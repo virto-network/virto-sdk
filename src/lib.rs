@@ -35,11 +35,12 @@ impl Wallet {
     /// ```
     /// # use libwallet::Wallet;
     /// # let mut wallet = Wallet::import("");
-    /// wallet.add_account("moneyyy");
+    /// let account = wallet.add_account("moneyyy");
     /// ```
-    pub fn add_account(&mut self, name: &str) -> impl Account {
+    pub fn add_account(&mut self, name: &str) -> &Box<dyn Account> {
         let account = self.derive(name);
         self.accounts.insert(name.to_owned(), Box::new(account));
+        &self.accounts.get(name).unwrap()
     }
 
     fn derive(&self, _phrase: &str) -> impl Account {}
@@ -58,3 +59,4 @@ impl Account for () {
         vec![0]
     }
 }
+
