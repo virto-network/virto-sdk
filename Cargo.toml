@@ -8,3 +8,4 @@ edition = "2018"
 
 [dependencies]
 hashbrown = "0.7.2"
+tiny-bip39 = "0.7.3"

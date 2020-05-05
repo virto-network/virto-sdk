@@ -9,6 +9,8 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+pub use bip39::Language;
+use bip39::{Mnemonic, MnemonicType};
 use hashbrown::HashMap;
 
 /// Wallet is the main interface to manage and interact with accounts.  
@@ -60,3 +62,15 @@ impl Account for () {
     }
 }
 
+/// Generate a 24 word mnemonic phrase with words in the specified language.
+/// ```
+/// # use libwallet::{mnemonic, Language};
+/// let phrase = mnemonic(Language::English);
+/// # let words = phrase.split(|c| c == ' ').count();
+/// # assert_eq!(words, 24);
+/// ```
+pub fn mnemonic(lang: Language) -> String {
+    Mnemonic::new(MnemonicType::Words24, lang)
+        .phrase()
+        .to_owned()
+}
