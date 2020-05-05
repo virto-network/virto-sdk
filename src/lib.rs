@@ -8,14 +8,15 @@ use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt;
 
 pub use bip39::Language;
-use bip39::{Mnemonic, MnemonicType};
+use bip39::{Mnemonic, MnemonicType, Seed};
 use hashbrown::HashMap;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 pub struct Wallet {
-    seed: String,
+    seed: Seed,
     accounts: HashMap<String, Box<dyn Account>>,
 }
 
@@ -25,18 +26,21 @@ impl Wallet {
     /// # use libwallet::Wallet;
     /// let wallet = Wallet::import("test test test test");
     /// ```
-    pub fn import(seed: &str) -> Self {
-        Wallet {
-            seed: seed.to_owned(),
+    pub fn import(seed_phrase: &str) -> Result<Self, Error> {
+        let mnemonic = Mnemonic::from_phrase(seed_phrase, Language::English)
+            .map_err(|_| Error::InvalidPhrase)?;
+        let seed = Seed::new(&mnemonic, "");
+        Ok(Wallet {
+            seed,
             accounts: HashMap::new(),
-        }
+        })
     }
 
     /// Add an account with a given name that is derived
     /// from the master key of the wallet.  
     /// ```
     /// # use libwallet::Wallet;
-    /// # let mut wallet = Wallet::import("");
+    /// # let mut wallet = Wallet::import("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
     /// let account = wallet.add_account("moneyyy");
     /// ```
     pub fn add_account(&mut self, name: &str) -> &Box<dyn Account> {
@@ -59,6 +63,19 @@ impl Account for () {
     }
     fn pk(&self) -> Vec<u8> {
         vec![0]
+    }
+}
+
+#[derive(Debug)]
+pub enum Error {
+    InvalidPhrase,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::InvalidPhrase => write!(f, "Invalid mnemonic phrase"),
+        }
     }
 }
 
