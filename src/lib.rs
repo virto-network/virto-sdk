@@ -10,8 +10,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-pub use bip39::Language;
-use bip39::{Mnemonic, MnemonicType, Seed};
+use bip39::Seed;
+pub use bip39::{Language, Mnemonic, MnemonicType};
 use hashbrown::HashMap;
 
 /// Wallet is the main interface to manage and interact with accounts.  
@@ -23,8 +23,9 @@ pub struct Wallet {
 impl Wallet {
     /// Import a wallet from its mnemonic seed
     /// ```
-    /// # use libwallet::Wallet;
-    /// let wallet = Wallet::import("test test test test");
+    /// # use libwallet::{Language, Wallet, mnemonic};
+    /// let phrase = mnemonic(Language::English);
+    /// let mut wallet = Wallet::import(&phrase).unwrap();
     /// ```
     pub fn import(seed_phrase: &str) -> Result<Self, Error> {
         let mnemonic = Mnemonic::from_phrase(seed_phrase, Language::English)
@@ -39,8 +40,9 @@ impl Wallet {
     /// Add an account with a given name that is derived
     /// from the master key of the wallet.  
     /// ```
-    /// # use libwallet::Wallet;
-    /// # let mut wallet = Wallet::import("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    /// # use libwallet::{Language, Wallet, mnemonic};
+    /// # let phrase = mnemonic(Language::English);
+    /// # let mut wallet = Wallet::import(&phrase).unwrap();
     /// let account = wallet.add_account("moneyyy");
     /// ```
     pub fn add_account(&mut self, name: &str) -> &Box<dyn Account> {
@@ -83,7 +85,7 @@ impl fmt::Display for Error {
 /// ```
 /// # use libwallet::{mnemonic, Language};
 /// let phrase = mnemonic(Language::English);
-/// # let words = phrase.split(|c| c == ' ').count();
+/// # let words = phrase.split_whitespace().count();
 /// # assert_eq!(words, 24);
 /// ```
 pub fn mnemonic(lang: Language) -> String {
