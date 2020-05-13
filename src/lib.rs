@@ -1,6 +1,16 @@
 //! With `libwallet` you can build crypto currency wallets that
 //! manage private keys of different kinds saved in a secure storage.
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(any(feature = "std", test))]
+#[macro_use]
+extern crate std;
+
+#[cfg(all(not(feature = "std"), not(test)))]
+#[macro_use]
+extern crate core as std;
+
+use crate::std::fmt;
 
 #[macro_use]
 extern crate alloc;
@@ -8,11 +18,13 @@ use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::fmt;
+use hashbrown::HashMap;
 
 use bip39::Seed;
 pub use bip39::{Language, Mnemonic, MnemonicType};
-use hashbrown::HashMap;
+
+#[cfg(feature = "chain")]
+pub mod chain;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 pub struct Wallet {
