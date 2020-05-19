@@ -1,25 +1,6 @@
 //! With `libwallet` you can build crypto currency wallets that
 //! manage private keys of different kinds saved in a secure storage.
-#![cfg_attr(not(feature = "std"), no_std)]
-
-#[cfg(any(feature = "std", test))]
-#[macro_use]
-extern crate std;
-
-#[cfg(all(not(feature = "std"), not(test)))]
-#[macro_use]
-extern crate core as std;
-
-use crate::std::fmt;
-
-#[macro_use]
-extern crate alloc;
-use alloc::borrow::ToOwned;
-use alloc::boxed::Box;
-use alloc::string::String;
-use alloc::vec::Vec;
 use async_trait::async_trait;
-
 use bip39::Seed;
 pub use bip39::{Language, Mnemonic, MnemonicType};
 
@@ -86,24 +67,16 @@ impl<'a> Wallet<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("Invalid mnemonic phrase")]
     InvalidPhrase,
+    #[error("Invalid password")]
     InvalidPasword,
+    #[error("Wallet data from the valut is invalid")]
     CorruptedWalletData,
+    #[error("Can't unlock, no vault was configured")]
     NoVault,
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::InvalidPhrase => write!(f, "Invalid mnemonic phrase"),
-            _ => write!(f, "Error"),
-        }
-    }
 }
 
 /// Generate a 24 word mnemonic phrase with words in the specified language.
