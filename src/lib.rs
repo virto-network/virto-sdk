@@ -8,12 +8,12 @@ pub use bip39::{Language, Mnemonic, MnemonicType};
 pub mod chain;
 
 #[async_trait]
-trait Valut {
+pub trait Valut {
     async fn store(&self, id: WalletId, secret: &[u8]) -> Result<(), Error>;
     async fn unlock(&self, id: WalletId, password: &str) -> Result<Vec<u8>, Error>;
 }
 
-type WalletId = Vec<u8>;
+pub type WalletId = Vec<u8>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 pub struct Wallet<'a> {
@@ -24,6 +24,19 @@ pub struct Wallet<'a> {
 }
 
 impl<'a> Wallet<'a> {
+    /// Generate a new wallet with a 24 word english mnemonic seed
+    pub fn new() -> Self {
+        let phrase = mnemonic(Language::English);
+        Wallet::import(&phrase).unwrap()
+    }
+
+    pub fn with_vault(self, vault: &'a dyn Valut) -> Self {
+        Wallet {
+            vault: Some(vault),
+            ..self
+        }
+    }
+
     /// Import a wallet from its mnemonic seed
     /// ```
     /// # use libwallet::{Language, Wallet, mnemonic};
@@ -47,6 +60,23 @@ impl<'a> Wallet<'a> {
     }
 
     /// A locked wallet can use a vault to retrive its secret seed.
+    /// ```
+    /// # use libwallet::{Wallet, Error, WalletId};
+    /// # use libwallet::Valut;
+    /// # struct Dummy;
+    /// # #[async_trait::async_trait] impl Valut for Dummy {
+    /// #   async fn store(&self, _: WalletId, _: &[u8]) -> Result<(), Error> { todo!() }
+    /// #   async fn unlock(&self, _: WalletId, _: &str) -> Result<Vec<u8>, Error> { todo!() }
+    /// # }
+    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # let dummy_vault = Dummy{};
+    /// let mut wallet = Wallet::new().with_vault(&dummy_vault);
+    /// if wallet.is_locked() {
+    ///     wallet.unlock("some password").await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn unlock(&mut self, password: &str) -> Result<(), Error> {
         if !self.is_locked() {
             return Ok(());
