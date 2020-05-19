@@ -18,7 +18,7 @@ use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use hashbrown::HashMap;
+use async_trait::async_trait;
 
 use bip39::Seed;
 pub use bip39::{Language, Mnemonic, MnemonicType};
@@ -26,13 +26,23 @@ pub use bip39::{Language, Mnemonic, MnemonicType};
 #[cfg(feature = "chain")]
 pub mod chain;
 
-/// Wallet is the main interface to manage and interact with accounts.  
-pub struct Wallet {
-    seed: Seed,
-    accounts: HashMap<String, Box<dyn Account>>,
+#[async_trait]
+trait Valut {
+    async fn store(&self, id: WalletId, secret: &[u8]) -> Result<(), Error>;
+    async fn unlock(&self, id: WalletId, password: &str) -> Result<Vec<u8>, Error>;
 }
 
-impl Wallet {
+type WalletId = Vec<u8>;
+
+/// Wallet is the main interface to manage and interact with accounts.  
+pub struct Wallet<'a> {
+    id: WalletId,
+    mnemonic: Option<Mnemonic>,
+    seed: Option<Seed>,
+    vault: Option<&'a dyn Valut>,
+}
+
+impl<'a> Wallet<'a> {
     /// Import a wallet from its mnemonic seed
     /// ```
     /// # use libwallet::{Language, Wallet, mnemonic};
@@ -42,47 +52,46 @@ impl Wallet {
     pub fn import(seed_phrase: &str) -> Result<Self, Error> {
         let mnemonic = Mnemonic::from_phrase(seed_phrase, Language::English)
             .map_err(|_| Error::InvalidPhrase)?;
-        let seed = Seed::new(&mnemonic, "");
+        let seed = Some(Seed::new(&mnemonic, ""));
         Ok(Wallet {
+            id: vec![],
+            mnemonic: Some(mnemonic),
             seed,
-            accounts: HashMap::new(),
+            vault: None,
         })
     }
 
-    /// Add an account with a given name that is derived
-    /// from the master key of the wallet.  
-    /// ```
-    /// # use libwallet::{Language, Wallet, mnemonic};
-    /// # let phrase = mnemonic(Language::English);
-    /// # let mut wallet = Wallet::import(&phrase).unwrap();
-    /// let account = wallet.add_account("moneyyy");
-    /// ```
-    pub fn add_account(&mut self, name: &str) -> &Box<dyn Account> {
-        let account = self.derive(name);
-        self.accounts.insert(name.to_owned(), Box::new(account));
-        &self.accounts.get(name).unwrap()
+    pub fn id(&self) -> WalletId {
+        self.id.clone()
     }
 
-    fn derive(&self, _phrase: &str) -> impl Account {}
-}
-
-pub trait Account {
-    fn address(&self) -> Vec<u8>;
-    fn pk(&self) -> Vec<u8>;
-}
-
-impl Account for () {
-    fn address(&self) -> Vec<u8> {
-        vec![0]
+    /// A locked wallet can use a vault to retrive its secret seed.
+    pub async fn unlock(&mut self, password: &str) -> Result<(), Error> {
+        if !self.is_locked() {
+            return Ok(());
+        }
+        if self.is_locked() && self.vault.is_none() {
+            return Err(Error::NoVault);
+        }
+        let entropy = self.vault.unwrap().unlock(self.id(), password).await?;
+        let mnemonic = Mnemonic::from_entropy(&entropy, Language::English)
+            .map_err(|_| Error::CorruptedWalletData)?;
+        self.seed = Some(Seed::new(&mnemonic, password));
+        self.mnemonic = Some(mnemonic);
+        Ok(())
     }
-    fn pk(&self) -> Vec<u8> {
-        vec![0]
+
+    pub fn is_locked(&self) -> bool {
+        self.seed.is_none()
     }
 }
 
 #[derive(Debug)]
 pub enum Error {
     InvalidPhrase,
+    InvalidPasword,
+    CorruptedWalletData,
+    NoVault,
 }
 
 #[cfg(feature = "std")]
@@ -92,6 +101,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::InvalidPhrase => write!(f, "Invalid mnemonic phrase"),
+            _ => write!(f, "Error"),
         }
     }
 }

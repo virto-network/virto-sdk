@@ -5,8 +5,8 @@ authors = ["Daniel Olano <me@olanod.com>"]
 edition = "2018"
 
 [dependencies]
-hashbrown = "0.7.2"
 tiny-bip39 = "0.7.3"
+async-trait = "0.1.31"
 jsonrpsee = { git = "https://github.com/paritytech/jsonrpsee.git", optional = true }
 
 [dev-dependencies]
