@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use bip39::Seed;
 pub use bip39::{Language, Mnemonic, MnemonicType};
+use sp_core::{sr25519, Pair};
 
 #[cfg(feature = "chain")]
 pub mod chain;
@@ -17,8 +18,8 @@ pub type WalletId = Vec<u8>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 pub struct Wallet<'a> {
-    id: WalletId,
-    mnemonic: Option<Mnemonic>,
+    root: sr25519::Pair,
+    entropy: Option<Vec<u8>>,
     seed: Option<Seed>,
     vault: Option<&'a dyn Valut>,
 }
@@ -46,17 +47,18 @@ impl<'a> Wallet<'a> {
     pub fn import(seed_phrase: &str) -> Result<Self, Error> {
         let mnemonic = Mnemonic::from_phrase(seed_phrase, Language::English)
             .map_err(|_| Error::InvalidPhrase)?;
-        let seed = Some(Seed::new(&mnemonic, ""));
+        let seed = Seed::new(&mnemonic, "");
+        println!("len: {}", seed.as_bytes().len());
         Ok(Wallet {
-            id: vec![],
-            mnemonic: Some(mnemonic),
-            seed,
+            root: sr25519::Pair::from_entropy(mnemonic.entropy(), None).0,
+            entropy: Some(mnemonic.entropy().into()),
+            seed: Some(seed),
             vault: None,
         })
     }
 
     pub fn id(&self) -> WalletId {
-        self.id.clone()
+        self.root.public().to_vec()
     }
 
     /// A locked wallet can use a vault to retrive its secret seed.
@@ -88,12 +90,24 @@ impl<'a> Wallet<'a> {
         let mnemonic = Mnemonic::from_entropy(&entropy, Language::English)
             .map_err(|_| Error::CorruptedWalletData)?;
         self.seed = Some(Seed::new(&mnemonic, password));
-        self.mnemonic = Some(mnemonic);
+        self.entropy = Some(entropy);
         Ok(())
     }
 
     pub fn is_locked(&self) -> bool {
         self.seed.is_none()
+    }
+
+    /// Sign a message with the root account
+    /// ```
+    /// # use libwallet::Wallet;
+    /// let wallet = Wallet::new();
+    /// wallet.sign(&[0x01, 0x02, 0x03]);
+    /// ```
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
+        let sig = self.root.sign(msg);
+        let sig: &[u8] = sig.as_ref();
+        sig.to_vec()
     }
 }
 
