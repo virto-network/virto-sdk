@@ -1,34 +1,30 @@
 //! With `libwallet` you can build crypto currency wallets that
 //! manage private keys of different kinds saved in a secure storage.
 use async_trait::async_trait;
-use bip39::Seed;
-pub use bip39::{Language, Mnemonic, MnemonicType};
-use sp_core::{sr25519, Pair};
+pub use bip39::{Language, Mnemonic, MnemonicType, Seed};
+use sp_core::{crypto::CryptoType, sr25519, Pair};
 
 #[cfg(feature = "chain")]
 pub mod chain;
 
 #[async_trait]
 pub trait Valut {
-    async fn store(&self, id: WalletId, secret: &[u8]) -> Result<(), Error>;
-    async fn unlock(&self, id: WalletId, password: &str) -> Result<Vec<u8>, Error>;
+    async fn store(&self, secret: &[u8]) -> Result<()>;
+    async fn unlock(&self, password: &str) -> Result<Seed>;
 }
 
-pub type WalletId = Vec<u8>;
+type Result<T> = std::result::Result<T, Error>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
+#[derive(Default)]
 pub struct Wallet<'a> {
-    root: sr25519::Pair,
-    entropy: Option<Vec<u8>>,
     seed: Option<Seed>,
     vault: Option<&'a dyn Valut>,
 }
 
 impl<'a> Wallet<'a> {
-    /// Generate a new wallet with a 24 word english mnemonic seed
     pub fn new() -> Self {
-        let phrase = mnemonic(Language::English);
-        Wallet::import(&phrase).unwrap()
+        Default::default()
     }
 
     pub fn with_vault(self, vault: &'a dyn Valut) -> Self {
@@ -38,37 +34,45 @@ impl<'a> Wallet<'a> {
         }
     }
 
+    /// Generate a new wallet with a 24 word english mnemonic seed
+    pub fn generate(password: &str) -> (Self, String) {
+        let phrase = mnemonic(Language::English);
+        (Wallet::import(&phrase, password).unwrap(), phrase)
+    }
+
     /// Import a wallet from its mnemonic seed
     /// ```
     /// # use libwallet::{Language, Wallet, mnemonic};
     /// let phrase = mnemonic(Language::English);
-    /// let mut wallet = Wallet::import(&phrase).unwrap();
+    /// let mut wallet = Wallet::import(&phrase, "").unwrap();
     /// ```
-    pub fn import(seed_phrase: &str) -> Result<Self, Error> {
+    pub fn import(seed_phrase: &str, password: &str) -> Result<Self> {
         let mnemonic = Mnemonic::from_phrase(seed_phrase, Language::English)
             .map_err(|_| Error::InvalidPhrase)?;
-        let seed = Seed::new(&mnemonic, "");
-        println!("len: {}", seed.as_bytes().len());
+        let seed = Some(Seed::new(&mnemonic, password));
         Ok(Wallet {
-            root: sr25519::Pair::from_entropy(mnemonic.entropy(), None).0,
-            entropy: Some(mnemonic.entropy().into()),
-            seed: Some(seed),
-            vault: None,
+            seed,
+            ..Default::default()
         })
     }
 
-    pub fn id(&self) -> WalletId {
-        self.root.public().to_vec()
+    pub fn default_account(&self) -> Result<<Self as CryptoType>::Pair> {
+        let seed = self.seed.as_ref().ok_or(Error::Locked)?.as_bytes();
+        let default =
+            <Self as CryptoType>::Pair::from_seed_slice(&seed[..32]).expect("seed is valid");
+        Ok(default)
     }
 
     /// A locked wallet can use a vault to retrive its secret seed.
     /// ```
-    /// # use libwallet::{Wallet, Error, WalletId};
+    /// # use libwallet::{Wallet, Error, Seed, Mnemonic, MnemonicType, Language};
     /// # use libwallet::Valut;
     /// # struct Dummy;
     /// # #[async_trait::async_trait] impl Valut for Dummy {
-    /// #   async fn store(&self, _: WalletId, _: &[u8]) -> Result<(), Error> { todo!() }
-    /// #   async fn unlock(&self, _: WalletId, _: &str) -> Result<Vec<u8>, Error> { todo!() }
+    /// #   async fn store(&self, _: &[u8]) -> Result<(), Error> { todo!() }
+    /// #   async fn unlock(&self, pwd: &str) -> Result<Seed, Error> {
+    /// #       Ok(Seed::new(&Mnemonic::new(MnemonicType::Words12, Language::English), pwd))
+    /// #   }
     /// # }
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
     /// # let dummy_vault = Dummy{};
@@ -79,18 +83,12 @@ impl<'a> Wallet<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(&mut self, password: &str) -> Result<(), Error> {
+    pub async fn unlock(&mut self, password: &str) -> Result<()> {
         if !self.is_locked() {
             return Ok(());
         }
-        if self.is_locked() && self.vault.is_none() {
-            return Err(Error::NoVault);
-        }
-        let entropy = self.vault.unwrap().unlock(self.id(), password).await?;
-        let mnemonic = Mnemonic::from_entropy(&entropy, Language::English)
-            .map_err(|_| Error::CorruptedWalletData)?;
-        self.seed = Some(Seed::new(&mnemonic, password));
-        self.entropy = Some(entropy);
+        let seed = self.vault.ok_or(Error::NoVault)?.unlock(password).await?;
+        self.seed = Some(seed);
         Ok(())
     }
 
@@ -98,17 +96,20 @@ impl<'a> Wallet<'a> {
         self.seed.is_none()
     }
 
-    /// Sign a message with the root account
+    /// Sign a message with the default account and return the 512bit signature.
     /// ```
     /// # use libwallet::Wallet;
-    /// let wallet = Wallet::new();
-    /// wallet.sign(&[0x01, 0x02, 0x03]);
+    /// let (wallet, _) = Wallet::generate("");
+    /// let signature = wallet.sign(&[0x01, 0x02, 0x03]);
     /// ```
-    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        let sig = self.root.sign(msg);
-        let sig: &[u8] = sig.as_ref();
-        sig.to_vec()
+    pub fn sign(&self, msg: &[u8]) -> Result<[u8; 64]> {
+        let signature = self.default_account()?.sign(msg);
+        Ok(signature.into())
     }
+}
+
+impl<'a> CryptoType for Wallet<'a> {
+    type Pair = sr25519::Pair;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -117,8 +118,8 @@ pub enum Error {
     InvalidPhrase,
     #[error("Invalid password")]
     InvalidPasword,
-    #[error("Wallet data from the valut is invalid")]
-    CorruptedWalletData,
+    #[error("Wallet is locked")]
+    Locked,
     #[error("Can't unlock, no vault was configured")]
     NoVault,
 }
