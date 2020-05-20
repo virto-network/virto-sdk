@@ -45,6 +45,7 @@ impl<'a> Wallet<'a> {
     /// # use libwallet::{Language, Wallet, mnemonic};
     /// let phrase = mnemonic(Language::English);
     /// let mut wallet = Wallet::import(&phrase, "").unwrap();
+    /// # assert_eq!(wallet.is_locked(), false);
     /// ```
     pub fn import(seed_phrase: &str, password: &str) -> Result<Self> {
         let mnemonic = Mnemonic::from_phrase(seed_phrase, Language::English)
@@ -80,6 +81,7 @@ impl<'a> Wallet<'a> {
     /// if wallet.is_locked() {
     ///     wallet.unlock("some password").await?;
     /// }
+    /// # assert_eq!(wallet.is_locked(), false);
     /// # Ok(())
     /// # }
     /// ```
@@ -101,6 +103,7 @@ impl<'a> Wallet<'a> {
     /// # use libwallet::Wallet;
     /// let (wallet, _) = Wallet::generate("");
     /// let signature = wallet.sign(&[0x01, 0x02, 0x03]);
+    /// assert!(signature.is_ok());
     /// ```
     pub fn sign(&self, msg: &[u8]) -> Result<[u8; 64]> {
         let signature = self.default_account()?.sign(msg);
