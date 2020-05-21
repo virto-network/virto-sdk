@@ -19,17 +19,17 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 #[derive(Default)]
-pub struct Wallet<'a> {
+pub struct Wallet {
     seed: Option<Seed>,
-    vault: Option<&'a dyn Vault>,
+    vault: Option<Box<dyn Vault>>,
 }
 
-impl<'a> Wallet<'a> {
+impl Wallet {
     pub fn new() -> Self {
         Default::default()
     }
 
-    pub fn with_vault(self, vault: &'a dyn Vault) -> Self {
+    pub fn with_vault(self, vault: Box<dyn Vault>) -> Self {
         Wallet {
             vault: Some(vault),
             ..self
@@ -77,8 +77,8 @@ impl<'a> Wallet<'a> {
     /// #   }
     /// # }
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let dummy_vault = Dummy{};
-    /// let mut wallet = Wallet::new().with_vault(&dummy_vault);
+    /// # let dummy_vault = Box::new(Dummy{});
+    /// let mut wallet = Wallet::new().with_vault(dummy_vault);
     /// if wallet.is_locked() {
     ///     wallet.unlock("some password".to_owned()).await?;
     /// }
@@ -90,7 +90,12 @@ impl<'a> Wallet<'a> {
         if !self.is_locked() {
             return Ok(());
         }
-        let seed = self.vault.ok_or(Error::NoVault)?.unlock(password).await?;
+        let seed = self
+            .vault
+            .as_ref()
+            .ok_or(Error::NoVault)?
+            .unlock(password)
+            .await?;
         self.seed = Some(seed).into();
         Ok(())
     }
@@ -112,7 +117,7 @@ impl<'a> Wallet<'a> {
     }
 }
 
-impl<'a> CryptoType for Wallet<'a> {
+impl CryptoType for Wallet {
     type Pair = sr25519::Pair;
 }
 
