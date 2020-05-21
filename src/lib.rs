@@ -10,9 +10,8 @@ use zeroize::Zeroize;
 #[cfg(feature = "chain")]
 pub mod chain;
 
-#[async_trait]
+#[async_trait(?Send)]
 pub trait Vault {
-    async fn store(&self, secret: &[u8]) -> Result<()>;
     async fn unlock(&self, password: String) -> Result<Seed>;
 }
 
@@ -72,8 +71,7 @@ impl<'a> Wallet<'a> {
     /// # use libwallet::{Wallet, Error, Seed, mnemonic, Language, Vault};
     /// # use std::convert::TryInto;
     /// # struct Dummy;
-    /// # #[async_trait::async_trait] impl Vault for Dummy {
-    /// #   async fn store(&self, _: &[u8]) -> Result<(), Error> { todo!() }
+    /// # #[async_trait::async_trait(?Send)] impl Vault for Dummy {
     /// #   async fn unlock(&self, pwd: String) -> Result<Seed, Error> {
     /// #       (mnemonic(Language::English), pwd).try_into()
     /// #   }
