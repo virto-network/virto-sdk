@@ -10,8 +10,8 @@ use zeroize::Zeroize;
 #[cfg(feature = "chain")]
 pub mod chain;
 
-#[async_trait(?Send)]
-pub trait Vault {
+#[async_trait]
+pub trait Vault: Send {
     async fn unlock(&self, password: String) -> Result<Seed>;
 }
 
