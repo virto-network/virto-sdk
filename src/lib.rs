@@ -11,14 +11,14 @@ use zeroize::Zeroize;
 pub mod chain;
 
 #[async_trait]
-pub trait Vault: Send {
+pub trait Vault: fmt::Debug + Send {
     async fn unlock(&self, password: String) -> Result<Seed>;
 }
 
 type Result<T> = std::result::Result<T, Error>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Wallet {
     seed: Option<Seed>,
     vault: Option<Box<dyn Vault>>,
@@ -70,8 +70,8 @@ impl Wallet {
     /// ```
     /// # use libwallet::{Wallet, Error, Seed, mnemonic, Language, Vault};
     /// # use std::convert::TryInto;
-    /// # struct Dummy;
-    /// # #[async_trait::async_trait(?Send)] impl Vault for Dummy {
+    /// # #[derive(Debug)] struct Dummy;
+    /// # #[async_trait::async_trait] impl Vault for Dummy {
     /// #   async fn unlock(&self, pwd: String) -> Result<Seed, Error> {
     /// #       (mnemonic(Language::English), pwd).try_into()
     /// #   }
