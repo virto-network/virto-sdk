@@ -11,7 +11,7 @@ use zeroize::Zeroize;
 pub mod chain;
 
 #[async_trait]
-pub trait Vault: fmt::Debug + Send {
+pub trait Vault: fmt::Debug + Default + Send {
     async fn unlock(&self, password: String) -> Result<Seed>;
 }
 
@@ -19,27 +19,14 @@ type Result<T> = std::result::Result<T, Error>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 #[derive(Default, Debug)]
-pub struct Wallet {
+pub struct Wallet<V: Vault> {
     seed: Option<Seed>,
-    vault: Option<Box<dyn Vault>>,
+    vault: Option<V>,
 }
 
-impl Wallet {
+impl Wallet<()> {
     pub fn new() -> Self {
         Default::default()
-    }
-
-    pub fn with_vault(self, vault: Box<dyn Vault>) -> Self {
-        Wallet {
-            vault: Some(vault),
-            ..self
-        }
-    }
-
-    /// Generate a new wallet with a 24 word english mnemonic seed
-    pub fn generate(password: String) -> (Self, String) {
-        let phrase = mnemonic(Language::English);
-        (Wallet::import(phrase.clone(), password).unwrap(), phrase)
     }
 
     /// Import a wallet from its mnemonic seed
@@ -59,6 +46,21 @@ impl Wallet {
         })
     }
 
+    /// Generate a new wallet with a 24 word english mnemonic seed
+    pub fn generate(password: String) -> (Self, String) {
+        let phrase = mnemonic(Language::English);
+        (Wallet::import(phrase.clone(), password).unwrap(), phrase)
+    }
+}
+
+impl<V: Vault> Wallet<V> {
+    pub fn with_vault<V2: Vault>(self, vault: V2) -> Wallet<V2> {
+        Wallet {
+            vault: Some(vault),
+            seed: self.seed,
+        }
+    }
+
     pub fn default_account(&self) -> Result<<Self as CryptoType>::Pair> {
         let seed = self.seed.as_ref().ok_or(Error::Locked)?.as_ref();
         let default =
@@ -70,14 +72,14 @@ impl Wallet {
     /// ```
     /// # use libwallet::{Wallet, Error, Seed, mnemonic, Language, Vault};
     /// # use std::convert::TryInto;
-    /// # #[derive(Debug)] struct Dummy;
+    /// # #[derive(Debug, Default)] struct Dummy;
     /// # #[async_trait::async_trait] impl Vault for Dummy {
     /// #   async fn unlock(&self, pwd: String) -> Result<Seed, Error> {
     /// #       (mnemonic(Language::English), pwd).try_into()
     /// #   }
     /// # }
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let dummy_vault = Box::new(Dummy{});
+    /// # let dummy_vault = Dummy{};
     /// let mut wallet = Wallet::new().with_vault(dummy_vault);
     /// if wallet.is_locked() {
     ///     wallet.unlock("some password".to_owned()).await?;
@@ -117,7 +119,14 @@ impl Wallet {
     }
 }
 
-impl CryptoType for Wallet {
+#[async_trait]
+impl Vault for () {
+    async fn unlock(&self, _: String) -> Result<Seed> {
+        Err(Error::NoVault)
+    }
+}
+
+impl<V: Vault> CryptoType for Wallet<V> {
     type Pair = sr25519::Pair;
 }
 
