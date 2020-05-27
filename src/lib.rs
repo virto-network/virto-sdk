@@ -11,14 +11,21 @@ use zeroize::Zeroize;
 pub mod chain;
 
 #[async_trait]
-pub trait Vault: fmt::Debug + Default + Send {
+pub trait Vault: fmt::Debug + Send {
     async fn unlock(&self, password: String) -> Result<Seed>;
+}
+
+#[async_trait]
+impl Vault for () {
+    async fn unlock(&self, _: String) -> Result<Seed> {
+        Err(Error::NoVault)
+    }
 }
 
 type Result<T> = std::result::Result<T, Error>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Wallet<V: Vault> {
     seed: Option<Seed>,
     vault: Option<V>,
@@ -119,10 +126,12 @@ impl<V: Vault> Wallet<V> {
     }
 }
 
-#[async_trait]
-impl Vault for () {
-    async fn unlock(&self, _: String) -> Result<Seed> {
-        Err(Error::NoVault)
+impl<V: Vault> Default for Wallet<V> {
+    fn default() -> Self {
+        Wallet {
+            seed: None,
+            vault: None,
+        }
     }
 }
 
