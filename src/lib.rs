@@ -2,9 +2,9 @@
 //! manage private keys of different kinds saved in a secure storage.
 use async_trait::async_trait;
 pub use bip39::{Language, Mnemonic, MnemonicType};
-use sp_core::{sr25519, Pair, Public};
+use sp_core::{sr25519, Pair};
 use std::convert::TryFrom;
-use std::fmt;
+use std::fmt::{self, Display};
 use std::ops::Deref;
 use zeroize::Zeroize;
 
@@ -135,22 +135,34 @@ impl<V: Vault> Default for Wallet<V> {
     }
 }
 
-pub struct Account<P: Pair> {
+pub struct Account<P>
+where
+    P: Pair,
+    P::Public: Display,
+{
     pair: P,
 }
 
-impl<P: Pair> Account<P> {
+impl<P> Account<P>
+where
+    P: Pair,
+    P::Public: Display,
+{
     pub fn from_seed(seed: &[u8]) -> Self {
         let pair = P::from_seed_slice(&seed[..32]).expect("seed is valid");
         Account { pair }
     }
 
-    pub fn id(&self) -> Vec<u8> {
-        self.pair.public().to_raw_vec()
+    pub fn id(&self) -> String {
+        self.pair.public().to_string()
     }
 }
 
-impl<P: Pair> Deref for Account<P> {
+impl<P> Deref for Account<P>
+where
+    P: Pair,
+    P::Public: Display,
+{
     type Target = P;
 
     fn deref(&self) -> &Self::Target {
