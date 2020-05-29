@@ -2,9 +2,10 @@
 //! manage private keys of different kinds saved in a secure storage.
 use async_trait::async_trait;
 pub use bip39::{Language, Mnemonic, MnemonicType};
-use sp_core::{crypto::CryptoType, sr25519, Pair};
+use sp_core::{sr25519, Pair, Public};
 use std::convert::TryFrom;
 use std::fmt;
+use std::ops::Deref;
 use zeroize::Zeroize;
 
 #[cfg(feature = "chain")]
@@ -68,11 +69,10 @@ impl<V: Vault> Wallet<V> {
         }
     }
 
-    pub fn default_account(&self) -> Result<<Self as CryptoType>::Pair> {
+    pub fn root_account(&self) -> Result<Account<sr25519::Pair>> {
         let seed = self.seed.as_ref().ok_or(Error::Locked)?.as_ref();
-        let default =
-            <Self as CryptoType>::Pair::from_seed_slice(&seed[..32]).expect("seed is valid");
-        Ok(default)
+        let root = Account::from_seed(seed);
+        Ok(root)
     }
 
     /// A locked wallet can use a vault to retrive its secret seed.
@@ -121,7 +121,7 @@ impl<V: Vault> Wallet<V> {
     /// assert!(signature.is_ok());
     /// ```
     pub fn sign(&self, msg: &[u8]) -> Result<[u8; 64]> {
-        let signature = self.default_account()?.sign(msg);
+        let signature = self.root_account()?.sign(msg);
         Ok(signature.into())
     }
 }
@@ -135,8 +135,27 @@ impl<V: Vault> Default for Wallet<V> {
     }
 }
 
-impl<V: Vault> CryptoType for Wallet<V> {
-    type Pair = sr25519::Pair;
+pub struct Account<P: Pair> {
+    pair: P,
+}
+
+impl<P: Pair> Account<P> {
+    pub fn from_seed(seed: &[u8]) -> Self {
+        let pair = P::from_seed_slice(&seed[..32]).expect("seed is valid");
+        Account { pair }
+    }
+
+    pub fn id(&self) -> Vec<u8> {
+        self.pair.public().to_raw_vec()
+    }
+}
+
+impl<P: Pair> Deref for Account<P> {
+    type Target = P;
+
+    fn deref(&self) -> &Self::Target {
+        &self.pair
+    }
 }
 
 #[derive(Zeroize)]
