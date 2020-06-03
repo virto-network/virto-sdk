@@ -62,13 +62,18 @@ impl Wallet<()> {
 }
 
 impl<V: Vault> Wallet<V> {
+    /// In case the wallet was not imported directly from a mnemonic phrase
+    /// it needs a vault to unlock the stored seed. This method creates a new
+    /// wallet copying data from the current wallet(none at the moment).
     pub fn with_vault<V2: Vault>(self, vault: V2) -> Wallet<V2> {
         Wallet {
             vault: Some(vault),
-            seed: self.seed,
+            seed: None,
         }
     }
 
+    /// Wallets have a root account that is used by default to sign messages.
+    /// Other sub-accounts can be created from this main account.
     pub fn root_account(&self) -> Result<Account<sr25519::Pair>> {
         let seed = self.seed.as_ref().ok_or(Error::Locked)?.as_ref();
         let root = Account::from_seed(seed);
@@ -135,6 +140,8 @@ impl<V: Vault> Default for Wallet<V> {
     }
 }
 
+/// Represents a private/public key pair that is meant to be used as
+/// a store of value in a specific network.
 pub struct Account<P>
 where
     P: Pair,
@@ -153,6 +160,8 @@ where
         Account { pair }
     }
 
+    /// Unique identifier of the account where funds can be sent to.
+    /// Often is the encoded hash of the public key.
     pub fn id(&self) -> String {
         self.pair.public().to_string()
     }
