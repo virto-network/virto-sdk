@@ -167,6 +167,18 @@ where
     }
 }
 
+impl<P> From<&str> for Account<P>
+where
+    P: Pair,
+    P::Public: Display,
+{
+    fn from(s: &str) -> Self {
+        Account {
+            pair: P::from_string(s, None).unwrap(),
+        }
+    }
+}
+
 impl<P> Deref for Account<P>
 where
     P: Pair,
