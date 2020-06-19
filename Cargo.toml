@@ -18,7 +18,6 @@ async-std = { version = "1.5.0", features = ["attributes"] }
 [features]
 chain = ["jsonrpsee"]
 
-
 [[example]]
 name = "balance"
 required-features = ["chain"]

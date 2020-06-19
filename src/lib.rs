@@ -1,5 +1,18 @@
+#![cfg_attr(not(feature = "std"), no_std)]
 //! With `libwallet` you can build crypto currency wallets that
 //! manage private keys of different kinds saved in a secure storage.
+
+#[cfg(any(feature = "std", test))]
+#[macro_use]
+extern crate std;
+#[cfg(all(not(feature = "std"), not(test)))]
+#[macro_use]
+extern crate core as std;
+
+//#[macro_use]
+extern crate alloc;
+use alloc::{borrow::ToOwned, boxed::Box, string::String, string::ToString};
+
 use async_trait::async_trait;
 pub use bip39::{Language, Mnemonic, MnemonicType};
 use sp_core::{sr25519, Pair};
@@ -227,15 +240,16 @@ impl fmt::Debug for Seed {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
+#[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum Error {
-    #[error("Invalid mnemonic phrase")]
+    #[cfg_attr(feature = "std", error("Invalid mnemonic phrase"))]
     InvalidPhrase,
-    #[error("Invalid password")]
+    #[cfg_attr(feature = "std", error("Invalid password"))]
     InvalidPasword,
-    #[error("Wallet is locked")]
+    #[cfg_attr(feature = "std", error("Wallet is locked"))]
     Locked,
-    #[error("Can't unlock, no vault was configured")]
+    #[cfg_attr(feature = "std", error("Can't unlock, no vault was configured"))]
     NoVault,
 }
 
