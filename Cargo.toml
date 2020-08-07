@@ -16,7 +16,8 @@ zeroize = "1.1.0"
 async-std = { version = "1.5.0", features = ["attributes"] }
 
 [features]
-chain = ["jsonrpsee"]
+std = []
+chain = ["std", "jsonrpsee"]
 
 [[example]]
 name = "balance"
