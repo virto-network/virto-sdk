@@ -9,29 +9,23 @@ extern crate std;
 #[macro_use]
 extern crate core as std;
 
-//#[macro_use]
 extern crate alloc;
-use alloc::{borrow::ToOwned, boxed::Box, string::String, string::ToString};
+use alloc::{boxed::Box, string::String, string::ToString};
 
 use async_trait::async_trait;
-pub use bip39::{Language, Mnemonic, MnemonicType};
+pub use bip39::{Language, Mnemonic, MnemonicType, Seed};
 use sp_core::{sr25519, Pair};
-use std::convert::TryFrom;
 use std::fmt::{self, Display};
 use std::ops::Deref;
-use zeroize::Zeroize;
-
-#[cfg(feature = "chain")]
-pub mod chain;
 
 #[async_trait]
 pub trait Vault: fmt::Debug + Send {
-    async fn unlock(&self, password: String) -> Result<Seed>;
+    async fn unlock(&self, password: &str) -> Result<Seed>;
 }
 
 #[async_trait]
 impl Vault for () {
-    async fn unlock(&self, _: String) -> Result<Seed> {
+    async fn unlock(&self, _: &str) -> Result<Seed> {
         Err(Error::NoVault)
     }
 }
@@ -53,11 +47,11 @@ impl Wallet<()> {
     /// Import a wallet from its mnemonic seed
     /// ```
     /// # use libwallet::{Language, Wallet, mnemonic};
-    /// let phrase = mnemonic(Language::English);
-    /// let mut wallet = Wallet::import(phrase, "foo".to_owned()).unwrap();
+    /// let m = mnemonic(Language::English);
+    /// let mut wallet = Wallet::import(m.phrase(), "foo").unwrap();
     /// # assert_eq!(wallet.is_locked(), false);
     /// ```
-    pub fn import(seed_phrase: String, password: String) -> Result<Self> {
+    pub fn import(seed_phrase: &str, password: &str) -> Result<Self> {
         let mnemonic = Mnemonic::from_phrase(&seed_phrase, Language::English)
             .map_err(|_| Error::InvalidPhrase)?;
         let seed = bip39::Seed::new(&mnemonic, &password).into();
@@ -68,9 +62,9 @@ impl Wallet<()> {
     }
 
     /// Generate a new wallet with a 24 word english mnemonic seed
-    pub fn generate(password: String) -> (Self, String) {
-        let phrase = mnemonic(Language::English);
-        (Wallet::import(phrase.clone(), password).unwrap(), phrase)
+    pub fn generate(password: &str) -> (Self, String) {
+        let m = mnemonic(Language::English);
+        (Wallet::import(m.phrase(), password).unwrap(), m.into())
     }
 }
 
@@ -99,21 +93,21 @@ impl<V: Vault> Wallet<V> {
     /// # use std::convert::TryInto;
     /// # #[derive(Debug, Default)] struct Dummy;
     /// # #[async_trait::async_trait] impl Vault for Dummy {
-    /// #   async fn unlock(&self, pwd: String) -> Result<Seed, Error> {
-    /// #       (mnemonic(Language::English), pwd).try_into()
+    /// #   async fn unlock(&self, pwd: &str) -> Result<Seed, Error> {
+    /// #       Ok(Seed::new(&mnemonic(Language::English), pwd))
     /// #   }
     /// # }
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
     /// # let dummy_vault = Dummy{};
     /// let mut wallet = Wallet::new().with_vault(dummy_vault);
     /// if wallet.is_locked() {
-    ///     wallet.unlock("some password".to_owned()).await?;
+    ///     wallet.unlock("some password").await?;
     /// }
     /// # assert_eq!(wallet.is_locked(), false);
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(&mut self, password: String) -> Result<()> {
+    pub async fn unlock(&mut self, password: &str) -> Result<()> {
         if !self.is_locked() {
             return Ok(());
         }
@@ -134,7 +128,7 @@ impl<V: Vault> Wallet<V> {
     /// Sign a message with the default account and return the 512bit signature.
     /// ```
     /// # use libwallet::Wallet;
-    /// let (wallet, _) = Wallet::generate("foo".to_owned());
+    /// let (wallet, _) = Wallet::generate("foo");
     /// let signature = wallet.sign(&[0x01, 0x02, 0x03]);
     /// assert!(signature.is_ok());
     /// ```
@@ -153,8 +147,7 @@ impl<V: Vault> Default for Wallet<V> {
     }
 }
 
-/// Represents a private/public key pair that is meant to be used as
-/// a store of value in a specific network.
+/// A derived accout from the wallet's root key pair
 pub struct Account<P>
 where
     P: Pair,
@@ -204,42 +197,6 @@ where
     }
 }
 
-#[derive(Zeroize)]
-#[zeroize(drop)]
-pub struct Seed([u8; 64]);
-
-impl TryFrom<(String, String)> for Seed {
-    type Error = Error;
-
-    fn try_from((phrase, pwd): (String, String)) -> Result<Self> {
-        let seed = bip39::Seed::new(
-            &Mnemonic::from_phrase(&phrase, Language::English).map_err(|_| Error::InvalidPhrase)?,
-            &pwd,
-        );
-        Ok(seed.into())
-    }
-}
-
-impl From<bip39::Seed> for Seed {
-    fn from(seed: bip39::Seed) -> Self {
-        let mut s = [0; 64];
-        s.copy_from_slice(&seed.as_bytes()[..64]);
-        Self(s)
-    }
-}
-
-impl AsRef<[u8]> for Seed {
-    fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
-    }
-}
-
-impl fmt::Debug for Seed {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "<secret>")
-    }
-}
-
 #[derive(Debug)]
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum Error {
@@ -253,15 +210,13 @@ pub enum Error {
     NoVault,
 }
 
-/// Generate a 24 word mnemonic phrase with words in the specified language.
+/// A new 24 word mnemonic phrase.
 /// ```
 /// # use libwallet::{mnemonic, Language};
-/// let phrase = mnemonic(Language::English);
-/// # let words = phrase.split_whitespace().count();
+/// let m = mnemonic(Language::English);
+/// # let words = m.phrase().split_whitespace().count();
 /// # assert_eq!(words, 24);
 /// ```
-pub fn mnemonic(lang: Language) -> String {
+pub fn mnemonic(lang: Language) -> Mnemonic {
     Mnemonic::new(MnemonicType::Words24, lang)
-        .phrase()
-        .to_owned()
 }

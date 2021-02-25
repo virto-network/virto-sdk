@@ -5,20 +5,13 @@ authors = ["Daniel Olano <me@olanod.com>"]
 edition = "2018"
 
 [dependencies]
-tiny-bip39 = "0.7.3"
-async-trait = "0.1.31"
-jsonrpsee = { git = "https://github.com/paritytech/jsonrpsee.git", optional = true }
-thiserror = "1.0.18"
-sp-core = "2.0.0-alpha.8"
-zeroize = "1.1.0"
+tiny-bip39 = "0.8.0"
+async-trait = "0.1.42"
+thiserror = "1.0.24"
+sp-core = "3.0.0"
 
 [dev-dependencies]
-async-std = { version = "1.5.0", features = ["attributes"] }
+async-std = { version = "1.9.0", features = ["attributes"] }
 
 [features]
 std = []
-chain = ["std", "jsonrpsee"]
-
-[[example]]
-name = "balance"
-required-features = ["chain"]
