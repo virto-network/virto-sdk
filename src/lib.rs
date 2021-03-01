@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use frame_metadata::v12::{StorageEntryType, StorageHasher};
 pub use frame_metadata::RuntimeMetadata;
-use futures_io::AsyncRead;
+use futures_lite::AsyncRead;
 use hasher::hash;
 use meta_ext::MetaExt;
 use once_cell::sync::OnceCell;
@@ -59,7 +59,7 @@ pub trait Backend {
     /// Send a signed extrinsic to the blockchain
     async fn submit<T>(&self, ext: T) -> Result<()>
     where
-        T: AsyncRead + Send;
+        T: AsyncRead + Send + Unpin;
 
     async fn metadata(&self) -> Result<RuntimeMetadata>;
 }
@@ -70,11 +70,23 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     BadKey,
     BadMetadata,
+    BadInput,
     NoMetadataLoaded,
     Node(String),
     ParseStorageItem,
     StorageKeyNotFound,
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Node(e) => write!(f, "{:}", e),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 #[derive(Clone, Debug)]
 pub struct StorageKey(Vec<u8>);

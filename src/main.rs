@@ -1,8 +1,9 @@
+use anyhow::Result;
 use async_std::{io, prelude::*};
 use frame_metadata::RuntimeMetadata;
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
-use sube::{http::Backend, Backend as _, Error, Sube};
+use sube::{http::Backend, Backend as _, Sube};
 use url::Url;
 
 #[derive(StructOpt, Debug)]
@@ -32,6 +33,16 @@ enum Cmd {
 
 #[async_std::main]
 async fn main() {
+    match run().await {
+        Ok(_) => {}
+        Err(err) => {
+            log::error!("{}", err);
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let opt = Opt::from_args();
     stderrlog::new()
         .verbosity(opt.verbose)
@@ -39,32 +50,21 @@ async fn main() {
         .init()
         .unwrap();
 
-    let node_url = Url::parse(&format!("http://{}:{}", opt.node, opt.node_port)).expect("Node URL");
+    let node_url = Url::parse(&format!("http://{}:{}", opt.node, opt.node_port))?;
     let s: Sube<_> = Backend::new(node_url).into();
 
-    let meta = match s.metadata().await {
-        Err(Error::Node(err)) => {
-            log::error!("{}", err);
-            return;
-        }
-        Err(err) => {
-            log::error!("{:?}", err);
-            return;
-        }
-        Ok(m) => m,
-    };
+    let meta = s.metadata().await?;
     let meta: &'static RuntimeMetadata = Box::leak(meta.into());
     Sube::<Backend>::init_metadata(&meta);
 
     match opt.cmd {
         Cmd::Query { query } => {
-            let res = s.query(query.as_str()).await.expect("Query");
-            writeln!(io::stdout(), "{}", res)
-                .await
-                .expect("Write result");
+            let res = s.query(query.as_str()).await?;
+            writeln!(io::stdout(), "{}", res).await?;
         }
-        Cmd::Submit => s.submit(io::stdin()).await.expect("Submit"),
-    }
+        Cmd::Submit => s.submit(io::stdin()).await?,
+    };
+    Ok(())
 }
 
 #[derive(Debug)]

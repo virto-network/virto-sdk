@@ -1,7 +1,7 @@
 use crate::{meta_ext::MetaExt, Error, StorageKey};
 use async_trait::async_trait;
 use frame_metadata::RuntimeMetadata;
-use futures_io::AsyncRead;
+use futures_lite::prelude::*;
 use jsonrpc::serde_json::{to_string, value::RawValue};
 use std::convert::TryInto;
 use url::Url;
@@ -22,11 +22,23 @@ impl crate::Backend for Backend {
             .map_err(|_| Error::StorageKeyNotFound)
     }
 
-    async fn submit<T>(&self, _ext: T) -> crate::Result<()>
+    async fn submit<T>(&self, mut ext: T) -> crate::Result<()>
     where
-        T: AsyncRead + Send,
+        T: AsyncRead + Send + Unpin,
     {
-        todo!()
+        let mut extrinsic = vec![];
+        ext.read_to_end(&mut extrinsic)
+            .await
+            .map_err(|_| Error::BadInput)?;
+        let extrinsic = format!("0x{}", hex::encode(&extrinsic));
+        log::debug!("Extrinsic: {}", extrinsic);
+
+        let res = self
+            .rpc("author_submitExtrinsic", &[&extrinsic])
+            .await
+            .map_err(|e| Error::Node(e.to_string()))?;
+        log::debug!("Extrinsic {}", res);
+        Ok(())
     }
 
     async fn metadata(&self) -> crate::Result<RuntimeMetadata> {
@@ -73,7 +85,7 @@ impl Backend {
             .await?
             .result()
             .map_err(|e| {
-                log::debug!("Rpc error: {}", e);
+                log::debug!("{}", e);
                 Box::new(e) as Box<dyn std::error::Error>
             })
     }

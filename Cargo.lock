@@ -1583,12 +1583,13 @@ dependencies = [
 name = "sube"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-std",
  "async-trait",
  "blake2",
  "byteorder",
  "frame-metadata",
- "futures-io",
+ "futures-lite",
  "hex",
  "jsonrpc",
  "log",

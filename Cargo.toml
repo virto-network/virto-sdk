@@ -5,12 +5,13 @@ authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 
 [dependencies]
+anyhow = { version = "1.0.38", optional = true }
 async-std = { version = "1.9.0", default_features = false, optional = true }
 async-trait = "0.1.42"
 blake2 = { version = "0.9.1", default-features = false }
 byteorder = "1.4.2"
 frame-metadata = { git = "https://github.com/paritytech/frame-metadata.git", branch = "main" }
-futures-io = "0.3.13"
+futures-lite = "1.11.3"
 hex = "0.4.2"
 jsonrpc = "0.12.0"
 log = "0.4.14"
@@ -24,7 +25,7 @@ url = "2.2.1"
 
 [features]
 default = ["http"]
-bin = ["structopt", "async-std/attributes", "stderrlog", "http"]
+bin = ["anyhow", "structopt", "async-std/attributes", "stderrlog", "http"]
 http = ["surf/h1-client"]
 
 [[bin]]
