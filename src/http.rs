@@ -1,6 +1,7 @@
 use crate::{meta_ext::MetaExt, Error, StorageKey};
 use async_trait::async_trait;
 use frame_metadata::RuntimeMetadata;
+use futures_io::AsyncRead;
 use jsonrpc::serde_json::{to_string, value::RawValue};
 use std::convert::TryInto;
 use url::Url;
@@ -21,7 +22,10 @@ impl crate::Backend for Backend {
             .map_err(|_| Error::StorageKeyNotFound)
     }
 
-    async fn submit(&self, _ext: &[u8]) -> crate::Result<()> {
+    async fn submit<T>(&self, _ext: T) -> crate::Result<()>
+    where
+        T: AsyncRead + Send,
+    {
         todo!()
     }
 

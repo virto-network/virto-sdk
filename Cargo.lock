@@ -1588,6 +1588,7 @@ dependencies = [
  "blake2",
  "byteorder",
  "frame-metadata",
+ "futures-io",
  "hex",
  "jsonrpc",
  "log",

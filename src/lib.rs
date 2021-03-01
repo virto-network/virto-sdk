@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use frame_metadata::v12::{StorageEntryType, StorageHasher};
 pub use frame_metadata::RuntimeMetadata;
+use futures_io::AsyncRead;
 use hasher::hash;
 use meta_ext::MetaExt;
 use once_cell::sync::OnceCell;
@@ -51,11 +52,14 @@ impl<T> Deref for Sube<T> {
 pub trait Backend {
     /// Get storage items form the blockchain
     async fn query<K>(&self, key: K) -> Result<String>
+    // TODO return deserializable/decodable
     where
         K: TryInto<StorageKey, Error = Error> + Send;
 
     /// Send a signed extrinsic to the blockchain
-    async fn submit(&self, ext: &[u8]) -> Result<()>;
+    async fn submit<T>(&self, ext: T) -> Result<()>
+    where
+        T: AsyncRead + Send;
 
     async fn metadata(&self) -> Result<RuntimeMetadata>;
 }
