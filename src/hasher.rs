@@ -1,6 +1,6 @@
 use blake2::{Blake2b, Digest};
 use core::hash::Hasher;
-use frame_metadata::StorageHasher;
+use frame_metadata::v12::StorageHasher;
 
 /// hashes and encodes the provided input with the specified hasher
 pub fn hash(hasher: &StorageHasher, input: &str) -> Vec<u8> {

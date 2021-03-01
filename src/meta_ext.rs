@@ -1,5 +1,6 @@
 use frame_metadata::{
-    DecodeDifferent, ModuleMetadata, RuntimeMetadata, StorageEntryMetadata, StorageMetadata,
+    v12::{DecodeDifferent, ModuleMetadata, StorageEntryMetadata, StorageMetadata},
+    RuntimeMetadata, RuntimeMetadataPrefixed,
 };
 
 pub trait MetaExt<'a> {
@@ -21,6 +22,10 @@ pub trait MetaExt<'a> {
             }
             .flatten()
         })
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> Result<RuntimeMetadata, scale::Error> {
+        scale::Decode::decode(&mut bytes.as_slice()).map(|m: RuntimeMetadataPrefixed| m.1)
     }
 }
 
