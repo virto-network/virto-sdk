@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use frame_metadata::RuntimeMetadata;
 use futures_lite::prelude::*;
 use jsonrpc::serde_json::{to_string, value::RawValue};
-use std::convert::TryInto;
+use std::{convert::TryInto, fmt};
 pub use surf::Url;
 
 #[derive(Debug)]
@@ -54,8 +54,12 @@ impl crate::Backend for Backend {
 }
 
 impl Backend {
-    pub fn new(url: impl Into<Url>) -> Self {
-        Backend(url.into())
+    pub fn new<U>(url: U) -> Self
+    where
+        U: TryInto<Url>,
+        <U as TryInto<Url>>::Error: fmt::Debug,
+    {
+        Backend(url.try_into().expect("Url"))
     }
 
     /// HTTP based JSONRpc request expecting an hex encoded result
