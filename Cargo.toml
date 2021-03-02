@@ -1,8 +1,11 @@
 [package]
 name = "sube"
+description = "SUBmit Extrinsics to a Substrate node"
+license = "Apache-2.0"
 version = "0.1.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
+repository = "https://github.com/valibre-org/sube"
 
 [dependencies]
 anyhow = { version = "1.0.38", optional = true }
