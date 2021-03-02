@@ -10,7 +10,7 @@ use url::Url;
 #[structopt(name = "sube")]
 struct Opt {
     /// Node address
-    #[structopt(short, long, default_value = "localhost")]
+    #[structopt(short, long, default_value = "127.0.0.1")]
     pub node: String,
     #[structopt(short = "p", long, default_value = "9933")]
     pub node_port: String,
