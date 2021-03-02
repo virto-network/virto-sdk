@@ -1599,7 +1599,6 @@ dependencies = [
  "structopt",
  "surf",
  "twox-hash",
- "url",
 ]
 
 [[package]]

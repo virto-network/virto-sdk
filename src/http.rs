@@ -4,7 +4,7 @@ use frame_metadata::RuntimeMetadata;
 use futures_lite::prelude::*;
 use jsonrpc::serde_json::{to_string, value::RawValue};
 use std::convert::TryInto;
-use url::Url;
+pub use surf::Url;
 
 #[derive(Debug)]
 pub struct Backend(Url);

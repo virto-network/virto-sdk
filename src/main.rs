@@ -3,8 +3,10 @@ use async_std::{io, prelude::*};
 use frame_metadata::RuntimeMetadata;
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
-use sube::{http::Backend, Backend as _, Sube};
-use url::Url;
+use sube::{
+    http::{Backend, Url},
+    Backend as _, Sube,
+};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "sube")]
