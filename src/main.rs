@@ -1,6 +1,5 @@
 use anyhow::Result;
 use async_std::{io, prelude::*};
-use frame_metadata::RuntimeMetadata;
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
 use sube::{
@@ -54,14 +53,11 @@ async fn run() -> Result<()> {
 
     let node_url = Url::parse(&format!("http://{}:{}", opt.node, opt.node_port))?;
     let s: Sube<_> = Backend::new(node_url).into();
-
-    let meta = s.metadata().await?;
-    let meta: &'static RuntimeMetadata = Box::leak(meta.into());
-    Sube::<Backend>::init_metadata(&meta);
+    s.try_init_meta().await?;
 
     match opt.cmd {
         Cmd::Query { query } => {
-            let res = s.query(query.as_str()).await?;
+            let res: String = s.query(query.as_str()).await?;
             writeln!(io::stdout(), "{}", res).await?;
         }
         Cmd::Submit => s.submit(io::stdin()).await?,

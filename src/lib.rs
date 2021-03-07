@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 pub use codec;
 use codec::Decode;
+use core::future::Future;
 use frame_metadata::v12::{StorageEntryType, StorageHasher};
 pub use frame_metadata::RuntimeMetadata;
 use futures_lite::AsyncRead;
@@ -20,18 +21,30 @@ pub mod http;
 mod hasher;
 mod meta_ext;
 
-static META_REF: OnceCell<&RuntimeMetadata> = OnceCell::new();
+static META_REF: OnceCell<RuntimeMetadata> = OnceCell::new();
 
 /// Submit extrinsics
 #[derive(Debug)]
 pub struct Sube<T>(T);
 
-impl<T> Sube<T> {
-    /// Sets the chain metadata that all instances of Sube will share
-    /// its stored as a static global to allow for convenient conversion of
+impl<T: Backend> Sube<T> {
+    /// Get or set if not available the chain metadata that all instances of Sube
+    /// will share, its stored as a static global to allow for convenient conversion of
     /// common types like string literals to a metadata aware `StorageKey`.
-    pub fn init_metadata(meta: &'static RuntimeMetadata) {
-        META_REF.set(meta).unwrap_or(());
+    pub async fn get_or_try_init_meta<F, M>(f: F) -> Result<&'static RuntimeMetadata>
+    where
+        F: FnOnce() -> M,
+        M: Future<Output = Result<RuntimeMetadata>>,
+    {
+        if let Some(meta) = META_REF.get() {
+            return Ok(meta);
+        };
+        let meta = f().await?;
+        Ok(META_REF.get_or_init(|| meta))
+    }
+
+    pub async fn try_init_meta(&self) -> Result<&'static RuntimeMetadata> {
+        Self::get_or_try_init_meta(|| self.0.metadata()).await
     }
 }
 
@@ -104,7 +117,7 @@ pub struct StorageKey(Vec<u8>);
 
 impl StorageKey {
     fn get_global_metadata() -> Result<&'static RuntimeMetadata> {
-        META_REF.get().map(|m| *m).ok_or(Error::NoMetadataLoaded)
+        META_REF.get().ok_or(Error::NoMetadataLoaded)
     }
 
     fn from_parts(module: &str, item: &str, k1: Option<&str>, k2: Option<&str>) -> Result<Self> {
