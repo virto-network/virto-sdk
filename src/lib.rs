@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+pub use codec;
+use codec::Decode;
 use frame_metadata::v12::{StorageEntryType, StorageHasher};
 pub use frame_metadata::RuntimeMetadata;
 use futures_lite::AsyncRead;
@@ -51,10 +53,18 @@ impl<T> Deref for Sube<T> {
 #[async_trait]
 pub trait Backend {
     /// Get storage items form the blockchain
-    async fn query<K>(&self, key: K) -> Result<String>
-    // TODO return deserializable/decodable
+    async fn query_raw<K>(&self, key: K) -> Result<Vec<u8>>
     where
         K: TryInto<StorageKey, Error = Error> + Send;
+
+    async fn query<K, R>(&self, key: K) -> Result<R>
+    where
+        K: TryInto<StorageKey, Error = Error> + Send,
+        R: codec::Decode,
+    {
+        let res = self.query_raw(key).await?;
+        Decode::decode(&mut res.as_ref()).map_err(|e| Error::Decode(e))
+    }
 
     /// Send a signed extrinsic to the blockchain
     async fn submit<T>(&self, ext: T) -> Result<()>
@@ -68,9 +78,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Debug)]
 pub enum Error {
+    BadInput,
     BadKey,
     BadMetadata,
-    BadInput,
+    Decode(codec::Error),
     NoMetadataLoaded,
     Node(String),
     ParseStorageItem,

@@ -11,7 +11,7 @@ pub struct Backend(Url);
 
 #[async_trait]
 impl crate::Backend for Backend {
-    async fn query<K>(&self, key: K) -> crate::Result<String>
+    async fn query_raw<K>(&self, key: K) -> crate::Result<Vec<u8>>
     where
         K: TryInto<StorageKey, Error = Error> + Send,
     {
@@ -19,6 +19,7 @@ impl crate::Backend for Backend {
         log::debug!("StorageKey encoded: {}", key);
         self.rpc("state_getStorage", &[&key])
             .await
+            // NOTE it could fail for more reasons
             .map_err(|_| Error::StorageKeyNotFound)
     }
 
@@ -37,7 +38,7 @@ impl crate::Backend for Backend {
             .rpc("author_submitExtrinsic", &[&extrinsic])
             .await
             .map_err(|e| Error::Node(e.to_string()))?;
-        log::debug!("Extrinsic {}", res);
+        log::debug!("Extrinsic {:x?}", res);
         Ok(())
     }
 
@@ -67,9 +68,9 @@ impl Backend {
         &self,
         method: &str,
         params: &[&str],
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         log::info!("RPC `{}` to {}", method, &self.0);
-        surf::post(&self.0)
+        let rpc_response: String = surf::post(&self.0)
             .content_type("application/json")
             .body(
                 to_string(&jsonrpc::Request {
@@ -87,10 +88,7 @@ impl Backend {
             .await?
             .body_json::<jsonrpc::Response>()
             .await?
-            .result()
-            .map_err(|e| {
-                log::debug!("{}", e);
-                Box::new(e) as Box<dyn std::error::Error>
-            })
+            .result()?;
+        Ok(hex::decode(rpc_response)?)
     }
 }

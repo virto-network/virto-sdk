@@ -24,8 +24,8 @@ pub trait MetaExt<'a> {
         })
     }
 
-    fn from_bytes(bytes: Vec<u8>) -> Result<RuntimeMetadata, scale::Error> {
-        scale::Decode::decode(&mut bytes.as_slice()).map(|m: RuntimeMetadataPrefixed| m.1)
+    fn from_bytes(bytes: Vec<u8>) -> Result<RuntimeMetadata, codec::Error> {
+        codec::Decode::decode(&mut bytes.as_slice()).map(|m: RuntimeMetadataPrefixed| m.1)
     }
 }
 
