@@ -47,7 +47,6 @@ impl crate::Backend for Backend {
             .rpc("state_getMetadata", &[])
             .await
             .map_err(|e| Error::Node(e.to_string()))?;
-        let meta = hex::decode(&meta[2..]).map_err(|_| Error::BadMetadata)?;
         let meta = RuntimeMetadata::from_bytes(meta).map_err(|_| Error::BadMetadata);
         log::trace!("Metadata {:#?}", meta);
         meta
@@ -89,6 +88,9 @@ impl Backend {
             .body_json::<jsonrpc::Response>()
             .await?
             .result()?;
-        Ok(hex::decode(rpc_response)?)
+        log::debug!("RPC Response: {}...", &rpc_response[..10]);
+        // assume the response is a hex encoded string starting with "0x"
+        let rpc_response = hex::decode(&rpc_response[2..])?;
+        Ok(rpc_response)
     }
 }

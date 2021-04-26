@@ -2,32 +2,34 @@
 name = "sube"
 description = "SUBmit Extrinsics to a Substrate node"
 license = "Apache-2.0"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/valibre-org/sube"
 
 [dependencies]
-anyhow = { version = "1.0.38", optional = true }
-async-std = { version = "1.9.0", default_features = false, optional = true }
-async-trait = "0.1.42"
+async-trait = "0.1.50"
 blake2 = { version = "0.9.1", default-features = false }
-byteorder = "1.4.2"
+byteorder = "1.4.3"
 frame-metadata = { git = "https://github.com/paritytech/frame-metadata.git", branch = "main" }
 futures-lite = "1.11.3"
-hex = "0.4.2"
+hex = "0.4.3"
 jsonrpc = "0.12.0"
 log = "0.4.14"
-once_cell = "1.7.0"
-codec = { version = "2.0.1", package = "parity-scale-codec" }
+once_cell = "1.7.2"
+codec = { version = "2.1.1", package = "parity-scale-codec" }
+twox-hash = { version = "1.6.0", default-features = false }
+surf = { version = "2.2.0", default_features = false, optional = true }
+
+anyhow = { version = "1.0.40", optional = true }
+async-std = { version = "1.9.0", default_features = false, optional = true }
+serde_json = { version = "1.0.64", default-features = false, optional = true }
 stderrlog = { version = "0.5.1", optional = true }
 structopt = { version = "0.3.21", optional = true }
-surf = { version = "2.1.0", default_features = false, optional = true }
-twox-hash = { version = "1.6.0", default-features = false }
 
 [features]
 default = ["http"]
-bin = ["anyhow", "structopt", "async-std/attributes", "stderrlog", "http"]
+bin = ["anyhow", "structopt", "async-std/attributes", "stderrlog", "http", "serde_json"]
 http = ["surf/h1-client"]
 
 [[bin]]

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_std::{io, prelude::*};
+use codec::Encode;
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
 use sube::{
@@ -28,6 +29,7 @@ struct Opt {
 
 #[derive(StructOpt, Debug)]
 enum Cmd {
+    Meta,
     Query { query: String },
     Submit,
 }
@@ -53,7 +55,7 @@ async fn run() -> Result<()> {
 
     let node_url = Url::parse(&format!("http://{}:{}", opt.node, opt.node_port))?;
     let s: Sube<_> = Backend::new(node_url).into();
-    s.try_init_meta().await?;
+    let meta = s.try_init_meta().await?;
 
     match opt.cmd {
         Cmd::Query { query } => {
@@ -61,6 +63,13 @@ async fn run() -> Result<()> {
             writeln!(io::stdout(), "{}", res).await?;
         }
         Cmd::Submit => s.submit(io::stdin()).await?,
+        Cmd::Meta => {
+            let meta = match opt.output {
+                Output::Scale => meta.encode(),
+                Output::Json => serde_json::to_string(&meta)?.into(),
+            };
+            io::stdout().write_all(&meta).await?;
+        }
     };
     Ok(())
 }
