@@ -24,8 +24,8 @@ pub trait MetaExt<'a> {
         })
     }
 
-    fn from_bytes(bytes: Vec<u8>) -> Result<RuntimeMetadata, codec::Error> {
-        codec::Decode::decode(&mut bytes.as_slice()).map(|m: RuntimeMetadataPrefixed| m.1)
+    fn from_bytes(bytes: Vec<u8>) -> Result<RuntimeMetadataPrefixed, codec::Error> {
+        codec::Decode::decode(&mut bytes.as_slice())
     }
 }
 
@@ -35,11 +35,11 @@ type FilteredEntries<'a> = core::iter::FilterMap<
     fn(&ModuleMetadata) -> Option<&StorageMetadata>,
 >;
 
-impl<'a> MetaExt<'a> for RuntimeMetadata {
+impl<'a> MetaExt<'a> for RuntimeMetadataPrefixed {
     type EntriesIter = FilteredEntries<'a>;
 
     fn storage_entries(&'a self) -> Self::EntriesIter {
-        match self {
+        match &self.1 {
             RuntimeMetadata::V12(meta) => meta
                 .modules
                 .decoded()

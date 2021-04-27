@@ -3,7 +3,7 @@ pub use codec;
 use codec::Decode;
 use core::future::Future;
 use frame_metadata::v12::{StorageEntryType, StorageHasher};
-pub use frame_metadata::RuntimeMetadata;
+pub use frame_metadata::RuntimeMetadataPrefixed;
 use futures_lite::AsyncRead;
 use hasher::hash;
 use meta_ext::MetaExt;
@@ -21,7 +21,7 @@ pub mod http;
 mod hasher;
 mod meta_ext;
 
-static META_REF: OnceCell<RuntimeMetadata> = OnceCell::new();
+static META_REF: OnceCell<RuntimeMetadataPrefixed> = OnceCell::new();
 
 /// Submit extrinsics
 #[derive(Debug)]
@@ -31,10 +31,10 @@ impl<T: Backend> Sube<T> {
     /// Get or set if not available the chain metadata that all instances of Sube
     /// will share, its stored as a static global to allow for convenient conversion of
     /// common types like string literals to a metadata aware `StorageKey`.
-    pub async fn get_or_try_init_meta<F, M>(f: F) -> Result<&'static RuntimeMetadata>
+    pub async fn get_or_try_init_meta<F, M>(f: F) -> Result<&'static RuntimeMetadataPrefixed>
     where
         F: FnOnce() -> M,
-        M: Future<Output = Result<RuntimeMetadata>>,
+        M: Future<Output = Result<RuntimeMetadataPrefixed>>,
     {
         if let Some(meta) = META_REF.get() {
             return Ok(meta);
@@ -43,7 +43,7 @@ impl<T: Backend> Sube<T> {
         Ok(META_REF.get_or_init(|| meta))
     }
 
-    pub async fn try_init_meta(&self) -> Result<&'static RuntimeMetadata> {
+    pub async fn try_init_meta(&self) -> Result<&'static RuntimeMetadataPrefixed> {
         Self::get_or_try_init_meta(|| self.0.metadata()).await
     }
 }
@@ -84,7 +84,7 @@ pub trait Backend {
     where
         T: AsyncRead + Send + Unpin;
 
-    async fn metadata(&self) -> Result<RuntimeMetadata>;
+    async fn metadata(&self) -> Result<RuntimeMetadataPrefixed>;
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -116,7 +116,7 @@ impl std::error::Error for Error {}
 pub struct StorageKey(Vec<u8>);
 
 impl StorageKey {
-    fn get_global_metadata() -> Result<&'static RuntimeMetadata> {
+    fn get_global_metadata() -> Result<&'static RuntimeMetadataPrefixed> {
         META_REF.get().ok_or(Error::NoMetadataLoaded)
     }
 

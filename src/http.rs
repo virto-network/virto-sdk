@@ -1,6 +1,6 @@
 use crate::{meta_ext::MetaExt, Error, StorageKey};
 use async_trait::async_trait;
-use frame_metadata::RuntimeMetadata;
+use frame_metadata::RuntimeMetadataPrefixed;
 use futures_lite::prelude::*;
 use jsonrpc::serde_json::{to_string, value::RawValue};
 use std::{convert::TryInto, fmt};
@@ -42,12 +42,12 @@ impl crate::Backend for Backend {
         Ok(())
     }
 
-    async fn metadata(&self) -> crate::Result<RuntimeMetadata> {
+    async fn metadata(&self) -> crate::Result<RuntimeMetadataPrefixed> {
         let meta = self
             .rpc("state_getMetadata", &[])
             .await
             .map_err(|e| Error::Node(e.to_string()))?;
-        let meta = RuntimeMetadata::from_bytes(meta).map_err(|_| Error::BadMetadata);
+        let meta = RuntimeMetadataPrefixed::from_bytes(meta).map_err(|_| Error::BadMetadata);
         log::trace!("Metadata {:#?}", meta);
         meta
     }
