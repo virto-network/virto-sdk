@@ -30,7 +30,7 @@ structopt = { version = "0.3.21", optional = true }
 [features]
 default = ["http"]
 bin = ["anyhow", "structopt", "async-std/attributes", "stderrlog", "http", "serde_json"]
-http = ["surf/h1-client"]
+http = ["surf/h1-client-rustls"]
 
 [[bin]]
 name = "sube"
