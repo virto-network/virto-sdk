@@ -11,7 +11,7 @@ repository = "https://github.com/valibre-org/sube"
 async-trait = "0.1.50"
 blake2 = { version = "0.9.1", default-features = false }
 byteorder = "1.4.3"
-frame-metadata = { git = "https://github.com/paritytech/frame-metadata.git", branch = "main" }
+frame-metadata = { git = "https://github.com/paritytech/frame-metadata.git", branch = "main", features = ["v12"] }
 futures-lite = "1.11.3"
 hex = "0.4.3"
 jsonrpc = "0.12.0"

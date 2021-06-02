@@ -1,5 +1,6 @@
 use frame_metadata::{
-    v12::{DecodeDifferent, ModuleMetadata, StorageEntryMetadata, StorageMetadata},
+    decode_different::DecodeDifferent,
+    v12::{ModuleMetadata, StorageEntryMetadata, StorageMetadata},
     RuntimeMetadata, RuntimeMetadataPrefixed,
 };
 
