@@ -13,9 +13,9 @@ use sube::{
 struct Opt {
     /// Node address
     #[structopt(short, long, default_value = "127.0.0.1")]
-    pub node: String,
+    pub chain: String,
     #[structopt(short = "p", long, default_value = "9933")]
-    pub node_port: String,
+    pub port: String,
     #[structopt(short, long, default_value = "Scale")]
     pub output: Output,
     #[structopt(short, long)]
@@ -29,8 +29,13 @@ struct Opt {
 
 #[derive(StructOpt, Debug)]
 enum Cmd {
+    /// Get the chain metadata
     Meta,
+    /// Use a path-like syntax to query data from the chain storage
+    ///
+    /// A storage item can be accessed as `module/item[/key[/key2]]`(e.g. `timestamp/now` or `system/account/0x123`).
     Query { query: String },
+    /// Submit an extrinsic to the chain
     Submit,
 }
 
@@ -53,7 +58,7 @@ async fn run() -> Result<()> {
         .init()
         .unwrap();
 
-    let node_url = Url::parse(&format!("http://{}:{}", opt.node, opt.node_port))?;
+    let node_url = Url::parse(&format!("http://{}:{}", opt.chain, opt.port))?;
     let s: Sube<_> = Backend::new(node_url).into();
     let meta = s.try_init_meta().await?;
 
