@@ -1,21 +1,17 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_std::{io, prelude::*};
 use codec::Encode;
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
-use sube::{
-    http::{Backend, Url},
-    Backend as _, Sube,
-};
+use sube::{http, Backend, Sube};
+use url::Url;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "sube")]
 struct Opt {
     /// Node address
-    #[structopt(short, long, default_value = "127.0.0.1")]
+    #[structopt(short, long, default_value = "http://127.0.0.1:9933")]
     pub chain: String,
-    #[structopt(short = "p", long, default_value = "9933")]
-    pub port: String,
     #[structopt(short, long, default_value = "Scale")]
     pub output: Output,
     #[structopt(short, long)]
@@ -58,8 +54,11 @@ async fn run() -> Result<()> {
         .init()
         .unwrap();
 
-    let node_url = Url::parse(&format!("http://{}:{}", opt.chain, opt.port))?;
-    let s: Sube<_> = Backend::new(node_url).into();
+    let url = chain_string_to_url(&opt.chain)?;
+    let s: Sube<_> = match url.scheme() {
+        "http" => http::Backend::new(url).into(),
+        _ => return Err(anyhow!("Not supported")),
+    };
     let meta = s.try_init_meta().await?;
 
     match opt.cmd {
@@ -93,4 +92,8 @@ impl FromStr for Output {
             _ => Output::Scale,
         })
     }
+}
+
+fn chain_string_to_url(chain: &str) -> Result<Url> {
+    Ok(Url::parse(chain)?)
 }
