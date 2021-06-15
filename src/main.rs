@@ -12,7 +12,7 @@ struct Opt {
     /// Node address
     #[structopt(short, long, default_value = "http://127.0.0.1:9933")]
     pub chain: String,
-    #[structopt(short, long, default_value = "Scale")]
+    #[structopt(short, long, default_value = "json")]
     pub output: Output,
     #[structopt(short, long)]
     pub quiet: bool,
@@ -89,7 +89,8 @@ impl FromStr for Output {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "json" => Output::Json,
-            _ => Output::Scale,
+            "scale" => Output::Scale,
+            _ => Output::Json,
         })
     }
 }
