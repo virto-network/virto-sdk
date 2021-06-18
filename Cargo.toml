@@ -22,16 +22,23 @@ twox-hash = { version = "1.6.0", default-features = false }
 surf = { version = "2.2.0", default_features = false, optional = true }
 
 anyhow = { version = "1.0.41", optional = true }
-async-std = { version = "1.9.0", default_features = false, optional = true }
+async-std = { version = "1.9.0", default_features = false }
+# async-std = { version = "1.9.0", default_features = false, optional = true }
 serde_json = { version = "1.0.64", default-features = false, optional = true }
 stderrlog = { version = "0.5.1", optional = true }
 structopt = { version = "0.3.21", optional = true }
 url = { version = "2.2.2", optional = true }
+# async-tungstenite = { version = "0.13.1", features = [], optional = true }
+async-tungstenite = { version = "0.13.1", features = ["async-std-runtime"] }
+
+[dev-dependencies]
+async-std = { version = "1.9.0", features = ["attributes"] }
 
 [features]
 default = ["http"]
 bin = ["anyhow", "structopt", "async-std/attributes", "stderrlog", "http", "serde_json", "url"]
 http = ["surf/h1-client-rustls"]
+# ws = ["async-tungstenite"]
 
 [[bin]]
 name = "sube"

@@ -17,6 +17,8 @@ use std::{
 
 #[cfg(feature = "http")]
 pub mod http;
+// #[cfg(feature = "ws")]
+pub mod ws;
 
 mod hasher;
 mod meta_ext;
@@ -29,8 +31,10 @@ pub struct Sube<T>(T);
 
 impl<T: Backend> Sube<T> {
     /// Get or set if not available the chain metadata that all instances of Sube
-    /// will share, its stored as a static global to allow for convenient conversion of
-    /// common types like string literals to a metadata aware `StorageKey`.
+    /// will share.
+    /// Metadata will be held as a static global to allow for convenient conversion of
+    /// types like string literals to a metadata aware `StorageKey` without the user having to
+    /// provide their own metadata object to a less ergonomic conversion method.
     pub async fn get_or_try_init_meta<F, M>(f: F) -> Result<&'static RuntimeMetadataPrefixed>
     where
         F: FnOnce() -> M,
@@ -91,6 +95,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Debug)]
 pub enum Error {
+    ChainUnavailable,
     BadInput,
     BadKey,
     BadMetadata,
