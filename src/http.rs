@@ -1,57 +1,15 @@
-use crate::{meta_ext::MetaExt, Error, StorageKey};
 use async_trait::async_trait;
-use frame_metadata::RuntimeMetadataPrefixed;
-use futures_lite::prelude::*;
-use jsonrpc::serde_json::{to_string, value::RawValue};
+use jsonrpc::{
+    error::{standard_error, StandardError},
+    serde_json::{to_string, value::to_raw_value},
+};
 use std::{convert::TryInto, fmt};
 pub use surf::Url;
 
+use crate::rpc::{self, Rpc, RpcResult};
+
 #[derive(Debug)]
 pub struct Backend(Url);
-
-#[async_trait]
-impl crate::Backend for Backend {
-    async fn query_raw<K>(&self, key: K) -> crate::Result<Vec<u8>>
-    where
-        K: TryInto<StorageKey, Error = Error> + Send,
-    {
-        let key = key.try_into()?.to_string();
-        log::debug!("StorageKey encoded: {}", key);
-        self.rpc("state_getStorage", &[&key])
-            .await
-            // NOTE it could fail for more reasons
-            .map_err(|_| Error::StorageKeyNotFound)
-    }
-
-    async fn submit<T>(&self, mut ext: T) -> crate::Result<()>
-    where
-        T: AsyncRead + Send + Unpin,
-    {
-        let mut extrinsic = vec![];
-        ext.read_to_end(&mut extrinsic)
-            .await
-            .map_err(|_| Error::BadInput)?;
-        let extrinsic = format!("0x{}", hex::encode(&extrinsic));
-        log::debug!("Extrinsic: {}", extrinsic);
-
-        let res = self
-            .rpc("author_submitExtrinsic", &[&extrinsic])
-            .await
-            .map_err(|e| Error::Node(e.to_string()))?;
-        log::debug!("Extrinsic {:x?}", res);
-        Ok(())
-    }
-
-    async fn metadata(&self) -> crate::Result<RuntimeMetadataPrefixed> {
-        let meta = self
-            .rpc("state_getMetadata", &[])
-            .await
-            .map_err(|e| Error::Node(e.to_string()))?;
-        let meta = RuntimeMetadataPrefixed::from_bytes(meta).map_err(|_| Error::BadMetadata);
-        log::trace!("Metadata {:#?}", meta);
-        meta
-    }
-}
 
 impl Backend {
     pub fn new<U>(url: U) -> Self
@@ -61,36 +19,40 @@ impl Backend {
     {
         Backend(url.try_into().expect("Url"))
     }
+}
 
+#[async_trait]
+impl Rpc for Backend {
     /// HTTP based JSONRpc request expecting an hex encoded result
-    async fn rpc(
-        &self,
-        method: &str,
-        params: &[&str],
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult {
         log::info!("RPC `{}` to {}", method, &self.0);
-        let rpc_response: String = surf::post(&self.0)
+        let res = surf::post(&self.0)
             .content_type("application/json")
             .body(
-                to_string(&jsonrpc::Request {
+                to_string(&rpc::Request {
                     id: 1.into(),
                     jsonrpc: Some("2.0"),
                     method,
-                    params: &params
-                        .iter()
-                        .map(|p| format!("\"{}\"", p))
-                        .map(|p| RawValue::from_string(p.to_string()).unwrap())
-                        .collect::<Vec<_>>(),
+                    params: &Self::convert_params(params),
                 })
                 .unwrap(),
             )
-            .await?
-            .body_json::<jsonrpc::Response>()
-            .await?
-            .result()?;
-        log::debug!("RPC Response: {}...", &rpc_response[..10]);
+            .await
+            .map_err(|err| rpc::Error::Transport(err.into_inner().into()))?
+            .body_json::<rpc::Response>()
+            .await
+            .map_err(|err| {
+                standard_error(
+                    StandardError::ParseError,
+                    Some(to_raw_value(&err.to_string()).unwrap()),
+                )
+            })?
+            .result::<String>()?;
+
+        log::debug!("RPC Response: {}...", &res[..res.len().min(20)]);
         // assume the response is a hex encoded string starting with "0x"
-        let rpc_response = hex::decode(&rpc_response[2..])?;
-        Ok(rpc_response)
+        let response = hex::decode(&res[2..])
+            .map_err(|_err| standard_error(StandardError::InternalError, None))?;
+        Ok(response)
     }
 }
