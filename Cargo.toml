@@ -28,8 +28,12 @@ serde_json = { version = "1.0.64", default-features = false, optional = true }
 stderrlog = { version = "0.5.1", optional = true }
 structopt = { version = "0.3.21", optional = true }
 url = { version = "2.2.2", optional = true }
+
 # async-tungstenite = { version = "0.13.1", features = [], optional = true }
 async-tungstenite = { version = "0.13.1", features = ["async-std-runtime"] }
+futures-channel = { version = "0.3.15", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3.15", default-features = false, features = ["sink"] }
+async-mutex = { version = "1.4.0" }
 
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes"] }

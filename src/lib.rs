@@ -22,6 +22,7 @@ pub mod ws;
 
 mod hasher;
 mod meta_ext;
+mod rpc;
 
 static META_REF: OnceCell<RuntimeMetadataPrefixed> = OnceCell::new();
 
@@ -58,7 +59,7 @@ impl<T: Backend> From<T> for Sube<T> {
     }
 }
 
-impl<T> Deref for Sube<T> {
+impl<T: Backend> Deref for Sube<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -70,7 +71,7 @@ impl<T> Deref for Sube<T> {
 #[async_trait]
 pub trait Backend {
     /// Get storage items form the blockchain
-    async fn query_raw<K>(&self, key: K) -> Result<Vec<u8>>
+    async fn query_bytes<K>(&self, key: K) -> Result<Vec<u8>>
     where
         K: TryInto<StorageKey, Error = Error> + Send;
 
@@ -79,7 +80,7 @@ pub trait Backend {
         K: TryInto<StorageKey, Error = Error> + Send,
         R: codec::Decode,
     {
-        let res = self.query_raw(key).await?;
+        let res = self.query_bytes(key).await?;
         Decode::decode(&mut res.as_ref()).map_err(|e| Error::Decode(e))
     }
 
@@ -112,6 +113,12 @@ impl fmt::Display for Error {
             Self::Node(e) => write!(f, "{:}", e),
             _ => write!(f, "{:?}", self),
         }
+    }
+}
+
+impl From<async_tungstenite::tungstenite::Error> for Error {
+    fn from(_err: async_tungstenite::tungstenite::Error) -> Self {
+        Error::ChainUnavailable
     }
 }
 
