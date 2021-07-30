@@ -2,11 +2,9 @@ use async_trait::async_trait;
 pub use codec;
 use codec::Decode;
 use core::future::Future;
-use frame_metadata::v12::{StorageEntryType, StorageHasher};
 pub use frame_metadata::RuntimeMetadataPrefixed;
 use futures_lite::AsyncRead;
-use hasher::hash;
-use meta_ext::MetaExt;
+use meta_ext::{Entry, Meta, Metadata};
 use once_cell::sync::OnceCell;
 use std::{
     convert::{TryFrom, TryInto},
@@ -17,14 +15,15 @@ use std::{
 
 #[cfg(feature = "http")]
 pub mod http;
-// #[cfg(feature = "ws")]
+#[cfg(feature = "ws")]
 pub mod ws;
 
 mod hasher;
 mod meta_ext;
+#[cfg(any(feature = "http", feature = "ws"))]
 mod rpc;
 
-static META_REF: OnceCell<RuntimeMetadataPrefixed> = OnceCell::new();
+static META_REF: OnceCell<Metadata> = OnceCell::new();
 
 /// Submit extrinsics
 #[derive(Debug)]
@@ -36,10 +35,10 @@ impl<T: Backend> Sube<T> {
     /// Metadata will be held as a static global to allow for convenient conversion of
     /// types like string literals to a metadata aware `StorageKey` without the user having to
     /// provide their own metadata object to a less ergonomic conversion method.
-    pub async fn get_or_try_init_meta<F, M>(f: F) -> Result<&'static RuntimeMetadataPrefixed>
+    pub async fn get_or_try_init_meta<F, Fut>(f: F) -> Result<&'static Metadata>
     where
-        F: FnOnce() -> M,
-        M: Future<Output = Result<RuntimeMetadataPrefixed>>,
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Metadata>>,
     {
         if let Some(meta) = META_REF.get() {
             return Ok(meta);
@@ -48,7 +47,7 @@ impl<T: Backend> Sube<T> {
         Ok(META_REF.get_or_init(|| meta))
     }
 
-    pub async fn try_init_meta(&self) -> Result<&'static RuntimeMetadataPrefixed> {
+    pub async fn try_init_meta(&self) -> Result<&'static Metadata> {
         Self::get_or_try_init_meta(|| self.0.metadata()).await
     }
 }
@@ -89,7 +88,7 @@ pub trait Backend {
     where
         T: AsyncRead + Send + Unpin;
 
-    async fn metadata(&self) -> Result<RuntimeMetadataPrefixed>;
+    async fn metadata(&self) -> Result<Metadata>;
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -116,6 +115,7 @@ impl fmt::Display for Error {
     }
 }
 
+#[cfg(feature = "ws")]
 impl From<async_tungstenite::tungstenite::Error> for Error {
     fn from(_err: async_tungstenite::tungstenite::Error) -> Self {
         Error::ChainUnavailable
@@ -128,48 +128,26 @@ impl std::error::Error for Error {}
 pub struct StorageKey(Vec<u8>);
 
 impl StorageKey {
-    fn get_global_metadata() -> Result<&'static RuntimeMetadataPrefixed> {
+    fn get_global_metadata() -> Result<&'static Metadata> {
         META_REF.get().ok_or(Error::NoMetadataLoaded)
     }
 
-    fn from_parts(module: &str, item: &str, k1: Option<&str>, k2: Option<&str>) -> Result<Self> {
+    fn from_parts(pallet: &str, item: &str, k1: Option<&str>, k2: Option<&str>) -> Result<Self> {
         log::debug!(
             "StorageKey parts: [module]={} [item]={} [key1]={} [key2]={}",
-            module,
+            pallet,
             item,
             k1.unwrap_or("()"),
             k2.unwrap_or("()"),
         );
         let meta = Self::get_global_metadata()?;
-        let entry = meta.entry(module, item).ok_or(Error::StorageKeyNotFound)?;
 
-        let mut key = hash(&StorageHasher::Twox128, &module);
-        key.append(&mut hash(&StorageHasher::Twox128, &item));
-
-        let key = match entry.ty {
-            StorageEntryType::Plain(_) => key,
-            StorageEntryType::Map { ref hasher, .. } => {
-                if k1.is_none() || k1.as_ref().unwrap().is_empty() {
-                    return Err(Error::StorageKeyNotFound);
-                }
-                key.append(&mut hash(hasher, &k1.unwrap()));
-                key
-            }
-            StorageEntryType::DoubleMap {
-                ref hasher,
-                ref key2_hasher,
-                ..
-            } => {
-                if (k1.is_none() || k1.as_ref().unwrap().is_empty())
-                    || (k2.is_none() || k2.as_ref().unwrap().is_empty())
-                {
-                    return Err(Error::StorageKeyNotFound);
-                }
-                key.append(&mut hash(hasher, &k1.unwrap()));
-                key.append(&mut hash(key2_hasher, &k2.unwrap()));
-                key
-            }
-        };
+        let map_keys = &[k1, k2].iter().filter_map(|k| *k).collect::<Vec<_>>();
+        let key = meta
+            .storage_entry(pallet, item)
+            .ok_or(Error::StorageKeyNotFound)?
+            .key(pallet, &map_keys)
+            .ok_or(Error::StorageKeyNotFound)?;
 
         Ok(StorageKey(key))
     }

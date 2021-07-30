@@ -1,10 +1,9 @@
+use crate::meta_ext::Hasher;
 use blake2::{Blake2b, Digest};
-use core::hash::Hasher;
-use frame_metadata::v12::StorageHasher;
+use core::hash::Hasher as _;
 
 /// hashes and encodes the provided input with the specified hasher
-pub fn hash(hasher: &StorageHasher, input: &str) -> Vec<u8> {
-    use StorageHasher::*;
+pub fn hash(hasher: &Hasher, input: &str) -> Vec<u8> {
     let input = if input.starts_with("0x") {
         hex::decode(&input[2..]).unwrap_or_else(|_| input.into())
     } else {
@@ -12,13 +11,13 @@ pub fn hash(hasher: &StorageHasher, input: &str) -> Vec<u8> {
     };
 
     match hasher {
-        Blake2_128 => Blake2b::digest(&input).as_slice().to_owned(),
-        Blake2_256 => unreachable!(),
-        Blake2_128Concat => blake2_concat(&input),
-        Twox128 => twox_hash(&input),
-        Twox256 => unreachable!(),
-        Twox64Concat => twox_hash_concat(&input),
-        Identity => input.into(),
+        Hasher::Blake2_128 => Blake2b::digest(&input).as_slice().to_owned(),
+        Hasher::Blake2_256 => unimplemented!(),
+        Hasher::Blake2_128Concat => blake2_concat(&input),
+        Hasher::Twox128 => twox_hash(&input),
+        Hasher::Twox256 => unimplemented!(),
+        Hasher::Twox64Concat => twox_hash_concat(&input),
+        Hasher::Identity => input.into(),
     }
 }
 

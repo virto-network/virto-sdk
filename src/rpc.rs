@@ -1,10 +1,10 @@
 use async_trait::async_trait;
-use frame_metadata::RuntimeMetadataPrefixed;
 use futures_lite::AsyncReadExt;
 use jsonrpc::serde_json::value::RawValue;
 pub use jsonrpc::{error, Error, Request, Response};
 
-use crate::{meta_ext::MetaExt, Backend, StorageKey};
+use crate::meta_ext::{meta_from_bytes, Metadata};
+use crate::{Backend, StorageKey};
 
 pub type RpcResult = Result<Vec<u8>, error::Error>;
 
@@ -56,15 +56,14 @@ impl<R: Rpc> Backend for R {
         Ok(())
     }
 
-    async fn metadata(&self) -> crate::Result<frame_metadata::RuntimeMetadataPrefixed> {
+    async fn metadata(&self) -> crate::Result<Metadata> {
         let meta = self
             .rpc("state_getMetadata", &[])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
 
-        let meta = RuntimeMetadataPrefixed::from_bytes(meta).map_err(|_| crate::Error::BadMetadata);
+        let meta = meta_from_bytes(&mut meta.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
         log::trace!("Metadata {:#?}", meta);
-        meta
+        Ok(meta)
     }
 }
-
