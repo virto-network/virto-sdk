@@ -13,8 +13,8 @@ struct Opt {
     /// Node address
     #[structopt(short, long)]
     pub chain: String,
-    #[structopt(short, long, default_value = "json")]
-    pub output: Output,
+    #[structopt(short, long)]
+    pub output: Option<Output>,
     #[structopt(short, long)]
     pub quiet: bool,
     #[structopt(short, long, parse(from_occurrences))]
@@ -66,20 +66,27 @@ async fn run() -> Result<()> {
     let client = Sube::from(backend);
     let meta = client.try_init_meta().await?;
 
-    match opt.cmd {
+    let out = match opt.cmd {
         Cmd::Query { query } => {
-            let res: String = client.query(query.as_str()).await?;
-            writeln!(io::stdout(), "{}", res).await?;
+            let res = client.query_bytes(query.as_str()).await?;
+            match opt.output.unwrap_or(Output::Hex) {
+                Output::Scale => res,
+                Output::Json => unimplemented!(),
+                Output::Hex => format!("0x{}", hex::encode(res)).into(),
+            }
         }
-        Cmd::Submit => client.submit(io::stdin()).await?,
-        Cmd::Meta => {
-            let meta = match opt.output {
-                Output::Scale => meta.encode(),
-                Output::Json => serde_json::to_string(&meta)?.into(),
-            };
-            io::stdout().write_all(&meta).await?;
+        Cmd::Submit => {
+            client.submit(io::stdin()).await?;
+            vec![]
         }
+        Cmd::Meta => match opt.output.unwrap_or(Output::Json) {
+            Output::Scale => meta.encode(),
+            Output::Json => serde_json::to_string(&meta)?.into(),
+            Output::Hex => format!("0x{}", hex::encode(meta.encode())).into(),
+        },
     };
+    io::stdout().write_all(&out).await?;
+    writeln!(io::stdout()).await?;
     Ok(())
 }
 
@@ -87,6 +94,7 @@ async fn run() -> Result<()> {
 enum Output {
     Json,
     Scale,
+    Hex,
 }
 
 impl FromStr for Output {
@@ -95,6 +103,7 @@ impl FromStr for Output {
         Ok(match s {
             "json" => Output::Json,
             "scale" => Output::Scale,
+            "hex" => Output::Hex,
             _ => Output::Json,
         })
     }
