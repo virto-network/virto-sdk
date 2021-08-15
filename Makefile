@@ -16,4 +16,4 @@ test-internal:
 		$(CONTAINER_IMAGE) --dev --rpc-external --ws-external 
 	@echo "⏳ Waiting node to be ready"
 	@curl localhost:12345 -fs --retry 5 --retry-all-errors -H 'Content-Type: application/json' -d $(TEST_REQUEST)
-	cargo test --all-features
+	cargo test --features default,ws

@@ -4,7 +4,8 @@ use codec::Decode;
 use core::future::Future;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 use futures_lite::AsyncRead;
-use meta_ext::{Entry, Meta, Metadata};
+pub use meta_ext::Metadata;
+use meta_ext::{Entry, Meta};
 use once_cell::sync::OnceCell;
 use std::{
     convert::{TryFrom, TryInto},

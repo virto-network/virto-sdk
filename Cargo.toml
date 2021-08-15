@@ -49,10 +49,10 @@ bin = [
 	"structopt",
 	"url",
 	"v13",
-	# "ws",
+	"ws",
 ]
 http = ["surf/h1-client-rustls"]
-ws = ["async-tungstenite"]
+ws = ["async-std", "async-tungstenite"]
 v12 = ["frame-metadata/v12"]
 v13 = ["frame-metadata/v13"]
 v14 = ["frame-metadata/v14", "scale-info"]

@@ -33,7 +33,7 @@ where
 {
     async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult {
         let id = self.next_id().await;
-        log::info!("RPC {} id: {}", id, method);
+        log::info!("RPC `{}` (ID={})", method, id);
 
         // Store a sender that will notify our receiver when a matching message arrives
         let (sender, recv) = oneshot::channel::<rpc::Response>();
@@ -48,7 +48,7 @@ where
             params: &Self::convert_params(params),
         })
         .expect("Request is serializable");
-        log::debug!("RPC Request {}", &msg[..20]);
+        log::debug!("RPC Request {} ...", &msg[..50]);
         let _ = self.tx.lock().await.send(Message::Text(msg)).await;
 
         // wait for the matching response to arrive
@@ -69,7 +69,7 @@ impl<Tx> Backend<Tx> {
     }
 }
 
-type WS2 = futures_util::sink::SinkErrInto<
+pub type WS2 = futures_util::sink::SinkErrInto<
     SplitSink<async_tungstenite::WebSocketStream<async_std::net::TcpStream>, Message>,
     Message,
     Error,
@@ -77,6 +77,7 @@ type WS2 = futures_util::sink::SinkErrInto<
 
 impl Backend<WS2> {
     pub async fn new_ws2(url: &str) -> Result<Self, WsError> {
+        log::trace!("WS connecting to {}", url);
         let (stream, _) = async_tungstenite::async_std::connect_async(url).await?;
         let (tx, rx) = stream.split();
 
