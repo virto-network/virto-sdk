@@ -69,8 +69,23 @@ impl<Tx> Backend<Tx> {
     }
 }
 
+#[cfg(not(feature = "wss"))]
 pub type WS2 = futures_util::sink::SinkErrInto<
     SplitSink<async_tungstenite::WebSocketStream<async_std::net::TcpStream>, Message>,
+    Message,
+    Error,
+>;
+#[cfg(feature = "wss")]
+pub type WS2 = futures_util::sink::SinkErrInto<
+    SplitSink<
+        async_tungstenite::WebSocketStream<
+            async_tungstenite::stream::Stream<
+                async_std::net::TcpStream,
+                async_tls::client::TlsStream<async_std::net::TcpStream>,
+            >,
+        >,
+        Message,
+    >,
     Message,
     Error,
 >;

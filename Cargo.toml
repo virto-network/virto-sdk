@@ -34,12 +34,13 @@ futures-channel = { version = "0.3.16", default-features = false, features = ["a
 futures-util = { version = "0.3.16", default-features = false, features = ["sink"] }
 async-mutex = "1.4.0"
 cfg-if = "1.0.0"
+async-tls = { version = "0.11.0", default-features = false, optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes"] }
 
 [features]
-# default = ["http", "ws", "v14"]
+# default = ["http", "wss", "v14"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
@@ -49,10 +50,11 @@ bin = [
 	"structopt",
 	"url",
 	"v13",
-	"ws",
+	"wss",
 ]
 http = ["surf/h1-client-rustls"]
 ws = ["async-std", "async-tungstenite"]
+wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 v12 = ["frame-metadata/v12"]
 v13 = ["frame-metadata/v13"]
 v14 = ["frame-metadata/v14", "scale-info"]
