@@ -26,17 +26,18 @@ impl Rpc for Backend {
     /// HTTP based JSONRpc request expecting an hex encoded result
     async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult {
         log::info!("RPC `{}` to {}", method, &self.0);
-        let mut res = surf::post(&self.0)
-            .content_type("application/json")
-            .body(
-                to_string(&rpc::Request {
-                    id: 1.into(),
-                    jsonrpc: Some("2.0"),
-                    method,
-                    params: &Self::convert_params(params),
-                })
-                .unwrap(),
-            )
+        let req = surf::post(&self.0).content_type("application/json").body(
+            to_string(&rpc::Request {
+                id: 1.into(),
+                jsonrpc: Some("2.0"),
+                method,
+                params: &Self::convert_params(params),
+            })
+            .unwrap(),
+        );
+        let client = surf::client().with(surf::middleware::Redirect::new(2));
+        let mut res = client
+            .send(req)
             .await
             .map_err(|err| rpc::Error::Transport(err.into_inner().into()))?;
 
