@@ -1,4 +1,5 @@
 use core::slice;
+use std::borrow::Borrow;
 
 use codec::Decode;
 #[cfg(any(feature = "v12", feature = "v13"))]
@@ -57,7 +58,7 @@ pub fn meta_from_bytes(bytes: &mut &[u8]) -> Result<Metadata, codec::Error> {
         RuntimeMetadata::V13(m) => m,
         #[cfg(feature = "v14")]
         RuntimeMetadata::V14(m) => m,
-        _ => unreachable!(),
+        _ => unreachable!("Metadata version not supported"),
     };
     Ok(meta)
 }
@@ -117,6 +118,32 @@ pub trait Entry {
 
 pub trait EntryTy {
     fn key(&self, pallet: &str, item: &str, map_keys: &[&str]) -> Option<Vec<u8>>;
+
+    fn build_key<H>(
+        &self,
+        pallet: &str,
+        item: &str,
+        map_keys: &[&str],
+        hashers: &[H],
+    ) -> Option<Vec<u8>>
+    where
+        H: Borrow<Hasher>,
+    {
+        let mut key = hash(&Hasher::Twox128, &pallet);
+        key.append(&mut hash(&Hasher::Twox128, &item));
+
+        if map_keys.len() != hashers.len() {
+            return None;
+        }
+        for (i, h) in hashers.iter().enumerate() {
+            let hasher = h.borrow();
+            if map_keys[i].is_empty() {
+                return None;
+            }
+            key.append(&mut hash(hasher, map_keys[i]))
+        }
+        Some(key)
+    }
 }
 
 impl<'a> Meta<'a> for Metadata {
@@ -186,50 +213,48 @@ impl<'a> Entry for EntryMeta {
 
 impl EntryTy for EntryType {
     fn key(&self, pallet: &str, item: &str, map_keys: &[&str]) -> Option<Vec<u8>> {
-        let mut key = hash(&Hasher::Twox128, &pallet);
-        key.append(&mut hash(&Hasher::Twox128, &item));
-
-        Some(match self {
-            Self::Plain(_) => key,
-            Self::Map { ref hasher, .. } => {
-                if map_keys.len() != 1 || map_keys[0].is_empty() {
-                    return None;
-                }
-                let k1 = map_keys[0];
-                key.append(&mut hash(hasher, &k1));
-                key
+        match self {
+            Self::Plain(ty) => {
+                log::debug!("Item Type: {:?}", ty);
+                self.build_key::<Hasher>(pallet, item, &[], &[])
             }
+            #[cfg(any(feature = "v12", feature = "v13"))]
+            Self::Map {
+                hasher, key, value, ..
+            } => {
+                log::debug!("Item Type: {:?} => {:?}", key, value);
+                self.build_key(pallet, item, map_keys, &[hasher])
+            }
+            #[cfg(any(feature = "v12", feature = "v13"))]
             Self::DoubleMap {
                 hasher,
                 key2_hasher,
-                ..
+                key1,
+                key2,
+                value,
             } => {
-                if map_keys.len() != 2 {
-                    return None;
-                }
-                let k1 = map_keys[0];
-                let k2 = map_keys[1];
-                if k1.is_empty() || k2.is_empty() {
-                    return None;
-                }
-                key.append(&mut hash(hasher, &k1));
-                key.append(&mut hash(key2_hasher, &k2));
-                key
+                log::debug!("Item Type: ({:?}, {:?}) => {:?}", key1, key2, value);
+                self.build_key(pallet, item, map_keys, &[hasher, key2_hasher])
             }
-            #[cfg(not(feature = "v12"))]
-            Self::NMap { hashers, .. } => {
-                #[cfg(feature = "v13")]
-                let hashers = hashers.decoded();
-                if map_keys.len() != hashers.len() {
-                    return None;
-                }
-
-                for (i, h) in hashers.iter().enumerate() {
-                    key.append(&mut hash(h, map_keys[i]))
-                }
-                key
+            #[cfg(feature = "v13")]
+            Self::NMap {
+                hashers,
+                keys,
+                value,
+            } => {
+                log::debug!("Item Type: {:?} => {:?}", keys, value);
+                self.build_key(pallet, item, map_keys, hashers.decoded())
             }
-        })
+            #[cfg(feature = "v14")]
+            Self::Map {
+                hashers,
+                key,
+                value,
+            } => {
+                log::debug!("Item Type: {:?} => {:?}", key, value);
+                self.build_key(pallet, item, map_keys, hashers)
+            }
+        }
     }
 }
 
