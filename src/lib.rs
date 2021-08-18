@@ -1,3 +1,14 @@
+#[cfg(not(any(feature = "v12", feature = "v13", feature = "v14")))]
+compile_error!("Enable one of the metadata versions");
+#[cfg(all(feature = "v12", feature = "v13", feature = "v14"))]
+compile_error!("Only one metadata version can be enabled at the moment");
+#[cfg(all(feature = "v12", feature = "v13"))]
+compile_error!("Only one metadata version can be enabled at the moment");
+#[cfg(all(feature = "v12", feature = "v14"))]
+compile_error!("Only one metadata version can be enabled at the moment");
+#[cfg(all(feature = "v13", feature = "v14"))]
+compile_error!("Only one metadata version can be enabled at the moment");
+
 use async_trait::async_trait;
 pub use codec;
 use codec::Decode;
