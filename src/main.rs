@@ -1,20 +1,25 @@
 use anyhow::{anyhow, Result};
-use async_std::{io, prelude::*};
+use async_std::{io, path::PathBuf, prelude::*};
 use async_trait::async_trait;
-use codec::Encode;
+use codec::{Decode, Encode};
+use futures_util::future::TryFutureExt;
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
-use sube::{http, ws, Backend, Sube};
+use sube::{http, ws, Backend, Metadata, Sube};
 use surf::Url;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "sube")]
 struct Opt {
-    /// Node address
+    /// Address of the chain to connect to
     #[structopt(short, long)]
     pub chain: String,
+    /// Format for the output (json,scale,hex)
     #[structopt(short, long)]
     pub output: Option<Output>,
+    /// Use an existing metadata definition from the filesystem
+    #[structopt(short, long)]
+    pub metadata: Option<PathBuf>,
     #[structopt(short, long)]
     pub quiet: bool,
     #[structopt(short, long, parse(from_occurrences))]
@@ -26,7 +31,7 @@ struct Opt {
 
 #[derive(StructOpt, Debug)]
 enum Cmd {
-    /// Get the chain metadata
+    /// Get the chain metadata from the specified chain
     Meta,
     /// Use a path-like syntax to query data from the chain storage
     ///
@@ -64,7 +69,22 @@ async fn run() -> Result<()> {
         _ => return Err(anyhow!("Not supported")),
     };
     let client = Sube::from(backend);
-    let meta = client.try_init_meta().await?;
+
+    let meta = if opt.metadata.is_none() {
+        client.try_init_meta().await?
+    } else {
+        let meta_path = &opt.metadata.unwrap();
+        Sube::<AnyBackend>::get_or_try_init_meta(|| {
+            async {
+                let mut m = Vec::new();
+                let mut f = async_std::fs::File::open(meta_path).await?;
+                f.read_to_end(&mut m).await?;
+                Metadata::decode(&mut m.as_slice())
+            }
+            .map_err(|_| sube::Error::BadMetadata)
+        })
+        .await?
+    };
 
     let out = match opt.cmd {
         Cmd::Query { query } => {
