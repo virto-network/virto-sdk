@@ -59,8 +59,8 @@ async fn run() -> Result<()> {
 
     log::debug!("Matching backend for {}", url);
     let backend: AnyBackend = match url.scheme() {
-        "http" => AnyBackend::Http(http::Backend::new(url)),
-        "ws" => AnyBackend::Ws(ws::Backend::new_ws2(url.as_ref()).await?),
+        "http" | "https" => AnyBackend::Http(http::Backend::new(url)),
+        "ws" | "wss" => AnyBackend::Ws(ws::Backend::new_ws2(url.as_ref()).await?),
         _ => return Err(anyhow!("Not supported")),
     };
     let client = Sube::from(backend);
@@ -111,7 +111,11 @@ impl FromStr for Output {
 
 // Function that tries to be "smart" about what the user might want to actually connect to
 fn chain_string_to_url(mut chain: String) -> Result<Url> {
-    if !chain.starts_with("ws://") && !chain.starts_with("http://") {
+    if !chain.starts_with("ws://")
+        && !chain.starts_with("wss://")
+        && !chain.starts_with("http://")
+        && !chain.starts_with("https://")
+    {
         chain = ["http", &chain].join("://");
     }
 

@@ -8,7 +8,7 @@ edition = "2018"
 repository = "https://github.com/valibre-org/sube"
 
 [dependencies]
-async-trait = "0.1.50"
+async-trait = "0.1.51"
 blake2 = { version = "0.9.1", default-features = false }
 byteorder = "1.4.3"
 frame-metadata = { git = "https://github.com/paritytech/frame-metadata.git", branch = "main", default-features = false, features = ["std"] }
@@ -24,14 +24,14 @@ surf = { version = "2.2.0", default_features = false, optional = true }
 
 anyhow = { version = "1.0.42", optional = true }
 async-std = { version = "1.9.0", default_features = false, optional = true }
-serde_json = { version = "1.0.64", default-features = false, optional = true }
+serde_json = { version = "1.0.66", default-features = false, optional = true }
 stderrlog = { version = "0.5.1", optional = true }
 structopt = { version = "0.3.22", optional = true }
 url = { version = "2.2.2", optional = true }
 
 async-tungstenite = { version = "0.14.0", features = ["async-std-runtime"], optional = true }
-futures-channel = { version = "0.3.15", default-features = false, features = ["alloc"] }
-futures-util = { version = "0.3.15", default-features = false, features = ["sink"] }
+futures-channel = { version = "0.3.16", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3.16", default-features = false, features = ["sink"] }
 async-mutex = "1.4.0"
 cfg-if = "1.0.0"
 
@@ -39,7 +39,6 @@ cfg-if = "1.0.0"
 async-std = { version = "1.9.0", features = ["attributes"] }
 
 [features]
-default = ["http", "v13"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
