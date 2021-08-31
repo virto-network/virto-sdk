@@ -5,6 +5,7 @@ authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 
 [dependencies]
+byteorder = { version = "1.4.3", default-features = false }
 scale-info = { version = "0.6.0", default-features = false }
 serde = { version = "1.0.126", default-features = false }
 serde_json = "1.0.64"

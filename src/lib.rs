@@ -1,11 +1,10 @@
+use byteorder::{ByteOrder, LE};
 use scale_info::form::MetaForm;
+use scale_info::{prelude::*, TypeDefPrimitive};
 use scale_info::{Type, TypeDef};
 use serde::ser::SerializeSeq;
 use serde::ser::{SerializeStruct, SerializeTuple};
 use serde::Serialize;
-use serde_json::to_value;
-use std::any::Any;
-use std::convert::TryInto;
 use std::str;
 
 pub struct Value<'a> {
@@ -24,33 +23,28 @@ impl<'a> Serialize for Value<'a> {
     where
         S: serde::Serializer,
     {
-        match self.info.type_def() {
+        let def = self.info.type_def();
+        let size = size_of(def);
+        let data = self.data;
+
+        match def {
             TypeDef::Primitive(primitive) => match primitive {
-                scale_info::TypeDefPrimitive::U8 => ser.serialize_u8(self.data[0]),
-                scale_info::TypeDefPrimitive::U16 => ser.serialize_u16(self.data[0].into()),
-                scale_info::TypeDefPrimitive::U32 => ser.serialize_u32(self.data[0].into()),
-                scale_info::TypeDefPrimitive::U64 => ser.serialize_u64(self.data[0].into()),
-                scale_info::TypeDefPrimitive::U128 => ser.serialize_u128(self.data[0].into()),
-                scale_info::TypeDefPrimitive::I8 => {
-                    ser.serialize_i8(self.data[0].try_into().unwrap())
+                TypeDefPrimitive::U8 => ser.serialize_u8(data[0]),
+                TypeDefPrimitive::U16 => ser.serialize_u16(LE::read_u16(&data[..size])),
+                TypeDefPrimitive::U32 => ser.serialize_u32(LE::read_u32(&data[..size])),
+                TypeDefPrimitive::U64 => ser.serialize_u64(LE::read_u64(&data[..size])),
+                TypeDefPrimitive::U128 => ser.serialize_u128(LE::read_u128(&data[..size])),
+                TypeDefPrimitive::I8 => ser.serialize_i8(i8::from_le_bytes([data[0]])),
+                TypeDefPrimitive::I16 => ser.serialize_i16(LE::read_i16(&data[..size])),
+                TypeDefPrimitive::I32 => ser.serialize_i32(LE::read_i32(&data[..size])),
+                TypeDefPrimitive::I64 => ser.serialize_i64(LE::read_i64(&data[..size])),
+                TypeDefPrimitive::I128 => ser.serialize_i128(LE::read_i128(&data[..size])),
+                TypeDefPrimitive::Bool => ser.serialize_bool(data[0] != 0),
+                TypeDefPrimitive::Char => {
+                    let n = LE::read_u32(&data[..size]);
+                    ser.serialize_char(char::from_u32(n).unwrap())
                 }
-                scale_info::TypeDefPrimitive::I16 => {
-                    ser.serialize_i16(self.data[0].try_into().unwrap())
-                }
-                scale_info::TypeDefPrimitive::I32 => {
-                    ser.serialize_i32(self.data[0].try_into().unwrap())
-                }
-                scale_info::TypeDefPrimitive::I64 => {
-                    ser.serialize_i64(self.data[0].try_into().unwrap())
-                }
-                scale_info::TypeDefPrimitive::I128 => {
-                    ser.serialize_i128(self.data[0].try_into().unwrap())
-                }
-                scale_info::TypeDefPrimitive::Bool => ser.serialize_bool(self.data[0] != 0),
-                scale_info::TypeDefPrimitive::Char => ser.serialize_char(self.data[0].into()),
-                scale_info::TypeDefPrimitive::Str => {
-                    ser.serialize_str(str::from_utf8(self.data).unwrap())
-                }
+                TypeDefPrimitive::Str => ser.serialize_str(str::from_utf8(self.data).unwrap()),
                 _ => ser.serialize_bytes(self.data),
             },
             TypeDef::Composite(x) => {
@@ -62,7 +56,7 @@ impl<'a> Serialize for Value<'a> {
                     let t = f.ty().type_info();
                     match t.type_def() {
                         TypeDef::Primitive(_) => {
-                            let size = get_size(t.type_def());
+                            let size = size_of(t.type_def());
                             state.serialize_field(name, &self.data[i])?;
                             i += size;
                         }
@@ -77,20 +71,20 @@ impl<'a> Serialize for Value<'a> {
                             state.serialize_field(name, &data)?;
                             i += size;
                         }
-                        TypeDef::Composite(_) => todo!(),
-                        TypeDef::Variant(_) => todo!(),
-                        TypeDef::Sequence(_) => todo!(),
-                        TypeDef::Array(_) => todo!(),
-                        TypeDef::Tuple(_) => todo!(),
-                        TypeDef::Compact(_) => todo!(),
-                        TypeDef::Phantom(_) => todo!(),
+                        // TypeDef::Composite(_) => todo!(),
+                        // TypeDef::Variant(_) => todo!(),
+                        // TypeDef::Sequence(_) => todo!(),
+                        // TypeDef::Array(_) => todo!(),
+                        // TypeDef::Tuple(_) => todo!(),
+                        // TypeDef::Compact(_) => todo!(),
+                        // TypeDef::Phantom(_) => todo!(),
                     }
                 }
                 state.end()
             }
             TypeDef::Variant(_y) => ser.serialize_bytes(self.data),
             TypeDef::Sequence(x) => {
-                let size = get_size(x.type_param().type_info().type_def());
+                let size = size_of(x.type_param().type_info().type_def());
                 let mut seq = ser.serialize_seq(Some(self.data.len()))?;
                 let mut i: usize = 1;
                 while i < self.data.len() {
@@ -100,7 +94,7 @@ impl<'a> Serialize for Value<'a> {
                 seq.end()
             }
             TypeDef::Array(x) => {
-                let size = get_size(x.type_param().type_info().type_def());
+                let size = size_of(x.type_param().type_info().type_def());
                 let mut seq = ser.serialize_seq(Some(self.data.len()))?;
                 let mut i: usize = 1;
                 while i < self.data.len() {
@@ -113,7 +107,7 @@ impl<'a> Serialize for Value<'a> {
                 let mut seq = ser.serialize_tuple(x.fields().len())?;
                 let mut i = 0;
                 for (_, f) in x.fields().iter().enumerate() {
-                    let size = get_size(f.type_info().type_def());
+                    let size = size_of(f.type_info().type_def());
                     seq.serialize_element(&self.data[i])?;
                     i += size;
                 }
@@ -125,24 +119,22 @@ impl<'a> Serialize for Value<'a> {
     }
 }
 
-fn get_size(t: &TypeDef<MetaForm>) -> usize {
+fn size_of(t: &TypeDef<MetaForm>) -> usize {
     match t {
         TypeDef::Primitive(primitive) => match primitive {
-            scale_info::TypeDefPrimitive::U8 => std::mem::size_of::<u8>(),
-            scale_info::TypeDefPrimitive::U16 => std::mem::size_of::<u16>(),
-            scale_info::TypeDefPrimitive::U32 => std::mem::size_of::<u32>(),
-            scale_info::TypeDefPrimitive::U64 => std::mem::size_of::<u64>(),
-            scale_info::TypeDefPrimitive::U128 => std::mem::size_of::<u128>(),
-            scale_info::TypeDefPrimitive::I8 => std::mem::size_of::<i8>(),
-            scale_info::TypeDefPrimitive::I16 => std::mem::size_of::<i16>(),
-            scale_info::TypeDefPrimitive::I32 => std::mem::size_of::<i32>(),
-            scale_info::TypeDefPrimitive::I64 => std::mem::size_of::<i64>(),
-            scale_info::TypeDefPrimitive::I128 => std::mem::size_of::<i128>(),
-            scale_info::TypeDefPrimitive::Bool => std::mem::size_of::<bool>(),
-            scale_info::TypeDefPrimitive::Char => std::mem::size_of::<char>(),
-            scale_info::TypeDefPrimitive::Str => todo!(),
-            scale_info::TypeDefPrimitive::U256 => todo!(),
-            scale_info::TypeDefPrimitive::I256 => todo!(),
+            scale_info::TypeDefPrimitive::U8 => mem::size_of::<u8>(),
+            scale_info::TypeDefPrimitive::U16 => mem::size_of::<u16>(),
+            scale_info::TypeDefPrimitive::U32 => mem::size_of::<u32>(),
+            scale_info::TypeDefPrimitive::U64 => mem::size_of::<u64>(),
+            scale_info::TypeDefPrimitive::U128 => mem::size_of::<u128>(),
+            scale_info::TypeDefPrimitive::I8 => mem::size_of::<i8>(),
+            scale_info::TypeDefPrimitive::I16 => mem::size_of::<i16>(),
+            scale_info::TypeDefPrimitive::I32 => mem::size_of::<i32>(),
+            scale_info::TypeDefPrimitive::I64 => mem::size_of::<i64>(),
+            scale_info::TypeDefPrimitive::I128 => mem::size_of::<i128>(),
+            scale_info::TypeDefPrimitive::Bool => mem::size_of::<bool>(),
+            scale_info::TypeDefPrimitive::Char => mem::size_of::<char>(),
+            _ => unimplemented!(),
         },
         TypeDef::Composite(_) => todo!(),
         TypeDef::Variant(_) => todo!(),
@@ -162,6 +154,26 @@ mod tests {
     use parity_scale_codec::Encode;
     use scale_info::TypeInfo;
     use serde_json::to_value;
+
+    #[test]
+    fn serialize_u8() -> Result<(), Box<dyn Error>> {
+        let foo = u8::MAX;
+        let data = foo.encode();
+        let info = u8::type_info();
+        let val = Value::new(&data, &info);
+        assert_eq!(to_value(val)?, to_value(foo)?);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_u16() -> Result<(), Box<dyn Error>> {
+        let foo = u16::MAX;
+        let data = foo.encode();
+        let info = u16::type_info();
+        let val = Value::new(&data, &info);
+        assert_eq!(to_value(val)?, to_value(foo)?);
+        Ok(())
+    }
 
     #[test]
     fn serialize_u32() -> Result<(), Box<dyn Error>> {
@@ -184,20 +196,30 @@ mod tests {
     }
 
     #[test]
-    fn serialize_u16() -> Result<(), Box<dyn Error>> {
-        let foo = u16::MAX;
+    fn serialize_i16() -> Result<(), Box<dyn Error>> {
+        let foo = i16::MAX;
         let data = foo.encode();
-        let info = u16::type_info();
+        let info = i16::type_info();
         let val = Value::new(&data, &info);
         assert_eq!(to_value(val)?, to_value(foo)?);
         Ok(())
     }
 
     #[test]
-    fn serialize_u8() -> Result<(), Box<dyn Error>> {
-        let foo = u8::MAX;
+    fn serialize_i32() -> Result<(), Box<dyn Error>> {
+        let foo = i32::MAX;
         let data = foo.encode();
-        let info = u8::type_info();
+        let info = i32::type_info();
+        let val = Value::new(&data, &info);
+        assert_eq!(to_value(val)?, to_value(foo)?);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_i64() -> Result<(), Box<dyn Error>> {
+        let foo = i64::MAX;
+        let data = foo.encode();
+        let info = i64::type_info();
         let val = Value::new(&data, &info);
         assert_eq!(to_value(val)?, to_value(foo)?);
         Ok(())
