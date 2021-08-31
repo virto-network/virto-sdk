@@ -65,18 +65,25 @@ impl<'a> Serialize for Value<'a> {
                             let size = get_size(t.type_def());
                             state.serialize_field(name, &self.data[i])?;
                             i += size;
-                        },
+                        }
                         _ => {
                             println!("{:?}", t.type_def());
                             println!("{:?}", self.data);
                             println!("{:?}", f.to_owned());
                             let size = std::mem::size_of_val(&f.to_owned().ty());
                             let u = &f.ty().type_info();
-                            let data  = Value::new(&self.data, u);
+                            let data = Value::new(&self.data, u);
                             println!("{:?}", size);
                             state.serialize_field(name, &data)?;
                             i += size;
                         }
+                        TypeDef::Composite(_) => todo!(),
+                        TypeDef::Variant(_) => todo!(),
+                        TypeDef::Sequence(_) => todo!(),
+                        TypeDef::Array(_) => todo!(),
+                        TypeDef::Tuple(_) => todo!(),
+                        TypeDef::Compact(_) => todo!(),
+                        TypeDef::Phantom(_) => todo!(),
                     }
                 }
                 state.end()
@@ -133,9 +140,17 @@ fn get_size(t: &TypeDef<MetaForm>) -> usize {
             scale_info::TypeDefPrimitive::I128 => std::mem::size_of::<i128>(),
             scale_info::TypeDefPrimitive::Bool => std::mem::size_of::<bool>(),
             scale_info::TypeDefPrimitive::Char => std::mem::size_of::<char>(),
-            _ => 0,
+            scale_info::TypeDefPrimitive::Str => todo!(),
+            scale_info::TypeDefPrimitive::U256 => todo!(),
+            scale_info::TypeDefPrimitive::I256 => todo!(),
         },
-        _ => 0, // ideally this match arm is not required
+        TypeDef::Composite(_) => todo!(),
+        TypeDef::Variant(_) => todo!(),
+        TypeDef::Sequence(_) => todo!(),
+        TypeDef::Array(_) => todo!(),
+        TypeDef::Tuple(_) => todo!(),
+        TypeDef::Compact(_) => todo!(),
+        TypeDef::Phantom(_) => todo!(),
     }
 }
 
@@ -150,7 +165,7 @@ mod tests {
 
     #[test]
     fn serialize_u32() -> Result<(), Box<dyn Error>> {
-        let foo = 2u32;
+        let foo = u32::MAX;
         let data = foo.encode();
         let info = u32::type_info();
         let val = Value::new(&data, &info);
@@ -160,7 +175,7 @@ mod tests {
 
     #[test]
     fn serialize_u64() -> Result<(), Box<dyn Error>> {
-        let foo = 2u64;
+        let foo = u64::MAX;
         let data = foo.encode();
         let info = u64::type_info();
         let val = Value::new(&data, &info);
@@ -170,7 +185,7 @@ mod tests {
 
     #[test]
     fn serialize_u16() -> Result<(), Box<dyn Error>> {
-        let foo = 2u16;
+        let foo = u16::MAX;
         let data = foo.encode();
         let info = u16::type_info();
         let val = Value::new(&data, &info);
@@ -180,7 +195,7 @@ mod tests {
 
     #[test]
     fn serialize_u8() -> Result<(), Box<dyn Error>> {
-        let foo = 2u8;
+        let foo = u8::MAX;
         let data = foo.encode();
         let info = u8::type_info();
         let val = Value::new(&data, &info);
@@ -200,7 +215,7 @@ mod tests {
 
     #[test]
     fn serialize_u8array() -> Result<(), Box<dyn Error>> {
-        let foo: Vec<u8> = [2u8, 7u8].into();
+        let foo: Vec<u8> = [2u8, u8::MAX].into();
         let data = foo.encode();
         let info = Vec::<u8>::type_info();
         let val = Value::new(&data, &info);
@@ -210,7 +225,7 @@ mod tests {
 
     #[test]
     fn serialize_u16array() -> Result<(), Box<dyn Error>> {
-        let foo: Vec<u16> = [2u16, 7u16].into();
+        let foo: Vec<u16> = [2u16, u16::MAX].into();
         let data = foo.encode();
         let info = Vec::<u16>::type_info();
         let val = Value::new(&data, &info);
@@ -220,7 +235,7 @@ mod tests {
 
     #[test]
     fn serialize_u32array() -> Result<(), Box<dyn Error>> {
-        let foo: Vec<u32> = [2u32, 7u32].into();
+        let foo: Vec<u32> = [2u32, u32::MAX].into();
         let data = foo.encode();
         let info = Vec::<u32>::type_info();
         let val = Value::new(&data, &info);
@@ -230,9 +245,9 @@ mod tests {
 
     #[test]
     fn serialize_tuple() -> Result<(), Box<dyn Error>> {
-        let foo = (2u8, 2u8);
+        let foo: (i128, Vec<String>) = (i128::MIN, vec!["foo".into()]);
         let data = foo.encode();
-        let info = <(u8, u8)>::type_info();
+        let info = <(i128, Vec<String>)>::type_info();
         let val = Value::new(&data, &info);
         assert_eq!(to_value(val)?, to_value(foo)?);
         Ok(())
@@ -245,7 +260,10 @@ mod tests {
             bar: u32,
             baz: u32,
         }
-        let foo = Foo { bar: 123, baz: 45 };
+        let foo = Foo {
+            bar: 123,
+            baz: u32::MAX,
+        };
         let data = foo.encode();
         let info = Foo::type_info();
         let val = Value::new(&data, &info);
@@ -261,7 +279,10 @@ mod tests {
             bar: u8,
             baz: u8,
         }
-        let foo = Foo { bar: 123, baz: 45 };
+        let foo = Foo {
+            bar: 123,
+            baz: u8::MAX,
+        };
         let data = foo.encode();
         let info = Foo::type_info();
         let val = Value::new(&data, &info);
@@ -277,7 +298,10 @@ mod tests {
             bar: u64,
             baz: u64,
         }
-        let foo = Foo { bar: 123, baz: 45 };
+        let foo = Foo {
+            bar: 123,
+            baz: u64::MAX,
+        };
         let data = foo.encode();
         let info = Foo::type_info();
         let val = Value::new(&data, &info);
@@ -289,11 +313,19 @@ mod tests {
     #[test]
     fn serialize_complex_struct() -> Result<(), Box<dyn Error>> {
         #[derive(Encode, Serialize, TypeInfo)]
-        struct Foo {
-            bar: Vec<u8>,
-            baz: u8,
+        enum Bar {
+            This,
+            That(i16),
         }
-        let foo = Foo { bar: [123u8].into(), baz: 45 };
+        #[derive(Encode, Serialize, TypeInfo)]
+        struct Foo {
+            bar: Vec<Bar>,
+            baz: Option<String>,
+        }
+        let foo = Foo {
+            bar: [Bar::That(i16::MAX), Bar::This].into(),
+            baz: Some("aliquam malesuada bibendum arcu vitae".into()),
+        };
         let data = foo.encode();
         let info = Foo::type_info();
         let val = Value::new(&data, &info);
