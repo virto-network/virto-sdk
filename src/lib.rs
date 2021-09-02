@@ -1,6 +1,5 @@
 use byteorder::{ByteOrder, LE};
-use scale_info::{Field, TypeDefPrimitive as Primitive};
-use scale_info::{Type, TypeDef};
+use scale_info::{prelude::*, Field, Type, TypeDef, TypeDefPrimitive as Primitive};
 use serde::ser::{SerializeStruct, SerializeTupleStruct};
 use serde::Serialize;
 use std::str;
@@ -10,12 +9,12 @@ use std::str;
 /// representation that requires allocating data.
 pub struct Value<'a> {
     data: &'a [u8],
-    info: &'a Type,
+    ty: Type,
 }
 
 impl<'a> Value<'a> {
-    pub fn new(data: &'a [u8], info: &'a Type) -> Self {
-        Value { data, info }
+    pub fn new(data: &'a [u8], ty: Type) -> Self {
+        Value { data, ty }
     }
 }
 
@@ -24,11 +23,10 @@ impl<'a> Serialize for Value<'a> {
     where
         S: serde::Serializer,
     {
-        let data = self.data;
-        let ty = self.info;
-        let name = ty_name(ty);
+        let mut data = self.data;
+        let name = ty_name(&self.ty);
 
-        match ty.type_def() {
+        match self.ty.type_def() {
             TypeDef::Composite(def) => {
                 let fields = def.fields();
                 // Differentiating between a tuple struct and a normal one
@@ -39,7 +37,7 @@ impl<'a> Serialize for Value<'a> {
                 } else {
                     let mut state = ser.serialize_struct(&name, fields.len())?;
                     for f in fields {
-                        let v = extract_value(data, f.ty().type_info());
+                        let v = extract_value(&mut data, f.ty().type_info());
                         state.serialize_field(f.name().unwrap(), &v)?;
                     }
                     state.end()
@@ -94,8 +92,35 @@ fn ty_name(ty: &Type) -> &'static str {
     ty.path().segments().last().copied().unwrap_or("")
 }
 
-// (TODO) Construct a Value slicing
-fn extract_value(_data: &[u8], ty: Type) -> Value {
+fn size_of(t: &Type) -> usize {
+    match t.type_def() {
+        TypeDef::Primitive(primitive) => match primitive {
+            scale_info::TypeDefPrimitive::U8 => mem::size_of::<u8>(),
+            scale_info::TypeDefPrimitive::U16 => mem::size_of::<u16>(),
+            scale_info::TypeDefPrimitive::U32 => mem::size_of::<u32>(),
+            scale_info::TypeDefPrimitive::U64 => mem::size_of::<u64>(),
+            scale_info::TypeDefPrimitive::U128 => mem::size_of::<u128>(),
+            scale_info::TypeDefPrimitive::I8 => mem::size_of::<i8>(),
+            scale_info::TypeDefPrimitive::I16 => mem::size_of::<i16>(),
+            scale_info::TypeDefPrimitive::I32 => mem::size_of::<i32>(),
+            scale_info::TypeDefPrimitive::I64 => mem::size_of::<i64>(),
+            scale_info::TypeDefPrimitive::I128 => mem::size_of::<i128>(),
+            scale_info::TypeDefPrimitive::Bool => mem::size_of::<bool>(),
+            scale_info::TypeDefPrimitive::Char => mem::size_of::<char>(),
+            _ => unimplemented!(),
+        },
+        TypeDef::Composite(_) => todo!(),
+        TypeDef::Variant(_) => todo!(),
+        TypeDef::Sequence(_) => todo!(),
+        TypeDef::Array(_) => todo!(),
+        TypeDef::Tuple(_) => todo!(),
+        TypeDef::Compact(_) => todo!(),
+        TypeDef::BitSequence(_) => todo!(),
+    }
+}
+
+// (TODO) Construct a Value consuming the original slice
+fn extract_value<'a>(data: &mut &'a [u8], ty: Type) -> Value<'a> {
     use TypeDef::*;
     match ty.type_def() {
         Composite(_def) => todo!(),
@@ -103,7 +128,11 @@ fn extract_value(_data: &[u8], ty: Type) -> Value {
         Sequence(_def) => todo!(),
         Array(_def) => todo!(),
         Tuple(_def) => todo!(),
-        Primitive(_def) => todo!(),
+        Primitive(_def) => {
+            let (value, reminder) = data.split_at(size_of(&ty));
+            *data = reminder;
+            Value::new(value, ty)
+        }
         Compact(_def) => todo!(),
         BitSequence(_def) => todo!(),
     }
@@ -123,7 +152,7 @@ mod tests {
         let extract_value = u8::MAX;
         let data = extract_value.encode();
         let info = u8::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -133,7 +162,7 @@ mod tests {
         let extract_value = u16::MAX;
         let data = extract_value.encode();
         let info = u16::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -143,7 +172,7 @@ mod tests {
         let extract_value = u32::MAX;
         let data = extract_value.encode();
         let info = u32::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -153,7 +182,7 @@ mod tests {
         let extract_value = u64::MAX;
         let data = extract_value.encode();
         let info = u64::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -163,7 +192,7 @@ mod tests {
         let extract_value = i16::MAX;
         let data = extract_value.encode();
         let info = i16::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -173,7 +202,7 @@ mod tests {
         let extract_value = i32::MAX;
         let data = extract_value.encode();
         let info = i32::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -183,7 +212,7 @@ mod tests {
         let extract_value = i64::MAX;
         let data = extract_value.encode();
         let info = i64::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -193,7 +222,7 @@ mod tests {
         let extract_value = true;
         let data = extract_value.encode();
         let info = bool::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -203,7 +232,7 @@ mod tests {
         let extract_value: Vec<u8> = [2u8, u8::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u8>::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -213,7 +242,7 @@ mod tests {
         let extract_value: Vec<u16> = [2u16, u16::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u16>::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -223,7 +252,7 @@ mod tests {
         let extract_value: Vec<u32> = [2u32, u32::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u32>::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -233,7 +262,7 @@ mod tests {
         let extract_value: (i128, Vec<String>) = (i128::MIN, vec!["extract_value".into()]);
         let data = extract_value.encode();
         let info = <(i128, Vec<String>)>::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -251,7 +280,7 @@ mod tests {
         };
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
@@ -270,7 +299,7 @@ mod tests {
         };
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
@@ -289,7 +318,7 @@ mod tests {
         };
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
@@ -313,7 +342,7 @@ mod tests {
         };
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, &info);
+        let val = Value::new(&data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
