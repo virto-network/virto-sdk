@@ -5,6 +5,7 @@ use serde::ser::{
     SerializeTupleVariant,
 };
 use serde::Serialize;
+use std::cell::Cell;
 use std::convert::TryInto;
 use std::str;
 
@@ -14,11 +15,16 @@ use std::str;
 pub struct Value<'a> {
     data: &'a [u8],
     ty: Type,
+    idx: Cell<usize>,
 }
 
 impl<'a> Value<'a> {
     pub fn new(data: &'a [u8], ty: Type) -> Self {
-        Value { data, ty }
+        Value {
+            data,
+            ty,
+            idx: 0.into(),
+        }
     }
 }
 
@@ -27,41 +33,32 @@ impl<'a> Serialize for Value<'a> {
     where
         S: serde::Serializer,
     {
-        let mut data = self.data;
-        let name = ty_name(&self.ty);
+        let name = self.ty_name();
 
         match self.ty.type_def() {
             TypeDef::Composite(cmp) => {
                 let fields = cmp.fields();
                 if fields.len() == 0 {
-                    return ser.serialize_unit_struct(name);
-                }
-                if is_tuple(fields) {
+                    ser.serialize_unit_struct(name)
+                } else if is_tuple(fields) {
                     let mut state = ser.serialize_tuple_struct(name, fields.len())?;
                     for f in fields {
-                        let ty = f.ty().type_info();
-                        let size = ty_data_size(&ty, data);
-                        let (val, reminder) = data.split_at(size);
-                        data = reminder;
-                        state.serialize_field(&Value::new(val, ty))?;
+                        state.serialize_field(&self.sub_value(f.ty().type_info()))?;
                     }
                     state.end()
                 } else {
                     let mut state = ser.serialize_struct(&name, fields.len())?;
                     for f in fields {
-                        let ty = f.ty().type_info();
-                        let size = ty_data_size(&ty, data);
-                        let (val, reminder) = data.split_at(size);
-                        data = reminder;
-                        state.serialize_field(f.name().unwrap(), &Value::new(val, ty))?;
+                        state.serialize_field(
+                            f.name().unwrap(),
+                            &self.sub_value(f.ty().type_info()),
+                        )?;
                     }
                     state.end()
                 }
             }
             TypeDef::Variant(enu) => {
-                let (idx, d) = data.split_at(1);
-                data = d;
-                let idx = idx[0];
+                let idx = self.extract_data(1)[0];
                 let var = enu
                     .variants()
                     .iter()
@@ -77,8 +74,8 @@ impl<'a> Serialize for Value<'a> {
                 } else if is_tuple(fields) {
                     if fields.len() == 1 {
                         let ty = fields.first().unwrap().ty().type_info();
-                        let size = ty_data_size(&ty, data);
-                        let val = Value::new(&data[..size], ty);
+                        let val = self.sub_value(ty);
+
                         if name == "Option" && *var.name() == "Some" {
                             return ser.serialize_some(&val);
                         }
@@ -87,11 +84,7 @@ impl<'a> Serialize for Value<'a> {
                     let mut s =
                         ser.serialize_tuple_variant(name, idx.into(), var.name(), fields.len())?;
                     for f in var.fields() {
-                        let ty = f.ty().type_info();
-                        let size = ty_data_size(&ty, data);
-                        let (val, reminder) = data.split_at(size);
-                        data = reminder;
-                        s.serialize_field(&Value::new(val, ty))?;
+                        s.serialize_field(&self.sub_value(f.ty().type_info()))?;
                     }
                     s.end()
                 } else {
@@ -102,25 +95,19 @@ impl<'a> Serialize for Value<'a> {
                         fields.len(),
                     )?;
                     for f in var.fields() {
-                        let ty = f.ty().type_info();
-                        let size = ty_data_size(&ty, data);
-                        let (val, reminder) = data.split_at(size);
-                        data = reminder;
-                        s.serialize_field(f.name().unwrap(), &Value::new(val, ty))?;
+                        s.serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
                     }
                     s.end()
                 }
             }
             TypeDef::Sequence(seq) => {
                 let ty = seq.type_param().type_info();
-                let (len, p_size) = sequence_len(data);
-                let mut data = &data[p_size..];
+                let (len, p_size) = sequence_len(self.remaining_data());
+                self.advance_idx(p_size);
                 let mut seq = ser.serialize_seq(Some(len))?;
 
                 for _ in 0..len {
-                    let ts = ty_data_size(&ty, data);
-                    seq.serialize_element(&Value::new(&data[..ts], ty.clone()))?;
-                    data = &data[ts..];
+                    seq.serialize_element(&self.sub_value(ty.clone()))?;
                 }
                 seq.end()
             }
@@ -128,40 +115,36 @@ impl<'a> Serialize for Value<'a> {
                 let mut s = ser.serialize_tuple(arr.len().try_into().unwrap())?;
                 let ty = arr.type_param().type_info();
                 for _ in 0..arr.len() {
-                    let (val, reminder) = data.split_at(ty_data_size(&ty, data));
-                    data = reminder;
-                    s.serialize_element(&Value::new(val, ty.clone()))?;
+                    s.serialize_element(&self.sub_value(ty.clone()))?;
                 }
                 s.end()
             }
             TypeDef::Tuple(tup) => {
                 let mut state = ser.serialize_tuple(tup.fields().len())?;
                 for f in tup.fields() {
-                    let ty = f.type_info();
-                    let (val, reminder) = data.split_at(ty_data_size(&ty, data));
-                    data = reminder;
-                    state.serialize_element(&Value::new(val, ty))?;
+                    state.serialize_element(&self.sub_value(f.type_info()))?;
                 }
                 state.end()
             }
             TypeDef::Primitive(prm) => match prm {
-                Primitive::U8 => ser.serialize_u8(data[0]),
-                Primitive::U16 => ser.serialize_u16(LE::read_u16(data)),
-                Primitive::U32 => ser.serialize_u32(LE::read_u32(data)),
-                Primitive::U64 => ser.serialize_u64(LE::read_u64(data)),
-                Primitive::U128 => ser.serialize_u128(LE::read_u128(data)),
-                Primitive::I8 => ser.serialize_i8(i8::from_le_bytes([data[0]])),
-                Primitive::I16 => ser.serialize_i16(LE::read_i16(data)),
-                Primitive::I32 => ser.serialize_i32(LE::read_i32(data)),
-                Primitive::I64 => ser.serialize_i64(LE::read_i64(data)),
-                Primitive::I128 => ser.serialize_i128(LE::read_i128(data)),
-                Primitive::Bool => ser.serialize_bool(data[0] != 0),
+                Primitive::U8 => ser.serialize_u8(self.remaining_data()[0]),
+                Primitive::U16 => ser.serialize_u16(LE::read_u16(self.remaining_data())),
+                Primitive::U32 => ser.serialize_u32(LE::read_u32(self.remaining_data())),
+                Primitive::U64 => ser.serialize_u64(LE::read_u64(self.remaining_data())),
+                Primitive::U128 => ser.serialize_u128(LE::read_u128(self.remaining_data())),
+                Primitive::I8 => ser.serialize_i8(i8::from_le_bytes([self.remaining_data()[0]])),
+                Primitive::I16 => ser.serialize_i16(LE::read_i16(self.remaining_data())),
+                Primitive::I32 => ser.serialize_i32(LE::read_i32(self.remaining_data())),
+                Primitive::I64 => ser.serialize_i64(LE::read_i64(self.remaining_data())),
+                Primitive::I128 => ser.serialize_i128(LE::read_i128(self.remaining_data())),
+                Primitive::Bool => ser.serialize_bool(self.remaining_data()[0] != 0),
                 Primitive::Str => {
-                    let (_, s) = sequence_len(data);
-                    ser.serialize_str(str::from_utf8(&data[s..]).unwrap())
+                    let (_, s) = sequence_len(self.remaining_data());
+                    self.advance_idx(s);
+                    ser.serialize_str(str::from_utf8(self.remaining_data()).unwrap())
                 }
                 Primitive::Char => {
-                    let n = LE::read_u32(data);
+                    let n = LE::read_u32(self.remaining_data());
                     ser.serialize_char(char::from_u32(n).unwrap())
                 }
                 Primitive::U256 => unimplemented!(),
@@ -173,12 +156,33 @@ impl<'a> Serialize for Value<'a> {
     }
 }
 
-fn is_tuple(fields: &[Field]) -> bool {
-    fields.first().and_then(Field::name).is_none()
+impl<'a> Value<'a> {
+    fn remaining_data(&self) -> &[u8] {
+        &self.data[self.idx.get()..]
+    }
+
+    fn sub_value(&self, ty: Type) -> Value {
+        let size = ty_data_size(&ty, &self.remaining_data());
+        Value::new(self.extract_data(size), ty)
+    }
+
+    fn extract_data(&self, end: usize) -> &[u8] {
+        let (data, _) = &self.remaining_data().split_at(end);
+        self.advance_idx(end);
+        data
+    }
+
+    fn advance_idx(&self, n: usize) {
+        self.idx.set(self.idx.get() + n)
+    }
+
+    fn ty_name(&self) -> &'static str {
+        self.ty.path().segments().last().copied().unwrap_or("")
+    }
 }
 
-fn ty_name(ty: &Type) -> &'static str {
-    ty.path().segments().last().copied().unwrap_or("")
+fn is_tuple(fields: &[Field]) -> bool {
+    fields.first().and_then(Field::name).is_none()
 }
 
 fn ty_data_size<'a>(ty: &Type, data: &'a [u8]) -> usize {
