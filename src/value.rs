@@ -8,9 +8,9 @@ use serde::Serialize;
 use std::convert::TryInto;
 use std::str;
 
-/// A non-owning container for SCALE encoded data that can serialize types
-/// directly with the help of a type registry and without using an intermediate
-/// representation that requires allocating data.
+/// A container for SCALE encoded data that can serialize types
+/// directly with the help of a type registry and without using an
+/// intermediate representation that requires allocating data.
 pub struct Value<'a> {
     data: &'a [u8],
     ty: Type,
@@ -33,9 +33,18 @@ impl<'a> Serialize for Value<'a> {
         match self.ty.type_def() {
             TypeDef::Composite(cmp) => {
                 let fields = cmp.fields();
+                if fields.len() == 0 {
+                    return ser.serialize_unit_struct(name);
+                }
                 if is_tuple(fields) {
-                    let state = ser.serialize_tuple_struct(name, fields.len())?;
-                    // TODO!;
+                    let mut state = ser.serialize_tuple_struct(name, fields.len())?;
+                    for f in fields {
+                        let ty = f.ty().type_info();
+                        let size = ty_data_size(&ty, data);
+                        let (val, reminder) = data.split_at(size);
+                        data = reminder;
+                        state.serialize_field(&Value::new(val, ty))?;
+                    }
                     state.end()
                 } else {
                     let mut state = ser.serialize_struct(&name, fields.len())?;
@@ -115,7 +124,16 @@ impl<'a> Serialize for Value<'a> {
                 }
                 seq.end()
             }
-            TypeDef::Array(_) => todo!(),
+            TypeDef::Array(arr) => {
+                let mut s = ser.serialize_tuple(arr.len().try_into().unwrap())?;
+                let ty = arr.type_param().type_info();
+                for _ in 0..arr.len() {
+                    let (val, reminder) = data.split_at(ty_data_size(&ty, data));
+                    data = reminder;
+                    s.serialize_element(&Value::new(val, ty.clone()))?;
+                }
+                s.end()
+            }
             TypeDef::Tuple(tup) => {
                 let mut state = ser.serialize_tuple(tup.fields().len())?;
                 for f in tup.fields() {
@@ -126,31 +144,29 @@ impl<'a> Serialize for Value<'a> {
                 }
                 state.end()
             }
-            TypeDef::Primitive(prm) => {
-                match prm {
-                    Primitive::U8 => ser.serialize_u8(data[0]),
-                    Primitive::U16 => ser.serialize_u16(LE::read_u16(data)),
-                    Primitive::U32 => ser.serialize_u32(LE::read_u32(data)),
-                    Primitive::U64 => ser.serialize_u64(LE::read_u64(data)),
-                    Primitive::U128 => ser.serialize_u128(LE::read_u128(data)),
-                    Primitive::I8 => ser.serialize_i8(i8::from_le_bytes([data[0]])),
-                    Primitive::I16 => ser.serialize_i16(LE::read_i16(data)),
-                    Primitive::I32 => ser.serialize_i32(LE::read_i32(data)),
-                    Primitive::I64 => ser.serialize_i64(LE::read_i64(data)),
-                    Primitive::I128 => ser.serialize_i128(LE::read_i128(data)),
-                    Primitive::Bool => ser.serialize_bool(data[0] != 0),
-                    Primitive::Str => {
-                        let (_, s) = sequence_len(data);
-                        ser.serialize_str(str::from_utf8(&data[s..]).unwrap())
-                    }
-                    // TODO: test if statements from here on actually work
-                    Primitive::Char => {
-                        let n = LE::read_u32(data);
-                        ser.serialize_char(char::from_u32(n).unwrap())
-                    }
-                    _ => ser.serialize_bytes(data),
+            TypeDef::Primitive(prm) => match prm {
+                Primitive::U8 => ser.serialize_u8(data[0]),
+                Primitive::U16 => ser.serialize_u16(LE::read_u16(data)),
+                Primitive::U32 => ser.serialize_u32(LE::read_u32(data)),
+                Primitive::U64 => ser.serialize_u64(LE::read_u64(data)),
+                Primitive::U128 => ser.serialize_u128(LE::read_u128(data)),
+                Primitive::I8 => ser.serialize_i8(i8::from_le_bytes([data[0]])),
+                Primitive::I16 => ser.serialize_i16(LE::read_i16(data)),
+                Primitive::I32 => ser.serialize_i32(LE::read_i32(data)),
+                Primitive::I64 => ser.serialize_i64(LE::read_i64(data)),
+                Primitive::I128 => ser.serialize_i128(LE::read_i128(data)),
+                Primitive::Bool => ser.serialize_bool(data[0] != 0),
+                Primitive::Str => {
+                    let (_, s) = sequence_len(data);
+                    ser.serialize_str(str::from_utf8(&data[s..]).unwrap())
                 }
-            }
+                Primitive::Char => {
+                    let n = LE::read_u32(data);
+                    ser.serialize_char(char::from_u32(n).unwrap())
+                }
+                Primitive::U256 => unimplemented!(),
+                Primitive::I256 => unimplemented!(),
+            },
             TypeDef::Compact(_) => todo!(),
             TypeDef::BitSequence(_) => todo!(),
         }
@@ -186,7 +202,10 @@ fn ty_data_size<'a>(ty: &Type, data: &'a [u8]) -> usize {
             }
             _ => unimplemented!(),
         },
-        TypeDef::Composite(_) => todo!(),
+        TypeDef::Composite(c) => c
+            .fields()
+            .iter()
+            .fold(0, |c, f| c + ty_data_size(&f.ty().type_info(), &data[c..])),
         TypeDef::Variant(e) => {
             let var = e
                 .variants()
@@ -207,10 +226,19 @@ fn ty_data_size<'a>(ty: &Type, data: &'a [u8]) -> usize {
             let ty = s.type_param().type_info();
             (0..len).fold(prefix_size, |c, _| c + ty_data_size(&ty, &data[c..]))
         }
-        TypeDef::Array(_) => todo!(),
-        TypeDef::Tuple(_) => todo!(),
-        TypeDef::Compact(_) => todo!(),
+        TypeDef::Array(a) => a.len().try_into().unwrap(),
+        TypeDef::Tuple(t) => t.fields().len(),
+        TypeDef::Compact(_) => compact_len(data),
         TypeDef::BitSequence(_) => todo!(),
+    }
+}
+
+fn compact_len(data: &[u8]) -> usize {
+    match data[0] % 0b100 {
+        0 => 1,
+        1 => 2,
+        2 => 4,
+        _ => todo!(),
     }
 }
 
@@ -218,17 +246,19 @@ fn sequence_len(data: &[u8]) -> (usize, usize) {
     // need to peek at the data to know the length of sequence
     // first byte(s) gives us a hint of the(compact encoded) length
     // https://substrate.dev/docs/en/knowledgebase/advanced/codec#compactgeneral-integers
-    match data[0] % 0b100 {
-        0 => ((data[0] >> 2).into(), 1),
-        1 => (u16::from_le_bytes([(data[0] >> 2), data[1]]).into(), 2),
-        2 => (
-            u32::from_le_bytes([(data[0] >> 2), data[1], data[2], data[3]])
+    let len = compact_len(data);
+    (
+        match len {
+            1 => (data[0] >> 2).into(),
+            2 => u16::from_le_bytes([(data[0] >> 2), data[1]]).into(),
+            4 => u32::from_le_bytes([(data[0] >> 2), data[1], data[2], data[3]])
                 .try_into()
                 .unwrap(),
-            4,
-        ),
-        _ => todo!(),
-    }
+
+            _ => todo!(),
+        },
+        len,
+    )
 }
 
 #[cfg(test)]
@@ -319,6 +349,17 @@ mod tests {
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
+
+    // `char` not supported?
+    // #[test]
+    // fn serialize_char() -> Result<(), Box<dyn Error>> {
+    //     let extract_value = '⚖';
+    //     let data = extract_value.encode();
+    //     let info = char::type_info();
+    //     let val = Value::new(&data, info);
+    //     assert_eq!(to_value(val)?, to_value(extract_value)?);
+    //     Ok(())
+    // }
 
     #[test]
     fn serialize_u8array() -> Result<(), Box<dyn Error>> {
@@ -422,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_complex_struct() -> Result<(), Box<dyn Error>> {
+    fn serialize_complex_struct_with_enum() -> Result<(), Box<dyn Error>> {
         #[derive(Encode, Serialize, TypeInfo)]
         enum Bar {
             This,
@@ -437,6 +478,34 @@ mod tests {
             bar: [Bar::That(i16::MAX), Bar::This].into(),
             baz: Some("aliquam malesuada bibendum arcu vitae".into()),
         };
+        let data = extract_value.encode();
+        let info = Foo::type_info();
+        let val = Value::new(&data, info);
+
+        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_tuple_struct() -> Result<(), Box<dyn Error>> {
+        #[derive(Encode, Serialize, TypeInfo)]
+        struct Foo<'a>([u8; 4], (bool, Option<()>), Baz<'a>, Baz<'a>);
+
+        #[derive(Encode, Serialize, TypeInfo)]
+        struct Bar;
+
+        #[derive(Encode, Serialize, TypeInfo)]
+        enum Baz<'a> {
+            A(Bar),
+            B { bb: &'a str },
+        }
+
+        let extract_value = Foo(
+            [1, 2, 3, 4],
+            (false, None),
+            Baz::A(Bar),
+            Baz::B { bb: "lol" },
+        );
         let data = extract_value.encode();
         let info = Foo::type_info();
         let val = Value::new(&data, info);
