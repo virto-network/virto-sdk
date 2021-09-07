@@ -1,13 +1,13 @@
 use byteorder::{ByteOrder, LE};
+use core::cell::Cell;
+use core::convert::TryInto;
+use core::str;
 use scale_info::{prelude::*, Field, Type, TypeDef, TypeDefPrimitive as Primitive};
 use serde::ser::{
     SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple, SerializeTupleStruct,
     SerializeTupleVariant,
 };
 use serde::Serialize;
-use std::cell::Cell;
-use std::convert::TryInto;
-use std::str;
 
 /// A container for SCALE encoded data that can serialize types
 /// directly with the help of a type registry and without using an
@@ -267,15 +267,17 @@ fn sequence_len(data: &[u8]) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use std::error::Error;
-
     use super::*;
+    use anyhow::Error;
     use parity_scale_codec::Encode;
-    use scale_info::TypeInfo;
+    use scale_info::{
+        prelude::{string::String, vec::Vec},
+        TypeInfo,
+    };
     use serde_json::to_value;
 
     #[test]
-    fn serialize_u8() -> Result<(), Box<dyn Error>> {
+    fn serialize_u8() -> Result<(), Error> {
         let extract_value = u8::MAX;
         let data = extract_value.encode();
         let info = u8::type_info();
@@ -285,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_u16() -> Result<(), Box<dyn Error>> {
+    fn serialize_u16() -> Result<(), Error> {
         let extract_value = u16::MAX;
         let data = extract_value.encode();
         let info = u16::type_info();
@@ -295,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_u32() -> Result<(), Box<dyn Error>> {
+    fn serialize_u32() -> Result<(), Error> {
         let extract_value = u32::MAX;
         let data = extract_value.encode();
         let info = u32::type_info();
@@ -305,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_u64() -> Result<(), Box<dyn Error>> {
+    fn serialize_u64() -> Result<(), Error> {
         let extract_value = u64::MAX;
         let data = extract_value.encode();
         let info = u64::type_info();
@@ -315,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_i16() -> Result<(), Box<dyn Error>> {
+    fn serialize_i16() -> Result<(), Error> {
         let extract_value = i16::MAX;
         let data = extract_value.encode();
         let info = i16::type_info();
@@ -325,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_i32() -> Result<(), Box<dyn Error>> {
+    fn serialize_i32() -> Result<(), Error> {
         let extract_value = i32::MAX;
         let data = extract_value.encode();
         let info = i32::type_info();
@@ -335,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_i64() -> Result<(), Box<dyn Error>> {
+    fn serialize_i64() -> Result<(), Error> {
         let extract_value = i64::MAX;
         let data = extract_value.encode();
         let info = i64::type_info();
@@ -345,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_bool() -> Result<(), Box<dyn Error>> {
+    fn serialize_bool() -> Result<(), Error> {
         let extract_value = true;
         let data = extract_value.encode();
         let info = bool::type_info();
@@ -356,7 +358,7 @@ mod tests {
 
     // `char` not supported?
     // #[test]
-    // fn serialize_char() -> Result<(), Box<dyn Error>> {
+    // fn serialize_char() -> Result<(), Error> {
     //     let extract_value = '⚖';
     //     let data = extract_value.encode();
     //     let info = char::type_info();
@@ -366,7 +368,7 @@ mod tests {
     // }
 
     #[test]
-    fn serialize_u8array() -> Result<(), Box<dyn Error>> {
+    fn serialize_u8array() -> Result<(), Error> {
         let extract_value: Vec<u8> = [2u8, u8::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u8>::type_info();
@@ -376,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_u16array() -> Result<(), Box<dyn Error>> {
+    fn serialize_u16array() -> Result<(), Error> {
         let extract_value: Vec<u16> = [2u16, u16::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u16>::type_info();
@@ -386,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_u32array() -> Result<(), Box<dyn Error>> {
+    fn serialize_u32array() -> Result<(), Error> {
         let extract_value: Vec<u32> = [2u32, u32::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u32>::type_info();
@@ -396,7 +398,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_tuple() -> Result<(), Box<dyn Error>> {
+    fn serialize_tuple() -> Result<(), Error> {
         let extract_value: (i64, Vec<String>, bool) = (
             i64::MIN,
             vec!["hello".into(), "big".into(), "world".into()],
@@ -410,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_simple_u32struct() -> Result<(), Box<dyn Error>> {
+    fn serialize_simple_u32struct() -> Result<(), Error> {
         #[derive(Encode, Serialize, TypeInfo)]
         struct Foo {
             bar: u32,
@@ -429,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_simple_u8struct() -> Result<(), Box<dyn Error>> {
+    fn serialize_simple_u8struct() -> Result<(), Error> {
         #[derive(Encode, Serialize, TypeInfo)]
         struct Foo {
             bar: u8,
@@ -448,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_simple_u64struct() -> Result<(), Box<dyn Error>> {
+    fn serialize_simple_u64struct() -> Result<(), Error> {
         #[derive(Encode, Serialize, TypeInfo)]
         struct Foo {
             bar: u64,
@@ -467,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_complex_struct_with_enum() -> Result<(), Box<dyn Error>> {
+    fn serialize_complex_struct_with_enum() -> Result<(), Error> {
         #[derive(Encode, Serialize, TypeInfo)]
         enum Bar {
             This,
@@ -491,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_tuple_struct() -> Result<(), Box<dyn Error>> {
+    fn serialize_tuple_struct() -> Result<(), Error> {
         #[derive(Encode, Serialize, TypeInfo)]
         struct Foo<'a>([u8; 4], (bool, Option<()>), Baz<'a>, Baz<'a>);
 
