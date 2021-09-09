@@ -39,23 +39,28 @@ where
     type SerializeStructVariant = Self;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok> {
@@ -63,15 +68,18 @@ where
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_f32(self, _v: f32) -> Result<Self::Ok> {
@@ -87,7 +95,8 @@ where
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
-        Ok(v.encode_to(&mut self.0))
+        v.encode_to(&mut self.0);
+        Ok(())
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok> {

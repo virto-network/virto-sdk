@@ -38,7 +38,7 @@ impl<'a> Serialize for Value<'a> {
         match self.ty.type_def() {
             TypeDef::Composite(cmp) => {
                 let fields = cmp.fields();
-                if fields.len() == 0 {
+                if fields.is_empty() {
                     ser.serialize_unit_struct(name)
                 } else if is_tuple(fields) {
                     let mut state = ser.serialize_tuple_struct(name, fields.len())?;
@@ -47,7 +47,7 @@ impl<'a> Serialize for Value<'a> {
                     }
                     state.end()
                 } else {
-                    let mut state = ser.serialize_struct(&name, fields.len())?;
+                    let mut state = ser.serialize_struct(name, fields.len())?;
                     for f in fields {
                         state.serialize_field(
                             f.name().unwrap(),
@@ -162,7 +162,7 @@ impl<'a> Value<'a> {
     }
 
     fn sub_value(&self, ty: Type) -> Value {
-        let size = ty_data_size(&ty, &self.remaining_data());
+        let size = ty_data_size(&ty, self.remaining_data());
         Value::new(self.extract_data(size), ty)
     }
 
@@ -185,7 +185,7 @@ fn is_tuple(fields: &[Field]) -> bool {
     fields.first().and_then(Field::name).is_none()
 }
 
-fn ty_data_size<'a>(ty: &Type, data: &'a [u8]) -> usize {
+fn ty_data_size(ty: &Type, data: &[u8]) -> usize {
     match ty.type_def() {
         TypeDef::Primitive(p) => match p {
             Primitive::U8 => mem::size_of::<u8>(),
