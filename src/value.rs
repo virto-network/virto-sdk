@@ -269,7 +269,7 @@ fn sequence_len(data: &[u8]) -> (usize, usize) {
 mod tests {
     use super::*;
     use anyhow::Error;
-    use parity_scale_codec::Encode;
+    use codec::Encode;
     use scale_info::{
         prelude::{string::String, vec::Vec},
         TypeInfo,
