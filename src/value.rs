@@ -2,16 +2,19 @@ use byteorder::{ByteOrder, LE};
 use core::cell::Cell;
 use core::convert::TryInto;
 use core::str;
-use scale_info::{prelude::*, Field, Type, TypeDef, TypeDefPrimitive as Primitive};
+use scale_info::{
+    prelude::*, Field, Type, TypeDef, TypeDefComposite, TypeDefPrimitive as Primitive,
+};
 use serde::ser::{
-    SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple, SerializeTupleStruct,
-    SerializeTupleVariant,
+    SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
+    SerializeTupleStruct, SerializeTupleVariant,
 };
 use serde::Serialize;
 
 /// A container for SCALE encoded data that can serialize types
 /// directly with the help of a type registry and without using an
 /// intermediate representation that requires allocating data.
+#[derive(Debug)]
 pub struct Value<'a> {
     data: &'a [u8],
     ty: Type,
@@ -40,6 +43,18 @@ impl<'a> Serialize for Value<'a> {
                 let fields = cmp.fields();
                 if fields.is_empty() {
                     ser.serialize_unit_struct(name)
+                } else if is_map(&self.ty) {
+                    let (len, p_size) = sequence_len(self.remaining_data());
+                    self.advance_idx(p_size);
+
+                    let mut state = ser.serialize_map(Some(len))?;
+                    let (kty, vty) = map_types(&cmp);
+                    for _ in 0..len {
+                        let key = &self.sub_value(kty.clone());
+                        let val = &self.sub_value(vty.clone());
+                        state.serialize_entry(key, val)?;
+                    }
+                    state.end()
                 } else if is_tuple(fields) {
                     let mut state = ser.serialize_tuple_struct(name, fields.len())?;
                     for f in fields {
@@ -181,6 +196,23 @@ impl<'a> Value<'a> {
     }
 }
 
+fn is_map(ty: &Type) -> bool {
+    ty.path().segments() == ["BTreeMap"]
+}
+fn map_types(ty: &TypeDefComposite) -> (Type, Type) {
+    let field = ty.fields().first().expect("map");
+    // Type information of BTreeMap is weirdly packed
+    if let TypeDef::Sequence(s) = field.ty().type_info().type_def() {
+        if let TypeDef::Tuple(t) = s.type_param().type_info().type_def() {
+            assert_eq!(t.fields().len(), 2);
+            let key_ty = t.fields().first().expect("key").type_info();
+            let val_ty = t.fields().last().expect("val").type_info();
+            return (key_ty, val_ty);
+        }
+    }
+    unreachable!()
+}
+
 fn is_tuple(fields: &[Field]) -> bool {
     fields.first().and_then(Field::name).is_none()
 }
@@ -237,6 +269,7 @@ fn ty_data_size(ty: &Type, data: &[u8]) -> usize {
     }
 }
 
+#[inline]
 fn compact_len(data: &[u8]) -> usize {
     match data[0] % 0b100 {
         0 => 1,
@@ -267,6 +300,8 @@ fn sequence_len(data: &[u8]) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use anyhow::Error;
     use codec::Encode;
@@ -465,6 +500,23 @@ mod tests {
         let val = Value::new(&data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_map() -> Result<(), Error> {
+        let value = {
+            let mut m = BTreeMap::<String, i32>::new();
+            m.insert("foo".into(), i32::MAX);
+            m.insert("bar".into(), i32::MIN);
+            m
+        };
+
+        let data = value.encode();
+        let info = BTreeMap::<String, i32>::type_info();
+        let val = Value::new(&data, info);
+
+        assert_eq!(to_value(val)?, to_value(value)?);
         Ok(())
     }
 
