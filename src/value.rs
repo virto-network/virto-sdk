@@ -2,14 +2,14 @@ use byteorder::{ByteOrder, LE};
 use core::cell::Cell;
 use core::convert::TryInto;
 use core::str;
-use scale_info::{
-    prelude::*, Field, Type, TypeDef, TypeDefComposite, TypeDefPrimitive as Primitive,
-};
+use scale_info::{prelude::*, Type, TypeDef, TypeDefPrimitive as Primitive};
 use serde::ser::{
     SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
     SerializeTupleStruct, SerializeTupleVariant,
 };
 use serde::Serialize;
+
+use crate::SerdeType;
 
 /// A container for SCALE encoded data that can serialize types
 /// directly with the help of a type registry and without using an
@@ -37,152 +37,131 @@ impl<'a> Serialize for Value<'a> {
         S: serde::Serializer,
     {
         let name = self.ty_name();
+        let data = self.data_left();
+        let ty: SerdeType = SerdeType::from(&self.ty, *data.get(0).unwrap_or(&0));
 
-        match self.ty.type_def() {
-            TypeDef::Composite(cmp) => {
-                let fields = cmp.fields();
-                if fields.is_empty() {
-                    ser.serialize_unit_struct(name)
-                } else if is_map(&self.ty) {
-                    let (len, p_size) = sequence_len(self.remaining_data());
-                    self.advance_idx(p_size);
-
-                    let mut state = ser.serialize_map(Some(len))?;
-                    let (kty, vty) = map_types(&cmp);
-                    for _ in 0..len {
-                        let key = &self.sub_value(kty.clone());
-                        let val = &self.sub_value(vty.clone());
-                        state.serialize_entry(key, val)?;
-                    }
-                    state.end()
-                } else if is_tuple(fields) {
-                    let mut state = ser.serialize_tuple_struct(name, fields.len())?;
-                    for f in fields {
-                        state.serialize_field(&self.sub_value(f.ty().type_info()))?;
-                    }
-                    state.end()
-                } else {
-                    let mut state = ser.serialize_struct(name, fields.len())?;
-                    for f in fields {
-                        state.serialize_field(
-                            f.name().unwrap(),
-                            &self.sub_value(f.ty().type_info()),
-                        )?;
-                    }
-                    state.end()
-                }
+        use SerdeType::*;
+        match ty {
+            Bool => ser.serialize_bool(data[0] != 0),
+            U8 => ser.serialize_u8(data[0]),
+            U16 => ser.serialize_u16(LE::read_u16(data)),
+            U32 => ser.serialize_u32(LE::read_u32(data)),
+            U64 => ser.serialize_u64(LE::read_u64(data)),
+            U128 => ser.serialize_u128(LE::read_u128(data)),
+            I8 => ser.serialize_i8(i8::from_le_bytes([data[0]])),
+            I16 => ser.serialize_i16(LE::read_i16(data)),
+            I32 => ser.serialize_i32(LE::read_i32(data)),
+            I64 => ser.serialize_i64(LE::read_i64(data)),
+            I128 => ser.serialize_i128(LE::read_i128(data)),
+            Bytes => unimplemented!(),
+            Char => {
+                let n = LE::read_u32(data);
+                ser.serialize_char(char::from_u32(n).unwrap())
             }
-            TypeDef::Variant(enu) => {
-                let idx = self.extract_data(1)[0];
-                let var = enu
-                    .variants()
-                    .iter()
-                    .find(|v| v.index() == idx)
-                    .expect("variant");
-
-                let fields = var.fields();
-                if fields.is_empty() {
-                    if name == "Option" && *var.name() == "None" {
-                        return ser.serialize_none();
-                    }
-                    ser.serialize_unit_variant(name, var.index().into(), var.name())
-                } else if is_tuple(fields) {
-                    if fields.len() == 1 {
-                        let ty = fields.first().unwrap().ty().type_info();
-                        let val = self.sub_value(ty);
-
-                        if name == "Option" && *var.name() == "Some" {
-                            return ser.serialize_some(&val);
-                        }
-                        return ser.serialize_newtype_variant(name, idx.into(), var.name(), &val);
-                    }
-                    let mut s =
-                        ser.serialize_tuple_variant(name, idx.into(), var.name(), fields.len())?;
-                    for f in var.fields() {
-                        s.serialize_field(&self.sub_value(f.ty().type_info()))?;
-                    }
-                    s.end()
-                } else {
-                    let mut s = ser.serialize_struct_variant(
-                        name,
-                        var.index().into(),
-                        var.name(),
-                        fields.len(),
-                    )?;
-                    for f in var.fields() {
-                        s.serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
-                    }
-                    s.end()
-                }
+            Str => {
+                let (_, s) = sequence_len(data);
+                self.advance_idx(s);
+                ser.serialize_str(str::from_utf8(self.data_left()).unwrap())
             }
-            TypeDef::Sequence(seq) => {
-                let ty = seq.type_param().type_info();
-                let (len, p_size) = sequence_len(self.remaining_data());
+            Sequence(ty) => {
+                let (len, p_size) = sequence_len(self.data_left());
                 self.advance_idx(p_size);
-                let mut seq = ser.serialize_seq(Some(len))?;
 
+                let mut seq = ser.serialize_seq(Some(len))?;
                 for _ in 0..len {
                     seq.serialize_element(&self.sub_value(ty.clone()))?;
                 }
                 seq.end()
             }
-            TypeDef::Array(arr) => {
-                let mut s = ser.serialize_tuple(arr.len().try_into().unwrap())?;
-                let ty = arr.type_param().type_info();
-                for _ in 0..arr.len() {
-                    s.serialize_element(&self.sub_value(ty.clone()))?;
-                }
-                s.end()
-            }
-            TypeDef::Tuple(tup) => {
-                let mut state = ser.serialize_tuple(tup.fields().len())?;
-                for f in tup.fields() {
-                    state.serialize_element(&self.sub_value(f.type_info()))?;
+            Map(ty_k, ty_v) => {
+                let (len, p_size) = sequence_len(self.data_left());
+                self.advance_idx(p_size);
+
+                let mut state = ser.serialize_map(Some(len))?;
+                for _ in 0..len {
+                    let key = &self.sub_value(ty_k.clone());
+                    let val = &self.sub_value(ty_v.clone());
+                    state.serialize_entry(key, val)?;
                 }
                 state.end()
             }
-            TypeDef::Primitive(prm) => match prm {
-                Primitive::U8 => ser.serialize_u8(self.remaining_data()[0]),
-                Primitive::U16 => ser.serialize_u16(LE::read_u16(self.remaining_data())),
-                Primitive::U32 => ser.serialize_u32(LE::read_u32(self.remaining_data())),
-                Primitive::U64 => ser.serialize_u64(LE::read_u64(self.remaining_data())),
-                Primitive::U128 => ser.serialize_u128(LE::read_u128(self.remaining_data())),
-                Primitive::I8 => ser.serialize_i8(i8::from_le_bytes([self.remaining_data()[0]])),
-                Primitive::I16 => ser.serialize_i16(LE::read_i16(self.remaining_data())),
-                Primitive::I32 => ser.serialize_i32(LE::read_i32(self.remaining_data())),
-                Primitive::I64 => ser.serialize_i64(LE::read_i64(self.remaining_data())),
-                Primitive::I128 => ser.serialize_i128(LE::read_i128(self.remaining_data())),
-                Primitive::Bool => ser.serialize_bool(self.remaining_data()[0] != 0),
-                Primitive::Str => {
-                    let (_, s) = sequence_len(self.remaining_data());
-                    self.advance_idx(s);
-                    ser.serialize_str(str::from_utf8(self.remaining_data()).unwrap())
+            Tuple(t) => {
+                let mut state = ser.serialize_tuple(t.len())?;
+                for i in 0..t.len() {
+                    state.serialize_element(&self.sub_value(t.type_info(i)))?;
                 }
-                Primitive::Char => {
-                    let n = LE::read_u32(self.remaining_data());
-                    ser.serialize_char(char::from_u32(n).unwrap())
+                state.end()
+            }
+            Struct(fields) => {
+                let mut state = ser.serialize_struct(name, fields.len())?;
+                for f in fields {
+                    state
+                        .serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
                 }
-                Primitive::U256 => unimplemented!(),
-                Primitive::I256 => unimplemented!(),
-            },
-            TypeDef::Compact(_) => todo!(),
-            TypeDef::BitSequence(_) => todo!(),
+                state.end()
+            }
+            StructUnit => ser.serialize_unit_struct(name),
+            StructNewType => unimplemented!(),
+            StructTuple(fields) => {
+                let mut state = ser.serialize_tuple_struct(name, fields.len())?;
+                for f in fields {
+                    state.serialize_field(&self.sub_value(f.ty().type_info()))?;
+                }
+                state.end()
+            }
+            OptionNone => ser.serialize_none(),
+            OptionSome(ty) => {
+                self.advance_idx(1);
+                ser.serialize_some(&self.sub_value(ty))
+            }
+            VariantUnit(v) => ser.serialize_unit_variant(name, v.index().into(), v.name()),
+            VariantNewType(v) => {
+                self.advance_idx(1);
+                let ty = v.fields().first().unwrap().ty().type_info();
+                ser.serialize_newtype_variant(name, v.index().into(), v.name(), &self.sub_value(ty))
+            }
+            VariantTuple(v) => {
+                self.advance_idx(1);
+                let mut s = ser.serialize_tuple_variant(
+                    name,
+                    v.index().into(),
+                    v.name(),
+                    v.fields().len(),
+                )?;
+                for f in v.fields() {
+                    s.serialize_field(&self.sub_value(f.ty().type_info()))?;
+                }
+                s.end()
+            }
+            VariantStruct(v) => {
+                self.advance_idx(1);
+                let mut s = ser.serialize_struct_variant(
+                    name,
+                    v.index().into(),
+                    v.name(),
+                    v.fields().len(),
+                )?;
+                for f in v.fields() {
+                    s.serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
+                }
+                s.end()
+            }
         }
     }
 }
 
 impl<'a> Value<'a> {
-    fn remaining_data(&self) -> &[u8] {
+    fn data_left(&self) -> &[u8] {
         &self.data[self.idx.get()..]
     }
 
     fn sub_value(&self, ty: Type) -> Value {
-        let size = ty_data_size(&ty, self.remaining_data());
+        let size = ty_data_size(&ty, self.data_left());
         Value::new(self.extract_data(size), ty)
     }
 
     fn extract_data(&self, end: usize) -> &[u8] {
-        let (data, _) = &self.remaining_data().split_at(end);
+        let (data, _) = &self.data_left().split_at(end);
         self.advance_idx(end);
         data
     }
@@ -194,27 +173,6 @@ impl<'a> Value<'a> {
     fn ty_name(&self) -> &'static str {
         self.ty.path().segments().last().copied().unwrap_or("")
     }
-}
-
-fn is_map(ty: &Type) -> bool {
-    ty.path().segments() == ["BTreeMap"]
-}
-fn map_types(ty: &TypeDefComposite) -> (Type, Type) {
-    let field = ty.fields().first().expect("map");
-    // Type information of BTreeMap is weirdly packed
-    if let TypeDef::Sequence(s) = field.ty().type_info().type_def() {
-        if let TypeDef::Tuple(t) = s.type_param().type_info().type_def() {
-            assert_eq!(t.fields().len(), 2);
-            let key_ty = t.fields().first().expect("key").type_info();
-            let val_ty = t.fields().last().expect("val").type_info();
-            return (key_ty, val_ty);
-        }
-    }
-    unreachable!()
-}
-
-fn is_tuple(fields: &[Field]) -> bool {
-    fields.first().and_then(Field::name).is_none()
 }
 
 fn ty_data_size(ty: &Type, data: &[u8]) -> usize {
@@ -265,7 +223,7 @@ fn ty_data_size(ty: &Type, data: &[u8]) -> usize {
         TypeDef::Array(a) => a.len().try_into().unwrap(),
         TypeDef::Tuple(t) => t.fields().len(),
         TypeDef::Compact(_) => compact_len(data),
-        TypeDef::BitSequence(_) => todo!(),
+        TypeDef::BitSequence(_) => unimplemented!(),
     }
 }
 
