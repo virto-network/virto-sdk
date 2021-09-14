@@ -1,3 +1,4 @@
+use crate::{EnumVariant, SerdeType};
 use byteorder::{ByteOrder, LE};
 use core::cell::Cell;
 use core::convert::TryInto;
@@ -8,8 +9,6 @@ use serde::ser::{
     SerializeTupleStruct, SerializeTupleVariant,
 };
 use serde::Serialize;
-
-use crate::SerdeType;
 
 /// A container for SCALE encoded data that can serialize types
 /// directly with the help of a type registry and without using an
@@ -38,7 +37,7 @@ impl<'a> Serialize for Value<'a> {
     {
         let name = self.ty_name();
         let data = self.data_left();
-        let ty: SerdeType = SerdeType::from(&self.ty, *data.get(0).unwrap_or(&0));
+        let ty = SerdeType::from(&self.ty);
 
         use SerdeType::*;
         match ty {
@@ -109,43 +108,53 @@ impl<'a> Serialize for Value<'a> {
                 }
                 state.end()
             }
-            OptionNone => ser.serialize_none(),
-            OptionSome(ty) => {
-                self.advance_idx(1);
-                ser.serialize_some(&self.sub_value(ty))
-            }
-            VariantUnit(v) => ser.serialize_unit_variant(name, v.index().into(), v.name()),
-            VariantNewType(v) => {
-                self.advance_idx(1);
-                let ty = v.fields().first().unwrap().ty().type_info();
-                ser.serialize_newtype_variant(name, v.index().into(), v.name(), &self.sub_value(ty))
-            }
-            VariantTuple(v) => {
-                self.advance_idx(1);
-                let mut s = ser.serialize_tuple_variant(
-                    name,
-                    v.index().into(),
-                    v.name(),
-                    v.fields().len(),
-                )?;
-                for f in v.fields() {
-                    s.serialize_field(&self.sub_value(f.ty().type_info()))?;
+            Variant(_, _) => match ty.pick_variant(data[0]) {
+                EnumVariant::OptionNone => ser.serialize_none(),
+                EnumVariant::OptionSome(ty) => {
+                    self.advance_idx(1);
+                    ser.serialize_some(&self.sub_value(ty))
                 }
-                s.end()
-            }
-            VariantStruct(v) => {
-                self.advance_idx(1);
-                let mut s = ser.serialize_struct_variant(
-                    name,
-                    v.index().into(),
-                    v.name(),
-                    v.fields().len(),
-                )?;
-                for f in v.fields() {
-                    s.serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
+                EnumVariant::Unit(v) => {
+                    ser.serialize_unit_variant(name, v.index().into(), v.name())
                 }
-                s.end()
-            }
+                EnumVariant::NewType(v) => {
+                    self.advance_idx(1);
+                    let ty = v.fields().first().unwrap().ty().type_info();
+                    ser.serialize_newtype_variant(
+                        name,
+                        v.index().into(),
+                        v.name(),
+                        &self.sub_value(ty),
+                    )
+                }
+
+                EnumVariant::Tuple(v) => {
+                    self.advance_idx(1);
+                    let mut s = ser.serialize_tuple_variant(
+                        name,
+                        v.index().into(),
+                        v.name(),
+                        v.fields().len(),
+                    )?;
+                    for f in v.fields() {
+                        s.serialize_field(&self.sub_value(f.ty().type_info()))?;
+                    }
+                    s.end()
+                }
+                EnumVariant::Struct(v) => {
+                    self.advance_idx(1);
+                    let mut s = ser.serialize_struct_variant(
+                        name,
+                        v.index().into(),
+                        v.name(),
+                        v.fields().len(),
+                    )?;
+                    for f in v.fields() {
+                        s.serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
+                    }
+                    s.end()
+                }
+            },
         }
     }
 }
