@@ -28,7 +28,7 @@ enum SerdeType<'a> {
     Sequence(Type),
     Map(Type, Type),
     Tuple(TupleOrArray<'a>),
-    Struct(&'a [Field]), StructUnit, StructNewType, StructTuple(&'a [Field]),
+    Struct(&'a [Field]), StructUnit, StructNewType(Type), StructTuple(&'a [Field]),
     Variant(&'a str, &'a [Variant]),
 }
 
@@ -63,6 +63,8 @@ impl<'a> From<&'a Type> for SerdeType<'a> {
                 } else if is_map(&ty) {
                     let (k, v) = map_types(c);
                     Self::Map(k, v)
+                } else if fields.len() == 1 {
+                    Self::StructNewType(fields.first().unwrap().ty().type_info())
                 } else if is_tuple(fields) {
                     Self::StructTuple(fields)
                 } else {

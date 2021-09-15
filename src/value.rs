@@ -100,7 +100,7 @@ impl<'a> Serialize for Value<'a> {
                 state.end()
             }
             StructUnit => ser.serialize_unit_struct(name),
-            StructNewType => unimplemented!(),
+            StructNewType(ty) => ser.serialize_newtype_struct(name, &self.sub_value(ty)),
             StructTuple(fields) => {
                 let mut state = ser.serialize_tuple_struct(name, fields.len())?;
                 for f in fields {
@@ -495,19 +495,21 @@ mod tests {
             That(i16),
         }
         #[derive(Encode, Serialize, TypeInfo)]
+        struct Baz(String);
+        #[derive(Encode, Serialize, TypeInfo)]
         struct Foo {
             bar: Vec<Bar>,
-            baz: Option<String>,
+            baz: Option<Baz>,
         }
-        let extract_value = Foo {
+        let expected = Foo {
             bar: [Bar::That(i16::MAX), Bar::This].into(),
-            baz: Some("aliquam malesuada bibendum arcu vitae".into()),
+            baz: Some(Baz("aliquam malesuada bibendum arcu vitae".into())),
         };
-        let data = extract_value.encode();
+        let data = expected.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, info);
+        let out = Value::new(&data, info);
 
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        assert_eq!(to_value(out)?, to_value(expected)?);
         Ok(())
     }
 
