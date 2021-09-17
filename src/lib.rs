@@ -72,7 +72,14 @@ impl<'a> From<&'a Type> for SerdeType<'a> {
                 }
             }
             Variant(v) => Self::Variant(name, v.variants()),
-            Sequence(s) => Self::Sequence(s.type_param().type_info()),
+            Sequence(s) => {
+                let ty = s.type_param().type_info();
+                if ty.path().segments() != &["u8"] {
+                    Self::Sequence(ty)
+                } else {
+                    Self::Bytes
+                }
+            }
             Array(a) => Self::Tuple(TupleOrArray::Array(a.type_param(), a.len())),
             Tuple(t) => Self::Tuple(TupleOrArray::Tuple(t.fields())),
             Primitive(p) => match p {

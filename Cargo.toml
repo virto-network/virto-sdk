@@ -7,16 +7,15 @@ edition = "2018"
 repository = "https://github.com/valibre-org/scales"
 
 [dependencies]
-byteorder = { version = "1.4.3", default-features = false }
-codec = { version = "2.2.0", package = "parity-scale-codec", default-features = false, optional = true }
-core2 = { version = "0.3.1", default-features = false, optional = true }
+bytes = { version = "1.0.1", default-features = false }
 scale-info = { version = "0.10.0", default-features = false }
 serde = { version = "1.0.126", default-features = false }
+codec = { version = "2.2.0", package = "parity-scale-codec", default-features = false, optional = true }
 
 [features]
 default = ["std", "serializer"]
-std = ["scale-info/std", "core2/std"]
-serializer = ["core2", "codec"]
+std = ["scale-info/std", "bytes/std"]
+serializer = ["codec"]
 
 [dev-dependencies]
 anyhow = "1.0.42"

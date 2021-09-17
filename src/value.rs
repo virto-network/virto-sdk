@@ -1,6 +1,5 @@
 use crate::{EnumVariant, SerdeType};
-use byteorder::{ByteOrder, LE};
-use core::cell::Cell;
+use bytes::{Buf, Bytes};
 use core::convert::TryInto;
 use core::str;
 use scale_info::{prelude::*, Type, TypeDef, TypeDefPrimitive as Primitive};
@@ -14,143 +13,145 @@ use serde::Serialize;
 /// directly with the help of a type registry and without using an
 /// intermediate representation that requires allocating data.
 #[derive(Debug)]
-pub struct Value<'a> {
-    data: &'a [u8],
+pub struct Value {
+    data: Bytes,
     ty: Type,
-    idx: Cell<usize>,
 }
 
-impl<'a> Value<'a> {
-    pub fn new(data: &'a [u8], ty: Type) -> Self {
+impl Value {
+    pub fn new(data: impl Into<Bytes>, ty: Type) -> Self {
         Value {
-            data,
+            data: data.into(),
             ty,
-            idx: 0.into(),
         }
+    }
+
+    fn chunk(mut data: impl Buf, ty: Type) -> Self {
+        let size = type_len(&ty, data.chunk());
+        Value::new(data.copy_to_bytes(size), ty)
+    }
+
+    #[inline]
+    fn ty_name(&self) -> &'static str {
+        self.ty.path().segments().last().copied().unwrap_or("")
     }
 }
 
-impl<'a> Serialize for Value<'a> {
+impl Serialize for Value {
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        let name = self.ty_name();
-        let data = self.data_left();
-        let ty = SerdeType::from(&self.ty);
+        let mut data = self.data.clone();
 
         use SerdeType::*;
-        match ty {
-            Bool => ser.serialize_bool(data[0] != 0),
-            U8 => ser.serialize_u8(data[0]),
-            U16 => ser.serialize_u16(LE::read_u16(data)),
-            U32 => ser.serialize_u32(LE::read_u32(data)),
-            U64 => ser.serialize_u64(LE::read_u64(data)),
-            U128 => ser.serialize_u128(LE::read_u128(data)),
-            I8 => ser.serialize_i8(i8::from_le_bytes([data[0]])),
-            I16 => ser.serialize_i16(LE::read_i16(data)),
-            I32 => ser.serialize_i32(LE::read_i32(data)),
-            I64 => ser.serialize_i64(LE::read_i64(data)),
-            I128 => ser.serialize_i128(LE::read_i128(data)),
-            Bytes => unimplemented!(),
-            Char => {
-                let n = LE::read_u32(data);
-                ser.serialize_char(char::from_u32(n).unwrap())
-            }
+        match (&self.ty).into() {
+            Bool => ser.serialize_bool(data.get_u8() != 0),
+            U8 => ser.serialize_u8(data.get_u8()),
+            U16 => ser.serialize_u16(data.get_u16_le()),
+            U32 => ser.serialize_u32(data.get_u32_le()),
+            U64 => ser.serialize_u64(data.get_u64_le()),
+            U128 => ser.serialize_u128(data.get_u128_le()),
+            I8 => ser.serialize_i8(data.get_i8()),
+            I16 => ser.serialize_i16(data.get_i16_le()),
+            I32 => ser.serialize_i32(data.get_i32_le()),
+            I64 => ser.serialize_i64(data.get_i64_le()),
+            I128 => ser.serialize_i128(data.get_i128_le()),
+            Bytes => ser.serialize_bytes(data.chunk()),
+            Char => ser.serialize_char(char::from_u32(data.get_u32_le()).unwrap()),
             Str => {
-                let (_, s) = sequence_len(data);
-                self.advance_idx(s);
-                ser.serialize_str(str::from_utf8(self.data_left()).unwrap())
+                let (_, s) = sequence_len(data.chunk());
+                data.advance(s);
+                ser.serialize_str(str::from_utf8(data.chunk()).unwrap())
             }
             Sequence(ty) => {
-                let (len, p_size) = sequence_len(self.data_left());
-                self.advance_idx(p_size);
+                let (len, p_size) = sequence_len(data.chunk());
+                data.advance(p_size);
 
                 let mut seq = ser.serialize_seq(Some(len))?;
                 for _ in 0..len {
-                    seq.serialize_element(&self.sub_value(ty.clone()))?;
+                    seq.serialize_element(&Value::chunk(&mut data, ty.clone()))?;
                 }
                 seq.end()
             }
             Map(ty_k, ty_v) => {
-                let (len, p_size) = sequence_len(self.data_left());
-                self.advance_idx(p_size);
+                let (len, p_size) = sequence_len(data.chunk());
+                data.advance(p_size);
 
                 let mut state = ser.serialize_map(Some(len))?;
                 for _ in 0..len {
-                    let key = &self.sub_value(ty_k.clone());
-                    let val = &self.sub_value(ty_v.clone());
-                    state.serialize_entry(key, val)?;
+                    let key = Value::chunk(&mut data, ty_k.clone());
+                    let val = Value::chunk(&mut data, ty_v.clone());
+                    state.serialize_entry(&key, &val)?;
                 }
                 state.end()
             }
             Tuple(t) => {
                 let mut state = ser.serialize_tuple(t.len())?;
                 for i in 0..t.len() {
-                    state.serialize_element(&self.sub_value(t.type_info(i)))?;
+                    state.serialize_element(&Value::chunk(&mut data, t.type_info(i)))?;
                 }
                 state.end()
             }
             Struct(fields) => {
-                let mut state = ser.serialize_struct(name, fields.len())?;
+                let mut state = ser.serialize_struct(self.ty_name(), fields.len())?;
                 for f in fields {
-                    state
-                        .serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
+                    state.serialize_field(
+                        f.name().unwrap(),
+                        &Value::chunk(&mut data, f.ty().type_info()),
+                    )?;
                 }
                 state.end()
             }
-            StructUnit => ser.serialize_unit_struct(name),
-            StructNewType(ty) => ser.serialize_newtype_struct(name, &self.sub_value(ty)),
+            StructUnit => ser.serialize_unit_struct(self.ty_name()),
+            StructNewType(ty) => {
+                ser.serialize_newtype_struct(self.ty_name(), &Value::chunk(&mut data, ty))
+            }
             StructTuple(fields) => {
-                let mut state = ser.serialize_tuple_struct(name, fields.len())?;
+                let mut state = ser.serialize_tuple_struct(self.ty_name(), fields.len())?;
                 for f in fields {
-                    state.serialize_field(&self.sub_value(f.ty().type_info()))?;
+                    state.serialize_field(&Value::chunk(&mut data, f.ty().type_info()))?;
                 }
                 state.end()
             }
-            Variant(_, _) => match ty.pick_variant(data[0]) {
+            ty @ Variant(_, _) => match ty.pick_variant(data.get_u8()) {
                 EnumVariant::OptionNone => ser.serialize_none(),
-                EnumVariant::OptionSome(ty) => {
-                    self.advance_idx(1);
-                    ser.serialize_some(&self.sub_value(ty))
-                }
+                EnumVariant::OptionSome(ty) => ser.serialize_some(&Value::chunk(&mut data, ty)),
                 EnumVariant::Unit(v) => {
-                    ser.serialize_unit_variant(name, v.index().into(), v.name())
+                    ser.serialize_unit_variant(self.ty_name(), v.index().into(), v.name())
                 }
                 EnumVariant::NewType(v) => {
-                    self.advance_idx(1);
                     let ty = v.fields().first().unwrap().ty().type_info();
                     ser.serialize_newtype_variant(
-                        name,
+                        self.ty_name(),
                         v.index().into(),
                         v.name(),
-                        &self.sub_value(ty),
+                        &Value::chunk(&mut data, ty),
                     )
                 }
 
                 EnumVariant::Tuple(v) => {
-                    self.advance_idx(1);
                     let mut s = ser.serialize_tuple_variant(
-                        name,
+                        self.ty_name(),
                         v.index().into(),
                         v.name(),
                         v.fields().len(),
                     )?;
                     for f in v.fields() {
-                        s.serialize_field(&self.sub_value(f.ty().type_info()))?;
+                        s.serialize_field(&Value::chunk(&mut data, f.ty().type_info()))?;
                     }
                     s.end()
                 }
                 EnumVariant::Struct(v) => {
-                    self.advance_idx(1);
                     let mut s = ser.serialize_struct_variant(
-                        name,
+                        self.ty_name(),
                         v.index().into(),
                         v.name(),
                         v.fields().len(),
                     )?;
                     for f in v.fields() {
-                        s.serialize_field(f.name().unwrap(), &self.sub_value(f.ty().type_info()))?;
+                        let ty = f.ty().type_info();
+                        s.serialize_field(f.name().unwrap(), &Value::chunk(&mut data, ty))?;
                     }
                     s.end()
                 }
@@ -159,32 +160,7 @@ impl<'a> Serialize for Value<'a> {
     }
 }
 
-impl<'a> Value<'a> {
-    fn data_left(&self) -> &[u8] {
-        &self.data[self.idx.get()..]
-    }
-
-    fn sub_value(&self, ty: Type) -> Value {
-        let size = ty_data_size(&ty, self.data_left());
-        Value::new(self.extract_data(size), ty)
-    }
-
-    fn extract_data(&self, end: usize) -> &[u8] {
-        let (data, _) = &self.data_left().split_at(end);
-        self.advance_idx(end);
-        data
-    }
-
-    fn advance_idx(&self, n: usize) {
-        self.idx.set(self.idx.get() + n)
-    }
-
-    fn ty_name(&self) -> &'static str {
-        self.ty.path().segments().last().copied().unwrap_or("")
-    }
-}
-
-fn ty_data_size(ty: &Type, data: &[u8]) -> usize {
+fn type_len(ty: &Type, data: &[u8]) -> usize {
     match ty.type_def() {
         TypeDef::Primitive(p) => match p {
             Primitive::U8 => mem::size_of::<u8>(),
@@ -208,7 +184,7 @@ fn ty_data_size(ty: &Type, data: &[u8]) -> usize {
         TypeDef::Composite(c) => c
             .fields()
             .iter()
-            .fold(0, |c, f| c + ty_data_size(&f.ty().type_info(), &data[c..])),
+            .fold(0, |c, f| c + type_len(&f.ty().type_info(), &data[c..])),
         TypeDef::Variant(e) => {
             let var = e
                 .variants()
@@ -221,13 +197,13 @@ fn ty_data_size(ty: &Type, data: &[u8]) -> usize {
             } else {
                 var.fields()
                     .iter()
-                    .fold(1, |c, f| c + ty_data_size(&f.ty().type_info(), &data[c..]))
+                    .fold(1, |c, f| c + type_len(&f.ty().type_info(), &data[c..]))
             }
         }
         TypeDef::Sequence(s) => {
             let (len, prefix_size) = sequence_len(data);
             let ty = s.type_param().type_info();
-            (0..len).fold(prefix_size, |c, _| c + ty_data_size(&ty, &data[c..]))
+            (0..len).fold(prefix_size, |c, _| c + type_len(&ty, &data[c..]))
         }
         TypeDef::Array(a) => a.len().try_into().unwrap(),
         TypeDef::Tuple(t) => t.fields().len(),
@@ -283,7 +259,7 @@ mod tests {
         let extract_value = u8::MAX;
         let data = extract_value.encode();
         let info = u8::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -293,7 +269,7 @@ mod tests {
         let extract_value = u16::MAX;
         let data = extract_value.encode();
         let info = u16::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -303,7 +279,7 @@ mod tests {
         let extract_value = u32::MAX;
         let data = extract_value.encode();
         let info = u32::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -313,7 +289,7 @@ mod tests {
         let extract_value = u64::MAX;
         let data = extract_value.encode();
         let info = u64::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -323,7 +299,7 @@ mod tests {
         let extract_value = i16::MAX;
         let data = extract_value.encode();
         let info = i16::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -333,7 +309,7 @@ mod tests {
         let extract_value = i32::MAX;
         let data = extract_value.encode();
         let info = i32::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -343,7 +319,7 @@ mod tests {
         let extract_value = i64::MAX;
         let data = extract_value.encode();
         let info = i64::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -353,7 +329,7 @@ mod tests {
         let extract_value = true;
         let data = extract_value.encode();
         let info = bool::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -364,7 +340,7 @@ mod tests {
     //     let extract_value = '⚖';
     //     let data = extract_value.encode();
     //     let info = char::type_info();
-    //     let val = Value::new(&data, info);
+    //     let val = Value::new(data, info);
     //     assert_eq!(to_value(val)?, to_value(extract_value)?);
     //     Ok(())
     // }
@@ -374,7 +350,7 @@ mod tests {
         let extract_value: Vec<u8> = [2u8, u8::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u8>::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -384,7 +360,7 @@ mod tests {
         let extract_value: Vec<u16> = [2u16, u16::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u16>::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -394,7 +370,7 @@ mod tests {
         let extract_value: Vec<u32> = [2u32, u32::MAX].into();
         let data = extract_value.encode();
         let info = Vec::<u32>::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -408,7 +384,7 @@ mod tests {
         );
         let data = extract_value.encode();
         let info = <(i64, Vec<String>, bool)>::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
     }
@@ -426,7 +402,7 @@ mod tests {
         };
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
@@ -445,7 +421,7 @@ mod tests {
         };
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
@@ -464,7 +440,7 @@ mod tests {
         };
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
@@ -481,7 +457,7 @@ mod tests {
 
         let data = value.encode();
         let info = BTreeMap::<String, i32>::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
 
         assert_eq!(to_value(val)?, to_value(value)?);
         Ok(())
@@ -500,14 +476,16 @@ mod tests {
         struct Foo {
             bar: Vec<Bar>,
             baz: Option<Baz>,
+            lol: &'static [u8],
         }
         let expected = Foo {
             bar: [Bar::That(i16::MAX), Bar::This].into(),
             baz: Some(Baz("aliquam malesuada bibendum arcu vitae".into())),
+            lol: b"\0xFFsome stuff\0x00",
         };
         let data = expected.encode();
         let info = Foo::type_info();
-        let out = Value::new(&data, info);
+        let out = Value::new(data, info);
 
         assert_eq!(to_value(out)?, to_value(expected)?);
         Ok(())
@@ -535,7 +513,7 @@ mod tests {
         );
         let data = extract_value.encode();
         let info = Foo::type_info();
-        let val = Value::new(&data, info);
+        let val = Value::new(data, info);
 
         assert_eq!(to_value(val)?, to_value(extract_value)?);
         Ok(())
