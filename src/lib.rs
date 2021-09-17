@@ -4,11 +4,11 @@
 ///! Dynamic SCALE Serialization using `scale-info` type information.
 ///!
 
-#[cfg(feature = "serializer")]
+#[cfg(feature = "experimental-serializer")]
 mod serializer;
 mod value;
 
-#[cfg(feature = "serializer")]
+#[cfg(feature = "experimental-serializer")]
 pub use serializer::{to_writer, Serializer};
 pub use value::Value;
 

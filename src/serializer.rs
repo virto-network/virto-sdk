@@ -1,28 +1,27 @@
-use codec::{Compact, Encode};
+use bytes::BufMut;
 use core::fmt;
-use core2::io;
 use scale_info::{Type, TypeInfo};
 use serde::{ser, Serialize};
 
-use crate::SerdeType;
+use crate::{SerdeType, TupleOrArray};
 
 type Result<T> = core::result::Result<T, Error>;
 
 #[derive(TypeInfo)]
 struct Noop;
 
-pub fn to_writer<W, T>(writer: W, value: &T) -> Result<()>
+pub fn to_writer<B, T>(bytes: B, value: &T) -> Result<()>
 where
     T: Serialize,
-    W: io::Write,
+    B: BufMut,
 {
-    to_writer_with_info(writer, value, Noop::type_info())
+    to_writer_with_info(bytes, value, Noop::type_info())
 }
 
-pub fn to_writer_with_info<W, T>(writer: W, value: &T, info: Type) -> Result<()>
+pub fn to_writer_with_info<B, T>(writer: B, value: &T, info: Type) -> Result<()>
 where
     T: Serialize,
-    W: io::Write,
+    B: BufMut,
 {
     let info = if info.path().segments().eq(&["scales", "serializer", "Noop"]) {
         None
@@ -34,85 +33,99 @@ where
     Ok(())
 }
 
-pub struct Serializer<W> {
-    out: W,
+pub struct Serializer<B> {
+    out: B,
     ty: Option<Type>,
 }
 
-impl<W> Serializer<W>
+impl<B> Serializer<B>
 where
-    W: io::Write,
+    B: BufMut,
 {
-    pub fn new(out: W, ty: Option<Type>) -> Self {
+    pub fn new(out: B, ty: Option<Type>) -> Self {
         Serializer { out, ty }
     }
 }
 
-impl<'a, W> ser::Serializer for &'a mut Serializer<W>
+impl<'a, B> ser::Serializer for &'a mut Serializer<B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
 
-    type SerializeSeq = TypedSerializer<'a, W>;
-    type SerializeTuple = TypedSerializer<'a, W>;
-    type SerializeTupleStruct = TypedSerializer<'a, W>;
-    type SerializeTupleVariant = TypedSerializer<'a, W>;
-    type SerializeMap = TypedSerializer<'a, W>;
-    type SerializeStruct = TypedSerializer<'a, W>;
-    type SerializeStructVariant = TypedSerializer<'a, W>;
+    type SerializeSeq = TypedSerializer<'a, B>;
+    type SerializeTuple = TypedSerializer<'a, B>;
+    type SerializeTupleStruct = TypedSerializer<'a, B>;
+    type SerializeTupleVariant = TypedSerializer<'a, B>;
+    type SerializeMap = TypedSerializer<'a, B>;
+    type SerializeStruct = TypedSerializer<'a, B>;
+    type SerializeStructVariant = TypedSerializer<'a, B>;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok> {
-        v.encode_to(&mut self.out);
+        self.maybe_some()?;
+        self.out.put_u8(v.into());
         Ok(())
     }
 
     fn serialize_i8(self, v: i8) -> Result<Self::Ok> {
-        v.encode_to(&mut self.out);
+        self.maybe_some()?;
+        self.out.put_i8(v);
         Ok(())
     }
 
     fn serialize_i16(self, v: i16) -> Result<Self::Ok> {
-        v.encode_to(&mut self.out);
+        self.maybe_some()?;
+        self.out.put_i16_le(v);
         Ok(())
     }
 
     fn serialize_i32(self, v: i32) -> Result<Self::Ok> {
-        v.encode_to(&mut self.out);
+        self.maybe_some()?;
+        self.out.put_i32_le(v);
         Ok(())
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok> {
         match self.ty() {
-            Some(SerdeType::I8) => (v as i8).encode_to(&mut self.out),
-            Some(SerdeType::I16) => (v as i16).encode_to(&mut self.out),
-            Some(SerdeType::I32) => (v as i32).encode_to(&mut self.out),
-            _ => v.encode_to(&mut self.out),
+            Some(SerdeType::I8) => self.serialize_i8(v as i8)?,
+            Some(SerdeType::I16) => self.serialize_i16(v as i16)?,
+            Some(SerdeType::I32) => self.serialize_i32(v as i32)?,
+            _ => {
+                self.maybe_some()?;
+                self.out.put_i64_le(v)
+            }
         }
         Ok(())
     }
 
     fn serialize_u8(self, v: u8) -> Result<Self::Ok> {
-        self.out.write_all(&[v]).map_err(Error::from)
+        self.maybe_some()?;
+        self.out.put_u8(v);
+        Ok(())
     }
 
     fn serialize_u16(self, v: u16) -> Result<Self::Ok> {
-        v.encode_to(&mut self.out);
+        self.maybe_some()?;
+        self.out.put_u16_le(v);
         Ok(())
     }
 
     fn serialize_u32(self, v: u32) -> Result<Self::Ok> {
-        v.encode_to(&mut self.out);
+        self.maybe_some()?;
+        self.out.put_u32_le(v);
         Ok(())
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
         match self.ty() {
-            Some(SerdeType::U8) => (v as u8).encode_to(&mut self.out),
-            Some(SerdeType::U16) => (v as u16).encode_to(&mut self.out),
-            Some(SerdeType::U32) => (v as u32).encode_to(&mut self.out),
-            _ => v.encode_to(&mut self.out),
+            Some(SerdeType::U8) => self.serialize_u8(v as u8)?,
+            Some(SerdeType::U16) => self.serialize_u16(v as u16)?,
+            Some(SerdeType::U32) => self.serialize_u32(v as u32)?,
+            _ => {
+                self.maybe_some()?;
+                self.out.put_u64_le(v);
+            }
         }
         Ok(())
     }
@@ -130,32 +143,39 @@ where
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
-        v.encode_to(&mut self.out);
+        self.maybe_some()?;
+        compact_number(v.len(), &mut self.out);
+        self.out.put(v.as_bytes());
         Ok(())
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok> {
-        self.out.write_all(v).map_err(Error::from)
+        self.maybe_some()?;
+        self.out.put(v);
+        Ok(())
     }
 
     fn serialize_none(self) -> Result<Self::Ok> {
-        self.out.write_all(&[0x00]).map_err(Error::from)
+        self.out.put_u8(0x00);
+        Ok(())
     }
 
     fn serialize_some<T: ?Sized>(self, value: &T) -> Result<Self::Ok>
     where
         T: Serialize,
     {
-        self.out.write_all(&[0x01])?;
+        self.out.put_u8(0x01);
         value.serialize(self)
     }
 
     fn serialize_unit(self) -> Result<Self::Ok> {
+        self.maybe_some()?;
         println!("===== u {:?}\n", self.ty);
         Ok(())
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok> {
+        self.maybe_some()?;
         println!("===== us {:?}\n", self.ty);
         Ok(())
     }
@@ -166,6 +186,7 @@ where
         variant_index: u32,
         _variant: &'static str,
     ) -> Result<Self::Ok> {
+        self.maybe_some()?;
         println!("===== uv {:?}\n", self.ty);
         (variant_index as u8).serialize(self)
     }
@@ -174,6 +195,7 @@ where
     where
         T: Serialize,
     {
+        self.maybe_some()?;
         println!("===== ns {:?}\n", self.ty);
         value.serialize(self)
     }
@@ -188,8 +210,9 @@ where
     where
         T: Serialize,
     {
+        self.maybe_some()?;
         println!("===== nv {:?}\n", self.ty);
-        self.out.write_all(&[variant_index as u8])?;
+        self.out.put_u8(variant_index as u8);
         value.serialize(self)
     }
 
@@ -197,12 +220,13 @@ where
         self.maybe_some()?;
         println!("===== seq {:?}\n", self.ty);
         if !matches!(self.ty(), Some(SerdeType::StructTuple(_))) {
-            Compact(len.expect("known length") as u64).encode_to(&mut self.out);
+            compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
     }
 
     fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple> {
+        self.maybe_some()?;
         println!("===== tup {:?}\n", self.ty);
         Ok(self.into())
     }
@@ -212,6 +236,7 @@ where
         __name: &'static str,
         __len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
+        self.maybe_some()?;
         println!("===== tups {:?}", self.ty);
         Ok(self.into())
     }
@@ -223,20 +248,26 @@ where
         _variant: &'static str,
         __len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        self.out.write_all(&[variant_index as u8])?;
+        self.maybe_some()?;
+        self.out.put_u8(variant_index as u8);
         println!("===== tupv {:?}", self.ty);
         Ok(self.into())
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
+        self.maybe_some()?;
         println!("===== m {:?}\n", self.ty);
+        if matches!(self.ty(), Some(SerdeType::Variant(_, _))) {
+            println!("map as variant: {:?}\n", len);
+        }
         if !matches!(self.ty(), Some(SerdeType::Struct(_))) {
-            Compact(len.expect("known length") as u64).encode_to(&mut self.out);
+            compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
     }
 
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
+        self.maybe_some()?;
         println!("===== s {:?}", self.ty);
         Ok(self.into())
     }
@@ -248,22 +279,23 @@ where
         _variant: &'static str,
         __len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        self.out.write_all(&[variant_index as u8])?;
+        self.maybe_some()?;
+        self.out.put_u8(variant_index as u8);
         println!("===== sv {:?}", self.ty);
         Ok(self.into())
     }
 }
 
-impl<'a, W> Serializer<W>
+impl<'a, B> Serializer<B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     // A check to run for every serialize fn since any type could be an Option::Some
     // if the type info says its an Option assume its Some and extract the inner type
     fn maybe_some(&mut self) -> Result<()> {
         if let Some(SerdeType::Variant("Option", v)) = self.ty() {
             self.ty = v[1].fields().first().map(|f| f.ty().type_info());
-            self.out.write_all(&[0x01])?;
+            self.out.put_u8(0x01);
         }
         Ok(())
     }
@@ -273,14 +305,22 @@ where
     }
 }
 
-impl<'a, W: 'a> From<&'a mut Serializer<W>> for TypedSerializer<'a, W> {
-    fn from(ser: &'a mut Serializer<W>) -> Self {
+impl<'a, B: 'a> From<&'a mut Serializer<B>> for TypedSerializer<'a, B> {
+    fn from(ser: &'a mut Serializer<B>) -> Self {
         use SerdeType::*;
+
         let t = ser.ty.take();
         match t.as_ref().map(SerdeType::from) {
             Some(Struct(fields) | StructTuple(fields)) => {
                 Self::Collection(ser, fields.iter().map(|f| f.ty().type_info()).collect())
             }
+            Some(Tuple(TupleOrArray::Array(ty, n))) => {
+                Self::Collection(ser, (0..n).map(|_| ty.type_info()).collect())
+            }
+            Some(Tuple(TupleOrArray::Tuple(fields))) => {
+                Self::Collection(ser, fields.iter().map(|f| f.type_info()).collect())
+            }
+            Some(Variant(_, variants)) => Self::Variant(ser, variants.into()),
             _ => Self::Empty(ser),
         }
     }
@@ -289,20 +329,20 @@ impl<'a, W: 'a> From<&'a mut Serializer<W>> for TypedSerializer<'a, W> {
 pub enum TypedSerializer<'a, W: 'a> {
     Empty(&'a mut Serializer<W>),
     Collection(&'a mut Serializer<W>, Vec<Type>),
+    Variant(&'a mut Serializer<W>, Vec<scale_info::Variant>),
 }
 
-impl<'a, W> TypedSerializer<'a, W> {
-    fn serializer(&mut self) -> &mut Serializer<W> {
+impl<'a, B> TypedSerializer<'a, B> {
+    fn serializer(&mut self) -> &mut Serializer<B> {
         match self {
-            TypedSerializer::Empty(ser) => *ser,
-            TypedSerializer::Collection(ser, _) => *ser,
+            Self::Empty(ser) | Self::Collection(ser, _) | Self::Variant(ser, _) => ser,
         }
     }
 }
 
-impl<'a, W> ser::SerializeMap for TypedSerializer<'a, W>
+impl<'a, B> ser::SerializeMap for TypedSerializer<'a, B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
@@ -314,7 +354,20 @@ where
         if matches!(self, Self::Collection(_, _)) {
             return Ok(());
         }
-        key.serialize(self.serializer())
+        match self {
+            TypedSerializer::Empty(_) => key.serialize(self.serializer()),
+            TypedSerializer::Collection(_, _) => Ok(()),
+            TypedSerializer::Variant(_, variants) => {
+                let key_data = {
+                    let mut s = Serializer::new(vec![], None);
+                    key.serialize(&mut s)?;
+                    s.out
+                };
+
+                println!("=========> {:?}: {:?}\n", key_data, variants);
+                Ok(())
+            }
+        }
     }
 
     fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<()>
@@ -337,9 +390,9 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeSeq for TypedSerializer<'a, W>
+impl<'a, B> ser::SerializeSeq for TypedSerializer<'a, B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
@@ -363,9 +416,9 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeStruct for TypedSerializer<'a, W>
+impl<'a, B> ser::SerializeStruct for TypedSerializer<'a, B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
@@ -382,9 +435,9 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeStructVariant for TypedSerializer<'a, W>
+impl<'a, B> ser::SerializeStructVariant for TypedSerializer<'a, B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
@@ -401,9 +454,9 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeTuple for TypedSerializer<'a, W>
+impl<'a, B> ser::SerializeTuple for TypedSerializer<'a, B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
@@ -420,9 +473,9 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeTupleStruct for TypedSerializer<'a, W>
+impl<'a, B> ser::SerializeTupleStruct for TypedSerializer<'a, B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
@@ -439,9 +492,9 @@ where
     }
 }
 
-impl<'a, W> ser::SerializeTupleVariant for TypedSerializer<'a, W>
+impl<'a, B> ser::SerializeTupleVariant for TypedSerializer<'a, B>
 where
-    W: io::Write,
+    B: BufMut,
 {
     type Ok = ();
     type Error = Error;
@@ -461,14 +514,12 @@ where
 #[derive(Debug)]
 pub enum Error {
     Ser(String),
-    Io(io::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Ser(msg) => write!(f, "{}", msg),
-            Error::Io(e) => write!(f, "{}", e),
         }
     }
 }
@@ -484,15 +535,35 @@ impl ser::Error for Error {
     }
 }
 
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self {
-        Error::Io(e)
+fn compact_number(n: usize, mut dest: impl BufMut) {
+    match n {
+        0..=0b0011_1111 => dest.put_u8((n as u8) << 2),
+        0..=0b0011_1111_1111_1111 => dest.put_u16_le(((n as u16) << 2) | 0b01),
+        0..=0b0011_1111_1111_1111_1111_1111_1111_1111 => dest.put_u32_le(((n as u32) << 2) | 0b10),
+        _ => {
+            let bytes_needed = 8 - n.leading_zeros() / 8;
+            assert!(
+                bytes_needed >= 4,
+                "Previous match arm matches anyting less than 2^30; qed"
+            );
+            dest.put_u8(0b11 + ((bytes_needed - 4) << 2) as u8);
+            let mut v = n;
+            for _ in 0..bytes_needed {
+                dest.put_u8(v as u8);
+                v >>= 8;
+            }
+            assert_eq!(
+                v, 0,
+                "shifted sufficient bits right to lead only leading zeros; qed"
+            )
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codec::Encode;
     use core::mem::size_of;
     use scale_info::TypeInfo;
     use serde_json::to_value;

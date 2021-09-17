@@ -10,12 +10,11 @@ repository = "https://github.com/valibre-org/scales"
 bytes = { version = "1.0.1", default-features = false }
 scale-info = { version = "0.10.0", default-features = false }
 serde = { version = "1.0.126", default-features = false }
-codec = { version = "2.2.0", package = "parity-scale-codec", default-features = false, optional = true }
 
 [features]
-default = ["std", "serializer"]
+default = ["std", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
-serializer = ["codec"]
+experimental-serializer = []
 
 [dev-dependencies]
 anyhow = "1.0.42"
