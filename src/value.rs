@@ -9,20 +9,22 @@ use serde::ser::{
 };
 use serde::Serialize;
 
-/// A container for SCALE encoded data that can serialize types
-/// directly with the help of a type registry and without using an
-/// intermediate representation that requires allocating data.
+/// A container for SCALE encoded data that can serialize types directly
+/// with the help of a type registry and without using an intermediate representation.
 #[derive(Debug)]
 pub struct Value {
     data: Bytes,
-    ty: Type,
+    ty: SerdeType,
+    path: Vec<&'static str>,
 }
 
 impl Value {
     pub fn new(data: impl Into<Bytes>, ty: Type) -> Self {
+        let path = ty.path().segments().to_vec();
         Value {
             data: data.into(),
-            ty,
+            ty: ty.into(),
+            path,
         }
     }
 
@@ -33,7 +35,7 @@ impl Value {
 
     #[inline]
     fn ty_name(&self) -> &'static str {
-        self.ty.path().segments().last().copied().unwrap_or("")
+        self.path.last().copied().unwrap_or("")
     }
 }
 
@@ -45,7 +47,7 @@ impl Serialize for Value {
         let mut data = self.data.clone();
 
         use SerdeType::*;
-        match (&self.ty).into() {
+        match &self.ty {
             Bool => ser.serialize_bool(data.get_u8() != 0),
             U8 => ser.serialize_u8(data.get_u8()),
             U16 => ser.serialize_u16(data.get_u16_le()),
@@ -89,7 +91,7 @@ impl Serialize for Value {
             Tuple(t) => {
                 let mut state = ser.serialize_tuple(t.len())?;
                 for i in 0..t.len() {
-                    state.serialize_element(&Value::chunk(&mut data, t.type_info(i)))?;
+                    state.serialize_element(&Value::chunk(&mut data, t.type_info(i).clone()))?;
                 }
                 state.end()
             }
@@ -105,7 +107,7 @@ impl Serialize for Value {
             }
             StructUnit => ser.serialize_unit_struct(self.ty_name()),
             StructNewType(ty) => {
-                ser.serialize_newtype_struct(self.ty_name(), &Value::chunk(&mut data, ty))
+                ser.serialize_newtype_struct(self.ty_name(), &Value::chunk(&mut data, ty.clone()))
             }
             StructTuple(fields) => {
                 let mut state = ser.serialize_tuple_struct(self.ty_name(), fields.len())?;
@@ -114,48 +116,47 @@ impl Serialize for Value {
                 }
                 state.end()
             }
-            ty @ Variant(_, _) => match ty.pick_variant(data.get_u8()) {
-                EnumVariant::OptionNone => ser.serialize_none(),
-                EnumVariant::OptionSome(ty) => ser.serialize_some(&Value::chunk(&mut data, ty)),
-                EnumVariant::Unit(v) => {
-                    ser.serialize_unit_variant(self.ty_name(), v.index().into(), v.name())
-                }
-                EnumVariant::NewType(v) => {
-                    let ty = v.fields().first().unwrap().ty().type_info();
-                    ser.serialize_newtype_variant(
+            ty @ Variant(_, _, _) => {
+                let variant = &ty.pick(data.get_u8());
+                match variant.into() {
+                    EnumVariant::OptionNone => ser.serialize_none(),
+                    EnumVariant::OptionSome(ty) => ser.serialize_some(&Value::chunk(&mut data, ty)),
+                    EnumVariant::Unit(idx, ref name) => {
+                        ser.serialize_unit_variant(self.ty_name(), idx.into(), name)
+                    }
+                    EnumVariant::NewType(idx, ref name, ty) => ser.serialize_newtype_variant(
                         self.ty_name(),
-                        v.index().into(),
-                        v.name(),
+                        idx.into(),
+                        name,
                         &Value::chunk(&mut data, ty),
-                    )
-                }
+                    ),
 
-                EnumVariant::Tuple(v) => {
-                    let mut s = ser.serialize_tuple_variant(
-                        self.ty_name(),
-                        v.index().into(),
-                        v.name(),
-                        v.fields().len(),
-                    )?;
-                    for f in v.fields() {
-                        s.serialize_field(&Value::chunk(&mut data, f.ty().type_info()))?;
+                    EnumVariant::Tuple(idx, ref name, fields) => {
+                        let mut s = ser.serialize_tuple_variant(
+                            self.ty_name(),
+                            idx.into(),
+                            name,
+                            fields.len(),
+                        )?;
+                        for ty in fields {
+                            s.serialize_field(&Value::chunk(&mut data, ty))?;
+                        }
+                        s.end()
                     }
-                    s.end()
-                }
-                EnumVariant::Struct(v) => {
-                    let mut s = ser.serialize_struct_variant(
-                        self.ty_name(),
-                        v.index().into(),
-                        v.name(),
-                        v.fields().len(),
-                    )?;
-                    for f in v.fields() {
-                        let ty = f.ty().type_info();
-                        s.serialize_field(f.name().unwrap(), &Value::chunk(&mut data, ty))?;
+                    EnumVariant::Struct(idx, ref name, fields) => {
+                        let mut s = ser.serialize_struct_variant(
+                            self.ty_name(),
+                            idx.into(),
+                            name,
+                            fields.len(),
+                        )?;
+                        for (fname, ty) in fields {
+                            s.serialize_field(fname, &Value::chunk(&mut data, ty))?;
+                        }
+                        s.end()
                     }
-                    s.end()
                 }
-            },
+            }
         }
     }
 }

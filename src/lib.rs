@@ -9,16 +9,22 @@ mod serializer;
 mod value;
 
 #[cfg(feature = "experimental-serializer")]
-pub use serializer::{to_writer, Serializer};
+pub use serializer::{to_bytes, Serializer};
 pub use value::Value;
 
 use scale_info::{Field, MetaType, Type, Variant};
+
+macro_rules! is_tuple {
+    ($it:ident) => {
+        $it.fields().first().and_then(Field::name).is_none()
+    };
+}
 
 /// A convenient representation of the scale-info types to a format
 /// that matches serde model more closely
 #[rustfmt::skip]
 #[derive(Debug)]
-enum SerdeType<'a> {
+enum SerdeType {
     Bool,
     U8, U16, U32, U64, U128,
     I8, I16, I32, I64, I128,
@@ -27,13 +33,13 @@ enum SerdeType<'a> {
     Str,
     Sequence(Type),
     Map(Type, Type),
-    Tuple(TupleOrArray<'a>),
-    Struct(&'a [Field]), StructUnit, StructNewType(Type), StructTuple(&'a [Field]),
-    Variant(&'a str, &'a [Variant]),
+    Tuple(TupleOrArray),
+    Struct(Vec<Field>), StructUnit, StructNewType(Type), StructTuple(Vec<Field>),
+    Variant(String, Vec<Variant>, Option<u8>),
 }
 
-impl<'a> From<&'a Type> for SerdeType<'a> {
-    fn from(ty: &'a Type) -> Self {
+impl From<Type> for SerdeType {
+    fn from(ty: Type) -> Self {
         use scale_info::{TypeDef, TypeDef::*, TypeDefComposite, TypeDefPrimitive};
         let name = ty.path().segments().last().copied().unwrap_or("");
 
@@ -65,13 +71,13 @@ impl<'a> From<&'a Type> for SerdeType<'a> {
                     Self::Map(k, v)
                 } else if fields.len() == 1 {
                     Self::StructNewType(fields.first().unwrap().ty().type_info())
-                } else if is_tuple(fields) {
-                    Self::StructTuple(fields)
+                } else if is_tuple!(c) {
+                    Self::StructTuple(fields.into())
                 } else {
-                    Self::Struct(fields)
+                    Self::Struct(fields.into())
                 }
             }
-            Variant(v) => Self::Variant(name, v.variants()),
+            Variant(v) => Self::Variant(name.into(), v.variants().into(), None),
             Sequence(s) => {
                 let ty = s.type_param().type_info();
                 if ty.path().segments() != &["u8"] {
@@ -80,8 +86,10 @@ impl<'a> From<&'a Type> for SerdeType<'a> {
                     Self::Bytes
                 }
             }
-            Array(a) => Self::Tuple(TupleOrArray::Array(a.type_param(), a.len())),
-            Tuple(t) => Self::Tuple(TupleOrArray::Tuple(t.fields())),
+            Array(a) => Self::Tuple(TupleOrArray::Array(a.type_param().type_info(), a.len())),
+            Tuple(t) => Self::Tuple(TupleOrArray::Tuple(
+                t.fields().iter().map(MetaType::type_info).collect(),
+            )),
             Primitive(p) => match p {
                 TypeDefPrimitive::U8 => Self::U8,
                 TypeDefPrimitive::U16 => Self::U16,
@@ -105,37 +113,17 @@ impl<'a> From<&'a Type> for SerdeType<'a> {
     }
 }
 
-impl<'a> SerdeType<'a> {
-    fn pick_variant(self, index: u8) -> EnumVariant<'a> {
+impl SerdeType {
+    fn pick(&self, index: u8) -> Self {
         match self {
-            SerdeType::Variant(name, variants) => {
-                let variant = variants
-                    .iter()
-                    .find(|v| v.index() == index)
-                    .expect("variant");
-                let fields = variant.fields();
-                if fields.is_empty() {
-                    if name == "Option" && variant.name() == &"None" {
-                        EnumVariant::OptionNone.into()
-                    } else {
-                        EnumVariant::Unit(variant).into()
-                    }
-                } else if is_tuple(fields) {
-                    if fields.len() == 1 {
-                        let ty = fields.first().unwrap().ty().type_info();
-                        return if name == "Option" && variant.name() == &"Some" {
-                            EnumVariant::OptionSome(ty).into()
-                        } else {
-                            EnumVariant::NewType(variant).into()
-                        };
-                    } else {
-                        EnumVariant::Tuple(variant).into()
-                    }
-                } else {
-                    EnumVariant::Struct(variant).into()
-                }
+            SerdeType::Variant(name, variant, Some(_)) => {
+                Self::Variant(name.to_string(), variant.to_vec(), Some(index))
             }
-            _ => unreachable!(),
+            SerdeType::Variant(name, variants, None) => {
+                let v = variants.iter().find(|v| v.index() == index).unwrap();
+                Self::Variant(name.clone(), vec![v.clone()], Some(index))
+            }
+            _ => panic!("Only for enum variants"),
         }
     }
 }
@@ -144,18 +132,57 @@ impl<'a> SerdeType<'a> {
 enum EnumVariant<'a> {
     OptionNone,
     OptionSome(Type),
-    Unit(&'a Variant),
-    NewType(&'a Variant),
-    Tuple(&'a Variant),
-    Struct(&'a Variant),
+    Unit(u8, &'a str),
+    NewType(u8, &'a str, Type),
+    Tuple(u8, &'a str, Vec<Type>),
+    Struct(u8, &'a str, Vec<(&'a str, Type)>),
+}
+
+impl<'a> From<&SerdeType> for EnumVariant<'a> {
+    fn from(ty: &SerdeType) -> Self {
+        match ty {
+            SerdeType::Variant(name, variants, Some(idx)) => {
+                let variant = variants.first().expect("single variant");
+                let fields = variant.fields();
+                let vname = *variant.name();
+
+                if fields.is_empty() {
+                    if name == "Option" && vname == "None" {
+                        Self::OptionNone
+                    } else {
+                        Self::Unit(*idx, vname)
+                    }
+                } else if is_tuple!(variant) {
+                    if fields.len() == 1 {
+                        let ty = fields.first().map(|f| f.ty().type_info()).unwrap();
+                        return if name == "Option" && variant.name() == &"Some" {
+                            Self::OptionSome(ty)
+                        } else {
+                            Self::NewType(*idx, vname, ty)
+                        };
+                    } else {
+                        let fields = fields.iter().map(|f| f.ty().type_info()).collect();
+                        Self::Tuple(*idx, vname, fields)
+                    }
+                } else {
+                    let fields = fields
+                        .iter()
+                        .map(|f| (*f.name().unwrap(), f.ty().type_info()))
+                        .collect();
+                    Self::Struct(*idx, vname, fields)
+                }
+            }
+            _ => panic!("Only for enum variants"),
+        }
+    }
 }
 
 #[derive(Debug)]
-enum TupleOrArray<'a> {
-    Array(&'a MetaType, u32),
-    Tuple(&'a [MetaType]),
+enum TupleOrArray {
+    Array(Type, u32),
+    Tuple(Vec<Type>),
 }
-impl<'a> TupleOrArray<'a> {
+impl TupleOrArray {
     fn len(&self) -> usize {
         match self {
             Self::Array(_, len) => *len as usize,
@@ -163,15 +190,10 @@ impl<'a> TupleOrArray<'a> {
         }
     }
 
-    fn type_info(&self, i: usize) -> Type {
+    fn type_info(&self, i: usize) -> &Type {
         match self {
-            Self::Array(ty, _) => ty.type_info(),
-            Self::Tuple(fields) => fields[i].type_info(),
+            Self::Array(ty, _) => ty,
+            Self::Tuple(fields) => &fields[i],
         }
     }
-}
-
-#[inline]
-fn is_tuple(fields: &[Field]) -> bool {
-    fields.first().and_then(Field::name).is_none()
 }
