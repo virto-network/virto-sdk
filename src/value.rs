@@ -1,4 +1,5 @@
 use crate::{EnumVariant, SerdeType};
+use alloc::vec::Vec;
 use bytes::{Buf, Bytes};
 use core::convert::TryInto;
 use core::str;
@@ -244,7 +245,7 @@ fn sequence_len(data: &[u8]) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use alloc::collections::BTreeMap;
 
     use super::*;
     use anyhow::Error;

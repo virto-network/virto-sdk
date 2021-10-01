@@ -1,24 +1,24 @@
 [package]
 name = "scales"
 description = "SCALE Serialization"
-version = "0.3.0"
+version = "0.5.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/valibre-org/scales"
 
 [dependencies]
 bytes = { version = "1.0.1", default-features = false }
-scale-info = { version = "0.10.0", default-features = false }
+scale-info = { version = "1.0.0", default-features = false }
 serde = { version = "1.0.126", default-features = false }
 
 [features]
-default = ["std", "experimental-serializer"]
+#default = ["std", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
 experimental-serializer = []
 
 [dev-dependencies]
 anyhow = "1.0.42"
 codec = { version = "2.2.0", package = "parity-scale-codec", features = ["derive"] }
-scale-info = { version = "0.10.0", default-features = false, features = ["derive"] }
+scale-info = { version = "1.0.0", default-features = false, features = ["derive"] }
 serde = { version = "1.0.126", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.66", default-features = false, features = ["alloc"] }

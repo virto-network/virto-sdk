@@ -1,18 +1,29 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+///!
 ///! # Scales
 ///!
 ///! Dynamic SCALE Serialization using `scale-info` type information.
-///!
+#[macro_use]
+extern crate alloc;
 
 #[cfg(feature = "experimental-serializer")]
 mod serializer;
 mod value;
 
 #[cfg(feature = "experimental-serializer")]
-pub use serializer::{to_bytes, Serializer};
+pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Serializer};
 pub use value::Value;
 
+use prelude::*;
 use scale_info::{Field, MetaType, Type, Variant};
+
+mod prelude {
+    pub use alloc::{
+        collections::BTreeMap,
+        string::{String, ToString},
+        vec::Vec,
+    };
+}
 
 macro_rules! is_tuple {
     ($it:ident) => {
@@ -113,6 +124,7 @@ impl From<Type> for SerdeType {
     }
 }
 
+// Utilities for enum variants
 impl SerdeType {
     fn pick(&self, index: u8) -> Self {
         match self {
@@ -123,6 +135,37 @@ impl SerdeType {
                 let v = variants.iter().find(|v| v.index() == index).unwrap();
                 Self::Variant(name.clone(), vec![v.clone()], Some(index))
             }
+            _ => panic!("Only for enum variants"),
+        }
+    }
+
+    #[cfg(feature = "experimental-serializer")]
+    fn pick_mut<F, A, B>(&mut self, selection: A, get_field: F) -> &Self
+    where
+        F: Fn(&Variant) -> B,
+        A: AsRef<[u8]> + PartialEq + core::fmt::Debug,
+        B: AsRef<[u8]> + PartialEq + core::fmt::Debug,
+    {
+        match self {
+            SerdeType::Variant(_, _, Some(_)) => self,
+            SerdeType::Variant(_, ref mut variants, idx @ None) => {
+                let i = variants
+                    .iter()
+                    .map(|v| get_field(v))
+                    .position(|f| f.as_ref() == selection.as_ref())
+                    .expect("index") as u8;
+                variants.retain(|v| v.index() == i);
+                *idx = Some(i);
+                self
+            }
+            _ => panic!("Only for enum variants"),
+        }
+    }
+
+    #[cfg(feature = "experimental-serializer")]
+    fn variant_id(&self) -> u8 {
+        match self {
+            SerdeType::Variant(_, _, Some(id)) => *id,
             _ => panic!("Only for enum variants"),
         }
     }

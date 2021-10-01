@@ -1,33 +1,56 @@
+use crate::prelude::*;
 use bytes::BufMut;
 use core::fmt;
 use scale_info::{Type, TypeInfo};
 use serde::{ser, Serialize};
 
-use crate::{SerdeType, TupleOrArray};
+use crate::{EnumVariant, SerdeType, TupleOrArray};
 
 type Result<T> = core::result::Result<T, Error>;
 
 #[derive(TypeInfo)]
 struct Noop;
 
+#[inline]
+pub fn to_vec<T>(value: &T) -> Result<Vec<u8>>
+where
+    T: Serialize + ?Sized,
+{
+    let mut out = vec![];
+    to_bytes(&mut out, value)?;
+    Ok(out)
+}
+
+#[inline]
+pub fn to_vec_with_info<T>(value: &T, info: impl Into<Option<Type>>) -> Result<Vec<u8>>
+where
+    T: Serialize + ?Sized,
+{
+    let mut out = vec![];
+    to_bytes_with_info(&mut out, value, info)?;
+    Ok(out)
+}
+
 pub fn to_bytes<B, T>(bytes: B, value: &T) -> Result<()>
 where
-    T: Serialize,
+    T: Serialize + ?Sized,
     B: BufMut,
 {
     to_bytes_with_info(bytes, value, None)
 }
 
-pub fn to_bytes_with_info<B, T>(writer: B, value: &T, info: impl Into<Option<Type>>) -> Result<()>
+pub fn to_bytes_with_info<B, T>(bytes: B, value: &T, info: impl Into<Option<Type>>) -> Result<()>
 where
-    T: Serialize,
+    T: Serialize + ?Sized,
     B: BufMut,
 {
-    let mut serializer = Serializer::new(writer, info);
+    let mut serializer = Serializer::new(bytes, info);
     value.serialize(&mut serializer)?;
     Ok(())
 }
 
+/// A serializer that encodes types to SCALE with the option to coerce
+/// the output to an equivalent representation given by some type information.
 pub struct Serializer<B> {
     out: B,
     ty: Option<SerdeType>,
@@ -168,13 +191,11 @@ where
 
     fn serialize_unit(self) -> Result<Self::Ok> {
         self.maybe_some()?;
-        println!("===== u {:?}\n", self.ty);
         Ok(())
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok> {
         self.maybe_some()?;
-        println!("===== us {:?}\n", self.ty);
         Ok(())
     }
 
@@ -185,7 +206,6 @@ where
         _variant: &'static str,
     ) -> Result<Self::Ok> {
         self.maybe_some()?;
-        println!("===== uv {:?}\n", self.ty);
         (variant_index as u8).serialize(self)
     }
 
@@ -194,7 +214,6 @@ where
         T: Serialize,
     {
         self.maybe_some()?;
-        println!("===== ns {:?}\n", self.ty);
         value.serialize(self)
     }
 
@@ -209,15 +228,13 @@ where
         T: Serialize,
     {
         self.maybe_some()?;
-        println!("===== nv {:?}\n", self.ty);
         self.out.put_u8(variant_index as u8);
         value.serialize(self)
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
         self.maybe_some()?;
-        println!("===== seq {:?}\n", self.ty);
-        if !matches!(self.ty, Some(SerdeType::StructTuple(_))) {
+        if matches!(self.ty, None | Some(SerdeType::Sequence(_))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
@@ -225,7 +242,6 @@ where
 
     fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple> {
         self.maybe_some()?;
-        println!("===== tup {:?}\n", self.ty);
         Ok(self.into())
     }
 
@@ -235,7 +251,6 @@ where
         __len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
         self.maybe_some()?;
-        println!("===== tups {:?}", self.ty);
         Ok(self.into())
     }
 
@@ -248,18 +263,12 @@ where
     ) -> Result<Self::SerializeTupleVariant> {
         self.maybe_some()?;
         self.out.put_u8(variant_index as u8);
-        println!("===== tupv {:?}", self.ty);
         Ok(self.into())
     }
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.maybe_some()?;
-        println!("===== m {:?}\n", self.ty);
-        if matches!(self.ty, Some(SerdeType::Variant(_, _, _))) {
-            // TODO!
-            println!("map as variant: {:?}\n", len);
-        }
-        if !matches!(self.ty, Some(SerdeType::Struct(_))) {
+        if matches!(self.ty, None | Some(SerdeType::Map(_, _))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
@@ -267,7 +276,6 @@ where
 
     fn serialize_struct(self, _name: &'static str, _len: usize) -> Result<Self::SerializeStruct> {
         self.maybe_some()?;
-        println!("===== s {:?}", self.ty);
         Ok(self.into())
     }
 
@@ -280,7 +288,6 @@ where
     ) -> Result<Self::SerializeStructVariant> {
         self.maybe_some()?;
         self.out.put_u8(variant_index as u8);
-        println!("===== sv {:?}", self.ty);
         Ok(self.into())
     }
 }
@@ -303,47 +310,51 @@ where
     }
 }
 
+///
+pub enum TypedSerializer<'a, B> {
+    Empty(&'a mut Serializer<B>),
+    Composite(&'a mut Serializer<B>, Vec<Type>),
+    Sequence(&'a mut Serializer<B>, Type),
+    Enum(&'a mut Serializer<B>),
+}
+
 impl<'a, B: 'a> From<&'a mut Serializer<B>> for TypedSerializer<'a, B> {
     fn from(ser: &'a mut Serializer<B>) -> Self {
         use SerdeType::*;
-
-        let t = ser.ty.take();
-        match t {
+        match ser.ty.take() {
             Some(Struct(fields) | StructTuple(fields)) => {
-                Self::Collection(ser, fields.iter().map(|f| f.ty().type_info()).collect())
+                Self::Composite(ser, fields.iter().map(|f| f.ty().type_info()).collect())
             }
-            Some(Tuple(TupleOrArray::Array(ty, n))) => {
-                Self::Collection(ser, (0..n).map(|_| ty.clone()).collect())
+            Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty.clone()),
+            Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Composite(ser, fields.into()),
+            Some(Sequence(ty)) => {
+                ser.ty = Some(ty.clone().into());
+                Self::Sequence(ser, ty)
             }
-            Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Collection(ser, fields.into()),
-            Some(Variant(_, variants, _)) => {
-                // assuming the variant name is used to select the right variant
-                let variants = variants.iter().map(|v| *v.name()).collect();
-                Self::Variant {
-                    ser,
-                    variants,
-                    selected: None,
+            Some(Map(_, _)) => Self::Empty(ser),
+            Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
+                EnumVariant::Tuple(_, _, types) => Self::Composite(ser, types),
+                EnumVariant::Struct(_, _, types) => {
+                    Self::Composite(ser, types.iter().map(|(_, ty)| ty.clone()).collect())
                 }
+                _ => Self::Empty(ser),
+            },
+            Some(var @ Variant(_, _, None)) => {
+                ser.ty = Some(var);
+                Self::Enum(ser)
             }
             _ => Self::Empty(ser),
         }
     }
 }
 
-pub enum TypedSerializer<'a, B> {
-    Empty(&'a mut Serializer<B>),
-    Collection(&'a mut Serializer<B>, Vec<Type>),
-    Variant {
-        ser: &'a mut Serializer<B>,
-        variants: Vec<&'a str>,
-        selected: Option<u8>,
-    },
-}
-
 impl<'a, B> TypedSerializer<'a, B> {
     fn serializer(&mut self) -> &mut Serializer<B> {
         match self {
-            Self::Empty(ser) | Self::Collection(ser, _) | Self::Variant { ser, .. } => ser,
+            Self::Empty(ser)
+            | Self::Composite(ser, _)
+            | Self::Enum(ser)
+            | Self::Sequence(ser, _) => ser,
         }
     }
 }
@@ -360,33 +371,18 @@ where
         T: Serialize,
     {
         match self {
-            TypedSerializer::Collection(_, _)
-            | TypedSerializer::Variant {
-                selected: Some(_), ..
-            } => Ok(()),
-            TypedSerializer::Variant {
-                ser,
-                variants,
-                selected: selected @ None,
-            } => {
-                let key_data = {
-                    let mut s = Serializer::new(vec![], None);
-                    key.serialize(&mut s)?;
-                    s.out
-                };
-                let idx = variants
-                    .iter()
-                    .position(|name| {
-                        let mut s = Serializer::new(vec![], None);
-                        name.serialize(&mut s).expect("key serialized");
-                        s.out == key_data
-                    })
-                    .expect("key exists") as u8;
-                idx.serialize(&mut **ser)?;
-                *selected = Some(idx);
+            TypedSerializer::Enum(ser) => {
+                if let Some(ref mut var @ SerdeType::Variant(_, _, None)) = ser.ty {
+                    let key_data = to_vec(key)?;
+                    // assume the key is the name of the variant
+                    var.pick_mut(key_data, |v| to_vec(v.name()).unwrap())
+                        .variant_id()
+                        .serialize(&mut **ser)?;
+                }
                 Ok(())
             }
             TypedSerializer::Empty(ser) => key.serialize(&mut **ser),
+            _ => Ok(()),
         }
     }
 
@@ -394,7 +390,7 @@ where
     where
         T: Serialize,
     {
-        if let TypedSerializer::Collection(ser, types) = self {
+        if let TypedSerializer::Composite(ser, types) = self {
             let mut ty = types.remove(0).into();
             // serde_json unwraps newtypes
             if let SerdeType::StructNewType(t) = ty {
@@ -421,12 +417,15 @@ where
     where
         T: Serialize,
     {
-        if let Self::Collection(ser, types) = self {
-            let mut ty = types.remove(0).into();
-            if let SerdeType::StructNewType(t) = ty {
-                ty = t.into()
+        match self {
+            TypedSerializer::Composite(ser, types) => {
+                let mut ty = types.remove(0).into();
+                if let SerdeType::StructNewType(t) = ty {
+                    ty = t.into()
+                }
+                ser.ty = Some(ty);
             }
-            ser.ty = Some(ty);
+            _ => {}
         }
         value.serialize(self.serializer())
     }
@@ -587,10 +586,9 @@ mod tests {
     use core::mem::size_of;
     use scale_info::TypeInfo;
     use serde_json::to_value;
-    use std::collections::BTreeMap;
 
     #[test]
-    fn test_primitive_u8() -> Result<()> {
+    fn primitive_u8() -> Result<()> {
         let mut out = [0u8];
         to_bytes(&mut out[..], &123u8)?;
 
@@ -601,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_u16() -> Result<()> {
+    fn primitive_u16() -> Result<()> {
         const INPUT: u16 = 0xFF_EE;
         let mut out = [0u8; size_of::<u16>()];
         let expected = INPUT.encode();
@@ -613,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_u32() -> Result<()> {
+    fn primitive_u32() -> Result<()> {
         const INPUT: u32 = 0xFF_EE_DD_CC;
         let mut out = [0u8; size_of::<u32>()];
         let expected = INPUT.encode();
@@ -625,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_u64() -> Result<()> {
+    fn primitive_u64() -> Result<()> {
         const INPUT: u64 = 0xFF_EE_DD_CC__BB_AA_99_88;
         let mut out = [0u8; size_of::<u64>()];
         let expected = INPUT.encode();
@@ -637,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_i16() -> Result<()> {
+    fn primitive_i16() -> Result<()> {
         const INPUT: i16 = i16::MIN;
         let mut out = [0u8; size_of::<i16>()];
         let expected = INPUT.encode();
@@ -649,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_i32() -> Result<()> {
+    fn primitive_i32() -> Result<()> {
         const INPUT: i32 = i32::MIN;
         let mut out = [0u8; size_of::<i32>()];
         let expected = INPUT.encode();
@@ -661,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_i64() -> Result<()> {
+    fn primitive_i64() -> Result<()> {
         const INPUT: i64 = i64::MIN;
         let mut out = [0u8; size_of::<i64>()];
         let expected = INPUT.encode();
@@ -673,7 +671,7 @@ mod tests {
     }
 
     #[test]
-    fn test_primitive_bool() -> Result<()> {
+    fn primitive_bool() -> Result<()> {
         const INPUT: bool = true;
         let mut out = [0u8];
         let expected = INPUT.encode();
@@ -685,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn test_str() -> Result<()> {
+    fn str() -> Result<()> {
         const INPUT: &str = "ac orci phasellus egestas tellus rutrum tellus pellentesque";
         let mut out = Vec::<u8>::new();
         let expected = INPUT.encode();
@@ -697,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bytes() -> Result<()> {
+    fn bytes() -> Result<()> {
         const INPUT: &[u8] = b"dictumst quisque sagittis purus sit amet volutpat consequat";
         let mut out = Vec::<u8>::new();
         let expected = INPUT.encode();
@@ -709,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tuple_simple() -> Result<()> {
+    fn tuple_simple() -> Result<()> {
         const INPUT: (u8, bool, u64) = (0xD0, false, u64::MAX);
         let mut out = Vec::<u8>::new();
         let expected = INPUT.encode();
@@ -721,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enum_simple() -> Result<()> {
+    fn enum_simple() -> Result<()> {
         #[derive(Serialize, Encode)]
         enum X {
             _A,
@@ -739,7 +737,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tuple_enum_mix() -> Result<()> {
+    fn tuple_enum_mix() -> Result<()> {
         #[derive(Serialize, Encode)]
         enum X {
             A,
@@ -757,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn test_struct_simple() -> Result<()> {
+    fn struct_simple() -> Result<()> {
         #[derive(Serialize, Encode)]
         struct Foo {
             a: Bar,
@@ -782,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vec_simple() -> Result<()> {
+    fn vec_simple() -> Result<()> {
         let input: Vec<String> = vec!["hello".into(), "beautiful".into(), "people".into()];
         let mut out = Vec::<u8>::new();
         let expected = input.encode();
@@ -794,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn test_struct_mix() -> Result<()> {
+    fn struct_mix() -> Result<()> {
         #[derive(Serialize, Encode)]
         struct Foo<'a> {
             a: Vec<String>,
@@ -834,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn test_json_simple() -> Result<()> {
+    fn json_simple() -> Result<()> {
         #[derive(Debug, Serialize, Encode, TypeInfo)]
         struct Foo {
             a: Bar,
@@ -853,8 +851,6 @@ mod tests {
         let expected = input.encode();
 
         let json_input = to_value(&input).unwrap();
-        println!("{:?}\n", input);
-        println!("{:?}\n", json_input);
         to_bytes_with_info(&mut out, &json_input, Foo::type_info())?;
 
         assert_eq!(out, expected);
@@ -862,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn test_json_mix() -> Result<()> {
+    fn json_mix() -> Result<()> {
         #[derive(Debug, Serialize, Encode, TypeInfo)]
         struct Foo<'a> {
             a: Vec<String>,
@@ -885,7 +881,8 @@ mod tests {
                 Bar::C(
                     {
                         let mut h = BTreeMap::new();
-                        h.insert("key".into(), false);
+                        h.insert("key1".into(), false);
+                        h.insert("key2".into(), true);
                         h
                     },
                     i64::MIN,
@@ -896,8 +893,6 @@ mod tests {
         let expected = input.encode();
 
         let json_input = to_value(&input).unwrap();
-        println!("{:?}\n", input);
-        println!("{:?}\n", json_input);
         to_bytes_with_info(&mut out, &json_input, Foo::type_info())?;
 
         assert_eq!(out, expected);
