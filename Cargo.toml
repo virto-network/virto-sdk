@@ -9,9 +9,12 @@ tiny-bip39 = "0.8.0"
 async-trait = "0.1.42"
 thiserror = "1.0.23"
 sp-core = "3.0.0"
+async-std = { version = "1.10.0", features = ["attributes"] }
+clap = "2.33"
 
 [dev-dependencies]
-async-std = { version = "1.9.0", features = ["attributes"] }
+async-std = { version = "1.10.0", features = ["attributes"] }
 
 [features]
+default = ["std"]
 std = []
