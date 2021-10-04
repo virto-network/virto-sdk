@@ -139,7 +139,11 @@ where
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
+        // all numbers in serde_json are the same
         match self.ty {
+            Some(SerdeType::I8) => self.serialize_i8(v as i8)?,
+            Some(SerdeType::I16) => self.serialize_i16(v as i16)?,
+            Some(SerdeType::I32) => self.serialize_i32(v as i32)?,
             Some(SerdeType::U8) => self.serialize_u8(v as u8)?,
             Some(SerdeType::U16) => self.serialize_u16(v as u16)?,
             Some(SerdeType::U32) => self.serialize_u32(v as u32)?,
@@ -165,6 +169,11 @@ where
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
         self.maybe_some()?;
+        if let Some(ref mut var @ SerdeType::Variant(_, _, None)) = &mut self.ty {
+            var.pick_mut(to_vec(v)?, |k| to_vec(k.name()).unwrap());
+            self.out.put_u8(var.variant_id());
+            return Ok(());
+        }
         compact_number(v.len(), &mut self.out);
         self.out.put(v.as_bytes());
         Ok(())
@@ -313,8 +322,8 @@ where
 ///
 pub enum TypedSerializer<'a, B> {
     Empty(&'a mut Serializer<B>),
-    Composite(&'a mut Serializer<B>, Vec<Type>),
-    Sequence(&'a mut Serializer<B>, Type),
+    Composite(&'a mut Serializer<B>, Vec<SerdeType>),
+    Sequence(&'a mut Serializer<B>, SerdeType),
     Enum(&'a mut Serializer<B>),
 }
 
@@ -322,20 +331,22 @@ impl<'a, B: 'a> From<&'a mut Serializer<B>> for TypedSerializer<'a, B> {
     fn from(ser: &'a mut Serializer<B>) -> Self {
         use SerdeType::*;
         match ser.ty.take() {
-            Some(Struct(fields) | StructTuple(fields)) => {
-                Self::Composite(ser, fields.iter().map(|f| f.ty().type_info()).collect())
+            Some(Struct(fields) | StructTuple(fields)) => Self::Composite(
+                ser,
+                fields.iter().map(|f| f.ty().type_info().into()).collect(),
+            ),
+            Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty.into()),
+            Some(Tuple(TupleOrArray::Tuple(fields))) => {
+                Self::Composite(ser, fields.iter().map(SerdeType::from).collect())
             }
-            Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty.clone()),
-            Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Composite(ser, fields.into()),
-            Some(Sequence(ty)) => {
-                ser.ty = Some(ty.clone().into());
-                Self::Sequence(ser, ty)
-            }
+            Some(Sequence(ty)) => Self::Sequence(ser, ty.into()),
             Some(Map(_, _)) => Self::Empty(ser),
             Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
-                EnumVariant::Tuple(_, _, types) => Self::Composite(ser, types),
+                EnumVariant::Tuple(_, _, types) => {
+                    Self::Composite(ser, types.iter().map(SerdeType::from).collect())
+                }
                 EnumVariant::Struct(_, _, types) => {
-                    Self::Composite(ser, types.iter().map(|(_, ty)| ty.clone()).collect())
+                    Self::Composite(ser, types.iter().map(|(_, ty)| ty.into()).collect())
                 }
                 _ => Self::Empty(ser),
             },
@@ -390,14 +401,24 @@ where
     where
         T: Serialize,
     {
-        if let TypedSerializer::Composite(ser, types) = self {
-            let mut ty = types.remove(0).into();
-            // serde_json unwraps newtypes
-            if let SerdeType::StructNewType(t) = ty {
-                ty = t.into()
+        match self {
+            TypedSerializer::Composite(ser, types) => {
+                let mut ty = types.remove(0);
+                // serde_json unwraps newtypes
+                if let SerdeType::StructNewType(t) = ty {
+                    ty = t.into()
+                }
+                ser.ty = Some(ty);
             }
-            ser.ty = Some(ty);
-        };
+            TypedSerializer::Enum(ser) => {
+                if let Some(var @ SerdeType::Variant(_, _, Some(_))) = &ser.ty {
+                    if let EnumVariant::NewType(_, _, ty) = var.into() {
+                        ser.ty = Some(ty.into());
+                    }
+                }
+            }
+            _ => {}
+        }
         value.serialize(self.serializer())
     }
 
@@ -420,13 +441,20 @@ where
         match self {
             TypedSerializer::Composite(ser, types) => {
                 let mut ty = types.remove(0).into();
-                if let SerdeType::StructNewType(t) = ty {
-                    ty = t.into()
-                }
+                match ty {
+                    SerdeType::StructNewType(t) => ty = t.into(),
+                    _ => {}
+                };
                 ser.ty = Some(ty);
             }
+            TypedSerializer::Sequence(ser, ty) => {
+                ser.ty = Some(match ty {
+                    SerdeType::StructNewType(t) => t.into(),
+                    _ => ty.clone(),
+                });
+            }
             _ => {}
-        }
+        };
         value.serialize(self.serializer())
     }
 
@@ -888,6 +916,36 @@ mod tests {
                     i64::MIN,
                 ),
             ),
+        };
+        let mut out = Vec::<u8>::new();
+        let expected = input.encode();
+
+        let json_input = to_value(&input).unwrap();
+        to_bytes_with_info(&mut out, &json_input, Foo::type_info())?;
+
+        assert_eq!(out, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn json_mix2() -> Result<()> {
+        #[derive(Debug, Encode, Serialize, TypeInfo)]
+        enum Bar {
+            This,
+            That(i16),
+        }
+        #[derive(Debug, Encode, Serialize, TypeInfo)]
+        struct Baz(String);
+        #[derive(Debug, Encode, Serialize, TypeInfo)]
+        struct Foo {
+            bar: Vec<Bar>,
+            baz: Option<Baz>,
+            lol: &'static [u8],
+        }
+        let input = Foo {
+            bar: [Bar::That(i16::MAX), Bar::This].into(),
+            baz: Some(Baz("lorem ipsum".into())),
+            lol: b"\0xFFsome stuff\0x00",
         };
         let mut out = Vec::<u8>::new();
         let expected = input.encode();

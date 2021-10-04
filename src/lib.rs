@@ -34,8 +34,8 @@ macro_rules! is_tuple {
 /// A convenient representation of the scale-info types to a format
 /// that matches serde model more closely
 #[rustfmt::skip]
-#[derive(Debug)]
-enum SerdeType {
+#[derive(Debug, Clone)]
+pub enum SerdeType {
     Bool,
     U8, U16, U32, U64, U128,
     I8, I16, I32, I64, I128,
@@ -47,6 +47,18 @@ enum SerdeType {
     Tuple(TupleOrArray),
     Struct(Vec<Field>), StructUnit, StructNewType(Type), StructTuple(Vec<Field>),
     Variant(String, Vec<Variant>, Option<u8>),
+}
+
+impl From<&mut Type> for SerdeType {
+    fn from(ty: &mut Type) -> Self {
+        ty.clone().into()
+    }
+}
+
+impl From<&Type> for SerdeType {
+    fn from(ty: &Type) -> Self {
+        ty.clone().into()
+    }
 }
 
 impl From<Type> for SerdeType {
@@ -220,8 +232,8 @@ impl<'a> From<&SerdeType> for EnumVariant<'a> {
     }
 }
 
-#[derive(Debug)]
-enum TupleOrArray {
+#[derive(Debug, Clone)]
+pub enum TupleOrArray {
     Array(Type, u32),
     Tuple(Vec<Type>),
 }

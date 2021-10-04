@@ -1,10 +1,10 @@
 [package]
 name = "scales"
 description = "SCALE Serialization"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
-repository = "https://github.com/valibre-org/scales"
+repository = "https://github.com/virto-network/scales"
 
 [dependencies]
 bytes = { version = "1.0.1", default-features = false }
@@ -12,7 +12,7 @@ scale-info = { version = "1.0.0", default-features = false }
 serde = { version = "1.0.126", default-features = false }
 
 [features]
-#default = ["std", "experimental-serializer"]
+default = ["std", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
 experimental-serializer = []
 
