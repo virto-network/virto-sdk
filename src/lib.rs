@@ -103,7 +103,7 @@ impl From<Type> for SerdeType {
             Variant(v) => Self::Variant(name.into(), v.variants().into(), None),
             Sequence(s) => {
                 let ty = s.type_param().type_info();
-                if ty.path().segments() != &["u8"] {
+                if ty.path().segments() != ["u8"] {
                     Self::Sequence(ty)
                 } else {
                     Self::Bytes

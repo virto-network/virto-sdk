@@ -122,17 +122,17 @@ impl Serialize for Value {
                 match variant.into() {
                     EnumVariant::OptionNone => ser.serialize_none(),
                     EnumVariant::OptionSome(ty) => ser.serialize_some(&Value::chunk(&mut data, ty)),
-                    EnumVariant::Unit(idx, ref name) => {
+                    EnumVariant::Unit(idx, name) => {
                         ser.serialize_unit_variant(self.ty_name(), idx.into(), name)
                     }
-                    EnumVariant::NewType(idx, ref name, ty) => ser.serialize_newtype_variant(
+                    EnumVariant::NewType(idx, name, ty) => ser.serialize_newtype_variant(
                         self.ty_name(),
                         idx.into(),
                         name,
                         &Value::chunk(&mut data, ty),
                     ),
 
-                    EnumVariant::Tuple(idx, ref name, fields) => {
+                    EnumVariant::Tuple(idx, name, fields) => {
                         let mut s = ser.serialize_tuple_variant(
                             self.ty_name(),
                             idx.into(),
@@ -144,7 +144,7 @@ impl Serialize for Value {
                         }
                         s.end()
                     }
-                    EnumVariant::Struct(idx, ref name, fields) => {
+                    EnumVariant::Struct(idx, name, fields) => {
                         let mut s = ser.serialize_struct_variant(
                             self.ty_name(),
                             idx.into(),

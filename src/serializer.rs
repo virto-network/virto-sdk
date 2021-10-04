@@ -322,8 +322,8 @@ where
 ///
 pub enum TypedSerializer<'a, B> {
     Empty(&'a mut Serializer<B>),
-    Composite(&'a mut Serializer<B>, Vec<SerdeType>),
-    Sequence(&'a mut Serializer<B>, SerdeType),
+    Composite(&'a mut Serializer<B>, Vec<Type>),
+    Sequence(&'a mut Serializer<B>, Type),
     Enum(&'a mut Serializer<B>),
 }
 
@@ -331,22 +331,17 @@ impl<'a, B: 'a> From<&'a mut Serializer<B>> for TypedSerializer<'a, B> {
     fn from(ser: &'a mut Serializer<B>) -> Self {
         use SerdeType::*;
         match ser.ty.take() {
-            Some(Struct(fields) | StructTuple(fields)) => Self::Composite(
-                ser,
-                fields.iter().map(|f| f.ty().type_info().into()).collect(),
-            ),
-            Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty.into()),
-            Some(Tuple(TupleOrArray::Tuple(fields))) => {
-                Self::Composite(ser, fields.iter().map(SerdeType::from).collect())
+            Some(Struct(fields) | StructTuple(fields)) => {
+                Self::Composite(ser, fields.iter().map(|f| f.ty().type_info()).collect())
             }
-            Some(Sequence(ty)) => Self::Sequence(ser, ty.into()),
+            Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty),
+            Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Composite(ser, fields),
+            Some(Sequence(ty)) => Self::Sequence(ser, ty),
             Some(Map(_, _)) => Self::Empty(ser),
             Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
-                EnumVariant::Tuple(_, _, types) => {
-                    Self::Composite(ser, types.iter().map(SerdeType::from).collect())
-                }
+                EnumVariant::Tuple(_, _, types) => Self::Composite(ser, types),
                 EnumVariant::Struct(_, _, types) => {
-                    Self::Composite(ser, types.iter().map(|(_, ty)| ty.into()).collect())
+                    Self::Composite(ser, types.iter().map(|(_, ty)| ty.clone()).collect())
                 }
                 _ => Self::Empty(ser),
             },
@@ -403,7 +398,7 @@ where
     {
         match self {
             TypedSerializer::Composite(ser, types) => {
-                let mut ty = types.remove(0);
+                let mut ty = types.remove(0).into();
                 // serde_json unwraps newtypes
                 if let SerdeType::StructNewType(t) = ty {
                     ty = t.into()
@@ -441,16 +436,15 @@ where
         match self {
             TypedSerializer::Composite(ser, types) => {
                 let mut ty = types.remove(0).into();
-                match ty {
-                    SerdeType::StructNewType(t) => ty = t.into(),
-                    _ => {}
-                };
+                if let SerdeType::StructNewType(t) = ty {
+                    ty = t.into();
+                }
                 ser.ty = Some(ty);
             }
             TypedSerializer::Sequence(ser, ty) => {
-                ser.ty = Some(match ty {
+                ser.ty = Some(match ty.into() {
                     SerdeType::StructNewType(t) => t.into(),
-                    _ => ty.clone(),
+                    _ => ty.into(),
                 });
             }
             _ => {}
@@ -582,6 +576,8 @@ impl ser::Error for Error {
     }
 }
 
+// from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
+#[allow(clippy::all)]
 fn compact_number(n: usize, mut dest: impl BufMut) {
     match n {
         0..=0b0011_1111 => dest.put_u8((n as u8) << 2),

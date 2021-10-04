@@ -1,10 +1,11 @@
 [package]
-name = "scales"
+name = "scale-serialization"
 description = "SCALE Serialization"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/virto-network/scales"
+license = "Apache-2.0"
 
 [dependencies]
 bytes = { version = "1.0.1", default-features = false }
