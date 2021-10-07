@@ -1,28 +1,27 @@
 use crate::meta_ext::Hasher;
+use crate::prelude::*;
 use blake2::{Blake2b, Digest};
 use core::hash::Hasher as _;
 
 /// hashes and encodes the provided input with the specified hasher
-pub fn hash(hasher: &Hasher, input: &str) -> Vec<u8> {
-    let input = if input.starts_with("0x") {
-        hex::decode(&input[2..]).unwrap_or_else(|_| input.into())
-    } else {
-        input.into()
+pub fn hash<I: AsRef<[u8]>>(hasher: &Hasher, input: I) -> Vec<u8> {
+    let mut input = input.as_ref();
+    // input might be a hex encoded string
+    let mut data = vec![];
+    if input.starts_with(b"0x") {
+        data.append(&mut hex::decode(&input[2..]).expect("hex string"));
+        input = data.as_ref();
     };
 
     match hasher {
-        Hasher::Blake2_128 => Blake2b::digest(&input).as_slice().to_owned(),
+        Hasher::Blake2_128 => Blake2b::digest(input).as_slice().to_vec(),
         Hasher::Blake2_256 => unimplemented!(),
-        Hasher::Blake2_128Concat => blake2_concat(&input),
+        Hasher::Blake2_128Concat => [Blake2b::digest(input).as_slice(), input].concat(),
         Hasher::Twox128 => twox_hash(&input),
         Hasher::Twox256 => unimplemented!(),
-        Hasher::Twox64Concat => twox_hash_concat(&input),
+        Hasher::Twox64Concat => twox_hash_concat(input),
         Hasher::Identity => input.into(),
     }
-}
-
-fn blake2_concat(input: &[u8]) -> Vec<u8> {
-    [Blake2b::digest(input).as_slice(), input].concat()
 }
 
 fn twox_hash_concat(input: &[u8]) -> Vec<u8> {
@@ -31,10 +30,8 @@ fn twox_hash_concat(input: &[u8]) -> Vec<u8> {
 
     h.write(input);
     let r = h.finish();
-    use byteorder::{ByteOrder, LittleEndian};
-    LittleEndian::write_u64(&mut dest, r);
-
-    [&dest[..], input].concat()
+    dest.copy_from_slice(&r.to_le_bytes());
+    [dest.as_ref(), input].concat()
 }
 
 fn twox_hash(input: &[u8]) -> Vec<u8> {
@@ -46,9 +43,22 @@ fn twox_hash(input: &[u8]) -> Vec<u8> {
     h1.write(input);
     let r0 = h0.finish();
     let r1 = h1.finish();
-    use byteorder::{ByteOrder, LittleEndian};
-    LittleEndian::write_u64(&mut dest[0..8], r0);
-    LittleEndian::write_u64(&mut dest[8..16], r1);
 
+    let (first, last) = dest.split_at_mut(8);
+    first.copy_from_slice(&r0.to_le_bytes());
+    last.copy_from_slice(&r1.to_le_bytes());
     dest.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn hash_blake_hex() {
+        let out1 = hash(&Hasher::Blake2_128, "0x68656c6c6f");
+        let out2 = hash(&Hasher::Blake2_128, hex!("68656c6c6f"));
+        assert_eq!(out1, out2,);
+    }
 }

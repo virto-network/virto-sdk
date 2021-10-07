@@ -39,6 +39,10 @@ enum Cmd {
     Query { query: String },
     /// Submit an extrinsic to the chain
     Submit,
+    /// Convert human-readable data(JSON atm.) to SCALE format
+    Encode,
+    /// Convert SCALE encoded data to a human-readable format(JSON)
+    Decode,
 }
 
 #[async_std::main]
@@ -104,6 +108,12 @@ async fn run() -> Result<()> {
             Output::Json => serde_json::to_string(&meta)?.into(),
             Output::Hex => format!("0x{}", hex::encode(meta.encode())).into(),
         },
+        Cmd::Encode => {
+            todo!()
+        }
+        Cmd::Decode => {
+            todo!()
+        }
     };
     io::stdout().write_all(&out).await?;
     writeln!(io::stdout()).await?;

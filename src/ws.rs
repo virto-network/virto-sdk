@@ -1,3 +1,5 @@
+use crate::prelude::*;
+use alloc::{collections::BTreeMap, sync::Arc};
 use async_mutex::Mutex;
 use async_std::task;
 use async_trait::async_trait;
@@ -12,7 +14,6 @@ use jsonrpc::{
     error::{result_to_response, standard_error, StandardError},
     serde_json,
 };
-use std::{collections::BTreeMap, sync::Arc};
 
 use crate::{
     rpc::{self, Rpc, RpcResult},
@@ -91,7 +92,7 @@ pub type WS2 = futures_util::sink::SinkErrInto<
 >;
 
 impl Backend<WS2> {
-    pub async fn new_ws2(url: &str) -> Result<Self, WsError> {
+    pub async fn new_ws2(url: &str) -> core::result::Result<Self, WsError> {
         log::trace!("WS connecting to {}", url);
         let (stream, _) = async_tungstenite::async_std::connect_async(url).await?;
         let (tx, rx) = stream.split();
@@ -108,7 +109,7 @@ impl Backend<WS2> {
 
     fn process_incoming_messages<Rx>(&self, mut rx: Rx)
     where
-        Rx: Stream<Item = Result<Message, WsError>> + Unpin + Send + 'static,
+        Rx: Stream<Item = core::result::Result<Message, WsError>> + Unpin + Send + 'static,
     {
         let messages = self.messages.clone();
 
@@ -149,7 +150,7 @@ impl Backend<WS2> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Backend as _, Error, Sube};
+    use crate::{Error, Sube};
     use once_cell::sync::OnceCell;
 
     type WSBackend = Backend<WS2>;
@@ -157,7 +158,7 @@ mod tests {
     static NODE: OnceCell<Sube<WSBackend>> = OnceCell::new();
 
     #[async_std::test]
-    async fn get_simple_storage_value() -> Result<(), Error> {
+    async fn get_simple_storage_value() -> core::result::Result<(), Error> {
         let node = get_node().await?;
 
         let latest_block: u32 = node.query("system/number").await?;
@@ -166,7 +167,7 @@ mod tests {
         Ok(())
     }
 
-    async fn get_node() -> Result<&'static Sube<WSBackend>, Error> {
+    async fn get_node() -> core::result::Result<&'static Sube<WSBackend>, Error> {
         if let Some(node) = NODE.get() {
             return Ok(node);
         }
@@ -174,7 +175,6 @@ mod tests {
             .await
             .map_err(|_| Error::ChainUnavailable)?
             .into();
-        sube.try_init_meta().await?;
         NODE.set(sube).map_err(|_| Error::ChainUnavailable)?;
         Ok(NODE.get().unwrap())
     }

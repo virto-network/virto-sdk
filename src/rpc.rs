@@ -4,6 +4,7 @@ use jsonrpc::serde_json::value::RawValue;
 pub use jsonrpc::{error, Error, Request, Response};
 
 use crate::meta_ext::{meta_from_bytes, Metadata};
+use crate::prelude::*;
 use crate::{Backend, StorageKey};
 
 pub type RpcResult = Result<Vec<u8>, error::Error>;
@@ -25,11 +26,8 @@ pub trait Rpc: Backend + Send + Sync {
 
 #[async_trait]
 impl<R: Rpc> Backend for R {
-    async fn query_bytes<K>(&self, key: K) -> crate::Result<Vec<u8>>
-    where
-        K: std::convert::TryInto<StorageKey, Error = crate::Error> + Send,
-    {
-        let key = key.try_into()?.to_string();
+    async fn query_bytes(&self, key: StorageKey) -> crate::Result<Vec<u8>> {
+        let key = key.to_string();
         log::debug!("StorageKey encoded: {}", key);
         self.rpc("state_getStorage", &[&key])
             .await

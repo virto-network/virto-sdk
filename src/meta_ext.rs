@@ -1,5 +1,5 @@
-use core::slice;
-use std::borrow::Borrow;
+use crate::prelude::*;
+use core::{borrow::Borrow, slice};
 
 use codec::Decode;
 #[cfg(any(feature = "v12", feature = "v13"))]
@@ -49,7 +49,7 @@ mod v14 {
 
 /// Decode metadata from its raw prefixed format to the currently
 /// active metadata version.
-pub fn meta_from_bytes(bytes: &mut &[u8]) -> Result<Metadata, codec::Error> {
+pub fn meta_from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
     let meta = match meta.1 {
         #[cfg(feature = "v12")]
