@@ -36,14 +36,14 @@ mod prelude {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-#[cfg(feature = "http")]
+#[cfg(any(feature = "http", feature = "http-web"))]
 pub mod http;
 #[cfg(feature = "ws")]
 pub mod ws;
 
 mod hasher;
 mod meta_ext;
-#[cfg(any(feature = "http", feature = "ws"))]
+#[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
 mod rpc;
 
 /// Sube is the

@@ -19,7 +19,7 @@ log = "0.4.14"
 once_cell = { version = "1.8.0", default-features = false }
 codec = { version = "2.2.0", package = "parity-scale-codec", default-features = false }
 twox-hash = { version = "1.6.0", default-features = false }
-surf = { version = "2.2.0", default_features = false, optional = true }
+surf = { version = "2.3.0", default_features = false, optional = true }
 
 anyhow = { version = "1.0.42", optional = true }
 async-std = { version = "1.9.0", default_features = false, optional = true }
@@ -52,6 +52,7 @@ bin = [
 	"wss",
 ]
 http = ["surf/h1-client-rustls"]
+http-web = ["surf/wasm-client"]
 ws = ["async-std", "async-tungstenite"]
 wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 v12 = ["frame-metadata/v12"]
