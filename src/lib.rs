@@ -19,7 +19,6 @@ pub use codec;
 use codec::Decode;
 use core::{fmt, ops::Deref};
 pub use frame_metadata::RuntimeMetadataPrefixed;
-use futures_lite::AsyncRead;
 pub use meta_ext::Metadata;
 use meta_ext::{Entry, Meta};
 #[cfg(feature = "std")]
@@ -108,7 +107,7 @@ pub trait Backend {
     /// Send a signed extrinsic to the blockchain
     async fn submit<T>(&self, ext: T) -> Result<()>
     where
-        T: AsyncRead + Send + Unpin;
+        T: AsRef<[u8]> + Send;
 
     async fn metadata(&self) -> Result<Metadata>;
 }

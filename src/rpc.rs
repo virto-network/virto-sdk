@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use futures_lite::AsyncReadExt;
 use jsonrpc::serde_json::value::RawValue;
 pub use jsonrpc::{error, Error, Request, Response};
 
@@ -35,15 +34,11 @@ impl<R: Rpc> Backend for R {
             .map_err(|_| crate::Error::StorageKeyNotFound)
     }
 
-    async fn submit<T>(&self, mut ext: T) -> crate::Result<()>
+    async fn submit<T>(&self, ext: T) -> crate::Result<()>
     where
-        T: futures_lite::AsyncRead + Send + Unpin,
+        T: AsRef<[u8]> + Send,
     {
-        let mut extrinsic = vec![];
-        ext.read_to_end(&mut extrinsic)
-            .await
-            .map_err(|_| crate::Error::BadInput)?;
-        let extrinsic = format!("0x{}", hex::encode(&extrinsic));
+        let extrinsic = format!("0x{}", hex::encode(ext.as_ref()));
         log::debug!("Extrinsic: {}", extrinsic);
 
         let res = self
