@@ -5,16 +5,18 @@ authors = ["Daniel Olano <me@olanod.com>"]
 edition = "2018"
 
 [dependencies]
-tiny-bip39 = "0.8.0"
-async-trait = "0.1.42"
-thiserror = "1.0.23"
-sp-core = "3.0.0"
-async-std = { version = "1.10.0", features = ["attributes"] }
-clap = "2.33"
+async-trait = "0.1.51"
+sp-core = { version = "3.0.0", default-features = false, features = ["full_crypto"] }
+thiserror = { version = "1.0.30", optional = true }
 
 [dev-dependencies]
+clap = "2.33.3"
 async-std = { version = "1.10.0", features = ["attributes"] }
 
 [features]
-default = ["std"]
-std = []
+default = ["std", "simple"]
+simple = []
+std = [
+	"thiserror",
+	"sp-core/std",
+]

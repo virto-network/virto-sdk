@@ -1,23 +1,19 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 //! With `libwallet` you can build crypto currency wallets that
 //! manage private keys of different kinds saved in a secure storage.
-
-#[cfg(any(feature = "std", test))]
-#[macro_use]
-extern crate std;
-#[cfg(all(not(feature = "std"), not(test)))]
-#[macro_use]
-extern crate core as std;
-
 extern crate alloc;
-use alloc::{boxed::Box, format};
+use alloc::boxed::Box;
+#[cfg(feature = "simple")]
+mod simple;
 
-use async_trait::async_trait;
-use core::str::FromStr;
-use sp_core::hexdisplay::HexDisplay;
+pub use async_trait::async_trait;
+#[cfg(feature = "simple")]
+pub use simple::SimpleVault;
 pub use sp_core::{
-    crypto::{CryptoType, Dummy as DummyPair},
-    ecdsa, ed25519, sr25519, Pair,
+    crypto::{CryptoType, Pair},
+    ecdsa, ed25519,
+    hexdisplay::HexDisplay,
+    sr25519,
 };
 
 #[async_trait(?Send)]
@@ -25,68 +21,7 @@ pub trait Vault: CryptoType {
     async fn unlock(&self, password: &str) -> Result<Self::Pair>;
 }
 
-/// A vault that holds secrets in memory
-pub struct SimpleVault<T: Pair> {
-    seed: T::Seed,
-}
-
-impl<T: Pair> CryptoType for SimpleVault<T> {
-    type Pair = T;
-}
-
-impl<T: Pair> SimpleVault<T> {
-    /// A vault with a random seed, once dropped the the vault can't be restored
-    /// ```
-    /// # use libwallet::{SimpleVault, Vault, Result, DummyPair};
-    /// # #[async_std::main] async fn main() -> Result<()> {
-    /// let vault = SimpleVault::<DummyPair>::new();
-    /// assert!(vault.unlock("").await.is_ok());
-    /// # Ok(()) }
-    /// ```
-    pub fn new() -> Self {
-        SimpleVault {
-            seed: <Self as CryptoType>::Pair::generate().1,
-        }
-    }
-
-    /// A vault with a password and random seed
-    pub fn new_with_password(pwd: &str) -> Self {
-        SimpleVault {
-            seed: <Self as CryptoType>::Pair::generate_with_phrase(Some(pwd)).2,
-        }
-    }
-}
-
-impl<T: Pair> From<&str> for SimpleVault<T> {
-    fn from(s: &str) -> Self {
-        s.parse().expect("valid secret string")
-    }
-}
-
-impl<T: Pair> FromStr for SimpleVault<T> {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self> {
-        let seed = <Self as CryptoType>::Pair::from_string_with_seed(s, None)
-            .map_err(|_| Error::InvalidPhrase)?
-            .1
-            .ok_or(Error::InvalidPhrase)?;
-        Ok(SimpleVault { seed })
-    }
-}
-
-#[async_trait(?Send)]
-impl<T: Pair> Vault for SimpleVault<T> {
-    async fn unlock(&self, pwd: &str) -> Result<T> {
-        let phrase = format!("0x{}", HexDisplay::from(&self.seed.as_ref()));
-        Ok(
-            <Self as CryptoType>::Pair::from_string_with_seed(&phrase, Some(pwd))
-                .map_err(|_| Error::InvalidPhrase)?
-                .0,
-        )
-    }
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 #[derive(Debug)]
@@ -152,6 +87,7 @@ impl<V: Vault> Wallet<V> {
     }
 }
 
+#[cfg(all(feature = "simple", feature = "std"))]
 impl<P: Pair> Default for Wallet<SimpleVault<P>> {
     fn default() -> Self {
         Wallet {
