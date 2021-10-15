@@ -1,54 +1,107 @@
 use crate::{EnumVariant, SerdeType};
-use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
 use bytes::{Buf, Bytes};
 use core::convert::TryInto;
 use core::str;
-use scale_info::{prelude::*, Type, TypeDef, TypeDefPrimitive as Primitive};
-use serde::ser::{
-    SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant, SerializeTuple,
-    SerializeTupleStruct, SerializeTupleVariant,
-};
+use scale_info::{prelude::*, PortableRegistry, TypeDefPrimitive as Primitive};
+use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple, SerializeTupleStruct};
 use serde::Serialize;
+
+type Type = scale_info::Type<scale_info::form::PortableForm>;
+type TypeId = u32;
+type TypeDef = scale_info::TypeDef<scale_info::form::PortableForm>;
 
 /// A container for SCALE encoded data that can serialize types directly
 /// with the help of a type registry and without using an intermediate representation.
 #[derive(Debug)]
-pub struct Value {
+pub struct Value<'a> {
     data: Bytes,
-    ty: SerdeType,
-    path: Vec<&'static str>,
+    ty_id: TypeId,
+    registry: &'a PortableRegistry,
 }
 
-impl Value {
-    pub fn new(data: impl Into<Bytes>, ty: Type) -> Self {
-        let path = ty.path().segments().to_vec();
+impl<'a> Value<'a> {
+    pub fn new(data: impl Into<Bytes>, ty_id: u32, registry: &'a PortableRegistry) -> Self {
         Value {
             data: data.into(),
-            ty: ty.into(),
-            path,
+            ty_id,
+            registry,
         }
     }
 
-    fn chunk(mut data: impl Buf, ty: Type) -> Self {
-        let size = type_len(&ty, data.chunk());
-        Value::new(data.copy_to_bytes(size), ty)
+    fn new_value(&self, data: &mut Bytes, ty_id: TypeId) -> Self {
+        let size = self.ty_len(data.chunk(), ty_id);
+        Value::new(data.copy_to_bytes(size), ty_id, self.registry)
     }
 
     #[inline]
-    fn ty_name(&self) -> &'static str {
-        self.path.last().copied().unwrap_or("")
+    fn resolve(&self, ty: TypeId) -> &'a Type {
+        self.registry.resolve(ty).expect("in registry")
+    }
+
+    fn ty_len(&self, data: &[u8], ty: TypeId) -> usize {
+        match self.resolve(ty).type_def() {
+            TypeDef::Primitive(p) => match p {
+                Primitive::U8 => mem::size_of::<u8>(),
+                Primitive::U16 => mem::size_of::<u16>(),
+                Primitive::U32 => mem::size_of::<u32>(),
+                Primitive::U64 => mem::size_of::<u64>(),
+                Primitive::U128 => mem::size_of::<u128>(),
+                Primitive::I8 => mem::size_of::<i8>(),
+                Primitive::I16 => mem::size_of::<i16>(),
+                Primitive::I32 => mem::size_of::<i32>(),
+                Primitive::I64 => mem::size_of::<i64>(),
+                Primitive::I128 => mem::size_of::<i128>(),
+                Primitive::Bool => mem::size_of::<bool>(),
+                Primitive::Char => mem::size_of::<char>(),
+                Primitive::Str => {
+                    let (l, p_size) = sequence_len(data);
+                    l + p_size
+                }
+                _ => unimplemented!(),
+            },
+            TypeDef::Composite(c) => c
+                .fields()
+                .iter()
+                .fold(0, |c, f| c + self.ty_len(&data[c..], f.ty().id())),
+            TypeDef::Variant(e) => {
+                let var = e
+                    .variants()
+                    .iter()
+                    .find(|v| v.index() == data[0])
+                    .expect("variant");
+
+                if var.fields().is_empty() {
+                    1 // unit variant
+                } else {
+                    var.fields()
+                        .iter()
+                        .fold(1, |c, f| c + self.ty_len(&data[c..], f.ty().id()))
+                }
+            }
+            TypeDef::Sequence(s) => {
+                let (len, prefix_size) = sequence_len(data);
+                let ty_id = s.type_param().id();
+                (0..len).fold(prefix_size, |c, _| c + self.ty_len(&data[c..], ty_id))
+            }
+            TypeDef::Array(a) => a.len().try_into().unwrap(),
+            TypeDef::Tuple(t) => t.fields().len(),
+            TypeDef::Compact(_) => compact_len(data),
+            TypeDef::BitSequence(_) => unimplemented!(),
+        }
     }
 }
 
-impl Serialize for Value {
+impl<'a> Serialize for Value<'a> {
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let mut data = self.data.clone();
+        let ty = self.resolve(self.ty_id);
 
         use SerdeType::*;
-        match &self.ty {
+        match (ty, self.registry).into() {
             Bool => ser.serialize_bool(data.get_u8() != 0),
             U8 => ser.serialize_u8(data.get_u8()),
             U16 => ser.serialize_u16(data.get_u16_le()),
@@ -73,7 +126,7 @@ impl Serialize for Value {
 
                 let mut seq = ser.serialize_seq(Some(len))?;
                 for _ in 0..len {
-                    seq.serialize_element(&Value::chunk(&mut data, ty.clone()))?;
+                    seq.serialize_element(&self.new_value(&mut data, ty))?;
                 }
                 seq.end()
             }
@@ -83,8 +136,8 @@ impl Serialize for Value {
 
                 let mut state = ser.serialize_map(Some(len))?;
                 for _ in 0..len {
-                    let key = Value::chunk(&mut data, ty_k.clone());
-                    let val = Value::chunk(&mut data, ty_v.clone());
+                    let key = self.new_value(&mut data, ty_k);
+                    let val = self.new_value(&mut data, ty_v);
                     state.serialize_entry(&key, &val)?;
                 }
                 state.end()
@@ -92,28 +145,24 @@ impl Serialize for Value {
             Tuple(t) => {
                 let mut state = ser.serialize_tuple(t.len())?;
                 for i in 0..t.len() {
-                    state.serialize_element(&Value::chunk(&mut data, t.type_info(i).clone()))?;
+                    state.serialize_element(&self.new_value(&mut data, t.type_id(i)))?;
                 }
                 state.end()
             }
             Struct(fields) => {
-                let mut state = ser.serialize_struct(self.ty_name(), fields.len())?;
-                for f in fields {
-                    state.serialize_field(
-                        f.name().unwrap(),
-                        &Value::chunk(&mut data, f.ty().type_info()),
-                    )?;
+                let mut state = ser.serialize_map(Some(fields.len()))?;
+                for (name, ty) in fields {
+                    state.serialize_key(&name)?;
+                    state.serialize_value(&self.new_value(&mut data, ty))?;
                 }
                 state.end()
             }
-            StructUnit => ser.serialize_unit_struct(self.ty_name()),
-            StructNewType(ty) => {
-                ser.serialize_newtype_struct(self.ty_name(), &Value::chunk(&mut data, ty.clone()))
-            }
+            StructUnit => ser.serialize_unit(),
+            StructNewType(ty) => ser.serialize_newtype_struct("", &self.new_value(&mut data, ty)),
             StructTuple(fields) => {
-                let mut state = ser.serialize_tuple_struct(self.ty_name(), fields.len())?;
-                for f in fields {
-                    state.serialize_field(&Value::chunk(&mut data, f.ty().type_info()))?;
+                let mut state = ser.serialize_tuple_struct("", fields.len())?;
+                for ty in fields {
+                    state.serialize_field(&self.new_value(&mut data, ty))?;
                 }
                 state.end()
             }
@@ -121,96 +170,43 @@ impl Serialize for Value {
                 let variant = &ty.pick(data.get_u8());
                 match variant.into() {
                     EnumVariant::OptionNone => ser.serialize_none(),
-                    EnumVariant::OptionSome(ty) => ser.serialize_some(&Value::chunk(&mut data, ty)),
-                    EnumVariant::Unit(idx, name) => {
-                        ser.serialize_unit_variant(self.ty_name(), idx.into(), name)
+                    EnumVariant::OptionSome(ty) => {
+                        ser.serialize_some(&self.new_value(&mut data, ty))
                     }
-                    EnumVariant::NewType(idx, name, ty) => ser.serialize_newtype_variant(
-                        self.ty_name(),
-                        idx.into(),
-                        name,
-                        &Value::chunk(&mut data, ty),
-                    ),
-
-                    EnumVariant::Tuple(idx, name, fields) => {
-                        let mut s = ser.serialize_tuple_variant(
-                            self.ty_name(),
-                            idx.into(),
-                            name,
-                            fields.len(),
-                        )?;
-                        for ty in fields {
-                            s.serialize_field(&Value::chunk(&mut data, ty))?;
-                        }
+                    EnumVariant::Unit(_idx, name) => ser.serialize_str(name),
+                    EnumVariant::NewType(_idx, name, ty) => {
+                        let mut s = ser.serialize_map(Some(1))?;
+                        s.serialize_key(name)?;
+                        s.serialize_value(&self.new_value(&mut data, ty))?;
                         s.end()
                     }
-                    EnumVariant::Struct(idx, name, fields) => {
-                        let mut s = ser.serialize_struct_variant(
-                            self.ty_name(),
-                            idx.into(),
-                            name,
-                            fields.len(),
+
+                    EnumVariant::Tuple(_idx, name, fields) => {
+                        let mut s = ser.serialize_map(Some(1))?;
+                        s.serialize_key(name)?;
+                        s.serialize_value(
+                            &fields
+                                .iter()
+                                .map(|ty| self.new_value(&mut data, *ty))
+                                .collect::<Vec<_>>(),
                         )?;
-                        for (fname, ty) in fields {
-                            s.serialize_field(fname, &Value::chunk(&mut data, ty))?;
-                        }
+                        s.end()
+                    }
+                    EnumVariant::Struct(_idx, name, fields) => {
+                        let mut s = ser.serialize_map(Some(1))?;
+                        s.serialize_key(name)?;
+                        s.serialize_value(&fields.iter().fold(
+                            BTreeMap::new(),
+                            |mut m, (name, ty)| {
+                                m.insert(*name, self.new_value(&mut data, *ty));
+                                m
+                            },
+                        ))?;
                         s.end()
                     }
                 }
             }
         }
-    }
-}
-
-fn type_len(ty: &Type, data: &[u8]) -> usize {
-    match ty.type_def() {
-        TypeDef::Primitive(p) => match p {
-            Primitive::U8 => mem::size_of::<u8>(),
-            Primitive::U16 => mem::size_of::<u16>(),
-            Primitive::U32 => mem::size_of::<u32>(),
-            Primitive::U64 => mem::size_of::<u64>(),
-            Primitive::U128 => mem::size_of::<u128>(),
-            Primitive::I8 => mem::size_of::<i8>(),
-            Primitive::I16 => mem::size_of::<i16>(),
-            Primitive::I32 => mem::size_of::<i32>(),
-            Primitive::I64 => mem::size_of::<i64>(),
-            Primitive::I128 => mem::size_of::<i128>(),
-            Primitive::Bool => mem::size_of::<bool>(),
-            Primitive::Char => mem::size_of::<char>(),
-            Primitive::Str => {
-                let (l, p_size) = sequence_len(data);
-                l + p_size
-            }
-            _ => unimplemented!(),
-        },
-        TypeDef::Composite(c) => c
-            .fields()
-            .iter()
-            .fold(0, |c, f| c + type_len(&f.ty().type_info(), &data[c..])),
-        TypeDef::Variant(e) => {
-            let var = e
-                .variants()
-                .iter()
-                .find(|v| v.index() == data[0])
-                .expect("variant");
-
-            if var.fields().is_empty() {
-                1 // unit variant
-            } else {
-                var.fields()
-                    .iter()
-                    .fold(1, |c, f| c + type_len(&f.ty().type_info(), &data[c..]))
-            }
-        }
-        TypeDef::Sequence(s) => {
-            let (len, prefix_size) = sequence_len(data);
-            let ty = s.type_param().type_info();
-            (0..len).fold(prefix_size, |c, _| c + type_len(&ty, &data[c..]))
-        }
-        TypeDef::Array(a) => a.len().try_into().unwrap(),
-        TypeDef::Tuple(t) => t.fields().len(),
-        TypeDef::Compact(_) => compact_len(data),
-        TypeDef::BitSequence(_) => unimplemented!(),
     }
 }
 
@@ -251,88 +247,114 @@ mod tests {
     use anyhow::Error;
     use codec::Encode;
     use scale_info::{
+        meta_type,
         prelude::{string::String, vec::Vec},
-        TypeInfo,
+        Registry, TypeInfo,
     };
     use serde_json::to_value;
 
+    fn register<T>(_ty: &T) -> (u32, PortableRegistry)
+    where
+        T: TypeInfo + 'static,
+    {
+        let mut reg = Registry::new();
+        let sym = reg.register_type(&meta_type::<T>());
+        (sym.id(), reg.into())
+    }
+
     #[test]
     fn serialize_u8() -> Result<(), Error> {
-        let extract_value = u8::MAX;
-        let data = extract_value.encode();
-        let info = u8::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = u8::MAX;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_u16() -> Result<(), Error> {
-        let extract_value = u16::MAX;
-        let data = extract_value.encode();
-        let info = u16::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = u16::MAX;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_u32() -> Result<(), Error> {
-        let extract_value = u32::MAX;
-        let data = extract_value.encode();
-        let info = u32::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = u32::MAX;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_u64() -> Result<(), Error> {
-        let extract_value = u64::MAX;
-        let data = extract_value.encode();
-        let info = u64::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = u64::MAX;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_i16() -> Result<(), Error> {
-        let extract_value = i16::MAX;
-        let data = extract_value.encode();
-        let info = i16::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = i16::MAX;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_i32() -> Result<(), Error> {
-        let extract_value = i32::MAX;
-        let data = extract_value.encode();
-        let info = i32::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = i32::MAX;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_i64() -> Result<(), Error> {
-        let extract_value = i64::MAX;
-        let data = extract_value.encode();
-        let info = i64::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = i64::MAX;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_bool() -> Result<(), Error> {
-        let extract_value = true;
-        let data = extract_value.encode();
-        let info = bool::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value = true;
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
@@ -342,52 +364,60 @@ mod tests {
     //     let extract_value = '⚖';
     //     let data = extract_value.encode();
     //     let info = char::type_info();
-    //     let val = Value::new(data, info);
+    //     let val = Value::new(data, info, reg);
     //     assert_eq!(to_value(val)?, to_value(extract_value)?);
     //     Ok(())
     // }
 
     #[test]
     fn serialize_u8array() -> Result<(), Error> {
-        let extract_value: Vec<u8> = [2u8, u8::MAX].into();
-        let data = extract_value.encode();
-        let info = Vec::<u8>::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value: Vec<u8> = [2u8, u8::MAX].into();
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_u16array() -> Result<(), Error> {
-        let extract_value: Vec<u16> = [2u16, u16::MAX].into();
-        let data = extract_value.encode();
-        let info = Vec::<u16>::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value: Vec<u16> = [2u16, u16::MAX].into();
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_u32array() -> Result<(), Error> {
-        let extract_value: Vec<u32> = [2u32, u32::MAX].into();
-        let data = extract_value.encode();
-        let info = Vec::<u32>::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let in_value: Vec<u32> = [2u32, u32::MAX].into();
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_tuple() -> Result<(), Error> {
-        let extract_value: (i64, Vec<String>, bool) = (
+        let in_value: (i64, Vec<String>, bool) = (
             i64::MIN,
             vec!["hello".into(), "big".into(), "world".into()],
             true,
         );
-        let data = extract_value.encode();
-        let info = <(i64, Vec<String>, bool)>::type_info();
-        let val = Value::new(data, info);
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
@@ -398,15 +428,16 @@ mod tests {
             bar: u32,
             baz: u32,
         }
-        let extract_value = Foo {
+        let in_value = Foo {
             bar: 123,
             baz: u32::MAX,
         };
-        let data = extract_value.encode();
-        let info = Foo::type_info();
-        let val = Value::new(data, info);
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
 
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
@@ -417,15 +448,16 @@ mod tests {
             bar: u8,
             baz: u8,
         }
-        let extract_value = Foo {
+        let in_value = Foo {
             bar: 123,
             baz: u8::MAX,
         };
-        let data = extract_value.encode();
-        let info = Foo::type_info();
-        let val = Value::new(data, info);
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
 
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
@@ -436,32 +468,34 @@ mod tests {
             bar: u64,
             baz: u64,
         }
-        let extract_value = Foo {
+        let in_value = Foo {
             bar: 123,
             baz: u64::MAX,
         };
-        let data = extract_value.encode();
-        let info = Foo::type_info();
-        let val = Value::new(data, info);
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
 
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
     #[test]
     fn serialize_map() -> Result<(), Error> {
-        let value = {
+        let in_value = {
             let mut m = BTreeMap::<String, i32>::new();
             m.insert("foo".into(), i32::MAX);
             m.insert("bar".into(), i32::MIN);
             m
         };
 
-        let data = value.encode();
-        let info = BTreeMap::<String, i32>::type_info();
-        let val = Value::new(data, info);
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
 
-        assert_eq!(to_value(val)?, to_value(value)?);
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
@@ -480,16 +514,17 @@ mod tests {
             baz: Option<Baz>,
             lol: &'static [u8],
         }
-        let expected = Foo {
+        let in_value = Foo {
             bar: [Bar::That(i16::MAX), Bar::This].into(),
             baz: Some(Baz("aliquam malesuada bibendum arcu vitae".into())),
             lol: b"\0xFFsome stuff\0x00",
         };
-        let data = expected.encode();
-        let info = Foo::type_info();
-        let out = Value::new(data, info);
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
 
-        assert_eq!(to_value(out)?, to_value(expected)?);
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 
@@ -507,17 +542,18 @@ mod tests {
             B { bb: &'a str },
         }
 
-        let extract_value = Foo(
+        let in_value = Foo(
             [1, 2, 3, 4],
             (false, None),
             Baz::A(Bar),
             Baz::B { bb: "lol" },
         );
-        let data = extract_value.encode();
-        let info = Foo::type_info();
-        let val = Value::new(data, info);
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
 
-        assert_eq!(to_value(val)?, to_value(extract_value)?);
+        let out_value = Value::new(data, id, &reg);
+
+        assert_eq!(to_value(out_value)?, to_value(in_value)?);
         Ok(())
     }
 }

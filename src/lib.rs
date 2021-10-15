@@ -15,7 +15,7 @@ pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Ser
 pub use value::Value;
 
 use prelude::*;
-use scale_info::{Field, MetaType, Type, Variant};
+use scale_info::{form::PortableForm as Portable, PortableRegistry};
 
 mod prelude {
     pub use alloc::{
@@ -24,6 +24,11 @@ mod prelude {
         vec::Vec,
     };
 }
+
+type Type = scale_info::Type<Portable>;
+type Field = scale_info::Field<Portable>;
+type Variant = scale_info::Variant<Portable>;
+type TypeId = u32;
 
 macro_rules! is_tuple {
     ($it:ident) => {
@@ -42,78 +47,92 @@ pub enum SerdeType {
     Bytes,
     Char,
     Str,
-    Sequence(Type),
-    Map(Type, Type),
+    Sequence(TypeId),
+    Map(TypeId, TypeId),
     Tuple(TupleOrArray),
-    Struct(Vec<Field>), StructUnit, StructNewType(Type), StructTuple(Vec<Field>),
+    Struct(Vec<(String, TypeId)>), StructUnit, StructNewType(TypeId), StructTuple(Vec<TypeId>),
     Variant(String, Vec<Variant>, Option<u8>),
 }
 
-impl From<&mut Type> for SerdeType {
-    fn from(ty: &mut Type) -> Self {
-        ty.clone().into()
-    }
-}
+// impl From<&mut Type> for SerdeType {
+//     fn from(ty: &mut Type) -> Self {
+//         ty.clone().into()
+//     }
+// }
 
-impl From<&Type> for SerdeType {
-    fn from(ty: &Type) -> Self {
-        ty.clone().into()
-    }
-}
+// impl From<&Type> for SerdeType {
+//     fn from(ty: &Type) -> Self {
+//         ty.clone().into()
+//     }
+// }
 
-impl From<Type> for SerdeType {
-    fn from(ty: Type) -> Self {
-        use scale_info::{TypeDef, TypeDef::*, TypeDefComposite, TypeDefPrimitive};
-        let name = ty.path().segments().last().copied().unwrap_or("");
+impl From<(&Type, &PortableRegistry)> for SerdeType {
+    fn from((ty, registry): (&Type, &PortableRegistry)) -> Self {
+        use scale_info::{TypeDef, TypeDefComposite, TypeDefPrimitive};
+        type Def = TypeDef<Portable>;
 
-        #[inline]
-        fn is_map(ty: &Type) -> bool {
-            ty.path().segments() == ["BTreeMap"]
+        macro_rules! resolve {
+            ($ty:expr) => {
+                registry.resolve($ty.id()).unwrap()
+            };
         }
-        fn map_types(ty: &TypeDefComposite) -> (Type, Type) {
+        let is_map = |ty: &Type| -> bool { ty.path().segments() == ["BTreeMap"] };
+        let map_types = |ty: &TypeDefComposite<Portable>| -> (TypeId, TypeId) {
             let field = ty.fields().first().expect("map");
             // Type information of BTreeMap is weirdly packed
-            if let TypeDef::Sequence(s) = field.ty().type_info().type_def() {
-                if let TypeDef::Tuple(t) = s.type_param().type_info().type_def() {
+            if let Def::Sequence(s) = resolve!(field.ty()).type_def() {
+                if let Def::Tuple(t) = resolve!(s.type_param()).type_def() {
                     assert_eq!(t.fields().len(), 2);
-                    let key_ty = t.fields().first().expect("key").type_info();
-                    let val_ty = t.fields().last().expect("val").type_info();
+                    let key_ty = t.fields().first().expect("key").id();
+                    let val_ty = t.fields().last().expect("val").id();
                     return (key_ty, val_ty);
                 }
             }
             unreachable!()
-        }
+        };
+
+        let name = ty
+            .path()
+            .segments()
+            .last()
+            .cloned()
+            .unwrap_or_else(String::new);
 
         match ty.type_def() {
-            Composite(c) => {
+            Def::Composite(c) => {
                 let fields = c.fields();
                 if fields.is_empty() {
                     Self::StructUnit
-                } else if is_map(&ty) {
+                } else if is_map(ty) {
                     let (k, v) = map_types(c);
                     Self::Map(k, v)
                 } else if fields.len() == 1 {
-                    Self::StructNewType(fields.first().unwrap().ty().type_info())
+                    Self::StructNewType(fields.first().unwrap().ty().id())
                 } else if is_tuple!(c) {
-                    Self::StructTuple(fields.into())
+                    Self::StructTuple(fields.iter().map(|f| f.ty().id()).collect())
                 } else {
-                    Self::Struct(fields.into())
+                    Self::Struct(
+                        fields
+                            .iter()
+                            .map(|f| (f.name().unwrap().into(), f.ty().id()))
+                            .collect(),
+                    )
                 }
             }
-            Variant(v) => Self::Variant(name.into(), v.variants().into(), None),
-            Sequence(s) => {
-                let ty = s.type_param().type_info();
+            Def::Variant(v) => Self::Variant(name.into(), v.variants().into(), None),
+            Def::Sequence(s) => {
+                let ty = resolve!(s.type_param());
                 if ty.path().segments() != ["u8"] {
-                    Self::Sequence(ty)
+                    Self::Sequence(s.type_param().id())
                 } else {
                     Self::Bytes
                 }
             }
-            Array(a) => Self::Tuple(TupleOrArray::Array(a.type_param().type_info(), a.len())),
-            Tuple(t) => Self::Tuple(TupleOrArray::Tuple(
-                t.fields().iter().map(MetaType::type_info).collect(),
+            Def::Array(a) => Self::Tuple(TupleOrArray::Array(a.type_param().id(), a.len())),
+            Def::Tuple(t) => Self::Tuple(TupleOrArray::Tuple(
+                t.fields().iter().map(|ty| ty.id()).collect(),
             )),
-            Primitive(p) => match p {
+            Def::Primitive(p) => match p {
                 TypeDefPrimitive::U8 => Self::U8,
                 TypeDefPrimitive::U16 => Self::U16,
                 TypeDefPrimitive::U32 => Self::U32,
@@ -130,8 +149,8 @@ impl From<Type> for SerdeType {
                 TypeDefPrimitive::U256 => unimplemented!(),
                 TypeDefPrimitive::I256 => unimplemented!(),
             },
-            Compact(_c) => todo!(),
-            BitSequence(_b) => todo!(),
+            Def::Compact(_c) => todo!(),
+            Def::BitSequence(_b) => todo!(),
         }
     }
 }
@@ -186,45 +205,45 @@ impl SerdeType {
 #[derive(Debug)]
 enum EnumVariant<'a> {
     OptionNone,
-    OptionSome(Type),
+    OptionSome(TypeId),
     Unit(u8, &'a str),
-    NewType(u8, &'a str, Type),
-    Tuple(u8, &'a str, Vec<Type>),
-    Struct(u8, &'a str, Vec<(&'a str, Type)>),
+    NewType(u8, &'a str, TypeId),
+    Tuple(u8, &'a str, Vec<TypeId>),
+    Struct(u8, &'a str, Vec<(&'a str, TypeId)>),
 }
 
-impl<'a> From<&SerdeType> for EnumVariant<'a> {
-    fn from(ty: &SerdeType) -> Self {
+impl<'a> From<&'a SerdeType> for EnumVariant<'a> {
+    fn from(ty: &'a SerdeType) -> Self {
         match ty {
             SerdeType::Variant(name, variants, Some(idx)) => {
                 let variant = variants.first().expect("single variant");
                 let fields = variant.fields();
-                let vname = *variant.name();
+                let vname = &*variant.name();
 
                 if fields.is_empty() {
                     if name == "Option" && vname == "None" {
                         Self::OptionNone
                     } else {
-                        Self::Unit(*idx, vname)
+                        Self::Unit(*idx, vname.as_str())
                     }
                 } else if is_tuple!(variant) {
                     if fields.len() == 1 {
-                        let ty = fields.first().map(|f| f.ty().type_info()).unwrap();
+                        let ty = fields.first().map(|f| f.ty().id()).unwrap();
                         return if name == "Option" && variant.name() == &"Some" {
                             Self::OptionSome(ty)
                         } else {
-                            Self::NewType(*idx, vname, ty)
+                            Self::NewType(*idx, vname.as_str(), ty)
                         };
                     } else {
-                        let fields = fields.iter().map(|f| f.ty().type_info()).collect();
-                        Self::Tuple(*idx, vname, fields)
+                        let fields = fields.iter().map(|f| f.ty().id()).collect();
+                        Self::Tuple(*idx, vname.as_str(), fields)
                     }
                 } else {
                     let fields = fields
                         .iter()
-                        .map(|f| (*f.name().unwrap(), f.ty().type_info()))
+                        .map(|f| (f.name().unwrap().as_str(), f.ty().id()))
                         .collect();
-                    Self::Struct(*idx, vname, fields)
+                    Self::Struct(*idx, vname.as_str(), fields)
                 }
             }
             _ => panic!("Only for enum variants"),
@@ -234,8 +253,8 @@ impl<'a> From<&SerdeType> for EnumVariant<'a> {
 
 #[derive(Debug, Clone)]
 pub enum TupleOrArray {
-    Array(Type, u32),
-    Tuple(Vec<Type>),
+    Array(TypeId, u32),
+    Tuple(Vec<TypeId>),
 }
 impl TupleOrArray {
     fn len(&self) -> usize {
@@ -245,10 +264,10 @@ impl TupleOrArray {
         }
     }
 
-    fn type_info(&self, i: usize) -> &Type {
+    fn type_id(&self, i: usize) -> TypeId {
         match self {
-            Self::Array(ty, _) => ty,
-            Self::Tuple(fields) => &fields[i],
+            Self::Array(ty, _) => *ty,
+            Self::Tuple(fields) => fields[i],
         }
     }
 }
