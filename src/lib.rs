@@ -23,6 +23,7 @@ mod prelude {
         string::{String, ToString},
         vec::Vec,
     };
+    pub use core::ops::Deref;
 }
 
 type Type = scale_info::Type<Portable>;
@@ -96,7 +97,7 @@ impl From<(&Type, &PortableRegistry)> for SerdeType {
             .segments()
             .last()
             .cloned()
-            .unwrap_or_else(String::new);
+            .unwrap_or_else(|| "".into());
 
         match ty.type_def() {
             Def::Composite(c) => {
@@ -114,7 +115,7 @@ impl From<(&Type, &PortableRegistry)> for SerdeType {
                     Self::Struct(
                         fields
                             .iter()
-                            .map(|f| (f.name().unwrap().into(), f.ty().id()))
+                            .map(|f| (f.name().unwrap().deref().into(), f.ty().id()))
                             .collect(),
                     )
                 }
@@ -218,13 +219,13 @@ impl<'a> From<&'a SerdeType> for EnumVariant<'a> {
             SerdeType::Variant(name, variants, Some(idx)) => {
                 let variant = variants.first().expect("single variant");
                 let fields = variant.fields();
-                let vname = &*variant.name();
+                let vname = variant.name().as_ref();
 
                 if fields.is_empty() {
                     if name == "Option" && vname == "None" {
                         Self::OptionNone
                     } else {
-                        Self::Unit(*idx, vname.as_str())
+                        Self::Unit(*idx, &vname)
                     }
                 } else if is_tuple!(variant) {
                     if fields.len() == 1 {
@@ -232,18 +233,18 @@ impl<'a> From<&'a SerdeType> for EnumVariant<'a> {
                         return if name == "Option" && variant.name() == &"Some" {
                             Self::OptionSome(ty)
                         } else {
-                            Self::NewType(*idx, vname.as_str(), ty)
+                            Self::NewType(*idx, &vname, ty)
                         };
                     } else {
                         let fields = fields.iter().map(|f| f.ty().id()).collect();
-                        Self::Tuple(*idx, vname.as_str(), fields)
+                        Self::Tuple(*idx, &vname, fields)
                     }
                 } else {
                     let fields = fields
                         .iter()
-                        .map(|f| (f.name().unwrap().as_str(), f.ty().id()))
+                        .map(|f| (f.name().unwrap().deref(), f.ty().id()))
                         .collect();
-                    Self::Struct(*idx, vname.as_str(), fields)
+                    Self::Struct(*idx, &vname, fields)
                 }
             }
             _ => panic!("Only for enum variants"),

@@ -1,8 +1,7 @@
 use crate::{EnumVariant, SerdeType};
-use alloc::collections::BTreeMap;
+use alloc::{collections::BTreeMap, vec::Vec};
 use bytes::{Buf, Bytes};
-use core::convert::TryInto;
-use core::str;
+use core::{convert::TryInto, str};
 use scale_info::{prelude::*, PortableRegistry, TypeDefPrimitive as Primitive};
 use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple, SerializeTupleStruct};
 use serde::Serialize;
