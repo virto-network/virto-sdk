@@ -13,7 +13,7 @@ scale-info = { version = "1.0.0", default-features = false }
 serde = { version = "1.0.126", default-features = false }
 
 [features]
-default = ["std"]
+default = ["std", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
 experimental-serializer = []
 

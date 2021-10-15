@@ -1,11 +1,12 @@
 use crate::prelude::*;
 use bytes::BufMut;
 use core::fmt;
-use scale_info::{Type, TypeInfo};
+use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
 
 use crate::{EnumVariant, SerdeType, TupleOrArray};
 
+type TypeId = u32;
 type Result<T> = core::result::Result<T, Error>;
 
 #[derive(TypeInfo)]
@@ -22,12 +23,15 @@ where
 }
 
 #[inline]
-pub fn to_vec_with_info<T>(value: &T, info: impl Into<Option<Type>>) -> Result<Vec<u8>>
+pub fn to_vec_with_info<T>(
+    value: &T,
+    registry_type: Option<(&PortableRegistry, TypeId)>,
+) -> Result<Vec<u8>>
 where
     T: Serialize + ?Sized,
 {
     let mut out = vec![];
-    to_bytes_with_info(&mut out, value, info)?;
+    to_bytes_with_info(&mut out, value, registry_type)?;
     Ok(out)
 }
 
@@ -39,49 +43,57 @@ where
     to_bytes_with_info(bytes, value, None)
 }
 
-pub fn to_bytes_with_info<B, T>(bytes: B, value: &T, info: impl Into<Option<Type>>) -> Result<()>
+pub fn to_bytes_with_info<B, T>(
+    bytes: B,
+    value: &T,
+    registry_type: Option<(&PortableRegistry, TypeId)>,
+) -> Result<()>
 where
     T: Serialize + ?Sized,
     B: BufMut,
 {
-    let mut serializer = Serializer::new(bytes, info);
+    let mut serializer = Serializer::new(bytes, registry_type);
     value.serialize(&mut serializer)?;
     Ok(())
 }
 
 /// A serializer that encodes types to SCALE with the option to coerce
 /// the output to an equivalent representation given by some type information.
-pub struct Serializer<B> {
+pub struct Serializer<'reg, B> {
     out: B,
     ty: Option<SerdeType>,
+    registry: Option<&'reg PortableRegistry>,
 }
 
-impl<B> Serializer<B>
+impl<'reg, B> Serializer<'reg, B>
 where
     B: BufMut,
 {
-    pub fn new(out: B, ty: impl Into<Option<Type>>) -> Self {
-        Serializer {
-            out,
-            ty: ty.into().map(SerdeType::from),
-        }
+    pub fn new(out: B, registry_type: Option<(&'reg PortableRegistry, TypeId)>) -> Self {
+        let (registry, ty) = match registry_type
+            .map(|(reg, ty_id)| (reg, (reg.resolve(ty_id).unwrap(), reg).into()))
+        {
+            Some((reg, ty)) => (Some(reg), Some(ty)),
+            None => (None, None),
+        };
+        Serializer { out, ty, registry }
     }
 }
 
-impl<'a, B> ser::Serializer for &'a mut Serializer<B>
+impl<'a, 'reg, B> ser::Serializer for &'a mut Serializer<'reg, B>
 where
     B: BufMut,
 {
     type Ok = ();
     type Error = Error;
 
-    type SerializeSeq = TypedSerializer<'a, B>;
-    type SerializeTuple = TypedSerializer<'a, B>;
-    type SerializeTupleStruct = TypedSerializer<'a, B>;
-    type SerializeTupleVariant = TypedSerializer<'a, B>;
-    type SerializeMap = TypedSerializer<'a, B>;
-    type SerializeStruct = TypedSerializer<'a, B>;
-    type SerializeStructVariant = TypedSerializer<'a, B>;
+    type SerializeSeq = TypedSerializer<'a, 'reg, B>;
+    type SerializeTuple = TypedSerializer<'a, 'reg, B>;
+    type SerializeTupleStruct = TypedSerializer<'a, 'reg, B>;
+    type SerializeTupleVariant = TypedSerializer<'a, 'reg, B>;
+    type SerializeMap = TypedSerializer<'a, 'reg, B>;
+    type SerializeStruct = TypedSerializer<'a, 'reg, B>;
+    type SerializeStructVariant = TypedSerializer<'a, 'reg, B>;
 
     fn serialize_bool(self, v: bool) -> Result<Self::Ok> {
         self.maybe_some()?;
@@ -301,7 +313,7 @@ where
     }
 }
 
-impl<'a, B> Serializer<B>
+impl<'a, 'reg, B> Serializer<'reg, B>
 where
     B: BufMut,
 {
@@ -310,30 +322,37 @@ where
     fn maybe_some(&mut self) -> Result<()> {
         match &self.ty {
             Some(SerdeType::Variant(ref name, v, _)) if name == "Option" => {
-                self.ty = v[1].fields().first().map(|f| f.ty().type_info().into());
+                self.ty = v[1].fields().first().map(|f| self.resolve(f.ty().id()));
                 self.out.put_u8(0x01);
             }
             _ => (),
         }
         Ok(())
     }
+
+    fn resolve(&self, ty_id: TypeId) -> SerdeType {
+        let reg = self.registry.expect("called heving type");
+        let ty = reg.resolve(ty_id).expect("in registry");
+        (ty, reg).into()
+    }
 }
 
 ///
-pub enum TypedSerializer<'a, B> {
-    Empty(&'a mut Serializer<B>),
-    Composite(&'a mut Serializer<B>, Vec<Type>),
-    Sequence(&'a mut Serializer<B>, Type),
-    Enum(&'a mut Serializer<B>),
+pub enum TypedSerializer<'a, 'reg, B> {
+    Empty(&'a mut Serializer<'reg, B>),
+    Composite(&'a mut Serializer<'reg, B>, Vec<TypeId>),
+    Sequence(&'a mut Serializer<'reg, B>, TypeId),
+    Enum(&'a mut Serializer<'reg, B>),
 }
 
-impl<'a, B: 'a> From<&'a mut Serializer<B>> for TypedSerializer<'a, B> {
-    fn from(ser: &'a mut Serializer<B>) -> Self {
+impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 'reg, B> {
+    fn from(ser: &'a mut Serializer<'reg, B>) -> Self {
         use SerdeType::*;
         match ser.ty.take() {
-            Some(Struct(fields) | StructTuple(fields)) => {
-                Self::Composite(ser, fields.iter().map(|f| f.ty().type_info()).collect())
+            Some(Struct(fields)) => {
+                Self::Composite(ser, fields.iter().map(|(_, ty)| *ty).collect())
             }
+            Some(StructTuple(fields)) => Self::Composite(ser, fields),
             Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty),
             Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Composite(ser, fields),
             Some(Sequence(ty)) => Self::Sequence(ser, ty),
@@ -354,8 +373,8 @@ impl<'a, B: 'a> From<&'a mut Serializer<B>> for TypedSerializer<'a, B> {
     }
 }
 
-impl<'a, B> TypedSerializer<'a, B> {
-    fn serializer(&mut self) -> &mut Serializer<B> {
+impl<'a, 'reg, B> TypedSerializer<'a, 'reg, B> {
+    fn serializer(&mut self) -> &mut Serializer<'reg, B> {
         match self {
             Self::Empty(ser)
             | Self::Composite(ser, _)
@@ -365,7 +384,7 @@ impl<'a, B> TypedSerializer<'a, B> {
     }
 }
 
-impl<'a, B> ser::SerializeMap for TypedSerializer<'a, B>
+impl<'a, 'reg, B> ser::SerializeMap for TypedSerializer<'a, 'reg, B>
 where
     B: BufMut,
 {
@@ -398,17 +417,17 @@ where
     {
         match self {
             TypedSerializer::Composite(ser, types) => {
-                let mut ty = types.remove(0).into();
+                let mut ty = ser.resolve(types.remove(0));
                 // serde_json unwraps newtypes
-                if let SerdeType::StructNewType(t) = ty {
-                    ty = t.into()
+                if let SerdeType::StructNewType(ty_id) = ty {
+                    ty = ser.resolve(ty_id)
                 }
                 ser.ty = Some(ty);
             }
             TypedSerializer::Enum(ser) => {
                 if let Some(var @ SerdeType::Variant(_, _, Some(_))) = &ser.ty {
-                    if let EnumVariant::NewType(_, _, ty) = var.into() {
-                        ser.ty = Some(ty.into());
+                    if let EnumVariant::NewType(_, _, ty_id) = var.into() {
+                        ser.ty = Some(ser.resolve(ty_id));
                     }
                 }
             }
@@ -422,7 +441,7 @@ where
     }
 }
 
-impl<'a, B> ser::SerializeSeq for TypedSerializer<'a, B>
+impl<'a, 'reg, B> ser::SerializeSeq for TypedSerializer<'a, 'reg, B>
 where
     B: BufMut,
 {
@@ -435,16 +454,17 @@ where
     {
         match self {
             TypedSerializer::Composite(ser, types) => {
-                let mut ty = types.remove(0).into();
-                if let SerdeType::StructNewType(t) = ty {
-                    ty = t.into();
+                let mut ty = ser.resolve(types.remove(0));
+                if let SerdeType::StructNewType(ty_id) = ty {
+                    ty = ser.resolve(ty_id);
                 }
                 ser.ty = Some(ty);
             }
-            TypedSerializer::Sequence(ser, ty) => {
-                ser.ty = Some(match ty.into() {
-                    SerdeType::StructNewType(t) => t.into(),
-                    _ => ty.into(),
+            TypedSerializer::Sequence(ser, ty_id) => {
+                let ty = ser.resolve(*ty_id);
+                ser.ty = Some(match ty {
+                    SerdeType::StructNewType(ty_id) => ser.resolve(ty_id),
+                    _ => ty,
                 });
             }
             _ => {}
@@ -457,7 +477,7 @@ where
     }
 }
 
-impl<'a, B> ser::SerializeStruct for TypedSerializer<'a, B>
+impl<'a, 'reg, B> ser::SerializeStruct for TypedSerializer<'a, 'reg, B>
 where
     B: BufMut,
 {
@@ -476,7 +496,7 @@ where
     }
 }
 
-impl<'a, B> ser::SerializeStructVariant for TypedSerializer<'a, B>
+impl<'a, 'reg, B> ser::SerializeStructVariant for TypedSerializer<'a, 'reg, B>
 where
     B: BufMut,
 {
@@ -495,7 +515,7 @@ where
     }
 }
 
-impl<'a, B> ser::SerializeTuple for TypedSerializer<'a, B>
+impl<'a, 'reg, B> ser::SerializeTuple for TypedSerializer<'a, 'reg, B>
 where
     B: BufMut,
 {
@@ -514,7 +534,7 @@ where
     }
 }
 
-impl<'a, B> ser::SerializeTupleStruct for TypedSerializer<'a, B>
+impl<'a, 'reg, B> ser::SerializeTupleStruct for TypedSerializer<'a, 'reg, B>
 where
     B: BufMut,
 {
@@ -533,7 +553,7 @@ where
     }
 }
 
-impl<'a, B> ser::SerializeTupleVariant for TypedSerializer<'a, B>
+impl<'a, 'reg, B> ser::SerializeTupleVariant for TypedSerializer<'a, 'reg, B>
 where
     B: BufMut,
 {
@@ -608,7 +628,7 @@ mod tests {
     use super::*;
     use codec::Encode;
     use core::mem::size_of;
-    use scale_info::TypeInfo;
+    use scale_info::{meta_type, Registry, TypeInfo};
     use serde_json::to_value;
 
     #[test]
@@ -855,6 +875,15 @@ mod tests {
         Ok(())
     }
 
+    fn register<T>(_ty: &T) -> (TypeId, PortableRegistry)
+    where
+        T: TypeInfo + 'static,
+    {
+        let mut reg = Registry::new();
+        let sym = reg.register_type(&meta_type::<T>());
+        (sym.id(), reg.into())
+    }
+
     #[test]
     fn json_simple() -> Result<()> {
         #[derive(Debug, Serialize, Encode, TypeInfo)]
@@ -873,9 +902,10 @@ mod tests {
         };
         let mut out = Vec::<u8>::new();
         let expected = input.encode();
+        let (id, reg) = register(&input);
 
         let json_input = to_value(&input).unwrap();
-        to_bytes_with_info(&mut out, &json_input, Foo::type_info())?;
+        to_bytes_with_info(&mut out, &json_input, Some((&reg, id)))?;
 
         assert_eq!(out, expected);
         Ok(())
@@ -915,9 +945,10 @@ mod tests {
         };
         let mut out = Vec::<u8>::new();
         let expected = input.encode();
+        let (id, reg) = register(&input);
 
         let json_input = to_value(&input).unwrap();
-        to_bytes_with_info(&mut out, &json_input, Foo::type_info())?;
+        to_bytes_with_info(&mut out, &json_input, Some((&reg, id)))?;
 
         assert_eq!(out, expected);
         Ok(())
@@ -945,9 +976,10 @@ mod tests {
         };
         let mut out = Vec::<u8>::new();
         let expected = input.encode();
+        let (id, reg) = register(&input);
 
         let json_input = to_value(&input).unwrap();
-        to_bytes_with_info(&mut out, &json_input, Foo::type_info())?;
+        to_bytes_with_info(&mut out, &json_input, Some((&reg, id)))?;
 
         assert_eq!(out, expected);
         Ok(())
