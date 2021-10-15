@@ -266,6 +266,13 @@ impl<'reg> core::fmt::Display for Value<'reg> {
     }
 }
 
+#[cfg(feature = "json")]
+impl<'reg> Into<crate::JsonValue> for Value<'reg> {
+    fn into(self) -> crate::JsonValue {
+        serde_json::value::to_value(self).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::collections::BTreeMap;

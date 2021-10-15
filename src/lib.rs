@@ -10,6 +10,8 @@ extern crate alloc;
 mod serializer;
 mod value;
 
+#[cfg(feature = "json")]
+pub use serde_json::Value as JsonValue;
 #[cfg(feature = "experimental-serializer")]
 pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Serializer};
 pub use value::Value;
