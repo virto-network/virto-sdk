@@ -107,7 +107,7 @@ impl From<(&Type, &PortableRegistry)> for SerdeType {
                 } else if is_map(ty) {
                     let (k, v) = map_types(c);
                     Self::Map(k, v)
-                } else if fields.len() == 1 {
+                } else if fields.len() == 1 && fields.first().unwrap().name().is_none() {
                     Self::StructNewType(fields.first().unwrap().ty().id())
                 } else if is_tuple!(c) {
                     Self::StructTuple(fields.iter().map(|f| f.ty().id()).collect())

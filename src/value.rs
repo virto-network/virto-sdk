@@ -12,7 +12,6 @@ type TypeDef = scale_info::TypeDef<scale_info::form::PortableForm>;
 
 /// A container for SCALE encoded data that can serialize types directly
 /// with the help of a type registry and without using an intermediate representation.
-#[derive(Debug)]
 pub struct Value<'a> {
     data: Bytes,
     ty_id: TypeId,
@@ -238,6 +237,35 @@ fn sequence_len(data: &[u8]) -> (usize, usize) {
     )
 }
 
+impl<'reg> AsRef<[u8]> for Value<'reg> {
+    fn as_ref(&self) -> &[u8] {
+        self.data.as_ref()
+    }
+}
+
+impl<'reg> core::fmt::Debug for Value<'reg> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Value {{ data: {:?}, type({}): {:?} }}",
+            self.data,
+            self.ty_id,
+            self.registry.resolve(self.ty_id).unwrap().type_def()
+        )
+    }
+}
+
+#[cfg(feature = "json")]
+impl<'reg> core::fmt::Display for Value<'reg> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            serde_json::to_string(self).map_err(|_| fmt::Error)?
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::collections::BTreeMap;
@@ -259,6 +287,21 @@ mod tests {
         let mut reg = Registry::new();
         let sym = reg.register_type(&meta_type::<T>());
         (sym.id(), reg.into())
+    }
+
+    #[test]
+    fn display_as_json() {
+        #[derive(Encode, TypeInfo)]
+        struct Foo {
+            bar: String,
+        }
+        let in_value = Foo { bar: "BAZ".into() };
+
+        let data = in_value.encode();
+        let (id, reg) = register(&in_value);
+        let out_value = Value::new(data, id, &reg).to_string();
+
+        assert_eq!("{\"bar\":\"BAZ\"}", out_value);
     }
 
     #[test]
