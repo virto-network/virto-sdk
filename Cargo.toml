@@ -2,7 +2,7 @@
 name = "sube"
 description = "SUBmit Extrinsics to a Substrate node"
 license = "Apache-2.0"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/valibre-org/sube"
@@ -19,6 +19,7 @@ twox-hash = { version = "1.6.0", default-features = false }
 
 scale-info = { version = "1.0.0", optional = true }
 jsonrpc = { version = "0.12.0", default-features = false, optional = true }
+scales = { version = "0.7.2", package = "scale-serialization", default-features = false, optional = true }
 
 # http backend
 surf = { version = "2.3.0", default_features = false, optional = true }
@@ -41,9 +42,10 @@ url = { version = "2.2.2", optional = true }
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes"] }
 hex-literal = "0.3.3"
+scales = { version = "0.7.2", package = "scale-serialization", default-features = false, features = ["json"] }
 
 [features]
-#default = ["http", "wss", "v14"]
+#default = ["http", "wss","bin", "decode", "std"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
@@ -54,7 +56,7 @@ bin = [
 	"url",
 	"wss",
 ]
-decode = ["v14"]
+decode = ["v14", "scales"]
 http = ["jsonrpc", "surf/h1-client-rustls"]
 http-web = ["jsonrpc", "surf/wasm-client"]
 std = []

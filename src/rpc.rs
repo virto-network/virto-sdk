@@ -25,7 +25,7 @@ pub trait Rpc: Backend + Send + Sync {
 
 #[async_trait]
 impl<R: Rpc> Backend for R {
-    async fn query_bytes(&self, key: StorageKey) -> crate::Result<Vec<u8>> {
+    async fn query_bytes(&self, key: &StorageKey) -> crate::Result<Vec<u8>> {
         let key = key.to_string();
         log::debug!("StorageKey encoded: {}", key);
         self.rpc("state_getStorage", &[&key])

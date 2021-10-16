@@ -2,10 +2,9 @@ use anyhow::{anyhow, Result};
 use async_std::{io, path::PathBuf, prelude::*};
 use async_trait::async_trait;
 use codec::{Decode, Encode};
-use futures_util::future::TryFutureExt;
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
-use sube::{http, ws, Backend, Metadata, Sube};
+use sube::{http, ws, Backend, Metadata, StorageKey, Sube};
 use surf::Url;
 
 #[derive(StructOpt, Debug)]
@@ -72,35 +71,34 @@ async fn run() -> Result<()> {
         "ws" | "wss" => AnyBackend::Ws(ws::Backend::new_ws2(url.as_ref()).await?),
         _ => return Err(anyhow!("Not supported")),
     };
-    let client = Sube::from(backend);
 
-    let meta = if opt.metadata.is_none() {
-        client.try_init_meta().await?
+    let client: Sube<_> = if opt.metadata.is_none() {
+        backend.into()
     } else {
         let meta_path = &opt.metadata.unwrap();
-        Sube::<AnyBackend>::get_or_try_init_meta(|| {
-            async {
-                let mut m = Vec::new();
-                let mut f = async_std::fs::File::open(meta_path).await?;
-                f.read_to_end(&mut m).await?;
-                Metadata::decode(&mut m.as_slice())
-            }
-            .map_err(|_| sube::Error::BadMetadata)
-        })
-        .await?
+        let mut m = Vec::new();
+        let mut f = async_std::fs::File::open(meta_path).await?;
+        f.read_to_end(&mut m).await?;
+        let meta = Metadata::decode(&mut m.as_slice())?;
+        Sube::new_with_meta(backend, meta)
     };
+    let meta = client.metadata().await?;
 
-    let out = match opt.cmd {
+    let out: Vec<_> = match opt.cmd {
         Cmd::Query { query } => {
-            let res = client.query_bytes(query.as_str()).await?;
+            let value = client.query(&query).await?;
             match opt.output.unwrap_or(Output::Hex) {
-                Output::Scale => res,
-                Output::Json => unimplemented!(),
-                Output::Hex => format!("0x{}", hex::encode(res)).into(),
+                Output::Scale => value.as_ref().into(),
+                Output::Json => value.to_string().as_bytes().into(),
+                Output::Hex => format!("0x{}", hex::encode(value.as_ref()))
+                    .as_bytes()
+                    .into(),
             }
         }
         Cmd::Submit => {
-            client.submit(io::stdin()).await?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).await?;
+            client.submit(input).await?;
             vec![]
         }
         Cmd::Meta => match opt.output.unwrap_or(Output::Json) {
@@ -170,10 +168,7 @@ enum AnyBackend {
 
 #[async_trait]
 impl Backend for AnyBackend {
-    async fn query_bytes<K>(&self, key: K) -> sube::Result<Vec<u8>>
-    where
-        K: std::convert::TryInto<sube::StorageKey, Error = sube::Error> + Send,
-    {
+    async fn query_bytes(&self, key: &StorageKey) -> sube::Result<Vec<u8>> {
         match self {
             AnyBackend::Ws(b) => b.query_bytes(key).await,
             AnyBackend::Http(b) => b.query_bytes(key).await,
@@ -182,7 +177,7 @@ impl Backend for AnyBackend {
 
     async fn submit<T>(&self, ext: T) -> sube::Result<()>
     where
-        T: io::Read + Send + Unpin,
+        T: AsRef<[u8]> + Send,
     {
         match self {
             AnyBackend::Ws(b) => b.submit(ext).await,

@@ -146,36 +146,3 @@ impl Backend<WS2> {
         });
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Error, Sube};
-    use once_cell::sync::OnceCell;
-
-    type WSBackend = Backend<WS2>;
-    const CHAIN_URL: &str = "ws://localhost:24680";
-    static NODE: OnceCell<Sube<WSBackend>> = OnceCell::new();
-
-    #[async_std::test]
-    async fn get_simple_storage_value() -> core::result::Result<(), Error> {
-        let node = get_node().await?;
-
-        let latest_block: u32 = node.query("system/number").await?;
-        assert!(latest_block > 0, "Block {} greater than 0", latest_block);
-
-        Ok(())
-    }
-
-    async fn get_node() -> core::result::Result<&'static Sube<WSBackend>, Error> {
-        if let Some(node) = NODE.get() {
-            return Ok(node);
-        }
-        let sube: Sube<_> = Backend::new_ws2(CHAIN_URL)
-            .await
-            .map_err(|_| Error::ChainUnavailable)?
-            .into();
-        NODE.set(sube).map_err(|_| Error::ChainUnavailable)?;
-        Ok(NODE.get().unwrap())
-    }
-}

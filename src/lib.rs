@@ -16,7 +16,6 @@ extern crate alloc;
 
 use async_trait::async_trait;
 pub use codec;
-use codec::Decode;
 use core::{fmt, ops::Deref};
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use meta_ext::Metadata;
@@ -26,6 +25,7 @@ use once_cell::sync::OnceCell;
 #[cfg(not(feature = "std"))]
 use once_cell::unsync::OnceCell;
 use prelude::*;
+use scale_info::PortableRegistry;
 
 mod prelude {
     pub use alloc::boxed::Box;
@@ -60,6 +60,13 @@ impl<B: Backend> Sube<B> {
         }
     }
 
+    pub fn new_with_meta(backend: B, meta: Metadata) -> Self {
+        Sube {
+            backend,
+            meta: meta.into(),
+        }
+    }
+
     pub async fn metadata(&self) -> Result<&Metadata> {
         match self.meta.get() {
             Some(meta) => Ok(meta),
@@ -71,16 +78,21 @@ impl<B: Backend> Sube<B> {
         }
     }
 
-    pub async fn query<R>(&self, key: &str) -> Result<R>
-    where
-        R: codec::Decode,
-    {
-        let res = self.query_bytes(self.key_from_path(key).await?).await?;
-        Decode::decode(&mut res.as_ref()).map_err(|e| Error::Decode(e))
+    pub async fn query(&self, key: &str) -> Result<scales::Value<'_>> {
+        let key = self.key_from_path(key).await?;
+        let res = self.query_bytes(&key).await?;
+        //Decode::decode(&mut res.as_ref()).map_err(|e| Error::Decode(e))
+        let reg = self.registry().await?;
+        let val = scales::Value::new(res, key.1, reg);
+        Ok(val)
     }
 
     async fn key_from_path(&self, path: &str) -> Result<StorageKey> {
         StorageKey::from_path(self.metadata().await?, path)
+    }
+
+    async fn registry(&self) -> Result<&PortableRegistry> {
+        Ok(&self.metadata().await?.types)
     }
 }
 
@@ -102,7 +114,7 @@ impl<T: Backend> Deref for Sube<T> {
 #[async_trait]
 pub trait Backend {
     /// Get storage items form the blockchain
-    async fn query_bytes(&self, key: StorageKey) -> Result<Vec<u8>>;
+    async fn query_bytes(&self, key: &StorageKey) -> Result<Vec<u8>>;
 
     /// Send a signed extrinsic to the blockchain
     async fn submit<T>(&self, ext: T) -> Result<()>
@@ -146,7 +158,7 @@ impl std::error::Error for Error {}
 
 /// Represents a key of the blockchain storage in its raw form
 #[derive(Clone, Debug)]
-pub struct StorageKey(Vec<u8>);
+pub struct StorageKey(Vec<u8>, u32);
 
 impl StorageKey {
     /// Parse the StorageKey from a URL-like path
@@ -163,13 +175,18 @@ impl StorageKey {
             map_keys,
         );
 
-        let key = meta
+        let entry = meta
             .storage_entry(&pallet, &item)
-            .ok_or(Error::StorageKeyNotFound)?
+            .ok_or(Error::StorageKeyNotFound)?;
+        let key = entry
             .key(&pallet, &map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
 
-        Ok(StorageKey(key))
+        let ty = match entry.ty() {
+            frame_metadata::StorageEntryType::Plain(ty) => ty,
+            frame_metadata::StorageEntryType::Map { value, .. } => value,
+        };
+        Ok(StorageKey(key, ty.id()))
     }
 }
 
@@ -201,4 +218,25 @@ fn to_camel(term: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use scales::JsonValue;
+
+    const CHAIN_URL: &str = "ws://localhost:24680";
+
+    #[async_std::test]
+    async fn query_as_json() -> Result<()> {
+        let client: Sube<_> = ws::Backend::new_ws2(CHAIN_URL).await?.into();
+
+        let latest_block: JsonValue = client.query("system/number").await?.into();
+        assert!(
+            latest_block.as_u64().unwrap() > 0,
+            "Block {} greater than 0",
+            latest_block
+        );
+        Ok(())
+    }
 }
