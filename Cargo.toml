@@ -49,8 +49,10 @@ scales = { version = "0.7.2", package = "scale-serialization", default-features 
 bin = [
 	"anyhow",
 	"async-std/attributes",
+	"decode",
 	"http",
 	"serde_json",
+	"std",
 	"stderrlog",
 	"structopt",
 	"url",

@@ -87,7 +87,7 @@ async fn run() -> Result<()> {
     let out: Vec<_> = match opt.cmd {
         Cmd::Query { query } => {
             let value = client.query(&query).await?;
-            match opt.output.unwrap_or(Output::Hex) {
+            match opt.output.unwrap_or(Output::Json) {
                 Output::Scale => value.as_ref().into(),
                 Output::Json => value.to_string().as_bytes().into(),
                 Output::Hex => format!("0x{}", hex::encode(value.as_ref()))
