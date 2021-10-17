@@ -7,6 +7,7 @@ use structopt::StructOpt;
 use sube::{http, ws, Backend, Metadata, StorageKey, Sube};
 use surf::Url;
 
+/// SUBmit Extrinsics and query chain data
 #[derive(StructOpt, Debug)]
 #[structopt(name = "sube")]
 struct Opt {
@@ -14,8 +15,8 @@ struct Opt {
     #[structopt(short, long)]
     pub chain: String,
     /// Format for the output (json,scale,hex)
-    #[structopt(short, long)]
-    pub output: Option<Output>,
+    #[structopt(short, long, default_value = "json")]
+    pub output: Output,
     /// Use an existing metadata definition from the filesystem
     #[structopt(short, long)]
     pub metadata: Option<PathBuf>,
@@ -34,13 +35,17 @@ enum Cmd {
     Meta,
     /// Use a path-like syntax to query data from the chain storage
     ///
-    /// A storage item can be accessed as `module/item[/key[/key2]]`(e.g. `timestamp/now` or `system/account/0x123`).
+    /// A storage item can be accessed as `pallet/item[/key[/key2]]`(e.g. `timestamp/now` or `system/account/0x123`).
+    #[structopt(visible_alias = "q")]
     Query { query: String },
     /// Submit an extrinsic to the chain
+    #[structopt(visible_alias = "s")]
     Submit,
     /// Convert human-readable data(JSON atm.) to SCALE format
+    #[structopt(visible_alias = "e")]
     Encode,
     /// Convert SCALE encoded data to a human-readable format(JSON)
+    #[structopt(visible_alias = "d")]
     Decode,
 }
 
@@ -87,7 +92,7 @@ async fn run() -> Result<()> {
     let out: Vec<_> = match opt.cmd {
         Cmd::Query { query } => {
             let value = client.query(&query).await?;
-            match opt.output.unwrap_or(Output::Json) {
+            match opt.output {
                 Output::Scale => value.as_ref().into(),
                 Output::Json => value.to_string().as_bytes().into(),
                 Output::Hex => format!("0x{}", hex::encode(value.as_ref()))
@@ -101,7 +106,7 @@ async fn run() -> Result<()> {
             client.submit(input).await?;
             vec![]
         }
-        Cmd::Meta => match opt.output.unwrap_or(Output::Json) {
+        Cmd::Meta => match opt.output {
             Output::Scale => meta.encode(),
             Output::Json => serde_json::to_string(&meta)?.into(),
             Output::Hex => format!("0x{}", hex::encode(meta.encode())).into(),
