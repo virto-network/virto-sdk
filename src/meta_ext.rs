@@ -110,6 +110,7 @@ pub trait Entry {
 
     fn name(&self) -> &str;
     fn ty(&self) -> &Self::Type;
+    fn ty_id(&self) -> u32;
 
     fn key(&self, pallet: &str, map_keys: &[&str]) -> Option<Vec<u8>> {
         self.ty().key(pallet, self.name(), map_keys)
@@ -208,6 +209,16 @@ impl<'a> Entry for EntryMeta {
     }
     fn ty(&self) -> &Self::Type {
         &self.ty
+    }
+
+    fn ty_id(&self) -> u32 {
+        #[cfg(feature = "v14")]
+        match &self.ty {
+            EntryType::Plain(t) => t.id(),
+            EntryType::Map { value, .. } => value.id(),
+        }
+        #[cfg(not(feature = "v14"))]
+        0
     }
 }
 

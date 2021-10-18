@@ -14,17 +14,23 @@ compile_error!("Only one metadata version can be enabled at the moment");
 #[macro_use]
 extern crate alloc;
 
-use async_trait::async_trait;
 pub use codec;
-use core::{fmt, ops::Deref};
 pub use frame_metadata::RuntimeMetadataPrefixed;
-pub use meta_ext::Metadata;
+pub use meta_ext::{meta_from_bytes, Metadata};
+#[cfg(feature = "json")]
+pub use scales::JsonValue;
+#[cfg(feature = "v14")]
+pub use scales::Value;
+
+use async_trait::async_trait;
+use core::{fmt, ops::Deref};
 use meta_ext::{Entry, Meta};
 #[cfg(feature = "std")]
 use once_cell::sync::OnceCell;
 #[cfg(not(feature = "std"))]
 use once_cell::unsync::OnceCell;
 use prelude::*;
+#[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 
 mod prelude {
@@ -45,7 +51,26 @@ mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
 mod rpc;
 
-/// Sube is the
+/// Sube is a lightweight Substrate client with multi-backend support
+/// that can use a chain's type information to auto encode/decode data
+/// into human-readable formats like JSON.
+///
+/// ```
+/// # use sube::{Sube, ws, JsonValue, Error};
+/// # const CHAIN_URL: &str = "ws://localhost:24680";
+/// # #[async_std::main] async fn main() -> Result<(), Error> {
+/// // Create an instance of Sube from any of the available backends
+/// let client: Sube<_> = ws::Backend::new_ws2(CHAIN_URL).await?.into();
+/// // Query the chain storage with a path-like syntax
+/// let latest_block: JsonValue = client.query("system/number").await?.into();
+///
+/// assert!(
+///     latest_block.as_u64().unwrap() > 0,
+///     "block {} is greater than 0",
+///     latest_block
+/// );
+/// # Ok(()) }
+/// ```
 #[derive(Debug)]
 pub struct Sube<B> {
     backend: B,
@@ -67,6 +92,7 @@ impl<B: Backend> Sube<B> {
         }
     }
 
+    /// Get the chain metadata and cache it for future calls
     pub async fn metadata(&self) -> Result<&Metadata> {
         match self.meta.get() {
             Some(meta) => Ok(meta),
@@ -78,20 +104,22 @@ impl<B: Backend> Sube<B> {
         }
     }
 
-    pub async fn query(&self, key: &str) -> Result<scales::Value<'_>> {
+    /// Use a path-like syntax to query storage items(e.g. `"pallet/item/keyN"`)
+    #[cfg(feature = "v14")]
+    pub async fn query(&self, key: &str) -> Result<Value<'_>> {
         let key = self.key_from_path(key).await?;
         let res = self.query_bytes(&key).await?;
-        //Decode::decode(&mut res.as_ref()).map_err(|e| Error::Decode(e))
         let reg = self.registry().await?;
-        let val = scales::Value::new(res, key.1, reg);
-        Ok(val)
+        Ok(Value::new(res, key.1, reg))
     }
 
-    async fn key_from_path(&self, path: &str) -> Result<StorageKey> {
+    pub async fn key_from_path(&self, path: &str) -> Result<StorageKey> {
         StorageKey::from_path(self.metadata().await?, path)
     }
 
-    async fn registry(&self) -> Result<&PortableRegistry> {
+    /// Get the type registry of the chain
+    #[cfg(feature = "v14")]
+    pub async fn registry(&self) -> Result<&PortableRegistry> {
         Ok(&self.metadata().await?.types)
     }
 }
@@ -162,7 +190,7 @@ pub struct StorageKey(Vec<u8>, u32);
 
 impl StorageKey {
     /// Parse the StorageKey from a URL-like path
-    fn from_path(meta: &Metadata, uri: &str) -> Result<Self> {
+    pub fn from_path(meta: &Metadata, uri: &str) -> Result<Self> {
         let mut path = uri.trim_matches('/').split('/');
         let pallet = path.next().map(to_camel).ok_or(Error::ParseStorageItem)?;
         let item = path.next().map(to_camel).ok_or(Error::ParseStorageItem)?;
@@ -182,11 +210,7 @@ impl StorageKey {
             .key(&pallet, &map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
 
-        let ty = match entry.ty() {
-            frame_metadata::StorageEntryType::Plain(ty) => ty,
-            frame_metadata::StorageEntryType::Map { value, .. } => value,
-        };
-        Ok(StorageKey(key, ty.id()))
+        Ok(StorageKey(key, entry.ty_id()))
     }
 }
 
@@ -218,25 +242,4 @@ fn to_camel(term: &str) -> String {
         }
     }
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use scales::JsonValue;
-
-    const CHAIN_URL: &str = "ws://localhost:24680";
-
-    #[async_std::test]
-    async fn query_as_json() -> Result<()> {
-        let client: Sube<_> = ws::Backend::new_ws2(CHAIN_URL).await?.into();
-
-        let latest_block: JsonValue = client.query("system/number").await?.into();
-        assert!(
-            latest_block.as_u64().unwrap() > 0,
-            "Block {} greater than 0",
-            latest_block
-        );
-        Ok(())
-    }
 }

@@ -2,7 +2,7 @@
 name = "sube"
 description = "SUBmit Extrinsics to a Substrate node"
 license = "Apache-2.0"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/valibre-org/sube"
@@ -26,8 +26,8 @@ surf = { version = "2.3.0", default_features = false, optional = true }
 
 # ws backend
 async-tungstenite = { version = "0.14.0", features = ["async-std-runtime"], optional = true }
-futures-channel = { version = "0.3.16", default-features = false, features = ["alloc"] }
-futures-util = { version = "0.3.16", default-features = false, features = ["sink"] }
+futures-channel = { version = "0.3.16", default-features = false, features = ["alloc"], optional = true }
+futures-util = { version = "0.3.16", default-features = false, features = ["sink"], optional = true }
 async-mutex = { version = "1.4.0", optional = true }
 async-tls = { version = "0.11.0", default-features = false, optional = true }
 
@@ -42,30 +42,29 @@ url = { version = "2.2.2", optional = true }
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes"] }
 hex-literal = "0.3.3"
-scales = { version = "0.7.2", package = "scale-serialization", default-features = false, features = ["json"] }
 
 [features]
-#default = ["http", "wss","bin", "decode", "std"]
+default = ["v14", "ws", "json", "scales", "std"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
-	"decode",
 	"http",
 	"serde_json",
 	"std",
 	"stderrlog",
 	"structopt",
 	"url",
+	"v14",
 	"wss",
 ]
-decode = ["v14", "scales"]
 http = ["jsonrpc", "surf/h1-client-rustls"]
 http-web = ["jsonrpc", "surf/wasm-client"]
+json = ["v14", "scales/json"]
 std = []
 v12 = ["frame-metadata/v12"]
 v13 = ["frame-metadata/v13"]
-v14 = ["frame-metadata/v14", "scale-info"]
-ws = ["async-std", "async-tungstenite", "async-mutex", "jsonrpc"]
+v14 = ["frame-metadata/v14", "scale-info", "scales"]
+ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
 wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 
 [[bin]]
