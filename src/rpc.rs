@@ -28,10 +28,11 @@ impl<R: Rpc> Backend for R {
     async fn query_bytes(&self, key: &StorageKey) -> crate::Result<Vec<u8>> {
         let key = key.to_string();
         log::debug!("StorageKey encoded: {}", key);
-        self.rpc("state_getStorage", &[&key])
-            .await
+        self.rpc("state_getStorage", &[&key]).await.map_err(|e| {
+            log::debug!("RPC failure: {}", e);
             // NOTE it could fail for more reasons
-            .map_err(|_| crate::Error::StorageKeyNotFound)
+            crate::Error::StorageKeyNotFound
+        })
     }
 
     async fn submit<T>(&self, ext: T) -> crate::Result<()>

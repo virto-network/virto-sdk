@@ -2,7 +2,7 @@
 name = "sube"
 description = "SUBmit Extrinsics to a Substrate node"
 license = "Apache-2.0"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/valibre-org/sube"
@@ -44,7 +44,7 @@ async-std = { version = "1.9.0", features = ["attributes"] }
 hex-literal = "0.3.3"
 
 [features]
-default = ["v14", "ws", "json", "scales", "std"]
+default = ["v14", "ws", "json", "std"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
@@ -70,3 +70,6 @@ wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 [[bin]]
 name = "sube"
 required-features = ["bin"]
+
+[package.metadata.docs.rs]
+features = ["http"]
