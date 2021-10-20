@@ -1,7 +1,7 @@
 [package]
 name = "scale-serialization"
 description = "SCALE Serialization"
-version = "0.7.2"
+version = "0.7.3"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/virto-network/scales"
@@ -10,18 +10,19 @@ license = "Apache-2.0"
 [dependencies]
 bytes = { version = "1.1.0", default-features = false }
 scale-info = { version = "1.0.0", default-features = false }
-serde = { version = "1.0.126", default-features = false }
-serde_json = { version = "1.0.66", default-features = false, optional = true }
+serde = { version = "1.0.130", default-features = false }
+serde_json = { version = "1.0.68", default-features = false, optional = true }
+codec = { version = "2.3.1", package = "parity-scale-codec", default-features = false, optional = true }
 
 [features]
-default = ["std", "json", "experimental-serializer"]
+default = ["std", "codec", "json", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
 experimental-serializer = []
 json = ["serde_json"]
 
 [dev-dependencies]
-anyhow = "1.0.42"
-codec = { version = "2.2.0", package = "parity-scale-codec", features = ["derive"] }
+anyhow = "1.0.44"
+codec = { version = "2.3.1", package = "parity-scale-codec", features = ["derive"] }
 scale-info = { version = "1.0.0", default-features = false, features = ["derive"] }
-serde = { version = "1.0.126", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0.66", default-features = false, features = ["alloc"] }
+serde = { version = "1.0.130", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.68", default-features = false, features = ["alloc"] }

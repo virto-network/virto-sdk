@@ -243,6 +243,15 @@ impl<'reg> AsRef<[u8]> for Value<'reg> {
     }
 }
 
+impl<'reg> codec::Encode for Value<'reg> {
+    fn size_hint(&self) -> usize {
+        self.data.len()
+    }
+    fn using_encoded<R, F: FnOnce(&[u8]) -> R>(&self, f: F) -> R {
+        f(self.data.as_ref())
+    }
+}
+
 impl<'reg> core::fmt::Debug for Value<'reg> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -309,6 +318,16 @@ mod tests {
         let out_value = Value::new(data, id, &reg).to_string();
 
         assert_eq!("{\"bar\":\"BAZ\"}", out_value);
+    }
+
+    #[test]
+    fn encodable() {
+        let input = u8::MAX;
+        let (ty, reg) = register(&input);
+        let value = Value::new(b"1234".as_ref(), ty, &reg);
+
+        let expected: &[u8] = value.as_ref();
+        assert_eq!(value.encode(), expected);
     }
 
     #[test]
