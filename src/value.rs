@@ -243,6 +243,7 @@ impl<'reg> AsRef<[u8]> for Value<'reg> {
     }
 }
 
+#[cfg(feature = "codec")]
 impl<'reg> codec::Encode for Value<'reg> {
     fn size_hint(&self) -> usize {
         self.data.len()
@@ -305,6 +306,7 @@ mod tests {
         (sym.id(), reg.into())
     }
 
+    #[cfg(feature = "json")]
     #[test]
     fn display_as_json() {
         #[derive(Encode, TypeInfo)]
@@ -320,6 +322,7 @@ mod tests {
         assert_eq!("{\"bar\":\"BAZ\"}", out_value);
     }
 
+    #[cfg(feature = "codec")]
     #[test]
     fn encodable() {
         let input = u8::MAX;
