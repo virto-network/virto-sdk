@@ -77,8 +77,10 @@ enum MetaOpt {
     Pallets {
         #[structopt(long)]
         name_only: bool,
-        #[structopt(short, long)]
+        #[structopt(short, long, conflicts_with = "constants", requires = "name")]
         entries: bool,
+        #[structopt(short, long, requires = "name")]
+        constants: bool,
         name: Option<String>,
     },
     /// Get information about the extrinsic format
@@ -143,10 +145,11 @@ async fn run() -> Result<()> {
                 name_only,
                 name,
                 entries,
+                constants,
             }) => {
                 if let Some(name) = name {
                     if let Some(p) = meta.pallet_by_name(&name) {
-                        if name_only && !entries {
+                        if name_only && !entries && !constants {
                             output.format(&p.name)?
                         } else if entries {
                             let entries = p
@@ -157,6 +160,14 @@ async fn run() -> Result<()> {
                                 output.format(entries.map(|e| &e.name).collect::<Vec<_>>())?
                             } else {
                                 output.format(&entries.collect::<Vec<_>>())?
+                            }
+                        } else if constants {
+                            if name_only {
+                                output.format(
+                                    &p.constants.iter().map(|c| &c.name).collect::<Vec<_>>(),
+                                )?
+                            } else {
+                                output.format(&p.constants)?
                             }
                         } else {
                             output.format(p)?
