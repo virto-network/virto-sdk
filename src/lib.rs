@@ -73,7 +73,8 @@ extern crate alloc;
 
 pub use codec;
 pub use frame_metadata::RuntimeMetadataPrefixed;
-pub use meta_ext::{meta_from_bytes, Meta, Metadata};
+pub use meta::Metadata;
+pub use meta_ext as meta;
 #[cfg(feature = "json")]
 pub use scales::JsonValue;
 #[cfg(feature = "v14")]
@@ -81,7 +82,7 @@ pub use scales::Value;
 
 use async_trait::async_trait;
 use core::{fmt, ops::Deref};
-use meta_ext::Entry;
+use meta::{Entry, Meta};
 #[cfg(feature = "std")]
 use once_cell::sync::OnceCell;
 #[cfg(not(feature = "std"))]
@@ -105,7 +106,7 @@ pub mod http;
 pub mod ws;
 
 mod hasher;
-mod meta_ext;
+pub mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
 mod rpc;
 
@@ -147,7 +148,7 @@ impl<B: Backend> Sube<B> {
     #[cfg(feature = "v14")]
     pub async fn query(&self, key: &str) -> Result<Value<'_>> {
         let key = self.key_from_path(key).await?;
-        let res = self.query_bytes(&key).await?;
+        let res = self.query_storage(&key).await?;
         let reg = self.registry().await?;
         Ok(Value::new(res, key.1, reg))
     }
@@ -193,8 +194,8 @@ impl<T: Backend> Deref for Sube<T> {
 /// ```
 #[async_trait]
 pub trait Backend {
-    /// Get storage items form the blockchain
-    async fn query_bytes(&self, key: &StorageKey) -> Result<Vec<u8>>;
+    /// Get raw storage items form the blockchain
+    async fn query_storage(&self, key: &StorageKey) -> Result<Vec<u8>>;
 
     /// Send a signed extrinsic to the blockchain
     async fn submit<T>(&self, ext: T) -> Result<()>
@@ -202,6 +203,28 @@ pub trait Backend {
         T: AsRef<[u8]> + Send;
 
     async fn metadata(&self) -> Result<Metadata>;
+}
+
+/// A Dummy backend for offline querying of metadata
+pub struct Offline(pub Metadata);
+
+#[async_trait]
+impl Backend for Offline {
+    async fn query_storage(&self, _key: &StorageKey) -> Result<Vec<u8>> {
+        Err(Error::ChainUnavailable)
+    }
+
+    /// Send a signed extrinsic to the blockchain
+    async fn submit<T>(&self, _ext: T) -> Result<()>
+    where
+        T: AsRef<[u8]> + Send,
+    {
+        Err(Error::ChainUnavailable)
+    }
+
+    async fn metadata(&self) -> Result<Metadata> {
+        Ok(self.0.clone())
+    }
 }
 
 #[derive(Clone, Debug)]

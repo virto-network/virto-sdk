@@ -2,7 +2,7 @@
 
 A client library and CLI for Substrate chains, doing less by design than [subxt](https://github.com/paritytech/substrate-subxt) with a big focus on size and portability so it can run in constrainted environments like the browser.
 
-Making use of the type information in a chain's metadata(`v14 >=`) and powered by our [Scales](https://github.com/virto-network/scales) library, Sube allows automatic conversion between the [SCALE](https://github.com/paritytech/parity-scale-codec) binary format used by the blockchain with a human-readable representation like JSON without having to hardcode type information for each network. 
+Making use of the type information in a chain's metadata(`>= v14`) and powered by our [Scales](https://github.com/virto-network/scales) library, Sube allows automatic conversion between the [SCALE](https://github.com/paritytech/parity-scale-codec) binary format used by the blockchain with a human-readable representation like JSON without having to hardcode type information for each network. 
 When submitting extrinsics Sube only does that, it's your responsability to sign the payload with a different tool first(e.g. [libwallet](https://github.com/valibre-org/libwallet)) before you feed the extrinsic data to the library.
 
 Sube supports multiple backends under different feature flags like `http`, `http-web` or `ws`/`wss`, with [future support](https://github.com/virto-network/sube/milestone/3) for a [`smoldot`](https://github.com/paritytech/smoldot) based light-node.  

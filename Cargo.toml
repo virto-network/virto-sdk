@@ -2,53 +2,57 @@
 name = "sube"
 description = "SUBmit Extrinsics to a Substrate node"
 license = "Apache-2.0"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/valibre-org/sube"
 
 [dependencies]
 async-trait = "0.1.51"
-blake2 = { version = "0.9.1", default-features = false }
-codec = { version = "2.2.0", package = "parity-scale-codec", default-features = false }
+blake2 = { version = "0.9.2", default-features = false }
+codec = { version = "2.3.1", package = "parity-scale-codec", default-features = false }
 frame-metadata = { version = "14.0.0", default-features = false, features = ["std"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 log = "0.4.14"
 once_cell = { version = "1.8.0", default-features = false }
-twox-hash = { version = "1.6.0", default-features = false }
+twox-hash = { version = "1.6.1", default-features = false }
 
 scale-info = { version = "1.0.0", optional = true }
 jsonrpc = { version = "0.12.0", default-features = false, optional = true }
-scales = { version = "0.7.2", package = "scale-serialization", default-features = false, optional = true }
+scales = { version = "0.7.4", package = "scale-serialization", default-features = false, optional = true }
 
 # http backend
-surf = { version = "2.3.0", default_features = false, optional = true }
+surf = { version = "2.3.1", default_features = false, optional = true }
 
 # ws backend
-async-tungstenite = { version = "0.14.0", features = ["async-std-runtime"], optional = true }
-futures-channel = { version = "0.3.16", default-features = false, features = ["alloc"], optional = true }
-futures-util = { version = "0.3.16", default-features = false, features = ["sink"], optional = true }
+async-tungstenite = { version = "0.15.0", features = ["async-std-runtime"], optional = true }
+futures-channel = { version = "0.3.17", default-features = false, features = ["alloc"], optional = true }
+futures-util = { version = "0.3.17", default-features = false, features = ["sink"], optional = true }
 async-mutex = { version = "1.4.0", optional = true }
 async-tls = { version = "0.11.0", default-features = false, optional = true }
 
 # bin target
-anyhow = { version = "1.0.42", optional = true }
-async-std = { version = "1.9.0", default_features = false, optional = true }
-serde_json = { version = "1.0.66", default-features = false, optional = true }
+anyhow = { version = "1.0.44", optional = true }
+async-std = { version = "1.10.0", default_features = false, optional = true }
+serde_json = { version = "1.0.68", default-features = false, optional = true }
 stderrlog = { version = "0.5.1", optional = true }
-structopt = { version = "0.3.22", optional = true }
+structopt = { version = "0.3.25", optional = true }
 url = { version = "2.2.2", optional = true }
+serde = { version = "1.0.130", default-features = false, optional = true }
 
 [dev-dependencies]
-async-std = { version = "1.9.0", features = ["attributes"] }
+async-std = { version = "1.10.0", features = ["attributes"] }
 hex-literal = "0.3.3"
 
 [features]
-default = ["v14", "ws", "json", "std"]
+default = ["http", "bin", "v14", "ws", "json", "std"]
+#default = ["v14", "ws", "json", "std"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
 	"http",
+	"scales/codec",
+	"serde",
 	"serde_json",
 	"std",
 	"stderrlog",

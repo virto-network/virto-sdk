@@ -4,20 +4,23 @@ use async_trait::async_trait;
 use codec::{Decode, Encode};
 use std::{convert::Infallible, str::FromStr};
 use structopt::StructOpt;
-use sube::{http, ws, Backend, Metadata, StorageKey, Sube};
+use sube::{http, meta::*, ws, Backend, StorageKey, Sube};
 use surf::Url;
 
 /// SUBmit Extrinsics and query chain data
 #[derive(StructOpt, Debug)]
 #[structopt(name = "sube")]
 struct Opt {
-    /// Address of the chain to connect to
-    #[structopt(short, long)]
-    pub chain: String,
+    /// Address of the chain to connect to. Http protocol assumed if not provided.
+    ///
+    /// When the metadata option is provided but not the chain, only offline functionality is
+    /// supported
+    #[structopt(short, long, required_unless = "metadata")]
+    pub chain: Option<String>,
     /// Format for the output (json,scale,hex)
     #[structopt(short, long, default_value = "json")]
     pub output: Output,
-    /// Use an existing metadata definition from the filesystem
+    /// Use existing metadata from the filesystem(in SCALE format)
     #[structopt(short, long)]
     pub metadata: Option<PathBuf>,
     #[structopt(short, long)]
@@ -31,8 +34,12 @@ struct Opt {
 
 #[derive(StructOpt, Debug)]
 enum Cmd {
-    /// Get the chain metadata from the specified chain
-    Meta,
+    /// Query the chain metadata
+    #[structopt(visible_alias = "m")]
+    Meta {
+        #[structopt(subcommand)]
+        cmd: Option<MetaOpt>,
+    },
     /// Use a path-like syntax to query data from the chain storage
     ///
     /// A storage item can be accessed as `pallet/item[/key[/key2]]`(e.g. `timestamp/now` or `system/account/0x123`).
@@ -49,6 +56,36 @@ enum Cmd {
     Decode,
 }
 
+#[derive(StructOpt, Debug)]
+enum MetaOpt {
+    /// Get the chain metadata (default)
+    Get,
+    /// Get or query the type registry
+    #[structopt(visible_alias = "r")]
+    Registry {
+        /// Get a type by its id
+        #[structopt(short, long)]
+        id: Option<u16>,
+        /// Get a type by its name
+        #[structopt(short, long)]
+        path: Option<String>,
+        // #[structopt(short, long)]
+        // resolve: bool,
+    },
+    /// Get information about pallets
+    #[structopt(visible_alias = "p")]
+    Pallets {
+        #[structopt(long)]
+        name_only: bool,
+        #[structopt(short, long)]
+        entries: bool,
+        name: Option<String>,
+    },
+    /// Get information about the extrinsic format
+    #[structopt(visible_alias = "e")]
+    Extrinsic,
+}
+
 #[async_std::main]
 async fn main() {
     match run().await {
@@ -61,55 +98,81 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let opt = Opt::from_args();
+    let mut opt = Opt::from_args();
     stderrlog::new()
         .verbosity(opt.verbose)
         .quiet(opt.quiet)
         .init()
         .unwrap();
 
-    let url = chain_string_to_url(opt.chain)?;
-
-    log::debug!("Matching backend for {}", url);
-    let backend: AnyBackend = match url.scheme() {
-        "http" | "https" => AnyBackend::Http(http::Backend::new(url)),
-        "ws" | "wss" => AnyBackend::Ws(ws::Backend::new_ws2(url.as_ref()).await?),
-        _ => return Err(anyhow!("Not supported")),
-    };
-
-    let client: Sube<_> = if opt.metadata.is_none() {
-        backend.into()
-    } else {
-        let meta_path = &opt.metadata.unwrap();
-        let mut m = Vec::new();
-        let mut f = async_std::fs::File::open(meta_path).await?;
-        f.read_to_end(&mut m).await?;
-        let meta = Metadata::decode(&mut m.as_slice())?;
-        Sube::new_with_meta(backend, meta)
-    };
+    let client = get_client(&mut opt).await?;
     let meta = client.metadata().await?;
+    let output = &opt.output;
 
     let out: Vec<_> = match opt.cmd {
-        Cmd::Query { query } => {
-            let value = client.query(&query).await?;
-            match opt.output {
-                Output::Scale => value.as_ref().into(),
-                Output::Json => value.to_string().as_bytes().into(),
-                Output::Hex => format!("0x{}", hex::encode(value.as_ref()))
-                    .as_bytes()
-                    .into(),
-            }
-        }
+        Cmd::Query { query } => output.format(client.query(&query).await?)?,
         Cmd::Submit => {
             let mut input = String::new();
             io::stdin().read_line(&mut input).await?;
             client.submit(input).await?;
             vec![]
         }
-        Cmd::Meta => match opt.output {
-            Output::Scale => meta.encode(),
-            Output::Json => serde_json::to_string(&meta)?.into(),
-            Output::Hex => format!("0x{}", hex::encode(meta.encode())).into(),
+        Cmd::Meta { cmd } => match cmd {
+            Some(MetaOpt::Registry { id, path }) => {
+                let reg = &meta.types;
+                match (id, path) {
+                    (Some(id), None) => {
+                        let ty = reg.resolve(id as u32).ok_or(anyhow!("Not in registry"))?;
+                        output.format(ty)?
+                    }
+                    (None, Some(path)) => {
+                        let ty = reg.find(&path);
+                        if ty.is_empty() {
+                            return Err(anyhow!("Not in registry"));
+                        }
+                        if ty.len() == 1 {
+                            output.format(ty[0])?
+                        } else {
+                            output.format(ty)?
+                        }
+                    }
+                    _ => output.format(&meta.types)?,
+                }
+            }
+            Some(MetaOpt::Pallets {
+                name_only,
+                name,
+                entries,
+            }) => {
+                if let Some(name) = name {
+                    if let Some(p) = meta.pallet_by_name(&name) {
+                        if name_only && !entries {
+                            output.format(&p.name)?
+                        } else if entries {
+                            let entries = p
+                                .storage()
+                                .ok_or(anyhow!("No storage in pallet"))?
+                                .entries();
+                            if name_only {
+                                output.format(entries.map(|e| &e.name).collect::<Vec<_>>())?
+                            } else {
+                                output.format(&entries.collect::<Vec<_>>())?
+                            }
+                        } else {
+                            output.format(p)?
+                        }
+                    } else {
+                        return Err(anyhow!("No pallet named '{}'", name));
+                    }
+                } else if name_only {
+                    let names = meta.pallets.iter().map(|p| &p.name).collect::<Vec<_>>();
+                    output.format(&names)?
+                } else {
+                    output.format(&meta.pallets)?
+                }
+            }
+            Some(MetaOpt::Extrinsic) => output.format(&meta.extrinsic)?,
+            _ => output.format(meta)?,
         },
         Cmd::Encode => {
             todo!()
@@ -123,11 +186,59 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
+async fn get_client(opt: &mut Opt) -> Result<Sube<AnyBackend>> {
+    let url = chain_string_to_url(opt.chain.take())?;
+    let mut maybe_meta = get_meta_from_fs(&opt.metadata).await;
+
+    log::debug!("Matching backend for {}", url);
+    let backend = match url.scheme() {
+        "http" | "https" => AnyBackend::Http(http::Backend::new(url)),
+        "ws" | "wss" => AnyBackend::Ws(ws::Backend::new_ws2(url.as_ref()).await?),
+        "about" => AnyBackend::Offline(sube::Offline(
+            maybe_meta
+                .take()
+                .ok_or(anyhow!("Couldn't get metadata from disk"))?,
+        )),
+        s => return Err(anyhow!("{} not supported", s)),
+    };
+
+    Ok(if let Some(meta) = maybe_meta {
+        Sube::new_with_meta(backend, meta)
+    } else {
+        backend.into()
+    })
+}
+
+async fn get_meta_from_fs(path: &Option<PathBuf>) -> Option<Metadata> {
+    if path.is_none() {
+        return None;
+    }
+    let mut m = Vec::new();
+    let mut f = async_std::fs::File::open(path.as_ref().unwrap())
+        .await
+        .ok()?;
+    f.read_to_end(&mut m).await.ok()?;
+    Metadata::decode(&mut m.as_slice()).ok()
+}
+
 #[derive(Debug)]
 enum Output {
     Json,
     Scale,
     Hex,
+}
+
+impl Output {
+    fn format<O>(&self, out: O) -> Result<Vec<u8>>
+    where
+        O: serde::Serialize + Encode,
+    {
+        Ok(match self {
+            Output::Json => serde_json::to_vec(&out)?,
+            Output::Scale => out.encode(),
+            Output::Hex => format!("0x{}", hex::encode(out.encode())).into(),
+        })
+    }
 }
 
 impl FromStr for Output {
@@ -143,7 +254,11 @@ impl FromStr for Output {
 }
 
 // Function that tries to be "smart" about what the user might want to actually connect to
-fn chain_string_to_url(mut chain: String) -> Result<Url> {
+fn chain_string_to_url(chain: Option<String>) -> Result<Url> {
+    if chain.is_none() {
+        return Ok(Url::parse("about:offline")?);
+    }
+    let mut chain = chain.unwrap();
     if !chain.starts_with("ws://")
         && !chain.starts_with("wss://")
         && !chain.starts_with("http://")
@@ -169,14 +284,16 @@ fn chain_string_to_url(mut chain: String) -> Result<Url> {
 enum AnyBackend {
     Ws(ws::Backend<ws::WS2>),
     Http(http::Backend),
+    Offline(sube::Offline),
 }
 
 #[async_trait]
 impl Backend for AnyBackend {
-    async fn query_bytes(&self, key: &StorageKey) -> sube::Result<Vec<u8>> {
+    async fn query_storage(&self, key: &StorageKey) -> sube::Result<Vec<u8>> {
         match self {
-            AnyBackend::Ws(b) => b.query_bytes(key).await,
-            AnyBackend::Http(b) => b.query_bytes(key).await,
+            AnyBackend::Ws(b) => b.query_storage(key).await,
+            AnyBackend::Http(b) => b.query_storage(key).await,
+            AnyBackend::Offline(b) => b.query_storage(key).await,
         }
     }
 
@@ -187,6 +304,7 @@ impl Backend for AnyBackend {
         match self {
             AnyBackend::Ws(b) => b.submit(ext).await,
             AnyBackend::Http(b) => b.submit(ext).await,
+            AnyBackend::Offline(b) => b.submit(ext).await,
         }
     }
 
@@ -194,6 +312,7 @@ impl Backend for AnyBackend {
         match self {
             AnyBackend::Ws(b) => b.metadata().await,
             AnyBackend::Http(b) => b.metadata().await,
+            AnyBackend::Offline(b) => b.metadata().await,
         }
     }
 }

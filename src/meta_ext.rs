@@ -49,7 +49,7 @@ mod v14 {
 
 /// Decode metadata from its raw prefixed format to the currently
 /// active metadata version.
-pub fn meta_from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
+pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
     let meta = match meta.1 {
         #[cfg(feature = "v12")]
@@ -73,7 +73,8 @@ pub trait Meta<'a> {
     fn pallets(&self) -> Pallets<Self::Pallet>;
 
     fn pallet_by_name(&self, name: &str) -> Option<&Self::Pallet> {
-        self.pallets().find(|p| p.name() == name)
+        self.pallets()
+            .find(|p| p.name().to_lowercase() == name.to_lowercase())
     }
 
     fn storage_entries(&'a self, pallet: &str) -> Option<Entries<EntryFor<Self>>> {
@@ -84,6 +85,12 @@ pub trait Meta<'a> {
         self.storage_entries(pallet)?.find(|e| e.name() == entry)
     }
 }
+
+#[cfg(feature = "v14")]
+pub trait Registry {
+    fn find(&self, q: &str) -> Vec<&scale_info::Type<scale_info::form::PortableForm>>;
+}
+
 type Pallets<'a, P> = slice::Iter<'a, P>;
 
 pub trait Pallet<'a> {
@@ -156,6 +163,17 @@ impl<'a> Meta<'a> for Metadata {
     #[cfg(feature = "v14")]
     fn pallets(&self) -> Pallets<Self::Pallet> {
         self.pallets.iter()
+    }
+}
+
+#[cfg(feature = "v14")]
+impl Registry for scale_info::PortableRegistry {
+    fn find(&self, path: &str) -> Vec<&scale_info::Type<scale_info::form::PortableForm>> {
+        self.types()
+            .iter()
+            .filter(|t| t.ty().path().segments().iter().any(|s| s.contains(path)))
+            .map(|t| t.ty())
+            .collect()
     }
 }
 
