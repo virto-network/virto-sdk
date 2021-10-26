@@ -45,7 +45,7 @@ enum Cmd {
     Registry {
         #[structopt(
             short = "t",
-            possible_values = &RegOpt::variants(), 
+            possible_values = &RegOpt::variants(),
             case_insensitive = true,
             requires = "query",
         )]
@@ -78,12 +78,20 @@ enum MetaOpt {
     /// Get information about pallets
     #[structopt(visible_alias = "p")]
     Pallets {
-        #[structopt(long)]
+        #[structopt(short, long)]
         name_only: bool,
-        #[structopt(long, conflicts_with = "constants", requires = "name")]
+        #[structopt(
+            long,
+            conflicts_with_all = &["constants", "constant_value"],
+            requires = "name"
+        )]
         entries: bool,
         #[structopt(long, requires = "name")]
         constants: bool,
+        /// Get value of a constant
+        #[structopt(long = "value", requires = "name", conflicts_with_all = &["entries", "constants"])]
+        constant_name: Option<String>,
+        // Filter by pallet name
         name: Option<String>,
     },
     /// Get information about the extrinsic format
@@ -137,11 +145,24 @@ async fn run() -> Result<()> {
                 name,
                 entries,
                 constants,
+                constant_name: constant_value,
             }) => {
                 if let Some(name) = name {
                     if let Some(p) = meta.pallet_by_name(&name) {
                         if name_only && !entries && !constants {
                             output.format(&p.name)?
+                        } else if let Some(const_name) = constant_value {
+                            let con = p
+                                .constants
+                                .iter()
+                                .find(|c| c.name.to_lowercase() == const_name.to_lowercase())
+                                .ok_or_else(|| anyhow!("No constant named '{}'", const_name))?;
+
+                            output.format(scales::Value::new(
+                                con.value.clone(),
+                                con.ty.id(),
+                                &meta.types,
+                            ))?
                         } else if entries {
                             let entries = p
                                 .storage()
@@ -275,11 +296,13 @@ impl Output {
         O: serde::Serialize + Encode,
     {
         Ok(match self {
-            Output::Json(pretty) => if *pretty {
-                serde_json::to_vec_pretty(&out)?
-            } else {
-                serde_json::to_vec(&out)?
-            },
+            Output::Json(pretty) => {
+                if *pretty {
+                    serde_json::to_vec_pretty(&out)?
+                } else {
+                    serde_json::to_vec(&out)?
+                }
+            }
             Output::Scale => out.encode(),
             Output::Hex => format!("0x{}", hex::encode(out.encode())).into(),
         })
