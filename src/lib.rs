@@ -172,7 +172,7 @@ impl<B: Backend> Sube<B> {
     where
         T: Into<scales::Bytes> + 'static,
     {
-        Ok(Value::new(data.into(), ty, self.registry().await?))
+        Ok(Value::new(data, ty, self.registry().await?))
     }
 }
 
@@ -235,7 +235,7 @@ impl Backend for Offline {
     }
 
     async fn metadata(&self) -> Result<Metadata> {
-        Ok(self.0.clone_meta())
+        Ok(self.0.cloned())
     }
 }
 

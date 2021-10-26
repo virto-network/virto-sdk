@@ -17,7 +17,7 @@ struct Opt {
     /// supported
     #[structopt(short, long, required_unless = "metadata")]
     pub chain: Option<String>,
-    /// Format for the output (json,scale,hex)
+    /// Format for the output (json,json-pretty,scale,hex)
     #[structopt(short, long, default_value = "json")]
     pub output: Output,
     /// Use existing metadata from the filesystem(in SCALE format)
@@ -80,9 +80,9 @@ enum MetaOpt {
     Pallets {
         #[structopt(long)]
         name_only: bool,
-        #[structopt(short, long, conflicts_with = "constants", requires = "name")]
+        #[structopt(long, conflicts_with = "constants", requires = "name")]
         entries: bool,
-        #[structopt(short, long, requires = "name")]
+        #[structopt(long, requires = "name")]
         constants: bool,
         name: Option<String>,
     },
@@ -264,7 +264,7 @@ async fn get_meta_from_fs(path: &Option<PathBuf>) -> Option<Metadata> {
 
 #[derive(Debug)]
 enum Output {
-    Json,
+    Json(bool),
     Scale,
     Hex,
 }
@@ -275,7 +275,11 @@ impl Output {
         O: serde::Serialize + Encode,
     {
         Ok(match self {
-            Output::Json => serde_json::to_vec(&out)?,
+            Output::Json(pretty) => if *pretty {
+                serde_json::to_vec_pretty(&out)?
+            } else {
+                serde_json::to_vec(&out)?
+            },
             Output::Scale => out.encode(),
             Output::Hex => format!("0x{}", hex::encode(out.encode())).into(),
         })
@@ -286,10 +290,11 @@ impl FromStr for Output {
     type Err = Infallible;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
-            "json" => Output::Json,
+            "json" => Output::Json(false),
+            "json-pretty" => Output::Json(true),
             "scale" => Output::Scale,
             "hex" => Output::Hex,
-            _ => Output::Json,
+            _ => Output::Json(false),
         })
     }
 }

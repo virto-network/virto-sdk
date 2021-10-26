@@ -89,7 +89,7 @@ pub trait Meta<'a> {
         self.storage_entries(pallet)?.find(|e| e.name() == entry)
     }
 
-    fn clone_meta(&self) -> Self;
+    fn cloned(&self) -> Self;
 }
 
 #[cfg(feature = "v14")]
@@ -170,7 +170,7 @@ impl<'a> Meta<'a> for Metadata {
     fn pallets(&self) -> Pallets<Self::Pallet> {
         self.pallets.iter()
     }
-    fn clone_meta(&self) -> Self {
+    fn cloned(&self) -> Self {
         #[cfg(feature = "v14")]
         let meta = self.clone();
         #[cfg(not(feature = "v14"))]

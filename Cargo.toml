@@ -45,7 +45,8 @@ async-std = { version = "1.10.0", features = ["attributes"] }
 hex-literal = "0.3.3"
 
 [features]
-default = ["v14", "ws", "decode", "json", "std"]
+default = ["v14", "ws", "bin", "decode", "json", "std"]
+#default = ["v14", "ws", "decode", "json", "std"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
