@@ -19,6 +19,7 @@ use crate::hasher::hash;
 mod v12 {
     use frame_metadata::v12::*;
     pub type Metadata = RuntimeMetadataV12;
+    pub type ExtrinsicMeta = ExtrinsicMetadata;
     pub type PalletMeta = ModuleMetadata;
     pub type StorageMeta = StorageMetadata;
     pub type EntryMeta = StorageEntryMetadata;
@@ -29,6 +30,7 @@ mod v12 {
 mod v13 {
     use frame_metadata::v13::*;
     pub type Metadata = RuntimeMetadataV13;
+    pub type ExtrinsicMeta = ExtrinsicMetadata;
     pub type PalletMeta = ModuleMetadata;
     pub type StorageMeta = StorageMetadata;
     pub type EntryMeta = StorageEntryMetadata;
@@ -40,6 +42,7 @@ mod v14 {
     use frame_metadata::v14::*;
     use scale_info::form::PortableForm;
     pub type Metadata = RuntimeMetadataV14;
+    pub type ExtrinsicMeta = ExtrinsicMetadata;
     pub type PalletMeta = PalletMetadata<PortableForm>;
     pub type StorageMeta = PalletStorageMetadata<PortableForm>;
     pub type EntryMeta = StorageEntryMetadata<PortableForm>;
@@ -63,6 +66,7 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
     Ok(meta)
 }
 
+type Entries<'a, E> = slice::Iter<'a, E>;
 type EntryFor<'a, M> = <<<M as Meta<'a>>::Pallet as Pallet<'a>>::Storage as Storage<'a>>::Entry;
 
 /// An extension trait for a decoded metadata object that provides
@@ -84,10 +88,13 @@ pub trait Meta<'a> {
     fn storage_entry(&'a self, pallet: &str, entry: &str) -> Option<&EntryFor<Self>> {
         self.storage_entries(pallet)?.find(|e| e.name() == entry)
     }
+
+    fn clone_meta(&self) -> Self;
 }
 
 #[cfg(feature = "v14")]
 pub trait Registry {
+    fn find_ids(&self, q: &str) -> Vec<u32>;
     fn find(&self, q: &str) -> Vec<&scale_info::Type<scale_info::form::PortableForm>>;
 }
 
@@ -110,7 +117,6 @@ pub trait Storage<'a> {
         self.entries().find(|e| e.name() == name)
     }
 }
-type Entries<'a, E> = slice::Iter<'a, E>;
 
 pub trait Entry {
     type Type: EntryTy;
@@ -164,15 +170,36 @@ impl<'a> Meta<'a> for Metadata {
     fn pallets(&self) -> Pallets<Self::Pallet> {
         self.pallets.iter()
     }
+    fn clone_meta(&self) -> Self {
+        #[cfg(feature = "v14")]
+        let meta = self.clone();
+        #[cfg(not(feature = "v14"))]
+        let meta = {
+            Metadata {
+                modules: self.modules.clone(),
+                extrinsic: ExtrinsicMeta {
+                    version: self.extrinsic.version,
+                    signed_extensions: self.extrinsic.signed_extensions.clone(),
+                },
+            }
+        };
+        meta
+    }
 }
 
 #[cfg(feature = "v14")]
 impl Registry for scale_info::PortableRegistry {
-    fn find(&self, path: &str) -> Vec<&scale_info::Type<scale_info::form::PortableForm>> {
+    fn find_ids(&self, path: &str) -> Vec<u32> {
         self.types()
             .iter()
             .filter(|t| t.ty().path().segments().iter().any(|s| s.contains(path)))
-            .map(|t| t.ty())
+            .map(|t| t.id())
+            .collect()
+    }
+    fn find(&self, path: &str) -> Vec<&scale_info::Type<scale_info::form::PortableForm>> {
+        self.find_ids(path)
+            .into_iter()
+            .map(|t| self.resolve(t).unwrap())
             .collect()
     }
 }

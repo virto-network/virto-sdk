@@ -18,7 +18,7 @@ sube = { version = "0.4", default_features = false, features = ["v13", "http"] }
 Creating a client is as simple as instantiating a backend and converting it to a `Sube` instance.
 
 ```
-# use sube::{Sube, ws, JsonValue, Error, Meta, Backend};
+# use sube::{Sube, ws, JsonValue, Error, meta::*, Backend};
 # #[async_std::main] async fn main() -> Result<(), Error> {
 # const CHAIN_URL: &str = "ws://localhost:24680";
 // Create an instance of Sube from any of the available backends
@@ -154,13 +154,25 @@ impl<B: Backend> Sube<B> {
     }
 
     pub async fn key_from_path(&self, path: &str) -> Result<StorageKey> {
-        StorageKey::from_path(self.metadata().await?, path)
+        StorageKey::from_uri(self.metadata().await?, path)
     }
 
     /// Get the type registry of the chain
     #[cfg(feature = "v14")]
     pub async fn registry(&self) -> Result<&PortableRegistry> {
         Ok(&self.metadata().await?.types)
+    }
+
+    #[cfg(feature = "decode")]
+    pub async fn decode<'a, T>(
+        &'a self,
+        data: T,
+        ty: u32,
+    ) -> Result<impl serde::Serialize + codec::Encode + 'a>
+    where
+        T: Into<scales::Bytes> + 'static,
+    {
+        Ok(Value::new(data.into(), ty, self.registry().await?))
     }
 }
 
@@ -223,7 +235,7 @@ impl Backend for Offline {
     }
 
     async fn metadata(&self) -> Result<Metadata> {
-        Ok(self.0.clone())
+        Ok(self.0.clone_meta())
     }
 }
 
@@ -265,27 +277,34 @@ pub struct StorageKey(Vec<u8>, u32);
 
 impl StorageKey {
     /// Parse the StorageKey from a URL-like path
-    pub fn from_path(meta: &Metadata, uri: &str) -> Result<Self> {
-        let mut path = uri.trim_matches('/').split('/');
-        let pallet = path.next().map(to_camel).ok_or(Error::ParseStorageItem)?;
-        let item = path.next().map(to_camel).ok_or(Error::ParseStorageItem)?;
-        let map_keys = path.collect::<Vec<_>>();
-
+    pub fn from_uri(meta: &Metadata, uri: &str) -> Result<Self> {
+        let (pallet, item, map_keys) = Self::parse_uri(uri).ok_or(Error::ParseStorageItem)?;
         log::debug!(
             "StorageKey parts: [module]={} [item]={} [keys]={:?}",
             pallet,
             item,
             map_keys,
         );
+        Self::new(meta, &pallet, &item, &map_keys)
+    }
 
+    pub fn new(meta: &Metadata, pallet: &str, item: &str, map_keys: &[&str]) -> Result<Self> {
         let entry = meta
-            .storage_entry(&pallet, &item)
+            .storage_entry(pallet, item)
             .ok_or(Error::StorageKeyNotFound)?;
         let key = entry
-            .key(&pallet, &map_keys)
+            .key(pallet, map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
 
         Ok(StorageKey(key, entry.ty_id()))
+    }
+
+    pub fn parse_uri(uri: &str) -> Option<(String, String, Vec<&str>)> {
+        let mut path = uri.trim_matches('/').split('/');
+        let pallet = path.next().map(to_camel)?;
+        let item = path.next().map(to_camel)?;
+        let map_keys = path.collect::<Vec<_>>();
+        Some((pallet, item, map_keys))
     }
 }
 

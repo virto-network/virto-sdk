@@ -45,13 +45,12 @@ async-std = { version = "1.10.0", features = ["attributes"] }
 hex-literal = "0.3.3"
 
 [features]
-default = ["http", "bin", "v14", "ws", "json", "std"]
-#default = ["v14", "ws", "json", "std"]
+default = ["v14", "ws", "decode", "json", "std"]
 bin = [
 	"anyhow",
 	"async-std/attributes",
 	"http",
-	"scales/codec",
+	"decode",
 	"serde",
 	"serde_json",
 	"std",
@@ -61,6 +60,7 @@ bin = [
 	"v14",
 	"wss",
 ]
+decode = ["v14", "serde", "scales/codec"]
 http = ["jsonrpc", "surf/h1-client-rustls"]
 http-web = ["jsonrpc", "surf/wasm-client"]
 json = ["v14", "scales/json"]

@@ -3,7 +3,7 @@ use async_std::{io, path::PathBuf, prelude::*};
 use async_trait::async_trait;
 use codec::{Decode, Encode};
 use std::{convert::Infallible, str::FromStr};
-use structopt::StructOpt;
+use structopt::{clap::arg_enum, StructOpt};
 use sube::{http, meta::*, ws, Backend, StorageKey, Sube};
 use surf::Url;
 
@@ -40,6 +40,18 @@ enum Cmd {
         #[structopt(subcommand)]
         cmd: Option<MetaOpt>,
     },
+    /// Explore the type registry
+    #[structopt(visible_alias = "r")]
+    Registry {
+        #[structopt(
+            short = "t",
+            possible_values = &RegOpt::variants(), 
+            case_insensitive = true,
+            requires = "query",
+        )]
+        query_type: Option<RegOpt>,
+        query: Option<String>,
+    },
     /// Use a path-like syntax to query data from the chain storage
     ///
     /// A storage item can be accessed as `pallet/item[/key[/key2]]`(e.g. `timestamp/now` or `system/account/0x123`).
@@ -53,25 +65,16 @@ enum Cmd {
     Encode,
     /// Convert SCALE encoded data to a human-readable format(JSON)
     #[structopt(visible_alias = "d")]
-    Decode,
+    Decode {
+        /// An id or the name of a type that exists in the type registry
+        ty: String,
+    },
 }
 
 #[derive(StructOpt, Debug)]
 enum MetaOpt {
     /// Get the chain metadata (default)
     Get,
-    /// Get or query the type registry
-    #[structopt(visible_alias = "r")]
-    Registry {
-        /// Get a type by its id
-        #[structopt(short, long)]
-        id: Option<u16>,
-        /// Get a type by its name
-        #[structopt(short, long)]
-        path: Option<String>,
-        // #[structopt(short, long)]
-        // resolve: bool,
-    },
     /// Get information about pallets
     #[structopt(visible_alias = "p")]
     Pallets {
@@ -86,6 +89,15 @@ enum MetaOpt {
     /// Get information about the extrinsic format
     #[structopt(visible_alias = "e")]
     Extrinsic,
+}
+
+arg_enum! {
+    #[derive(Debug)]
+    enum RegOpt {
+        Id,
+        Name,
+        Entry,
+    }
 }
 
 #[async_std::main]
@@ -114,33 +126,12 @@ async fn run() -> Result<()> {
     let out: Vec<_> = match opt.cmd {
         Cmd::Query { query } => output.format(client.query(&query).await?)?,
         Cmd::Submit => {
-            let mut input = String::new();
-            io::stdin().read_line(&mut input).await?;
+            let mut input = Vec::new();
+            io::stdin().read_to_end(&mut input).await?;
             client.submit(input).await?;
             vec![]
         }
         Cmd::Meta { cmd } => match cmd {
-            Some(MetaOpt::Registry { id, path }) => {
-                let reg = &meta.types;
-                match (id, path) {
-                    (Some(id), None) => {
-                        let ty = reg.resolve(id as u32).ok_or(anyhow!("Not in registry"))?;
-                        output.format(ty)?
-                    }
-                    (None, Some(path)) => {
-                        let ty = reg.find(&path);
-                        if ty.is_empty() {
-                            return Err(anyhow!("Not in registry"));
-                        }
-                        if ty.len() == 1 {
-                            output.format(ty[0])?
-                        } else {
-                            output.format(ty)?
-                        }
-                    }
-                    _ => output.format(&meta.types)?,
-                }
-            }
             Some(MetaOpt::Pallets {
                 name_only,
                 name,
@@ -185,11 +176,50 @@ async fn run() -> Result<()> {
             Some(MetaOpt::Extrinsic) => output.format(&meta.extrinsic)?,
             _ => output.format(meta)?,
         },
+        Cmd::Registry { query_type, query } => {
+            let reg = &meta.types;
+            match (query_type, query) {
+                (Some(RegOpt::Id), Some(q)) => {
+                    let id = q.parse::<u32>()?;
+                    let ty = reg.resolve(id).ok_or(anyhow!("Not in registry"))?;
+                    output.format(ty)?
+                }
+                (Some(RegOpt::Name), Some(q)) => {
+                    let ty = reg.find(&q);
+                    if ty.is_empty() {
+                        return Err(anyhow!("Not in registry"));
+                    }
+                    if ty.len() == 1 {
+                        output.format(ty[0])?
+                    } else {
+                        output.format(ty)?
+                    }
+                }
+                (Some(RegOpt::Entry), Some(q)) => {
+                    let (pallet, item, _) =
+                        StorageKey::parse_uri(&q).ok_or_else(|| anyhow!("Invalid entry format"))?;
+                    let ty = meta
+                        .storage_entry(&pallet, &item)
+                        .ok_or_else(|| anyhow!("Not in registry"))?
+                        .ty();
+                    output.format(ty)?
+                }
+                _ => output.format(&meta.types)?,
+            }
+        }
         Cmd::Encode => {
             todo!()
         }
-        Cmd::Decode => {
-            todo!()
+        Cmd::Decode { ty } => {
+            let reg = client.registry().await?;
+            let ty = ty
+                .parse::<u32>()
+                .ok()
+                .or_else(|| reg.find_ids(&ty).first().copied())
+                .ok_or_else(|| anyhow!("Not in registry"))?;
+            let mut input = Vec::new();
+            io::stdin().read_to_end(&mut input).await?;
+            output.format(client.decode(input, ty).await?)?
         }
     };
     io::stdout().write_all(&out).await?;
