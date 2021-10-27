@@ -174,6 +174,33 @@ impl<B: Backend> Sube<B> {
     {
         Ok(Value::new(data, ty, self.registry().await?))
     }
+
+    #[cfg(feature = "encode")]
+    pub async fn encode(&self, value: impl serde::Serialize, ty: u32) -> Result<Vec<u8>> {
+        let reg = self.registry().await?;
+        scales::to_vec_with_info(&value, (reg, ty).into()).map_err(|e| Error::Encode(e.to_string()))
+    }
+
+    #[cfg(feature = "encode")]
+    pub async fn encode_iter<I, V>(&self, value: I, ty: u32) -> Result<Vec<u8>>
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<JsonValue>,
+    {
+        let val: JsonValue = value.into_iter().collect();
+        self.encode(val, ty).await
+    }
+
+    #[cfg(feature = "encode")]
+    pub async fn encode_iter2<I, K, V>(&self, value: I, ty: u32) -> Result<Vec<u8>>
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<JsonValue>,
+    {
+        let val: JsonValue = value.into_iter().collect();
+        self.encode(val, ty).await
+    }
 }
 
 impl<B: Backend> From<B> for Sube<B> {
@@ -246,6 +273,7 @@ pub enum Error {
     BadKey,
     BadMetadata,
     Decode(codec::Error),
+    Encode(String),
     NoMetadataLoaded,
     Node(String),
     ParseStorageItem,

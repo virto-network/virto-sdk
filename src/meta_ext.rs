@@ -48,6 +48,7 @@ mod v14 {
     pub type EntryMeta = StorageEntryMetadata<PortableForm>;
     pub type EntryType = StorageEntryType<PortableForm>;
     pub type Hasher = StorageHasher;
+    pub use scale_info::PortableRegistry;
 }
 
 /// Decode metadata from its raw prefixed format to the currently

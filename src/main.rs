@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use codec::{Decode, Encode};
 use std::{convert::Infallible, str::FromStr};
 use structopt::{clap::arg_enum, StructOpt};
-use sube::{http, meta::*, ws, Backend, StorageKey, Sube};
+use sube::{http, meta::*, ws, Backend, JsonValue, StorageKey, Sube};
 use surf::Url;
 
 /// SUBmit Extrinsics and query chain data
@@ -62,11 +62,23 @@ enum Cmd {
     Submit,
     /// Convert human-readable data(JSON atm.) to SCALE format
     #[structopt(visible_alias = "e")]
-    Encode,
+    Encode {
+        /// An id or the name of a type that exists in the type registry
+        #[structopt(short, required_unless = "pallet-call")]
+        ty: Option<String>,
+        /// Indicates that the input values are the parameters of `<pallet>/<call>`
+        #[structopt(short = "c", conflicts_with = "ty")]
+        pallet_call: Option<String>,
+        /// Create an object from the provided list of values which can be
+        /// - primitive
+        #[structopt(value_name = "VALUE")]
+        values: Vec<String>,
+    },
     /// Convert SCALE encoded data to a human-readable format(JSON)
     #[structopt(visible_alias = "d")]
     Decode {
         /// An id or the name of a type that exists in the type registry
+        #[structopt(short)]
         ty: String,
     },
 }
@@ -168,6 +180,7 @@ async fn run() -> Result<()> {
                                 .storage()
                                 .ok_or(anyhow!("No storage in pallet"))?
                                 .entries();
+
                             if name_only {
                                 output.format(entries.map(|e| &e.name).collect::<Vec<_>>())?
                             } else {
@@ -203,6 +216,7 @@ async fn run() -> Result<()> {
                 (Some(RegOpt::Id), Some(q)) => {
                     let id = q.parse::<u32>()?;
                     let ty = reg.resolve(id).ok_or(anyhow!("Not in registry"))?;
+
                     output.format(ty)?
                 }
                 (Some(RegOpt::Name), Some(q)) => {
@@ -210,6 +224,7 @@ async fn run() -> Result<()> {
                     if ty.is_empty() {
                         return Err(anyhow!("Not in registry"));
                     }
+
                     if ty.len() == 1 {
                         output.format(ty[0])?
                     } else {
@@ -223,21 +238,46 @@ async fn run() -> Result<()> {
                         .storage_entry(&pallet, &item)
                         .ok_or_else(|| anyhow!("Not in registry"))?
                         .ty();
+
                     output.format(ty)?
                 }
                 _ => output.format(&meta.types)?,
             }
         }
-        Cmd::Encode => {
-            todo!()
+        Cmd::Encode {
+            ty,
+            values,
+            pallet_call,
+        } => {
+            let ty = if let Some(_call) = pallet_call {
+                0
+            } else {
+                let ty = ty.unwrap();
+                parse_ty(&ty, &meta.types)
+                    .ok_or_else(|| anyhow!("'{}' is not in the registry", ty))?
+            };
+
+            let maybe_pairs = values.iter().map(|it| {
+                it.split_once("=")
+                    .map(|(k, v)| v.parse::<JsonValue>().map(|v| (k, v)).ok())
+                    .flatten()
+                    .ok_or_else(|| it.as_str())
+            });
+
+            // Check that every input value is a key-value pair
+            if let Ok(pairs) = maybe_pairs
+                .clone()
+                .collect::<core::result::Result<Vec<_>, _>>()
+            {
+                client.encode_iter2(pairs, ty).await?
+            } else {
+                let values = maybe_pairs.filter_map(|it| it.err());
+                client.encode_iter(values, ty).await?
+            }
         }
         Cmd::Decode { ty } => {
-            let reg = client.registry().await?;
-            let ty = ty
-                .parse::<u32>()
-                .ok()
-                .or_else(|| reg.find_ids(&ty).first().copied())
-                .ok_or_else(|| anyhow!("Not in registry"))?;
+            let ty = parse_ty(&ty, &meta.types)
+                .ok_or_else(|| anyhow!("'{}' is not in the registry", ty))?;
             let mut input = Vec::new();
             io::stdin().read_to_end(&mut input).await?;
             output.format(client.decode(input, ty).await?)?
@@ -320,6 +360,13 @@ impl FromStr for Output {
             _ => Output::Json(false),
         })
     }
+}
+
+fn parse_ty(id_or_name: &str, reg: &PortableRegistry) -> Option<u32> {
+    id_or_name
+        .parse::<u32>()
+        .ok()
+        .or_else(|| reg.find_ids(&id_or_name).first().copied())
 }
 
 // Function that tries to be "smart" about what the user might want to actually connect to
