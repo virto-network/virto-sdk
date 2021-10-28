@@ -43,6 +43,8 @@ enum Cmd {
     /// Explore the type registry
     #[structopt(visible_alias = "r")]
     Registry {
+        #[structopt(long)]
+        long: bool,
         #[structopt(
             short = "t",
             possible_values = &RegOpt::variants(),
@@ -210,14 +212,25 @@ async fn run() -> Result<()> {
             Some(MetaOpt::Extrinsic) => output.format(&meta.extrinsic)?,
             _ => output.format(meta)?,
         },
-        Cmd::Registry { query_type, query } => {
+        Cmd::Registry {
+            long,
+            query_type,
+            query,
+        } => {
             let reg = &meta.types;
+            let condensed = |ty: &Type| -> (String, scales::SpecificType) {
+                (ty.path().to_string(), (ty, reg).into())
+            };
             match (query_type, query) {
                 (Some(RegOpt::Id), Some(q)) => {
                     let id = q.parse::<u32>()?;
                     let ty = reg.resolve(id).ok_or(anyhow!("Not in registry"))?;
 
-                    output.format(ty)?
+                    if long {
+                        output.format(ty)?
+                    } else {
+                        output.format(condensed(ty))?
+                    }
                 }
                 (Some(RegOpt::Name), Some(q)) => {
                     let ty = reg.find(&q);
@@ -225,10 +238,19 @@ async fn run() -> Result<()> {
                         return Err(anyhow!("Not in registry"));
                     }
 
-                    if ty.len() == 1 {
-                        output.format(ty[0])?
+                    if !long {
+                        let ty = ty.into_iter().map(condensed).collect::<Vec<_>>();
+                        if ty.len() == 1 {
+                            output.format(&ty[0])?
+                        } else {
+                            output.format(ty)?
+                        }
                     } else {
-                        output.format(ty)?
+                        if ty.len() == 1 {
+                            output.format(ty[0])?
+                        } else {
+                            output.format(ty)?
+                        }
                     }
                 }
                 (Some(RegOpt::Entry), Some(q)) => {

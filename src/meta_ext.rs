@@ -49,6 +49,8 @@ mod v14 {
     pub type EntryType = StorageEntryType<PortableForm>;
     pub type Hasher = StorageHasher;
     pub use scale_info::PortableRegistry;
+    pub type Type = scale_info::Type<PortableForm>;
+    pub type TypeDef = scale_info::TypeDef<PortableForm>;
 }
 
 /// Decode metadata from its raw prefixed format to the currently
@@ -193,7 +195,13 @@ impl Registry for scale_info::PortableRegistry {
     fn find_ids(&self, path: &str) -> Vec<u32> {
         self.types()
             .iter()
-            .filter(|t| t.ty().path().segments().iter().any(|s| s.contains(path)))
+            .filter(|t| {
+                t.ty()
+                    .path()
+                    .segments()
+                    .iter()
+                    .any(|s| s.to_lowercase().contains(&path.to_lowercase()))
+            })
             .map(|t| t.id())
             .collect()
     }
