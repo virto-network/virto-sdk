@@ -4,7 +4,7 @@ use core::fmt;
 use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
 
-use crate::{EnumVariant, SerdeType, TupleOrArray};
+use crate::{EnumVariant, SpecificType, TupleOrArray};
 
 type TypeId = u32;
 type Result<T> = core::result::Result<T, Error>;
@@ -61,7 +61,7 @@ where
 /// the output to an equivalent representation given by some type information.
 pub struct Serializer<'reg, B> {
     out: B,
-    ty: Option<SerdeType>,
+    ty: Option<SpecificType>,
     registry: Option<&'reg PortableRegistry>,
 }
 
@@ -121,9 +121,9 @@ where
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok> {
         match self.ty {
-            Some(SerdeType::I8) => self.serialize_i8(v as i8)?,
-            Some(SerdeType::I16) => self.serialize_i16(v as i16)?,
-            Some(SerdeType::I32) => self.serialize_i32(v as i32)?,
+            Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
+            Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
+            Some(SpecificType::I32) => self.serialize_i32(v as i32)?,
             _ => {
                 self.maybe_some()?;
                 self.out.put_i64_le(v)
@@ -153,12 +153,12 @@ where
     fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
         // all numbers in serde_json are the same
         match self.ty {
-            Some(SerdeType::I8) => self.serialize_i8(v as i8)?,
-            Some(SerdeType::I16) => self.serialize_i16(v as i16)?,
-            Some(SerdeType::I32) => self.serialize_i32(v as i32)?,
-            Some(SerdeType::U8) => self.serialize_u8(v as u8)?,
-            Some(SerdeType::U16) => self.serialize_u16(v as u16)?,
-            Some(SerdeType::U32) => self.serialize_u32(v as u32)?,
+            Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
+            Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
+            Some(SpecificType::I32) => self.serialize_i32(v as i32)?,
+            Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
+            Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
+            Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
             _ => {
                 self.maybe_some()?;
                 self.out.put_u64_le(v);
@@ -181,7 +181,7 @@ where
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
         self.maybe_some()?;
-        if let Some(ref mut var @ SerdeType::Variant(_, _, None)) = &mut self.ty {
+        if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = &mut self.ty {
             var.pick_mut(to_vec(v)?, |k| to_vec(k.name()).unwrap());
             self.out.put_u8(var.variant_id());
             return Ok(());
@@ -255,7 +255,7 @@ where
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
         self.maybe_some()?;
-        if matches!(self.ty, None | Some(SerdeType::Sequence(_))) {
+        if matches!(self.ty, None | Some(SpecificType::Sequence(_))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
@@ -289,7 +289,7 @@ where
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.maybe_some()?;
-        if matches!(self.ty, None | Some(SerdeType::Map(_, _))) {
+        if matches!(self.ty, None | Some(SpecificType::Map(_, _))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
@@ -321,7 +321,7 @@ where
     // if the type info says its an Option assume its Some and extract the inner type
     fn maybe_some(&mut self) -> Result<()> {
         match &self.ty {
-            Some(SerdeType::Variant(ref name, v, _)) if name == "Option" => {
+            Some(SpecificType::Variant(ref name, v, _)) if name == "Option" => {
                 self.ty = v[1].fields().first().map(|f| self.resolve(f.ty().id()));
                 self.out.put_u8(0x01);
             }
@@ -330,7 +330,7 @@ where
         Ok(())
     }
 
-    fn resolve(&self, ty_id: TypeId) -> SerdeType {
+    fn resolve(&self, ty_id: TypeId) -> SpecificType {
         let reg = self.registry.expect("called heving type");
         let ty = reg.resolve(ty_id).expect("in registry");
         (ty, reg).into()
@@ -347,7 +347,7 @@ pub enum TypedSerializer<'a, 'reg, B> {
 
 impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 'reg, B> {
     fn from(ser: &'a mut Serializer<'reg, B>) -> Self {
-        use SerdeType::*;
+        use SpecificType::*;
         match ser.ty.take() {
             Some(Struct(fields)) => {
                 Self::Composite(ser, fields.iter().map(|(_, ty)| *ty).collect())
@@ -397,7 +397,7 @@ where
     {
         match self {
             TypedSerializer::Enum(ser) => {
-                if let Some(ref mut var @ SerdeType::Variant(_, _, None)) = ser.ty {
+                if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = ser.ty {
                     let key_data = to_vec(key)?;
                     // assume the key is the name of the variant
                     var.pick_mut(key_data, |v| to_vec(v.name()).unwrap())
@@ -419,13 +419,13 @@ where
             TypedSerializer::Composite(ser, types) => {
                 let mut ty = ser.resolve(types.remove(0));
                 // serde_json unwraps newtypes
-                if let SerdeType::StructNewType(ty_id) = ty {
+                if let SpecificType::StructNewType(ty_id) = ty {
                     ty = ser.resolve(ty_id)
                 }
                 ser.ty = Some(ty);
             }
             TypedSerializer::Enum(ser) => {
-                if let Some(var @ SerdeType::Variant(_, _, Some(_))) = &ser.ty {
+                if let Some(var @ SpecificType::Variant(_, _, Some(_))) = &ser.ty {
                     if let EnumVariant::NewType(_, _, ty_id) = var.into() {
                         ser.ty = Some(ser.resolve(ty_id));
                     }
@@ -455,7 +455,7 @@ where
         match self {
             TypedSerializer::Composite(ser, types) => {
                 let mut ty = ser.resolve(types.remove(0));
-                if let SerdeType::StructNewType(ty_id) = ty {
+                if let SpecificType::StructNewType(ty_id) = ty {
                     ty = ser.resolve(ty_id);
                 }
                 ser.ty = Some(ty);
@@ -463,7 +463,7 @@ where
             TypedSerializer::Sequence(ser, ty_id) => {
                 let ty = ser.resolve(*ty_id);
                 ser.ty = Some(match ty {
-                    SerdeType::StructNewType(ty_id) => ser.resolve(ty_id),
+                    SpecificType::StructNewType(ty_id) => ser.resolve(ty_id),
                     _ => ty,
                 });
             }

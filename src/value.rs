@@ -1,4 +1,4 @@
-use crate::{EnumVariant, SerdeType};
+use crate::{EnumVariant, SpecificType};
 use alloc::{collections::BTreeMap, vec::Vec};
 use bytes::{Buf, Bytes};
 use core::{convert::TryInto, str};
@@ -98,7 +98,7 @@ impl<'a> Serialize for Value<'a> {
         let mut data = self.data.clone();
         let ty = self.resolve(self.ty_id);
 
-        use SerdeType::*;
+        use SpecificType::*;
         match (ty, self.registry).into() {
             Bool => ser.serialize_bool(data.get_u8() != 0),
             U8 => ser.serialize_u8(data.get_u8()),

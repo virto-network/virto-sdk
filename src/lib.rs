@@ -43,8 +43,9 @@ macro_rules! is_tuple {
 /// A convenient representation of the scale-info types to a format
 /// that matches serde model more closely
 #[rustfmt::skip]
-#[derive(Debug, Clone)]
-pub enum SerdeType {
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "codec", derive(codec::Encode))]
+pub enum SpecificType {
     Bool,
     U8, U16, U32, U64, U128,
     I8, I16, I32, I64, I128,
@@ -58,19 +59,7 @@ pub enum SerdeType {
     Variant(String, Vec<Variant>, Option<u8>),
 }
 
-// impl From<&mut Type> for SerdeType {
-//     fn from(ty: &mut Type) -> Self {
-//         ty.clone().into()
-//     }
-// }
-
-// impl From<&Type> for SerdeType {
-//     fn from(ty: &Type) -> Self {
-//         ty.clone().into()
-//     }
-// }
-
-impl From<(&Type, &PortableRegistry)> for SerdeType {
+impl From<(&Type, &PortableRegistry)> for SpecificType {
     fn from((ty, registry): (&Type, &PortableRegistry)) -> Self {
         use scale_info::{TypeDef, TypeDefComposite, TypeDefPrimitive};
         type Def = TypeDef<Portable>;
@@ -160,13 +149,13 @@ impl From<(&Type, &PortableRegistry)> for SerdeType {
 }
 
 // Utilities for enum variants
-impl SerdeType {
+impl SpecificType {
     fn pick(&self, index: u8) -> Self {
         match self {
-            SerdeType::Variant(name, variant, Some(_)) => {
+            SpecificType::Variant(name, variant, Some(_)) => {
                 Self::Variant(name.to_string(), variant.to_vec(), Some(index))
             }
-            SerdeType::Variant(name, variants, None) => {
+            SpecificType::Variant(name, variants, None) => {
                 let v = variants.iter().find(|v| v.index() == index).unwrap();
                 Self::Variant(name.clone(), vec![v.clone()], Some(index))
             }
@@ -182,8 +171,8 @@ impl SerdeType {
         B: AsRef<[u8]> + PartialEq + core::fmt::Debug,
     {
         match self {
-            SerdeType::Variant(_, _, Some(_)) => self,
-            SerdeType::Variant(_, ref mut variants, idx @ None) => {
+            SpecificType::Variant(_, _, Some(_)) => self,
+            SpecificType::Variant(_, ref mut variants, idx @ None) => {
                 let i = variants
                     .iter()
                     .map(|v| get_field(v))
@@ -200,7 +189,7 @@ impl SerdeType {
     #[cfg(feature = "experimental-serializer")]
     fn variant_id(&self) -> u8 {
         match self {
-            SerdeType::Variant(_, _, Some(id)) => *id,
+            SpecificType::Variant(_, _, Some(id)) => *id,
             _ => panic!("Only for enum variants"),
         }
     }
@@ -216,10 +205,10 @@ enum EnumVariant<'a> {
     Struct(u8, &'a str, Vec<(&'a str, TypeId)>),
 }
 
-impl<'a> From<&'a SerdeType> for EnumVariant<'a> {
-    fn from(ty: &'a SerdeType) -> Self {
+impl<'a> From<&'a SpecificType> for EnumVariant<'a> {
+    fn from(ty: &'a SpecificType) -> Self {
         match ty {
-            SerdeType::Variant(name, variants, Some(idx)) => {
+            SpecificType::Variant(name, variants, Some(idx)) => {
                 let variant = variants.first().expect("single variant");
                 let fields = variant.fields();
                 let vname = variant.name().as_ref();
@@ -255,7 +244,8 @@ impl<'a> From<&'a SerdeType> for EnumVariant<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "codec", derive(codec::Encode))]
 pub enum TupleOrArray {
     Array(TypeId, u32),
     Tuple(Vec<TypeId>),
