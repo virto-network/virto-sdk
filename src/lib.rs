@@ -93,7 +93,7 @@ where
     V: Vault,
     <<V as CryptoType>::Pair as Pair>::Public: core::fmt::Display,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(f, "{}", self.root_account().expect("unlocked").public())
     }
 }

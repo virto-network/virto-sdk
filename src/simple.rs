@@ -1,4 +1,4 @@
-use crate::{async_trait, CryptoType, Error, Pair, Result, Vault};
+use crate::{async_trait, Box, CryptoType, Pair, Result, Vault};
 
 /// A vault that holds secrets in memory
 pub struct SimpleVault<T: Pair> {
@@ -48,12 +48,12 @@ impl<T: Pair> From<&str> for SimpleVault<T> {
 
 #[cfg(feature = "std")]
 impl<T: Pair> core::str::FromStr for SimpleVault<T> {
-    type Err = Error;
+    type Err = crate::Error;
     fn from_str(s: &str) -> Result<Self> {
         let seed = <Self as CryptoType>::Pair::from_string_with_seed(s, None)
-            .map_err(|_| Error::InvalidPhrase)?
+            .map_err(|_| Self::Err::InvalidPhrase)?
             .1
-            .ok_or(Error::InvalidPhrase)?;
+            .ok_or(Self::Err::InvalidPhrase)?;
         Ok(SimpleVault { seed })
     }
 }
