@@ -24,21 +24,24 @@ async fn main() -> Result<()> {
                 .help("Formats the address to specified network."),
         )
         .get_matches();
+    let network: &str = matches.value_of("network").unwrap_or("substrate");
 
-    let mut wallet = get_wallet(matches.value_of("seed"));
+    let mut wallet = get_wallet(matches.value_of("seed"), network);
     wallet.unlock("").await?;
-    let _network: &str = matches.value_of("network").unwrap_or("substrate");
 
-    println!("Public key (SS58): {}", wallet);
+    println!("Public key ({}): {}", wallet.network(), wallet);
     Ok(())
 }
 
-fn get_wallet(seed: Option<&str>) -> Wallet {
+fn get_wallet(seed: Option<&str>, network: &str) -> Wallet {
     let mnemonic = match seed {
         Some(mnemonic) => mnemonic.into(),
         None => Pair::generate_with_phrase(None).1,
     };
 
     println!("Secret Key: \"{}\"", mnemonic);
-    SimpleVault::<Pair>::from(&*mnemonic).into()
+    Wallet::new(
+        SimpleVault::<Pair>::from(&*mnemonic),
+        network.parse().unwrap(),
+    )
 }
