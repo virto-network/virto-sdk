@@ -1,13 +1,10 @@
 use clap::{App, Arg};
-use libwallet::{
-    self,
-    sr25519::{Pair, Public},
-    Pair as _, SimpleVault, Wallet,
-};
-use sp_core::crypto::Ss58Codec;
+use libwallet::{self, sr25519::Pair, Pair as _, Result, SimpleVault};
+
+type Wallet = libwallet::Wallet<SimpleVault<Pair>>;
 
 #[async_std::main]
-async fn main() {
+async fn main() -> Result<()> {
     let matches = App::new("Wallet Generator")
         .version("0.1.0")
         .author("Virto Team <we@virto.team>")
@@ -28,31 +25,20 @@ async fn main() {
         )
         .get_matches();
 
-    let pub_address = get_pub_address(matches.value_of("seed")).await;
-    let network: &str = matches.value_of("network").unwrap_or("substrate");
+    let mut wallet = get_wallet(matches.value_of("seed"));
+    wallet.unlock("").await?;
+    let _network: &str = matches.value_of("network").unwrap_or("substrate");
 
-    let address: String = pub_address
-        .to_ss58check_with_version(network.parse().unwrap_or_else(|_| Default::default()));
-    println!("Public key (SS58): {}", address);
+    println!("Public key (SS58): {}", wallet);
+    Ok(())
 }
 
-async fn get_pub_address(seed: Option<&str>) -> Public {
-    let vault = match seed {
-        Some(mnemonic) => {
-            println!("Secret Key: \"{}\"", mnemonic);
-            let vault = SimpleVault::<Pair>::from(mnemonic);
-            vault
-        }
-        None => {
-            let mnemonic: String = Pair::generate_with_phrase(None).1;
-            println!("Secret Key: \"{}\"", mnemonic);
-            let vault = SimpleVault::<Pair>::from(mnemonic.as_str());
-            vault
-        }
+fn get_wallet(seed: Option<&str>) -> Wallet {
+    let mnemonic = match seed {
+        Some(mnemonic) => mnemonic.into(),
+        None => Pair::generate_with_phrase(None).1,
     };
 
-    let mut wallet = Wallet::from(vault);
-    wallet.unlock("").await.unwrap();
-    let public_add = wallet.root_account().unwrap().public();
-    public_add
+    println!("Secret Key: \"{}\"", mnemonic);
+    SimpleVault::<Pair>::from(&*mnemonic).into()
 }

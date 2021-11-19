@@ -16,6 +16,7 @@ pub use sp_core::{
     sr25519,
 };
 
+/// Abstration for storage of private keys that are protected by a password.
 #[async_trait(?Send)]
 pub trait Vault: CryptoType {
     async fn unlock(&self, password: &str) -> Result<Self::Pair>;
@@ -84,6 +85,16 @@ impl<V: Vault> Wallet<V> {
     /// ```
     pub fn sign(&self, msg: &[u8]) -> Result<<Account<V> as Pair>::Signature> {
         Ok(self.root_account()?.sign(msg))
+    }
+}
+
+impl<V> core::fmt::Display for Wallet<V>
+where
+    V: Vault,
+    <<V as CryptoType>::Pair as Pair>::Public: core::fmt::Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.root_account().expect("unlocked").public())
     }
 }
 
