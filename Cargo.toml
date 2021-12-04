@@ -11,18 +11,18 @@ license = "Apache-2.0"
 bytes = { version = "1.1.0", default-features = false }
 scale-info = { version = "1.0.0", default-features = false, features = ["serde"] }
 serde = { version = "1.0.130", default-features = false }
-serde_json = { version = "1.0.68", default-features = false, optional = true }
+serde_json = { version = "1.0.72", default-features = false, optional = true }
 codec = { version = "2.3.1", package = "parity-scale-codec", default-features = false, optional = true }
 
 [features]
 default = ["std", "codec", "json", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
 experimental-serializer = []
-json = ["serde_json"]
+json = ["serde_json/preserve_order"]
 
 [dev-dependencies]
-anyhow = "1.0.44"
+anyhow = "1.0.51"
 codec = { version = "2.3.1", package = "parity-scale-codec", features = ["derive"] }
 scale-info = { version = "1.0.0", default-features = false, features = ["derive"] }
 serde = { version = "1.0.130", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0.68", default-features = false, features = ["alloc"] }
+serde_json = { version = "1.0.72", default-features = false, features = ["alloc"] }

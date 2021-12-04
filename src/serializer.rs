@@ -57,6 +57,58 @@ where
     Ok(())
 }
 
+#[cfg(feature = "json")]
+pub fn to_bytes_from_iter<B, I, K, V>(
+    bytes: B,
+    iter: I,
+    registry_type: (&PortableRegistry, TypeId),
+) -> Result<()>
+where
+    B: BufMut,
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<crate::JsonValue>,
+{
+    let ty = registry_type
+        .0
+        .resolve(registry_type.1)
+        .ok_or_else(|| Error::BadInput("Type not in registry".into()))?;
+    let obj = iter.into_iter().collect::<crate::JsonValue>();
+    let val: crate::JsonValue = if let scale_info::TypeDef::Composite(ty) = ty.type_def() {
+        ty.fields()
+            .iter()
+            .map(|f| {
+                let name = f.name().expect("named field");
+                Ok((
+                    name.deref(),
+                    obj.get(name)
+                        .ok_or_else(|| Error::BadInput(format!("missing field {}", name)))?
+                        .clone(),
+                ))
+            })
+            .collect::<Result<_>>()?
+    } else {
+        return Err(Error::Type(ty.clone()));
+    };
+
+    to_bytes_with_info(bytes, &val, Some(registry_type))
+}
+
+#[cfg(feature = "json")]
+pub fn to_vec_from_iter<I, K, V>(
+    iter: I,
+    registry_type: (&PortableRegistry, TypeId),
+) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<crate::JsonValue>,
+{
+    let mut out = vec![];
+    to_bytes_from_iter(&mut out, iter, registry_type)?;
+    Ok(out)
+}
+
 /// A serializer that encodes types to SCALE with the option to coerce
 /// the output to an equivalent representation given by some type information.
 pub struct Serializer<'reg, B> {
@@ -70,9 +122,12 @@ where
     B: BufMut,
 {
     pub fn new(out: B, registry_type: Option<(&'reg PortableRegistry, TypeId)>) -> Self {
-        let (registry, ty) = match registry_type
-            .map(|(reg, ty_id)| (reg, (reg.resolve(ty_id).unwrap(), reg).into()))
-        {
+        let (registry, ty) = match registry_type.map(|(reg, ty_id)| {
+            (
+                reg,
+                (reg.resolve(ty_id).expect("exists in registry"), reg).into(),
+            )
+        }) {
             Some((reg, ty)) => (Some(reg), Some(ty)),
             None => (None, None),
         };
@@ -152,6 +207,7 @@ where
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
         // all numbers in serde_json are the same
+        self.maybe_some()?;
         match self.ty {
             Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
             Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
@@ -160,7 +216,6 @@ where
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
             _ => {
-                self.maybe_some()?;
                 self.out.put_u64_le(v);
             }
         }
@@ -181,11 +236,10 @@ where
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
         self.maybe_some()?;
-        if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = &mut self.ty {
-            var.pick_mut(to_vec(v)?, |k| to_vec(k.name()).unwrap());
-            self.out.put_u8(var.variant_id());
+        if self.maybe_other(v)?.is_some() {
             return Ok(());
         }
+
         compact_number(v.len(), &mut self.out);
         self.out.put(v.as_bytes());
         Ok(())
@@ -331,9 +385,30 @@ where
     }
 
     fn resolve(&self, ty_id: TypeId) -> SpecificType {
-        let reg = self.registry.expect("called heving type");
+        let reg = self.registry.expect("called having type");
         let ty = reg.resolve(ty_id).expect("in registry");
         (ty, reg).into()
+    }
+
+    #[inline]
+    fn maybe_other(&mut self, val: &str) -> Result<Option<()>> {
+        use core::any::type_name;
+        match self.ty {
+            Some(SpecificType::Str) | None => Ok(None),
+            // { "foo": "Bar" } => "Bar" might be an enum variant
+            Some(ref mut var @ SpecificType::Variant(_, _, None)) => {
+                var.pick_mut(to_vec(val)?, |k| to_vec(k.name()).unwrap())
+                    .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
+                self.out.put_u8(var.variant_id());
+                Ok(Some(()))
+            }
+            Some(SpecificType::StructNewType(ty)) => match self.resolve(ty) {
+                // { "foo": "bar" } => "bar" might be a string wrapped in a type
+                SpecificType::Str => Ok(None),
+                _ => Err(Error::NotSupported(type_name::<&str>())),
+            },
+            Some(_) => Err(Error::NotSupported(type_name::<&str>())),
+        }
     }
 }
 
@@ -360,7 +435,7 @@ impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 
             Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
                 EnumVariant::Tuple(_, _, types) => Self::Composite(ser, types),
                 EnumVariant::Struct(_, _, types) => {
-                    Self::Composite(ser, types.iter().map(|(_, ty)| ty.clone()).collect())
+                    Self::Composite(ser, types.iter().map(|(_, ty)| *ty).collect())
                 }
                 _ => Self::Empty(ser),
             },
@@ -401,6 +476,7 @@ where
                     let key_data = to_vec(key)?;
                     // assume the key is the name of the variant
                     var.pick_mut(key_data, |v| to_vec(v.name()).unwrap())
+                        .ok_or_else(|| Error::BadInput("Invalid variant".into()))?
                         .variant_id()
                         .serialize(&mut **ser)?;
                 }
@@ -575,12 +651,22 @@ where
 #[derive(Debug)]
 pub enum Error {
     Ser(String),
+    BadInput(String),
+    Type(scale_info::Type<scale_info::form::PortableForm>),
+    NotSupported(&'static str),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Ser(msg) => write!(f, "{}", msg),
+            Error::BadInput(msg) => write!(f, "Bad Input: {}", msg),
+            Error::Type(ty) => write!(
+                f,
+                "Unexpected type: {}",
+                ty.path().ident().unwrap_or_else(|| "Unknown".into())
+            ),
+            Error::NotSupported(from) => write!(f, "Serializing {} as type is not supported", from),
         }
     }
 }
@@ -980,6 +1066,40 @@ mod tests {
 
         let json_input = to_value(&input).unwrap();
         to_bytes_with_info(&mut out, &json_input, Some((&reg, id)))?;
+
+        assert_eq!(out, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_unordered_iter() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        enum Bar {
+            _This,
+            That(i16),
+        }
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            bar: Bar,
+            baz: Option<u32>,
+            bam: String,
+        }
+        let foo = Foo {
+            bar: Bar::That(i16::MAX),
+            baz: Some(123),
+            bam: "lorem ipsum".into(),
+        };
+        let (ty, reg) = register(&foo);
+
+        let input = vec![
+            ("bam", crate::JsonValue::String("lol".into())),
+            ("baz", 123.into()),
+            ("bam", "lorem ipsum".into()),
+            ("bar", serde_json::json!({ "That": i16::MAX })),
+        ];
+
+        let out = to_vec_from_iter(input, (&reg, ty))?;
+        let expected = foo.encode();
 
         assert_eq!(out, expected);
         Ok(())

@@ -15,6 +15,8 @@ pub use bytes::Bytes;
 pub use serde_json::Value as JsonValue;
 #[cfg(feature = "experimental-serializer")]
 pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Serializer};
+#[cfg(feature = "json")]
+pub use serializer::{to_bytes_from_iter, to_vec_from_iter};
 pub use value::Value;
 
 use prelude::*;
@@ -164,23 +166,22 @@ impl SpecificType {
     }
 
     #[cfg(feature = "experimental-serializer")]
-    fn pick_mut<F, A, B>(&mut self, selection: A, get_field: F) -> &Self
+    fn pick_mut<F, A, B>(&mut self, selection: A, get_field: F) -> Option<&Self>
     where
         F: Fn(&Variant) -> B,
         A: AsRef<[u8]> + PartialEq + core::fmt::Debug,
         B: AsRef<[u8]> + PartialEq + core::fmt::Debug,
     {
         match self {
-            SpecificType::Variant(_, _, Some(_)) => self,
+            SpecificType::Variant(_, _, Some(_)) => Some(self),
             SpecificType::Variant(_, ref mut variants, idx @ None) => {
                 let i = variants
                     .iter()
                     .map(|v| get_field(v))
-                    .position(|f| f.as_ref() == selection.as_ref())
-                    .expect("index") as u8;
+                    .position(|f| f.as_ref() == selection.as_ref())? as u8;
                 variants.retain(|v| v.index() == i);
                 *idx = Some(i);
-                self
+                Some(self)
             }
             _ => panic!("Only for enum variants"),
         }
