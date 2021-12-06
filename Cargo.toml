@@ -1,7 +1,7 @@
 [package]
 name = "scale-serialization"
 description = "SCALE Serialization"
-version = "0.8.0"
+version = "1.0.0-beta"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2018"
 repository = "https://github.com/virto-network/scales"
