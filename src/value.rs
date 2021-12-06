@@ -111,7 +111,11 @@ impl<'a> Serialize for Value<'a> {
             I32 => ser.serialize_i32(data.get_i32_le()),
             I64 => ser.serialize_i64(data.get_i64_le()),
             I128 => ser.serialize_i128(data.get_i128_le()),
-            Bytes => ser.serialize_bytes(data.chunk()),
+            Bytes(_) => {
+                let (_, s) = sequence_len(data.chunk());
+                data.advance(s);
+                ser.serialize_bytes(data.chunk())
+            }
             Char => ser.serialize_char(char::from_u32(data.get_u32_le()).unwrap()),
             Str => {
                 let (_, s) = sequence_len(data.chunk());
@@ -442,7 +446,7 @@ mod tests {
 
     #[test]
     fn serialize_u8array() -> Result<(), Error> {
-        let in_value: Vec<u8> = [2u8, u8::MAX].into();
+        let in_value: Vec<u8> = [2u8; u8::MAX as usize].into();
         let data = in_value.encode();
         let (id, reg) = register(&in_value);
 

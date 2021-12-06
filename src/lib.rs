@@ -51,9 +51,9 @@ pub enum SpecificType {
     Bool,
     U8, U16, U32, U64, U128,
     I8, I16, I32, I64, I128,
-    Bytes,
     Char,
     Str,
+    Bytes(TypeId),
     Sequence(TypeId),
     Map(TypeId, TypeId),
     Tuple(TupleOrArray),
@@ -116,11 +116,14 @@ impl From<(&Type, &PortableRegistry)> for SpecificType {
             }
             Def::Variant(v) => Self::Variant(name.into(), v.variants().into(), None),
             Def::Sequence(s) => {
-                let ty = resolve!(s.type_param());
-                if ty.path().segments() != ["u8"] {
-                    Self::Sequence(s.type_param().id())
+                let ty = s.type_param();
+                if matches!(
+                    resolve!(ty).type_def(),
+                    Def::Primitive(TypeDefPrimitive::U8)
+                ) {
+                    Self::Bytes(ty.id())
                 } else {
-                    Self::Bytes
+                    Self::Sequence(ty.id())
                 }
             }
             Def::Array(a) => Self::Tuple(TupleOrArray::Array(a.type_param().id(), a.len())),

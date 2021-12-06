@@ -13,9 +13,10 @@ scale-info = { version = "1.0.0", default-features = false, features = ["serde"]
 serde = { version = "1.0.130", default-features = false }
 serde_json = { version = "1.0.72", default-features = false, optional = true }
 codec = { version = "2.3.1", package = "parity-scale-codec", default-features = false, optional = true }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"], optional = true }
 
 [features]
-default = ["std", "codec", "json", "experimental-serializer"]
+default = ["std", "codec", "json", "hex", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
 experimental-serializer = []
 json = ["serde_json/preserve_order"]

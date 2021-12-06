@@ -206,8 +206,8 @@ where
     }
 
     fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
-        // all numbers in serde_json are the same
         self.maybe_some()?;
+        // all numbers in serde_json are the same
         match self.ty {
             Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
             Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
@@ -247,6 +247,8 @@ where
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok> {
         self.maybe_some()?;
+
+        compact_number(v.len(), &mut self.out);
         self.out.put(v);
         Ok(())
     }
@@ -309,7 +311,10 @@ where
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
         self.maybe_some()?;
-        if matches!(self.ty, None | Some(SpecificType::Sequence(_))) {
+        if matches!(
+            self.ty,
+            None | Some(SpecificType::Bytes(_)) | Some(SpecificType::Sequence(_))
+        ) {
             compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
@@ -392,7 +397,6 @@ where
 
     #[inline]
     fn maybe_other(&mut self, val: &str) -> Result<Option<()>> {
-        use core::any::type_name;
         match self.ty {
             Some(SpecificType::Str) | None => Ok(None),
             // { "foo": "Bar" } => "Bar" might be an enum variant
@@ -405,9 +409,26 @@ where
             Some(SpecificType::StructNewType(ty)) => match self.resolve(ty) {
                 // { "foo": "bar" } => "bar" might be a string wrapped in a type
                 SpecificType::Str => Ok(None),
-                _ => Err(Error::NotSupported(type_name::<&str>())),
+                ref ty => Err(Error::NotSupported(
+                    type_name_of_val(val),
+                    format!("{:?}", ty),
+                )),
             },
-            Some(_) => Err(Error::NotSupported(type_name::<&str>())),
+            #[cfg(feature = "hex")]
+            Some(SpecificType::Bytes(_)) => {
+                if val.starts_with("0x") {
+                    let bytes =
+                        hex::decode(&val[2..]).map_err(|e| Error::BadInput(e.to_string()))?;
+                    ser::Serializer::serialize_bytes(self, &bytes)?;
+                    Ok(Some(()))
+                } else {
+                    Err(Error::BadInput("Hex string must start with 0x".into()))
+                }
+            }
+            Some(ref ty) => Err(Error::NotSupported(
+                type_name_of_val(val),
+                format!("{:?}", ty),
+            )),
         }
     }
 }
@@ -430,7 +451,7 @@ impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 
             Some(StructTuple(fields)) => Self::Composite(ser, fields),
             Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty),
             Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Composite(ser, fields),
-            Some(Sequence(ty)) => Self::Sequence(ser, ty),
+            Some(Sequence(ty) | Bytes(ty)) => Self::Sequence(ser, ty),
             Some(Map(_, _)) => Self::Empty(ser),
             Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
                 EnumVariant::Tuple(_, _, types) => Self::Composite(ser, types),
@@ -653,7 +674,7 @@ pub enum Error {
     Ser(String),
     BadInput(String),
     Type(scale_info::Type<scale_info::form::PortableForm>),
-    NotSupported(&'static str),
+    NotSupported(&'static str, String),
 }
 
 impl fmt::Display for Error {
@@ -666,7 +687,9 @@ impl fmt::Display for Error {
                 "Unexpected type: {}",
                 ty.path().ident().unwrap_or_else(|| "Unknown".into())
             ),
-            Error::NotSupported(from) => write!(f, "Serializing {} as type is not supported", from),
+            Error::NotSupported(from, to) => {
+                write!(f, "Serializing {} as {} is not supported", from, to)
+            }
         }
     }
 }
@@ -682,7 +705,7 @@ impl ser::Error for Error {
     }
 }
 
-// from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
+// adapted from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
 #[allow(clippy::all)]
 fn compact_number(n: usize, mut dest: impl BufMut) {
     match n {
@@ -707,6 +730,11 @@ fn compact_number(n: usize, mut dest: impl BufMut) {
             )
         }
     }
+}
+
+// nightly only
+fn type_name_of_val<T: ?Sized>(_val: &T) -> &'static str {
+    core::any::type_name::<T>()
 }
 
 #[cfg(test)]
@@ -1058,7 +1086,7 @@ mod tests {
         let input = Foo {
             bar: [Bar::That(i16::MAX), Bar::This].into(),
             baz: Some(Baz("lorem ipsum".into())),
-            lol: b"\0xFFsome stuff\0x00",
+            lol: b"\xFFsome stuff\x00",
         };
         let mut out = Vec::<u8>::new();
         let expected = input.encode();
@@ -1097,6 +1125,28 @@ mod tests {
             ("bam", "lorem ipsum".into()),
             ("bar", serde_json::json!({ "That": i16::MAX })),
         ];
+
+        let out = to_vec_from_iter(input, (&reg, ty))?;
+        let expected = foo.encode();
+
+        assert_eq!(out, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_bytes_as_hex_string() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            bar: Vec<u8>,
+        }
+        let foo = Foo {
+            bar: b"\x00\x12\x34\x56".to_vec(),
+        };
+        let (ty, reg) = register(&foo);
+
+        let hex_string = "0x00123456";
+
+        let input = vec![("bar", crate::JsonValue::String(hex_string.into()))];
 
         let out = to_vec_from_iter(input, (&reg, ty))?;
         let expected = foo.encode();
