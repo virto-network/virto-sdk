@@ -1,15 +1,11 @@
-use crate::{async_trait, Box, CryptoType, Pair, Result, Vault};
+use crate::{async_trait, Box, Pair, Result, Vault};
 
 /// A vault that holds secrets in memory
 pub struct SimpleVault<T: Pair> {
     seed: T::Seed,
 }
 
-impl<T: Pair> CryptoType for SimpleVault<T> {
-    type Pair = T;
-}
-
-impl<T: Pair> SimpleVault<T> {
+impl<P: Pair> SimpleVault<P> {
     /// A vault with a random seed, once dropped the the vault can't be restored
     /// ```
     /// # use libwallet::{SimpleVault, Vault, Result, sr25519};
@@ -21,7 +17,7 @@ impl<T: Pair> SimpleVault<T> {
     #[cfg(feature = "std")]
     pub fn new() -> Self {
         SimpleVault {
-            seed: <Self as CryptoType>::Pair::generate().1,
+            seed: P::generate().1,
         }
     }
 
@@ -29,12 +25,12 @@ impl<T: Pair> SimpleVault<T> {
     #[cfg(feature = "std")]
     pub fn new_with_password(pwd: &str) -> Self {
         SimpleVault {
-            seed: <Self as CryptoType>::Pair::generate_with_phrase(Some(pwd)).2,
+            seed: P::generate_with_phrase(Some(pwd)).2,
         }
     }
 
     // Provide your own seed
-    pub fn new_with_seed(seed: T::Seed) -> Self {
+    pub fn new_with_seed(seed: P::Seed) -> Self {
         SimpleVault { seed }
     }
 }
@@ -47,10 +43,10 @@ impl<T: Pair> From<&str> for SimpleVault<T> {
 }
 
 #[cfg(feature = "std")]
-impl<T: Pair> core::str::FromStr for SimpleVault<T> {
+impl<P: Pair> core::str::FromStr for SimpleVault<P> {
     type Err = crate::Error;
     fn from_str(s: &str) -> Result<Self> {
-        let seed = <Self as CryptoType>::Pair::from_string_with_seed(s, None)
+        let seed = P::from_string_with_seed(s, None)
             .map_err(|_| Self::Err::InvalidPhrase)?
             .1
             .ok_or(Self::Err::InvalidPhrase)?;
@@ -59,9 +55,11 @@ impl<T: Pair> core::str::FromStr for SimpleVault<T> {
 }
 
 #[async_trait(?Send)]
-impl<T: Pair> Vault for SimpleVault<T> {
-    async fn unlock(&self, _pwd: &str) -> Result<T> {
-        let foo = <Self as CryptoType>::Pair::from_seed(&self.seed);
+impl<P: Pair> Vault for SimpleVault<P> {
+    type Pair = P;
+
+    async fn unlock(&self, _pwd: &str) -> Result<P> {
+        let foo = Self::Pair::from_seed(&self.seed);
         Ok(foo)
     }
 }

@@ -26,22 +26,16 @@ async fn main() -> Result<()> {
         .get_matches();
     let network: &str = matches.value_of("network").unwrap_or("substrate");
 
-    let mut wallet = get_wallet(matches.value_of("seed"), network);
-    wallet.unlock("").await?;
-
-    println!("Public key ({}): {}", wallet.network(), wallet);
-    Ok(())
-}
-
-fn get_wallet(seed: Option<&str>, network: &str) -> Wallet {
-    let mnemonic = match seed {
+    let mnemonic = match matches.value_of("seed") {
         Some(mnemonic) => mnemonic.into(),
         None => Pair::generate_with_phrase(None).1,
     };
+    println!("Secret Key: \"{}\"", &mnemonic);
 
-    println!("Secret Key: \"{}\"", mnemonic);
-    Wallet::new(
-        SimpleVault::<Pair>::from(&*mnemonic),
-        network.parse().unwrap(),
-    )
+    let mut wallet = Wallet::new(SimpleVault::<Pair>::from(mnemonic.as_str()));
+    wallet.unlock("").await?;
+    let account = wallet.switch_default_network(network)?;
+
+    println!("Public key ({}): {}", account.network(), account);
+    Ok(())
 }
