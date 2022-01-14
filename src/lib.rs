@@ -6,13 +6,15 @@ use alloc::boxed::Box;
 mod account;
 #[cfg(feature = "simple")]
 mod simple;
+#[cfg(feature = "substrate")]
+mod substrate_ext;
+
+use core::convert::TryFrom;
 
 pub use account::Account;
 pub use async_trait::async_trait;
-use core::convert::{TryFrom, TryInto};
 #[cfg(feature = "simple")]
 pub use simple::SimpleVault;
-use sp_core::crypto::Ss58AddressFormat;
 pub use sp_core::{
     crypto::{CryptoType, Pair},
     ecdsa, ed25519,
@@ -116,33 +118,28 @@ impl<P: Pair> Default for Wallet<SimpleVault<P>> {
     }
 }
 
-// Represents the blockchain network that this wallet belongs to
+// Represents the blockchain network in use by an account
 #[derive(Debug, Clone)]
 pub enum Network {
     // For substrate based blockchains commonly formatted as SS58
     // that are distinguished by their address prefix. 42 is the generic prefix.
+    #[cfg(feature = "substrate")]
     Substrate(u16),
     // Space for future supported networks(e.g. ethereum, bitcoin)
 }
 
 impl Default for Network {
     fn default() -> Self {
+        #[cfg(feature = "substrate")]
         Network::Substrate(42)
-    }
-}
-
-impl From<&Network> for Ss58AddressFormat {
-    fn from(n: &Network) -> Self {
-        match n {
-            Network::Substrate(prefix) => (*prefix).try_into().expect("valid substrate prefix"),
-        }
     }
 }
 
 impl core::str::FromStr for Network {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self> {
-        Ss58AddressFormat::try_from(s)
+        #[cfg(feature = "substrate")]
+        substrate_ext::Ss58AddressFormat::try_from(s)
             .map(|x| Network::Substrate(x.into()))
             .map_err(|_| Error::InvalidNetwork)
     }
@@ -151,7 +148,8 @@ impl core::str::FromStr for Network {
 #[cfg(feature = "std")]
 impl core::fmt::Display for Network {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        write!(f, "{}", Ss58AddressFormat::from(self))
+        #[cfg(feature = "substrate")]
+        write!(f, "{}", substrate_ext::Ss58AddressFormat::from(self))
     }
 }
 

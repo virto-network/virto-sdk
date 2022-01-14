@@ -73,19 +73,3 @@ impl<P: Pair> CryptoType for Account<'_, P> {
     type Pair = P;
 }
 
-#[cfg(feature = "std")]
-impl<P> core::fmt::Display for Account<'_, P>
-where
-    P: Pair,
-    P::Public: core::fmt::Display,
-{
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        let account = self.public();
-        let net = self.network();
-        write!(
-            f,
-            "{}",
-            sp_core::crypto::Ss58Codec::to_ss58check_with_version(&account, net.into())
-        )
-    }
-}
