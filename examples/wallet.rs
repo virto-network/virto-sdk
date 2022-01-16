@@ -32,8 +32,8 @@ async fn main() -> Result<()> {
     };
     println!("Secret Key: \"{}\"", &mnemonic);
 
-    let mut wallet = Wallet::new(SimpleVault::<Pair>::from(mnemonic.as_str()));
-    wallet.unlock("").await?;
+    let vault = SimpleVault::<Pair>::from(mnemonic.as_str());
+    let mut wallet = Wallet::new(vault).unlock("").await?;
     let account = wallet.switch_default_network(network)?;
 
     println!("Public key ({}): {}", account.network(), account);

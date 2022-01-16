@@ -63,19 +63,19 @@ impl<V: Vault> Wallet<V> {
     /// let vault: SimpleVault<sr25519::Pair> = "//Alice".into();
     /// let mut wallet = Wallet::from(vault);
     /// if wallet.is_locked() {
-    ///     wallet.unlock("").await?;
+    ///     wallet = wallet.unlock("").await?;
     /// }
     /// # assert_eq!(wallet.is_locked(), false);
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(&mut self, password: &str) -> Result<()> {
+    pub async fn unlock(mut self, password: &str) -> Result<Self> {
         if !self.is_locked() {
-            return Ok(());
+            return Ok(self);
         }
         let pair = self.vault.unlock(password).await?;
         self.root = Some(Account::from_pair(pair));
-        Ok(())
+        Ok(self)
     }
 
     pub fn is_locked(&self) -> bool {
@@ -87,8 +87,7 @@ impl<V: Vault> Wallet<V> {
     /// # use libwallet::{Wallet, SimpleVault, sr25519, Result};
     /// # #[async_std::main] async fn main() -> Result<()> {
     ///
-    /// let mut wallet: Wallet<_> = SimpleVault::<sr25519::Pair>::new().into();
-    /// wallet.unlock("").await;
+    /// let wallet = Wallet::new(SimpleVault::<sr25519::Pair>::new()).unlock("").await?;
     /// let signature = wallet.sign(&[0x01, 0x02, 0x03]);
     /// assert!(signature.is_ok());
     /// # Ok(()) }
