@@ -24,29 +24,38 @@ pub use sp_core::{
 
 /// Abstration for storage of private keys that are protected by a password.
 #[async_trait(?Send)]
-pub trait Vault {
+pub trait Vault<C = ()> {
     type Pair: Pair;
 
-    async fn unlock(&self, password: &str) -> Result<Self::Pair>;
+    async fn unlock(&self, credentials: C) -> Result<Self::Pair>;
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
-type SignatureOf<V> = <<V as Vault>::Pair as Pair>::Signature;
+type SignatureOf<V, C> = <<V as Vault<C>>::Pair as Pair>::Signature;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 #[derive(Debug)]
-pub struct Wallet<V: Vault> {
+pub struct Wallet<V, C = ()>
+where
+    V: Vault<C>,
+{
     vault: V,
     root: Option<Account<'static, V::Pair>>,
 }
 
-impl<V: Vault> From<V> for Wallet<V> {
+impl<V, C> From<V> for Wallet<V, C>
+where
+    V: Vault<C>,
+{
     fn from(vault: V) -> Self {
         Wallet { vault, root: None }
     }
 }
 
-impl<V: Vault> Wallet<V> {
+impl<V, C> Wallet<V, C>
+where
+    V: Vault<C>,
+{
     pub fn new(vault: V) -> Self {
         vault.into()
     }
@@ -71,11 +80,11 @@ impl<V: Vault> Wallet<V> {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(mut self, password: &str) -> Result<Self> {
+    pub async fn unlock(mut self, credentials: C) -> Result<Self> {
         if !self.is_locked() {
             return Ok(self);
         }
-        let pair = self.vault.unlock(password).await?;
+        let pair = self.vault.unlock(credentials).await?;
         self.root = Some(Account::from_pair(pair));
         Ok(self)
     }
@@ -94,7 +103,7 @@ impl<V: Vault> Wallet<V> {
     /// assert!(signature.is_ok());
     /// # Ok(()) }
     /// ```
-    pub fn sign(&self, message: &[u8]) -> Result<SignatureOf<V>> {
+    pub fn sign(&self, message: &[u8]) -> Result<SignatureOf<V, C>> {
         Ok(self.root_account()?.sign(message))
     }
 

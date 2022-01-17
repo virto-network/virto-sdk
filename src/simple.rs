@@ -1,8 +1,8 @@
 use crate::{async_trait, Box, Pair, Result, Vault};
 
 /// A vault that holds secrets in memory
-pub struct SimpleVault<T: Pair> {
-    seed: T::Seed,
+pub struct SimpleVault<P: Pair> {
+    seed: P::Seed,
 }
 
 impl<P: Pair> SimpleVault<P> {
@@ -58,7 +58,7 @@ impl<P: Pair> core::str::FromStr for SimpleVault<P> {
 impl<P: Pair> Vault for SimpleVault<P> {
     type Pair = P;
 
-    async fn unlock(&self, _pwd: &str) -> Result<P> {
+    async fn unlock(&self, _: ()) -> Result<P> {
         let foo = Self::Pair::from_seed(&self.seed);
         Ok(foo)
     }
