@@ -1,4 +1,5 @@
 use crate::{CryptoType, Network, Pair};
+use core::mem;
 
 const ROOT_ACCOUNT: &str = "ROOT";
 
@@ -10,11 +11,13 @@ pub enum Account<'a, P> {
     Root {
         pair: P,
         network: Network,
+        pending_sign: Vec<Vec<u8>>,
     },
     Sub {
         path: &'a str,
         name: &'a str,
         network: Network,
+        pending_sign: Vec<Vec<u8>>,
     },
 }
 
@@ -26,6 +29,7 @@ where
         Account::Root {
             pair,
             network: Network::default(),
+            pending_sign: Vec::new(),
         }
     }
 
@@ -67,9 +71,41 @@ where
             Self::Sub { .. } => todo!(),
         }
     }
+
+    /// Save data to be signed later
+    pub fn add_to_pending(&mut self, message: &[u8]) {
+        self.pending_sign_mut().push(message.into());
+    }
+
+    /// Sign messages from the queue returning them and their signatures
+    pub fn sign_pending(&mut self) -> Vec<(Vec<u8>, P::Signature)> {
+        let v = mem::take(self.pending_sign_mut());
+        v.into_iter()
+            .map(|msg| {
+                let s = self.sign(&msg);
+                (msg, s)
+            })
+            .collect()
+    }
+
+    // Return an iterator over the messages pending for signature in this account
+    pub fn get_pending(&self) -> impl Iterator<Item = &[u8]> {
+        self.pending_sign().iter().map(|i| i.as_ref())
+    }
+
+    fn pending_sign_mut(&mut self) -> &mut Vec<Vec<u8>> {
+        match self {
+            Self::Root { pending_sign, .. } | Self::Sub { pending_sign, .. } => pending_sign,
+        }
+    }
+
+    fn pending_sign(&self) -> &Vec<Vec<u8>> {
+        match self {
+            Self::Root { pending_sign, .. } | Self::Sub { pending_sign, .. } => pending_sign,
+        }
+    }
 }
 
 impl<P: Pair> CryptoType for Account<'_, P> {
     type Pair = P;
 }
-
