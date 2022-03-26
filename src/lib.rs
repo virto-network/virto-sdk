@@ -9,7 +9,10 @@ mod simple;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
 
+use serde::{Deserialize, Serialize};
+
 use core::convert::TryFrom;
+use std::collections::HashMap;
 
 pub use account::Account;
 pub use async_trait::async_trait;
@@ -40,7 +43,8 @@ where
     V: Vault<C>,
 {
     vault: V,
-    root: Option<Account<'static, V::Pair>>,
+    root: Option<Account<V::Pair>>,
+    subaccounts: HashMap<String, Account<V::Pair>>,
 }
 
 impl<V, C> From<V> for Wallet<V, C>
@@ -48,7 +52,11 @@ where
     V: Vault<C>,
 {
     fn from(vault: V) -> Self {
-        Wallet { vault, root: None }
+        Wallet {
+            vault,
+            root: None,
+            subaccounts: HashMap::new(),
+        }
     }
 }
 
@@ -64,6 +72,19 @@ where
     /// It's recommended to create sub-accoutns and used those instead.
     pub fn root_account(&self) -> Result<&Account<V::Pair>> {
         self.root.as_ref().ok_or(Error::Locked)
+    }
+
+    pub fn create_sub_account(
+        &mut self,
+        name: &str,
+        derivation_path: &str,
+    ) -> Result<&Account<V::Pair>> {
+        let root = self.root_account()?;
+        let subaccount = root
+            .derive_subaccount(name, derivation_path)
+            .map_err(|_| Error::DeriveError)?;
+        self.subaccounts.insert(name.to_string(), subaccount);
+        Ok(self.subaccounts.get(name).unwrap())
     }
 
     /// A locked wallet uses its vault to retrive the key pair used to sign transactions.
@@ -186,12 +207,13 @@ impl<P: Pair> Default for Wallet<SimpleVault<P>> {
         Wallet {
             vault: SimpleVault::<P>::new(),
             root: None,
+            subaccounts: HashMap::new(),
         }
     }
 }
 
 // Represents the blockchain network in use by an account
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Network {
     // For substrate based blockchains commonly formatted as SS58
     // that are distinguished by their address prefix. 42 is the generic prefix.
@@ -236,4 +258,6 @@ pub enum Error {
     InvalidNetwork,
     #[cfg_attr(feature = "std", error("Wallet is locked"))]
     Locked,
+    #[cfg_attr(feature = "std", error("Cannot derive subaccount"))]
+    DeriveError,
 }

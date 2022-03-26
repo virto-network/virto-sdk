@@ -1,5 +1,8 @@
 use crate::{CryptoType, Network, Pair};
 use core::mem;
+use regex::Regex;
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+use sp_core::crypto::DeriveJunction;
 
 const ROOT_ACCOUNT: &str = "ROOT";
 
@@ -7,21 +10,22 @@ const ROOT_ACCOUNT: &str = "ROOT";
 /// can hold extra metadata. Accounts can only be constructed by the wallet and can be either a
 /// root account or a sub-account derived from a root account.
 #[derive(Debug)]
-pub enum Account<'a, P> {
+pub enum Account<P> {
     Root {
         pair: P,
         network: Network,
         pending_sign: Vec<Vec<u8>>,
     },
     Sub {
-        path: &'a str,
-        name: &'a str,
+        pair: P,
+        path: String,
+        name: String,
         network: Network,
         pending_sign: Vec<Vec<u8>>,
     },
 }
 
-impl<'a, P> Account<'a, P>
+impl<'a, P> Account<P>
 where
     P: Pair,
 {
@@ -67,8 +71,20 @@ where
 
     fn pair(&self) -> &P {
         match self {
-            Self::Root { pair, .. } => pair,
-            Self::Sub { .. } => todo!(),
+            Self::Root { pair, .. } | Self::Sub { pair, .. } => pair,
+        }
+    }
+
+    // derive a Sub from Root
+    pub fn derive_subaccount(&self, name: &str, path: &str) -> Result<Self, P::DeriveError> {
+        match self {
+            Self::Root { network, .. } | Self::Sub { network, .. } => Ok(Account::Sub {
+                pair: self.derive_pair(path)?,
+                path: path.to_string(),
+                name: name.to_string(),
+                network: network.clone(),
+                pending_sign: Default::default(),
+            }),
         }
     }
 
@@ -104,8 +120,50 @@ where
             Self::Root { pending_sign, .. } | Self::Sub { pending_sign, .. } => pending_sign,
         }
     }
+
+    fn derive_pair(&self, path: &str) -> Result<P, P::DeriveError> {
+        let junction_regex: Regex =
+            Regex::new(r"/(/?[^/]+)").expect("constructed from known-good static value; qed");
+        let fullpath = junction_regex
+            .captures_iter(path)
+            .map(|f| DeriveJunction::from(&f[1]));
+        match self {
+            Self::Root { pair, .. } | Self::Sub { pair, .. } => {
+                pair.derive(fullpath, None).map(|a| a.0)
+            }
+        }
+    }
 }
 
-impl<P: Pair> CryptoType for Account<'_, P> {
+impl<P: Pair> CryptoType for Account<P> {
     type Pair = P;
+}
+
+impl<P: Pair> Serialize for Account<P> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("Account", 1)?;
+        match self {
+            Self::Root { network, .. } => {
+                state.serialize_field("account_type", "root")?;
+                //state.serialize_field("seed", pair)?;
+                state.serialize_field("network", network)?;
+                state.end()
+            }
+            Self::Sub {
+                name,
+                path,
+                network,
+                ..
+            } => {
+                state.serialize_field("account_type", "sub")?;
+                state.serialize_field("name", name)?;
+                state.serialize_field("derivation_path", path)?;
+                state.serialize_field("network", network)?;
+                state.end()
+            }
+        }
+    }
 }

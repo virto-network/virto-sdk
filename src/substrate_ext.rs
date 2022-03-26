@@ -9,10 +9,10 @@ trait SubstrateExt {}
 
 impl<V: Vault> SubstrateExt for Wallet<V> {}
 
-impl<T> SubstrateExt for Account<'_, T> {}
+impl<T> SubstrateExt for Account<T> {}
 
 #[cfg(feature = "std")]
-impl<P> core::fmt::Display for Account<'_, P>
+impl<P> core::fmt::Display for Account<P>
 where
     P: Pair,
     P::Public: core::fmt::Display,
