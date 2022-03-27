@@ -1,57 +1,58 @@
+// #![feature(result_option_inspect)]
 #![cfg_attr(not(feature = "std"), no_std)]
 //! With `libwallet` you can build crypto currency wallets that
 //! manage private keys of different kinds saved in a secure storage.
-extern crate alloc;
-use alloc::boxed::Box;
+
 mod account;
+mod key_pair;
+#[cfg(feature = "osvault")]
+mod osvault;
 #[cfg(feature = "simple")]
 mod simple;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
-mod osvault;
 
 use serde::{Deserialize, Serialize};
 
-use core::convert::TryFrom;
+use core::future::Future;
+#[cfg(feature = "mnemonic")]
+use mnemonic;
 use std::collections::HashMap;
 
 pub use account::Account;
-pub use async_trait::async_trait;
+pub use key_pair::*;
+#[cfg(feature = "mnemonic")]
+pub use mnemonic::{Language, Mnemonic};
+#[cfg(feature = "osvault")]
+pub use osvault::OSVault;
 #[cfg(feature = "simple")]
 pub use simple::SimpleVault;
-pub use osvault::OSVault;
-pub use sp_core::{
-    crypto::{CryptoType, Pair},
-    ecdsa, ed25519,
-    hexdisplay::HexDisplay,
-    sr25519,
-};
 
 /// Abstration for storage of private keys that are protected by a password.
-#[async_trait(?Send)]
-pub trait Vault<C = ()> {
+pub trait Vault {
     type Pair: Pair;
+    type PairFut: Future<Output = Result<Self::Pair>>;
 
-    async fn unlock(&mut self, credentials: C) -> Result<Self::Pair>;
+    fn unlock<C>(&mut self, credentials: C) -> Self::PairFut;
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
-type SignatureOf<V, C> = <<V as Vault<C>>::Pair as Pair>::Signature;
+type SignatureOf<V> = <<V as Vault>::Pair as Pair>::Signature;
 
 /// Wallet is the main interface to manage and interact with accounts.  
 #[derive(Debug)]
-pub struct Wallet<V, C = ()>
+pub struct Wallet<V>
 where
-    V: Vault<C>,
+    V: Vault,
 {
     vault: V,
     root: Option<Account<V::Pair>>,
     subaccounts: HashMap<String, Account<V::Pair>>,
 }
 
-impl<V, C> From<V> for Wallet<V, C>
+impl<V> From<V> for Wallet<V>
 where
-    V: Vault<C>,
+    V: Vault,
 {
     fn from(vault: V) -> Self {
         Wallet {
@@ -62,9 +63,9 @@ where
     }
 }
 
-impl<V, C> Wallet<V, C>
+impl<V> Wallet<V>
 where
-    V: Vault<C>,
+    V: Vault,
 {
     pub fn new(vault: V) -> Self {
         vault.into()
@@ -84,7 +85,7 @@ where
         let root = self.root_account()?;
         let subaccount = root
             .derive_subaccount(name, derivation_path)
-            .map_err(|_| Error::DeriveError)?;
+            .ok_or(Error::DeriveError)?;
         self.subaccounts.insert(name.to_string(), subaccount);
         Ok(self.subaccounts.get(name).unwrap())
     }
@@ -103,7 +104,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(mut self, credentials: C) -> Result<Self> {
+    pub async fn unlock<C>(mut self, credentials: C) -> Result<Self> {
         if !self.is_locked() {
             return Ok(self);
         }
@@ -126,7 +127,7 @@ where
     /// # assert!(signature.is_ok());
     /// # Ok(()) }
     /// ```
-    pub fn sign(&self, message: &[u8]) -> Result<SignatureOf<V, C>> {
+    pub fn sign(&self, message: &[u8]) -> Result<SignatureOf<V>> {
         Ok(self.root_account()?.sign(message))
     }
 
@@ -161,7 +162,7 @@ where
     /// assert!(res.is_empty());
     /// # Ok(()) }
     /// ```
-    pub fn sign_pending(&mut self, name: &str) -> Vec<(Vec<u8>, SignatureOf<V, C>)> {
+    pub fn sign_pending(&mut self, name: &str) -> Vec<(Vec<u8>, SignatureOf<V>)> {
         match name {
             "ROOT" => self
                 .root
@@ -197,17 +198,16 @@ where
     /// default when deriving new sub-accounts
     pub fn switch_default_network(&mut self, net: &str) -> Result<&Account<V::Pair>> {
         let root = self.root.take();
-        let network = net.parse().map_err(|_| Error::InvalidNetwork)?;
-        self.root = root.map(|a| a.switch_network(network));
+        self.root = root.map(|a| a.switch_network(net));
         self.root_account()
     }
 }
 
 #[cfg(all(feature = "simple", feature = "std"))]
-impl<P: Pair> Default for Wallet<SimpleVault<P>> {
+impl Default for Wallet<SimpleVault<sr25519::Pair>> {
     fn default() -> Self {
         Wallet {
-            vault: SimpleVault::<P>::new(),
+            vault: SimpleVault::new(),
             root: None,
             subaccounts: HashMap::new(),
         }
@@ -231,35 +231,40 @@ impl Default for Network {
     }
 }
 
-impl core::str::FromStr for Network {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self> {
-        #[cfg(feature = "substrate")]
-        substrate_ext::Ss58AddressFormat::try_from(s)
-            .map(|x| Network::Substrate(x.into()))
-            .map_err(|_| Error::InvalidNetwork)
-    }
-}
-
-#[cfg(feature = "std")]
 impl core::fmt::Display for Network {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
-        #[cfg(feature = "substrate")]
-        write!(f, "{}", substrate_ext::Ss58AddressFormat::from(self))
+        match self {
+            Self::Substrate(p) => write!(f, "{}", p),
+        }
     }
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum Error {
-    #[cfg_attr(feature = "std", error("Invalid mnemonic phrase"))]
-    InvalidPhrase,
-    #[cfg_attr(feature = "std", error("Invalid password"))]
-    InvalidPassword,
-    #[cfg_attr(feature = "std", error("Invalid network identifier"))]
-    InvalidNetwork,
-    #[cfg_attr(feature = "std", error("Wallet is locked"))]
     Locked,
-    #[cfg_attr(feature = "std", error("Cannot derive subaccount"))]
+    InvalidCredentials,
     DeriveError,
+    #[cfg(feature = "mnemonic")]
+    InvalidPhrase,
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            Error::Locked => write!(f, "Locked"),
+            Error::InvalidCredentials => write!(f, "Invalid credentials"),
+            Error::DeriveError => write!(f, "Cannot derive"),
+            Error::InvalidPhrase => write!(f, "Invalid phrase"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
+
+#[cfg(feature = "mnemonic")]
+impl From<mnemonic::Error> for Error {
+    fn from(_: mnemonic::Error) -> Self {
+        Error::InvalidPhrase
+    }
 }

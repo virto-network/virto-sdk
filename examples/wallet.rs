@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use libwallet::{self, sr25519::Pair, Pair as _, Result, SimpleVault};
+use libwallet::{self, sr25519::Pair, Mnemonic, Result, SimpleVault};
 
 type Wallet = libwallet::Wallet<SimpleVault<Pair>>;
 
@@ -26,16 +26,19 @@ async fn main() -> Result<()> {
         .get_matches();
     let network: &str = matches.value_of("network").unwrap_or("substrate");
 
-    let mnemonic = match matches.value_of("seed") {
-        Some(mnemonic) => mnemonic.into(),
-        None => Pair::generate_with_phrase(None).1,
+    let phrase = match matches.value_of("seed") {
+        Some(mnemonic) => mnemonic.parse()?,
+        None => {
+            let entropy = [0; 32];
+            Mnemonic::from_entropy(entropy)?
+        }
     };
-    println!("Secret Key: \"{}\"", &mnemonic);
+    println!("Secret Key: \"{}\"", &phrase);
 
-    let vault = SimpleVault::<Pair>::from(mnemonic.as_str());
-    let mut wallet = Wallet::new(vault).unlock(()).await?;
+    let vault = SimpleVault::<Pair>::from_phrase(phrase);
+    let mut wallet = Wallet::new(vault).unlock("").await?;
     let account = wallet.switch_default_network(network)?;
 
-    println!("Public key ({}): {}", account.network(), account);
+    println!("Public key ({}): {:?}", account.network(), account.public());
     Ok(())
 }

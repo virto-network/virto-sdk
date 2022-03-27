@@ -5,25 +5,26 @@ authors = ["Daniel Olano <me@olanod.com>"]
 edition = "2018"
 
 [dependencies]
-async-trait = "0.1.51"
-sp-core = { version = "3.0.0", default-features = false, features = ["full_crypto"] }
-thiserror = { version = "1.0.30", optional = true }
+mnemonic = { package = "bip0039", version = "0.10.1", default-features = false, optional = true }
 serde = { version = "1.0", features = ["derive", "rc"], optional = true}
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
-regex = { version = "1.5.4", optional = true}
-keyring = "1.1.2"
+schnorrkel = { version = "0.10.2", default-features = false, optional = true }
+rand_core = { version = "0.6.3", optional = true }
+keyring = { version = "1.1.2", optional = true }
 
 [dev-dependencies]
 clap = "2.33.3"
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 async-std = { version = "1.10.0", features = ["attributes"] }
 
 [features]
-default = ["std", "simple", "substrate"]
-substrate = []
-simple = []
+default = ["std", "substrate", "simple", "mnemonic", "rand", "osvault"]
 std = [
-	"thiserror",
-	"sp-core/std",
 	"serde",
-	"regex",
+	"rand_core/getrandom"
 ]
+rand = ["rand_core"]
+substrate = ["sr25519"]
+sr25519 = ["schnorrkel/u64_backend"]
+simple = []
+osvault = ["keyring"]

@@ -4,29 +4,19 @@ use std::error::Error;
 
 type Wallet = libwallet::Wallet<OSVault<Pair>>;
 
-const MNEMONIC: &str = "caution juice atom organ advance problem want pledge someone senior holiday very";
-// key example taken from https://docs.substrate.io/v3/tools/subkey/#hd-key-derivation
-// 5Gv8YYFu8H1btvmrJy9FjjAWfb99wrhV3uhPFoNEr918utyR
+const TEST_USER: &str = "test_user";
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let account_name = "main";
+    let user = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| TEST_USER.to_string());
 
-    let network: &str = "substrate";
-
-    let vault = libwallet::OSVault::<Pair>::create_with_seed(account_name, MNEMONIC).unwrap();
-    let mut wallet = Wallet::new(vault).unlock(()).await?;
-    let account = wallet.switch_default_network(network)?;
-
-    println!("Public key ({}): {}", account.network(), account);
-
-    let copy_vault = libwallet::OSVault::<Pair>::new(account_name);
-    let mut wallet = Wallet::new(copy_vault).unlock(()).await?;
-    let account = wallet.switch_default_network(network)?;
-
+    let (vault, phrase) = OSVault::<Pair>::new(&user).generate()?;
+    let wallet = Wallet::new(vault).unlock(()).await?;
+    let account = wallet.root_account()?;
 
     println!("Public key ({}): {}", account.network(), account);
-
+    println!("Phrase: {phrase}");
     Ok(())
 }
-

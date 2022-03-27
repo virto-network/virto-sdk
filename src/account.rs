@@ -1,8 +1,8 @@
-use crate::{CryptoType, Network, Pair};
+use crate::{Network, Pair};
 use core::mem;
-use regex::Regex;
+// use regex::Regex;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use sp_core::crypto::DeriveJunction;
+// use sp_core::crypto::DeriveJunction;
 
 const ROOT_ACCOUNT: &str = "ROOT";
 
@@ -58,8 +58,8 @@ where
         }
     }
 
-    pub fn switch_network(mut self, network: Network) -> Self {
-        *self.network_mut() = network;
+    pub fn switch_network(mut self, network: impl Into<Network>) -> Self {
+        *self.network_mut() = network.into();
         self
     }
 
@@ -75,10 +75,10 @@ where
         }
     }
 
-    // derive a Sub from Root
-    pub fn derive_subaccount(&self, name: &str, path: &str) -> Result<Self, P::DeriveError> {
+    // // derive a Sub from Root
+    pub fn derive_subaccount(&self, name: &str, path: &str) -> Option<Self> {
         match self {
-            Self::Root { network, .. } | Self::Sub { network, .. } => Ok(Account::Sub {
+            Self::Root { network, .. } | Self::Sub { network, .. } => Some(Account::Sub {
                 pair: self.derive_pair(path)?,
                 path: path.to_string(),
                 name: name.to_string(),
@@ -121,22 +121,11 @@ where
         }
     }
 
-    fn derive_pair(&self, path: &str) -> Result<P, P::DeriveError> {
-        let junction_regex: Regex =
-            Regex::new(r"/(/?[^/]+)").expect("constructed from known-good static value; qed");
-        let fullpath = junction_regex
-            .captures_iter(path)
-            .map(|f| DeriveJunction::from(&f[1]));
+    fn derive_pair(&self, path: &str) -> Option<P> {
         match self {
-            Self::Root { pair, .. } | Self::Sub { pair, .. } => {
-                pair.derive(fullpath, None).map(|a| a.0)
-            }
+            Self::Root { pair, .. } | Self::Sub { pair, .. } => pair.derive(path),
         }
     }
-}
-
-impl<P: Pair> CryptoType for Account<P> {
-    type Pair = P;
 }
 
 impl<P: Pair> Serialize for Account<P> {
@@ -165,5 +154,14 @@ impl<P: Pair> Serialize for Account<P> {
                 state.end()
             }
         }
+    }
+}
+
+impl<P: Pair> core::fmt::Display for Account<P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> std::fmt::Result {
+        for byte in self.public().as_ref() {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
     }
 }

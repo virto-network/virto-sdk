@@ -1,7 +1,13 @@
-use crate::{async_trait, Box, Pair, Result, Vault, Error};
+use core::future::Ready;
+
+use crate::{
+    mnemonic::{Language, Mnemonic},
+    Error, Pair, Result, Vault,
+};
 
 use keyring;
 
+const SERVICE: &str = "libwallet_account";
 
 pub struct OSVault<P: Pair> {
     entry: keyring::Entry,
@@ -9,55 +15,64 @@ pub struct OSVault<P: Pair> {
 }
 
 impl<P: Pair> OSVault<P> {
-    /// Create new entry with a random seed and save it in the OS.
-    pub fn create(name: &str) -> Result<(Self, String)> {
-        let entry = keyring::Entry::new("wallet", &name);
-        let (_, phrase, seed) = P::generate_with_phrase(None);
-        entry.set_password(&phrase).map_err(|_| Error::InvalidPhrase)?;
-        Ok((OSVault { 
-            entry, 
-            seed: Some(seed) 
-        }, phrase))
-    }
-    
-    // Create new password saved in OS with given name.
-    // Save seed as password in the OS.
-    pub fn create_with_seed(name: &str, seed: &str) -> Result<Self> {
-        let entry = keyring::Entry::new("wallet", &name);
-        entry.set_password(seed).map_err(|_| Error::InvalidPhrase)?;
-        Ok(OSVault {
-            entry,
-            seed: None,
-        })
-    }
-
-    // Make new OSVault from entry with name. 
+    // Make new OSVault from entry with name.
     // Doesn't save any password.
     // If password doesn't exist in the system, it will fail later.
-    pub fn new(name: &str) -> Self {
-        OSVault { 
-            entry: keyring::Entry::new("wallet", &name), 
-            seed: None 
+    pub fn new(uname: &str) -> Self {
+        OSVault {
+            entry: keyring::Entry::new(SERVICE, &uname),
+            seed: None,
         }
-    }  
-}
+    }
 
-#[async_trait(?Send)]
-impl<P: Pair> Vault for OSVault<P> {
-    type Pair = P;
+    /// Create new random seed and save it in the OS keyring.
+    pub fn generate(self) -> Result<(Self, Mnemonic)> {
+        let (_, phrase) = P::generate_with_phrase(Language::default());
+        self.entry
+            .set_password(phrase.phrase())
+            // .inspect_err(|e| {
+            //     dbg!(e);
+            // })
+            .map_err(|_| Error::InvalidPhrase)?;
+        Ok((self, phrase))
+    }
 
-    async fn unlock(&mut self, _: ()) -> Result<P> {
-        // get seed from entry
-        match self.entry.get_password() {
-            Ok(s) => match P::from_phrase(&s, None) {
-                Ok((pair, seed)) => {
-                    self.seed = Some(seed);
-                    Ok(pair)
-                },
-                Err(_) => Err(Error::InvalidPhrase),
-            },
-            Err(_) => Err(Error::InvalidPhrase),
-        }
+    // pub async fn get_or_generate(&self) -> Result<Self> {}
+
+    // Create new password saved in OS with given name.
+    // Save seed as password in the OS.
+    pub fn update(&self, phrase: &str) -> Result<()> {
+        self.entry
+            .set_password(phrase)
+            .map_err(|_| Error::InvalidPhrase)
+    }
+
+    fn get_key_pair(&self) -> Option<(P, P::Seed)> {
+        let phrase = self
+            .entry
+            .get_password()
+            // .inspect_err(|e| {
+            //     dbg!(e);
+            // })
+            .ok()?;
+        let phrase = phrase.parse::<Mnemonic>().ok()?;
+        Some(P::from_bytes(phrase.entropy()))
     }
 }
 
+impl<P: Pair> Vault for OSVault<P> {
+    type Pair = P;
+    type PairFut = Ready<Result<Self::Pair>>;
+
+    fn unlock<C>(&mut self, _c: C) -> Self::PairFut {
+        // TODO make truly async
+        let res = self
+            .get_key_pair()
+            .and_then(|(p, s)| {
+                self.seed = Some(s);
+                Some(p)
+            })
+            .ok_or_else(|| Error::InvalidPhrase);
+        core::future::ready(res)
+    }
+}
