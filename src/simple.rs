@@ -10,7 +10,7 @@ impl<P: Pair> SimpleVault<P> {
     /// ```
     /// # use libwallet::{SimpleVault, Vault, Result, sr25519};
     /// # #[async_std::main] async fn main() -> Result<()> {
-    /// let vault = SimpleVault::<sr25519::Pair>::new();
+    /// let mut vault = SimpleVault::<sr25519::Pair>::new();
     /// assert!(vault.unlock(()).await.is_ok());
     /// # Ok(()) }
     /// ```
@@ -58,7 +58,7 @@ impl<P: Pair> core::str::FromStr for SimpleVault<P> {
 impl<P: Pair> Vault for SimpleVault<P> {
     type Pair = P;
 
-    async fn unlock(&self, _: ()) -> Result<P> {
+    async fn unlock(&mut self, _: ()) -> Result<P> {
         let foo = Self::Pair::from_seed(&self.seed);
         Ok(foo)
     }

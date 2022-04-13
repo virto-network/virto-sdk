@@ -8,6 +8,7 @@ mod account;
 mod simple;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
+mod osvault;
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,7 @@ pub use account::Account;
 pub use async_trait::async_trait;
 #[cfg(feature = "simple")]
 pub use simple::SimpleVault;
+pub use osvault::OSVault;
 pub use sp_core::{
     crypto::{CryptoType, Pair},
     ecdsa, ed25519,
@@ -30,7 +32,7 @@ pub use sp_core::{
 pub trait Vault<C = ()> {
     type Pair: Pair;
 
-    async fn unlock(&self, credentials: C) -> Result<Self::Pair>;
+    async fn unlock(&mut self, credentials: C) -> Result<Self::Pair>;
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
