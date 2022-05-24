@@ -182,24 +182,14 @@ impl<B: Backend> Sube<B> {
     }
 
     #[cfg(feature = "encode")]
-    pub async fn encode_iter<I, V>(&self, value: I, ty: u32) -> Result<Vec<u8>>
-    where
-        I: IntoIterator<Item = V>,
-        V: Into<JsonValue>,
-    {
-        let val: JsonValue = value.into_iter().collect();
-        self.encode(val, ty).await
-    }
-
-    #[cfg(feature = "encode")]
-    pub async fn encode_iter2<I, K, V>(&self, value: I, ty: u32) -> Result<Vec<u8>>
+    pub async fn encode_iter<I, K, V>(&self, value: I, ty: u32) -> Result<Vec<u8>>
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
         V: Into<JsonValue>,
     {
-        let val: JsonValue = value.into_iter().collect();
-        self.encode(val, ty).await
+        let reg = self.registry().await?;
+        scales::to_vec_from_iter(value, (reg, ty)).map_err(|e| Error::Encode(e.to_string()))
     }
 }
 
