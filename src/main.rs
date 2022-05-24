@@ -279,23 +279,18 @@ async fn run() -> Result<()> {
                     .ok_or_else(|| anyhow!("'{}' is not in the registry", ty))?
             };
 
-            let maybe_pairs = values.iter().map(|it| {
-                it.split_once("=")
-                    .map(|(k, v)| v.parse::<JsonValue>().map(|v| (k, v)).ok())
-                    .flatten()
-                    .ok_or_else(|| it.as_str())
-            });
+            let pairs = values
+                .iter()
+                .map(|it| {
+                    it.split_once("=")
+                        .map(|(k, v)| v.parse::<JsonValue>().map(|v| (k, v)))
+                        .transpose()
+                })
+                .collect::<core::result::Result<Vec<_>, _>>()?;
+            println!("{:?}", pairs);
 
             // Check that every input value is a key-value pair
-            if let Ok(pairs) = maybe_pairs
-                .clone()
-                .collect::<core::result::Result<Vec<_>, _>>()
-            {
-                client.encode_iter2(pairs, ty).await?
-            } else {
-                let values = maybe_pairs.filter_map(|it| it.err());
-                client.encode_iter(values, ty).await?
-            }
+            client.encode_iter(pairs, ty).await?
         }
         Cmd::Decode { ty } => {
             let ty = parse_ty(&ty, &meta.types)

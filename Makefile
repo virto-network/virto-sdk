@@ -1,7 +1,7 @@
 .PHONY: test test-internal
 
 DOCKER=podman
-CONTAINER_IMAGE=parity/polkadot:v0.9.11
+CONTAINER_IMAGE=parity/polkadot:v0.9.19
 CONTAINER_NAME=test-blockchain-node
 TEST_REQUEST='{"method": "system_version"}'
 
