@@ -4,7 +4,7 @@ trait SubstrateExt {}
 
 impl<V: Vault> SubstrateExt for Wallet<V> {}
 
-impl<T> SubstrateExt for Account<T> {}
+impl<'a> SubstrateExt for Account<'a> {}
 
 impl From<&str> for Network {
     fn from(s: &str) -> Self {

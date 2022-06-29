@@ -12,12 +12,12 @@ mod simple;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
 
-use serde::{Deserialize, Serialize};
+use arrayvec::ArrayVec;
+use core::{convert::TryInto, future::Future};
+use key_pair::any::AnySignature;
 
-use core::future::Future;
 #[cfg(feature = "mnemonic")]
 use mnemonic;
-use std::collections::HashMap;
 
 pub use account::Account;
 pub use key_pair::*;
@@ -28,66 +28,67 @@ pub use osvault::OSVault;
 #[cfg(feature = "simple")]
 pub use simple::SimpleVault;
 
-/// Abstration for storage of private keys that are protected by a password.
-pub trait Vault {
-    type Pair: Pair;
-    type PairFut: Future<Output = Result<Self::Pair>>;
+pub type Result<T> = core::result::Result<T, Error>;
+
+type Message = ArrayVec<u8, { u8::MAX as usize }>;
+
+/// Abstration for storage of private keys that are protected by a set of credentials.
+pub trait Vault<'a> {
+    type PairFut: Future<Output = Result<&'a RootAccount>>;
 
     fn unlock<C>(&mut self, credentials: C) -> Self::PairFut;
 }
 
-pub type Result<T> = core::result::Result<T, Error>;
-type SignatureOf<V> = <<V as Vault>::Pair as Pair>::Signature;
-
-/// Wallet is the main interface to manage and interact with accounts.  
+/// The root account references the key pairs stored in the vault and cannot be used directly,
+/// we always derive new key pairs from it to create and use accounts with the wallet.
 #[derive(Debug)]
-pub struct Wallet<V>
-where
-    V: Vault,
-{
-    vault: V,
-    root: Option<Account<V::Pair>>,
-    subaccounts: HashMap<String, Account<V::Pair>>,
+pub struct RootAccount {
+    #[cfg(feature = "substrate")]
+    sub: key_pair::sr25519::Pair,
 }
 
-impl<V> From<V> for Wallet<V>
+impl<'a> Derive for &'a RootAccount {
+    type Pair = any::Pair;
+
+    fn derive(&self, path: &str) -> Option<Self::Pair>
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
+}
+
+/// Wallet is the main interface to interact with blockchain accounts. Before being able
+/// to use the accounts for signing for example the wallet needs to be unlocked with the
+/// set of credentials supported by the underlying vault.  
+///
+/// Wallets have the concept of a `default account` that is used to sign messages
+/// when no account is specified. Messages can be queued to be signed later in bulk.
+#[derive(Debug)]
+pub struct Wallet<'a, V, const A: usize = 5, const M: usize = A> {
+    vault: V,
+    root: Option<&'a RootAccount>,
+    default_account: Option<Account<'a>>,
+    accounts: ArrayVec<Account<'a>, A>,
+    pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
+}
+
+impl<'a, V, const A: usize, const M: usize> Wallet<'a, V, A, M>
 where
-    V: Vault,
+    V: Vault<'a>,
 {
-    fn from(vault: V) -> Self {
+    pub fn new(vault: V) -> Self {
         Wallet {
             vault,
             root: None,
-            subaccounts: HashMap::new(),
+            default_account: None,
+            accounts: ArrayVec::new_const(),
+            pending_sign: ArrayVec::new(),
         }
     }
-}
 
-impl<V> Wallet<V>
-where
-    V: Vault,
-{
-    pub fn new(vault: V) -> Self {
-        vault.into()
-    }
-
-    /// The root account represents the public/private key as it's returned by the vault.
-    /// It's recommended to create sub-accoutns and used those instead.
-    pub fn root_account(&self) -> Result<&Account<V::Pair>> {
-        self.root.as_ref().ok_or(Error::Locked)
-    }
-
-    pub fn create_sub_account(
-        &mut self,
-        name: &str,
-        derivation_path: &str,
-    ) -> Result<&Account<V::Pair>> {
-        let root = self.root_account()?;
-        let subaccount = root
-            .derive_subaccount(name, derivation_path)
-            .ok_or(Error::DeriveError)?;
-        self.subaccounts.insert(name.to_string(), subaccount);
-        Ok(self.subaccounts.get(name).unwrap())
+    pub fn default_account(&self) -> &Account {
+        self.default_account.as_ref().expect("unlocked")
     }
 
     /// A locked wallet uses its vault to retrive the key pair used to sign transactions.
@@ -104,13 +105,12 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock<C>(mut self, credentials: C) -> Result<Self> {
-        if !self.is_locked() {
-            return Ok(self);
+    pub async fn unlock<C>(&mut self, credentials: C) -> Result<()> {
+        if self.is_locked() {
+            self.root = self.vault.unlock(credentials).await?.into();
+            self.default_account = self.root.map(|r| Account::new(&r, None));
         }
-        let pair = self.vault.unlock(credentials).await?;
-        self.root = Some(Account::from_pair(pair));
-        Ok(self)
+        Ok(())
     }
 
     pub fn is_locked(&self) -> bool {
@@ -127,8 +127,8 @@ where
     /// # assert!(signature.is_ok());
     /// # Ok(()) }
     /// ```
-    pub fn sign(&self, message: &[u8]) -> Result<SignatureOf<V>> {
-        Ok(self.root_account()?.sign(message))
+    pub fn sign(&self, message: &[u8]) -> Result<impl Signature> {
+        Ok(self.default_account().sign(message))
     }
 
     /// Save data to be signed later by root account
@@ -141,11 +141,14 @@ where
     /// assert!(res.is_ok());
     /// # Ok(()) }
     /// ```
-    pub fn sign_later(&mut self, message: &[u8]) -> Result<()> {
-        self.root
-            .as_mut()
-            .map(|a| a.add_to_pending(message))
-            .ok_or(Error::Locked)
+    pub fn sign_later<'b: 'a, T>(&'b mut self, message: T)
+    where
+        T: AsRef<[u8]>,
+    {
+        let msg = message.as_ref()[..self.pending_sign.capacity()]
+            .try_into()
+            .unwrap();
+        self.pending_sign.push((msg, None));
     }
 
     /// Try to sign all messages in the queue of an account
@@ -162,18 +165,18 @@ where
     /// assert!(res.is_empty());
     /// # Ok(()) }
     /// ```
-    pub fn sign_pending(&mut self, name: &str) -> Vec<(Vec<u8>, SignatureOf<V>)> {
-        match name {
-            "ROOT" => self
-                .root
-                .as_mut()
-                .map(|a| a.sign_pending())
-                .unwrap_or_default(),
-            _ => todo!(), //search sub-accounts
+    pub fn sign_pending(&mut self) -> [AnySignature; M] {
+        let mut signatures = ArrayVec::new();
+        for (msg, a) in self.pending_sign.take() {
+            let account = a
+                .map(|idx| &self.accounts[idx as usize])
+                .unwrap_or_else(|| self.default_account());
+            signatures.push(account.sign(&msg));
         }
+        signatures.into_inner().expect("signatures")
     }
 
-    /// Iteratate over the messages with pending signature of the named account.
+    /// Iteratate over the messages with pending signature of all the accounts.
     /// It panics if the wallet is locked.
     ///
     /// ```
@@ -187,54 +190,53 @@ where
     /// assert_eq!(vec![vec![0x01, 0x02, 0x03], vec![0x01, 0x02]], res);
     /// # Ok(()) }
     /// ```
-    pub fn get_pending(&self, name: &str) -> impl Iterator<Item = &[u8]> {
-        match name {
-            "ROOT" => self.root_account().unwrap().get_pending(),
-            _ => todo!(), //get sub-accounts
-        }
+    pub fn get_pending(&self) -> impl Iterator<Item = &[u8]> {
+        self.pending_sign.iter().map(|(msg, _)| msg.as_ref())
     }
 
-    /// Switch the network used by the root account which is used by
-    /// default when deriving new sub-accounts
-    pub fn switch_default_network(&mut self, net: &str) -> Result<&Account<V::Pair>> {
-        let root = self.root.take();
-        self.root = root.map(|a| a.switch_network(net));
-        self.root_account()
+    #[cfg(feature = "subaccounts")]
+    pub fn new_account(&mut self, name: &str, derivation_path: &str) -> Result<&Account<V::Pair>> {
+        let root = self.root_account()?;
+        let subaccount = root
+            .derive_subaccount(name, derivation_path)
+            .ok_or(Error::DeriveError)?;
+        self.subaccounts.insert(name.to_string(), subaccount);
+        Ok(self.subaccounts.get(name).unwrap())
     }
-}
 
-#[cfg(all(feature = "simple", feature = "std"))]
-impl Default for Wallet<SimpleVault<sr25519::Pair>> {
-    fn default() -> Self {
-        Wallet {
-            vault: SimpleVault::new(),
-            root: None,
-            subaccounts: HashMap::new(),
-        }
+    fn account(&self, idx: u8) -> &Account {
+        &self.accounts[idx as usize]
     }
 }
 
 // Represents the blockchain network in use by an account
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Network {
     // For substrate based blockchains commonly formatted as SS58
     // that are distinguished by their address prefix. 42 is the generic prefix.
     #[cfg(feature = "substrate")]
     Substrate(u16),
     // Space for future supported networks(e.g. ethereum, bitcoin)
+    _Missing,
 }
 
 impl Default for Network {
     fn default() -> Self {
         #[cfg(feature = "substrate")]
-        Network::Substrate(42)
+        let net = Network::Substrate(42);
+        #[cfg(not(feature = "substrate"))]
+        let net = Network::_Missing;
+        net
     }
 }
 
 impl core::fmt::Display for Network {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            Self::Substrate(p) => write!(f, "{}", p),
+            #[cfg(feature = "substrate")]
+            Self::Substrate(_) => write!(f, "substrate"),
+            _ => write!(f, ""),
         }
     }
 }
@@ -254,6 +256,7 @@ impl core::fmt::Display for Error {
             Error::Locked => write!(f, "Locked"),
             Error::InvalidCredentials => write!(f, "Invalid credentials"),
             Error::DeriveError => write!(f, "Cannot derive"),
+            #[cfg(feature = "mnemonic")]
             Error::InvalidPhrase => write!(f, "Invalid phrase"),
         }
     }

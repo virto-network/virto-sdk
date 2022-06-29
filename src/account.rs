@@ -1,138 +1,75 @@
-use crate::{Network, Pair};
-use core::mem;
+use crate::{
+    any::{self, AnySignature},
+    Derive, Error, Network, Pair, Public, RootAccount,
+};
+use arrayvec::ArrayString;
 // use regex::Regex;
-use serde::ser::{Serialize, SerializeStruct, Serializer};
 // use sp_core::crypto::DeriveJunction;
 
-const ROOT_ACCOUNT: &str = "ROOT";
+const NAME_MAX_LEN: usize = 16;
 
 /// Account is an abstration around public/private key pairs that are more convenient to use and
 /// can hold extra metadata. Accounts can only be constructed by the wallet and can be either a
 /// root account or a sub-account derived from a root account.
 #[derive(Debug)]
-pub enum Account<P> {
-    Root {
-        pair: P,
-        network: Network,
-        pending_sign: Vec<Vec<u8>>,
-    },
-    Sub {
-        pair: P,
-        path: String,
-        name: String,
-        network: Network,
-        pending_sign: Vec<Vec<u8>>,
-    },
+pub struct Account<'a> {
+    root: &'a RootAccount,
+    network: Network,
+    name: ArrayString<NAME_MAX_LEN>,
 }
 
-impl<'a, P> Account<P>
-where
-    P: Pair,
-{
-    pub(crate) fn from_pair(pair: P) -> Self {
-        Account::Root {
-            pair,
+impl<'a> Account<'a> {
+    pub(crate) fn new(root: &'a RootAccount, name: impl Into<Option<&'a str>>) -> Self {
+        Account {
+            root,
             network: Network::default(),
-            pending_sign: Vec::new(),
+            //pending_sign: Vec::new(),
+            name: ArrayString::from(name.into().unwrap_or_else(|| "default")).expect("short name"),
+        }
+    }
+
+    pub(crate) fn with_network(self, net: impl Into<Network>) -> Self {
+        Account {
+            network: net.into(),
+            ..self
         }
     }
 
     pub fn name(&self) -> &str {
-        match self {
-            Self::Root { .. } => ROOT_ACCOUNT,
-            Self::Sub { name, .. } => name,
-        }
+        &self.name
     }
 
-    pub fn public(&self) -> P::Public {
-        self.pair().public()
-    }
-
-    pub fn sign(&self, message: &[u8]) -> P::Signature {
-        self.pair().sign(message)
+    pub fn public(&self) -> impl Public {
+        self.account().expect("derive account").public()
     }
 
     pub fn network(&self) -> &Network {
-        match self {
-            Self::Root { network, .. } | Self::Sub { network, .. } => network,
-        }
+        &self.network
     }
 
-    pub fn switch_network(mut self, network: impl Into<Network>) -> Self {
-        *self.network_mut() = network.into();
-        self
-    }
-
-    fn network_mut(&mut self) -> &mut Network {
-        match self {
-            Self::Root { network, .. } | Self::Sub { network, .. } => network,
-        }
-    }
-
-    fn pair(&self) -> &P {
-        match self {
-            Self::Root { pair, .. } | Self::Sub { pair, .. } => pair,
-        }
-    }
-
-    // // derive a Sub from Root
-    pub fn derive_subaccount(&self, name: &str, path: &str) -> Option<Self> {
-        match self {
-            Self::Root { network, .. } | Self::Sub { network, .. } => Some(Account::Sub {
-                pair: self.derive_pair(path)?,
-                path: path.to_string(),
-                name: name.to_string(),
-                network: network.clone(),
-                pending_sign: Default::default(),
-            }),
-        }
-    }
-
-    /// Save data to be signed later
-    pub fn add_to_pending(&mut self, message: &[u8]) {
-        self.pending_sign_mut().push(message.into());
-    }
-
-    /// Sign messages from the queue returning them and their signatures
-    pub fn sign_pending(&mut self) -> Vec<(Vec<u8>, P::Signature)> {
-        let v = mem::take(self.pending_sign_mut());
-        v.into_iter()
-            .map(|msg| {
-                let s = self.sign(&msg);
-                (msg, s)
-            })
-            .collect()
-    }
-
-    // Return an iterator over the messages pending for signature in this account
-    pub fn get_pending(&self) -> impl Iterator<Item = &[u8]> {
-        self.pending_sign().iter().map(|i| i.as_ref())
-    }
-
-    fn pending_sign_mut(&mut self) -> &mut Vec<Vec<u8>> {
-        match self {
-            Self::Root { pending_sign, .. } | Self::Sub { pending_sign, .. } => pending_sign,
-        }
-    }
-
-    fn pending_sign(&self) -> &Vec<Vec<u8>> {
-        match self {
-            Self::Root { pending_sign, .. } | Self::Sub { pending_sign, .. } => pending_sign,
-        }
-    }
-
-    fn derive_pair(&self, path: &str) -> Option<P> {
-        match self {
-            Self::Root { pair, .. } | Self::Sub { pair, .. } => pair.derive(path),
-        }
+    fn account(&self) -> crate::Result<any::Pair> {
+        self.root
+            .derive(&self.name)
+            .ok_or_else(|| Error::DeriveError)
     }
 }
 
-impl<P: Pair> Serialize for Account<P> {
+impl<'a> crate::Signer for Account<'a> {
+    type Signature = AnySignature;
+
+    fn sign<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
+        self.account().expect("derive").sign(msg)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'a> serde::Serialize for Account<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: Serializer,
+        S: serde::Serializer,
     {
+        use serde::ser::SerializeStruct;
+
         let mut state = serializer.serialize_struct("Account", 1)?;
         match self {
             Self::Root { network, .. } => {
@@ -157,8 +94,8 @@ impl<P: Pair> Serialize for Account<P> {
     }
 }
 
-impl<P: Pair> core::fmt::Display for Account<P> {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> std::fmt::Result {
+impl<'a> core::fmt::Display for Account<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         for byte in self.public().as_ref() {
             write!(f, "{:02x}", byte)?;
         }
