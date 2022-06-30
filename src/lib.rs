@@ -2,6 +2,8 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 //! With `libwallet` you can build crypto currency wallets that
 //! manage private keys of different kinds saved in a secure storage.
+#[cfg(not(any(feature = "sr25519")))]
+compile_error!("Enable at least one type of signature algorithm");
 
 mod account;
 mod key_pair;
@@ -128,7 +130,7 @@ where
     /// # Ok(()) }
     /// ```
     pub fn sign(&self, message: &[u8]) -> Result<impl Signature> {
-        Ok(self.default_account().sign(message))
+        Ok(self.default_account().sign_msg(message))
     }
 
     /// Save data to be signed later by root account
@@ -169,9 +171,9 @@ where
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
             let account = a
-                .map(|idx| &self.accounts[idx as usize])
+                .map(|idx| self.account(idx))
                 .unwrap_or_else(|| self.default_account());
-            signatures.push(account.sign(&msg));
+            signatures.push(account.sign_msg(&msg));
         }
         signatures.into_inner().expect("signatures")
     }

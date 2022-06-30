@@ -57,8 +57,8 @@ impl<'a> Account<'a> {
 impl<'a> crate::Signer for Account<'a> {
     type Signature = AnySignature;
 
-    fn sign<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
-        self.account().expect("derive").sign(msg)
+    fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
+        self.account().expect("derive").sign_msg(msg)
     }
 }
 

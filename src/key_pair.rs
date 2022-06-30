@@ -1,7 +1,4 @@
-use core::{
-    convert::{TryFrom, TryInto},
-    fmt::Debug,
-};
+use core::fmt::Debug;
 
 type Bytes<const N: usize> = [u8; N];
 
@@ -9,7 +6,7 @@ pub trait Pair: Signer + Derive {
     type Seed: Seed;
     type Public: Public;
 
-    fn from_bytes(seed: &[u8]) -> (Self, Self::Seed)
+    fn from_bytes(seed: &[u8]) -> Self
     where
         Self: Sized;
 
@@ -29,15 +26,11 @@ pub trait Pair: Signer + Derive {
         let phrase = mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid");
         (pair, phrase)
     }
-
-    fn seed_from_bytes(bytes: &[u8]) -> Self::Seed {
-        bytes.try_into().map_err(|_| ()).expect("Seed size")
-    }
 }
 
-// seed could be just a type alias for an array with generic length
+// NOTE: seed could be just a type alias for an array with generic length
 // https://github.com/rust-lang/rust/issues/60551
-pub trait Seed: AsRef<[u8]> + for<'a> TryFrom<&'a [u8]> {}
+pub trait Seed: AsRef<[u8]> {}
 impl<const N: usize> Seed for Bytes<N> {}
 
 pub trait Public: AsRef<[u8]> + Debug {}
@@ -48,7 +41,7 @@ impl<const N: usize> Signature for Bytes<N> {}
 
 pub trait Signer {
     type Signature: Signature;
-    fn sign<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature;
+    fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature;
 }
 
 pub trait Derive {
@@ -77,24 +70,29 @@ pub mod util {
 }
 
 pub mod any {
-    use core::{convert::TryFrom, fmt};
-
-    use crate::{Public, Seed, Signature};
+    use super::{Bytes, Public, Seed, Signature};
+    use core::fmt;
 
     pub enum Pair {
         #[cfg(feature = "sr25519")]
         Sr25519(super::sr25519::Pair),
+        #[cfg(not(feature = "sr25519"))]
+        _None,
     }
 
     impl super::Pair for Pair {
         type Seed = AnySeed;
         type Public = AnyPublic;
 
-        fn from_bytes(seed: &[u8]) -> (Self, Self::Seed)
+        fn from_bytes(seed: &[u8]) -> Self
         where
             Self: Sized,
         {
-            todo!()
+            #[cfg(feature = "sr25519")]
+            let p = Self::Sr25519(<super::sr25519::Pair as super::Pair>::from_bytes(seed));
+            #[cfg(not(feature = "sr25519"))]
+            let p = Self::_None;
+            p
         }
 
         fn public(&self) -> Self::Public {
@@ -124,8 +122,12 @@ pub mod any {
     impl super::Signer for Pair {
         type Signature = AnySignature;
 
-        fn sign<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
-            todo!()
+        fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
+            match self {
+                #[cfg(feature = "sr25519")]
+                Pair::Sr25519(p) => p.sign_msg(msg).into(),
+                _ => unreachable!(),
+            }
         }
     }
 
@@ -137,31 +139,29 @@ pub mod any {
             todo!()
         }
     }
-    impl TryFrom<&[u8]> for AnySeed {
-        type Error = ();
-        fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-            todo!()
-        }
-    }
+
     impl Seed for AnySeed {}
 
     #[derive(Debug)]
-    pub enum AnyPublic {}
+    pub enum AnyPublic {
+        #[cfg(feature = "sr25519")]
+        Sr25519(Bytes<{ super::sr25519::SEED_LEN }>),
+        #[cfg(not(feature = "sr25519"))]
+        _None,
+    }
 
     impl AsRef<[u8]> for AnyPublic {
         fn as_ref(&self) -> &[u8] {
             todo!()
         }
     }
-    impl TryFrom<&[u8]> for AnyPublic {
-        type Error = ();
-        fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-            todo!()
-        }
-    }
+
     impl fmt::Display for AnyPublic {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            todo!()
+            for b in self.as_ref() {
+                write!(f, "{:02X}", b)?;
+            }
+            Ok(())
         }
     }
     impl Public for AnyPublic {}
@@ -169,25 +169,26 @@ pub mod any {
     #[derive(Debug)]
     pub enum AnySignature {
         #[cfg(feature = "sr25519")]
-        Sr25519,
-    }
-    impl Default for AnySignature {
-        fn default() -> Self {
-            #[cfg(feature = "sr25519")]
-            Self::Sr25519
-        }
+        Sr25519(Bytes<{ super::sr25519::SIG_LEN }>),
+
+        #[cfg(not(feature = "sr25519"))]
+        _None,
     }
     impl AsRef<[u8]> for AnySignature {
         fn as_ref(&self) -> &[u8] {
-            todo!()
+            match self {
+                #[cfg(feature = "sr25519")]
+                AnySignature::Sr25519(s) => s.as_ref(),
+            }
         }
     }
-    impl TryFrom<&[u8]> for AnySignature {
-        type Error = ();
-        fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-            todo!()
+    #[cfg(feature = "sr25519")]
+    impl From<super::sr25519::Signature> for AnySignature {
+        fn from(s: super::sr25519::Signature) -> Self {
+            Self::AnySignature::Sr25519(s)
         }
     }
+
     impl Signature for AnySignature {}
 }
 
@@ -197,18 +198,20 @@ pub mod sr25519 {
     use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, MINI_SECRET_KEY_LENGTH};
 
     pub use schnorrkel::Keypair as Pair;
-    pub const SEED_LEN: usize = MINI_SECRET_KEY_LENGTH;
-
+    pub(super) const SEED_LEN: usize = MINI_SECRET_KEY_LENGTH;
+    pub(super) const SIG_LEN: usize = 64;
+    pub type Seed = Bytes<SEED_LEN>;
+    pub type Public = Bytes<32>;
+    pub type Signature = Bytes<64>;
     const SIGNING_CTX: &[u8] = b"substrate";
 
     impl super::Pair for Pair {
-        type Seed = Bytes<SEED_LEN>;
-        type Public = Bytes<32>;
+        type Seed = Seed;
+        type Public = Public;
 
-        fn from_bytes(bytes: &[u8]) -> (Self, Self::Seed) {
-            let seed = Self::seed_from_bytes(bytes);
-            let minikey = MiniSecretKey::from_bytes(&seed).expect("Seed size");
-            (minikey.expand_to_keypair(ExpansionMode::Ed25519), seed)
+        fn from_bytes(bytes: &[u8]) -> Self {
+            let minikey = MiniSecretKey::from_bytes(&bytes).expect("Seed size");
+            minikey.expand_to_keypair(ExpansionMode::Ed25519)
         }
 
         fn public(&self) -> Self::Public {
@@ -228,9 +231,9 @@ pub mod sr25519 {
     }
 
     impl Signer for Pair {
-        type Signature = Bytes<64>;
+        type Signature = Signature;
 
-        fn sign<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
+        fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
             let context = signing_context(SIGNING_CTX);
             self.sign(context.bytes(msg.as_ref())).to_bytes()
         }
