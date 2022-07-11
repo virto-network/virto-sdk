@@ -11,21 +11,6 @@ pub trait Pair: Signer + Derive {
         Self: Sized;
 
     fn public(&self) -> Self::Public;
-
-    #[cfg(feature = "std")]
-    fn generate() -> (Self, Self::Seed)
-    where
-        Self: Sized;
-
-    #[cfg(feature = "mnemonic")]
-    fn generate_with_phrase(lang: mnemonic::Language) -> (Self, crate::Mnemonic)
-    where
-        Self: Sized,
-    {
-        let (pair, seed) = Self::generate();
-        let phrase = mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid");
-        (pair, phrase)
-    }
 }
 
 // NOTE: seed could be just a type alias for an array with generic length
@@ -47,32 +32,16 @@ pub trait Signer {
 pub trait Derive {
     type Pair: Signer;
 
-    fn derive(&self, path: &str) -> Option<Self::Pair>
+    fn derive(&self, path: &str) -> Self::Pair
     where
         Self: Sized;
 }
 
-pub mod util {
-    #[cfg(feature = "std")]
-    pub fn generate<const S: usize>() -> [u8; S] {
-        generate_with::<_, S>(&mut rand_core::OsRng)
-    }
-
-    #[cfg(feature = "rand")]
-    pub fn generate_with<R, const S: usize>(rng: &mut R) -> [u8; S]
-    where
-        R: rand_core::CryptoRng + rand_core::RngCore,
-    {
-        let mut bytes = [0u8; S];
-        rng.fill_bytes(&mut bytes);
-        bytes
-    }
-}
-
 pub mod any {
-    use super::{Bytes, Public, Seed, Signature};
+    use super::{Public, Seed, Signature};
     use core::fmt;
 
+    #[derive(Debug)]
     pub enum Pair {
         #[cfg(feature = "sr25519")]
         Sr25519(super::sr25519::Pair),
@@ -98,20 +67,12 @@ pub mod any {
         fn public(&self) -> Self::Public {
             todo!()
         }
-
-        #[cfg(feature = "std")]
-        fn generate() -> (Self, Self::Seed)
-        where
-            Self: Sized,
-        {
-            todo!()
-        }
     }
 
     impl super::Derive for Pair {
         type Pair = Pair;
 
-        fn derive(&self, path: &str) -> Option<Self::Pair>
+        fn derive(&self, _path: &str) -> Self::Pair
         where
             Self: Sized,
         {
@@ -126,6 +87,7 @@ pub mod any {
             match self {
                 #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => p.sign_msg(msg).into(),
+                #[cfg(not(feature = "sr25519"))]
                 _ => unreachable!(),
             }
         }
@@ -145,7 +107,7 @@ pub mod any {
     #[derive(Debug)]
     pub enum AnyPublic {
         #[cfg(feature = "sr25519")]
-        Sr25519(Bytes<{ super::sr25519::SEED_LEN }>),
+        Sr25519(super::Bytes<{ super::sr25519::SEED_LEN }>),
         #[cfg(not(feature = "sr25519"))]
         _None,
     }
@@ -169,7 +131,7 @@ pub mod any {
     #[derive(Debug)]
     pub enum AnySignature {
         #[cfg(feature = "sr25519")]
-        Sr25519(Bytes<{ super::sr25519::SIG_LEN }>),
+        Sr25519(super::Bytes<{ super::sr25519::SIG_LEN }>),
 
         #[cfg(not(feature = "sr25519"))]
         _None,
@@ -185,7 +147,7 @@ pub mod any {
     #[cfg(feature = "sr25519")]
     impl From<super::sr25519::Signature> for AnySignature {
         fn from(s: super::sr25519::Signature) -> Self {
-            Self::AnySignature::Sr25519(s)
+            AnySignature::Sr25519(s)
         }
     }
 
@@ -219,15 +181,6 @@ pub mod sr25519 {
             key.copy_from_slice(self.public.as_ref());
             key
         }
-
-        #[cfg(feature = "std")]
-        fn generate() -> (Self, Self::Seed)
-        where
-            Self: Sized,
-        {
-            let seed = super::util::generate::<{ SEED_LEN }>();
-            <Self as super::Pair>::from_bytes(&seed)
-        }
     }
 
     impl Signer for Pair {
@@ -242,7 +195,7 @@ pub mod sr25519 {
     impl Derive for Pair {
         type Pair = Self;
 
-        fn derive(&self, _path: &str) -> Option<Self>
+        fn derive(&self, _path: &str) -> Self
         where
             Self: Sized,
         {

@@ -1,6 +1,6 @@
 use crate::{
     any::{self, AnySignature},
-    Derive, Error, Network, Pair, Public, RootAccount,
+    Derive, Network, Pair, Public, RootAccount,
 };
 use arrayvec::ArrayString;
 // use regex::Regex;
@@ -12,23 +12,23 @@ const NAME_MAX_LEN: usize = 16;
 /// can hold extra metadata. Accounts can only be constructed by the wallet and can be either a
 /// root account or a sub-account derived from a root account.
 #[derive(Debug)]
-pub struct Account<'a> {
-    root: &'a RootAccount,
+pub struct Account {
+    pair: Option<any::Pair>,
     network: Network,
     name: ArrayString<NAME_MAX_LEN>,
 }
 
-impl<'a> Account<'a> {
-    pub(crate) fn new(root: &'a RootAccount, name: impl Into<Option<&'a str>>) -> Self {
+impl Account {
+    pub(crate) fn new<'a>(name: impl Into<Option<&'a str>>) -> Self {
         Account {
-            root,
+            pair: None,
             network: Network::default(),
             //pending_sign: Vec::new(),
             name: ArrayString::from(name.into().unwrap_or_else(|| "default")).expect("short name"),
         }
     }
 
-    pub(crate) fn with_network(self, net: impl Into<Network>) -> Self {
+    pub fn switch_network(self, net: impl Into<Network>) -> Self {
         Account {
             network: net.into(),
             ..self
@@ -40,30 +40,35 @@ impl<'a> Account<'a> {
     }
 
     pub fn public(&self) -> impl Public {
-        self.account().expect("derive account").public()
+        self.pair.as_ref().expect("account unlocked").public()
     }
 
     pub fn network(&self) -> &Network {
         &self.network
     }
 
-    fn account(&self) -> crate::Result<any::Pair> {
-        self.root
-            .derive(&self.name)
-            .ok_or_else(|| Error::DeriveError)
+    pub fn is_locked(&self) -> bool {
+        self.pair.is_none()
+    }
+
+    pub(crate) fn unlock(&mut self, root: &RootAccount) -> &Self {
+        if self.is_locked() {
+            self.pair = Some(root.derive(&self.name));
+        }
+        self
     }
 }
 
-impl<'a> crate::Signer for Account<'a> {
+impl crate::Signer for Account {
     type Signature = AnySignature;
 
     fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
-        self.account().expect("derive").sign_msg(msg)
+        self.pair.as_ref().expect("unlocked").sign_msg(msg)
     }
 }
 
 #[cfg(feature = "serde")]
-impl<'a> serde::Serialize for Account<'a> {
+impl serde::Serialize for Account {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -71,30 +76,13 @@ impl<'a> serde::Serialize for Account<'a> {
         use serde::ser::SerializeStruct;
 
         let mut state = serializer.serialize_struct("Account", 1)?;
-        match self {
-            Self::Root { network, .. } => {
-                state.serialize_field("account_type", "root")?;
-                //state.serialize_field("seed", pair)?;
-                state.serialize_field("network", network)?;
-                state.end()
-            }
-            Self::Sub {
-                name,
-                path,
-                network,
-                ..
-            } => {
-                state.serialize_field("account_type", "sub")?;
-                state.serialize_field("name", name)?;
-                state.serialize_field("derivation_path", path)?;
-                state.serialize_field("network", network)?;
-                state.end()
-            }
-        }
+        state.serialize_field("network", &self.network)?;
+        state.serialize_field("name", self.name.as_str())?;
+        state.end()
     }
 }
 
-impl<'a> core::fmt::Display for Account<'a> {
+impl core::fmt::Display for Account {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         for byte in self.public().as_ref() {
             write!(f, "{:02x}", byte)?;

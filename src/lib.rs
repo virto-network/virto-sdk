@@ -30,18 +30,22 @@ pub use osvault::OSVault;
 #[cfg(feature = "simple")]
 pub use simple::SimpleVault;
 
-pub type Result<T> = core::result::Result<T, Error>;
+// pub type Result<T> = core::result::Result<T, Error>;
 
 type Message = ArrayVec<u8, { u8::MAX as usize }>;
 
-/// Abstration for storage of private keys that are protected by a set of credentials.
-pub trait Vault<'a> {
-    type PairFut: Future<Output = Result<&'a RootAccount>>;
+/// Abstration for storage of private keys that are protected behind some credentials.
+pub trait Vault {
+    type Credentials;
+    type AuthDone: Future<Output = core::result::Result<(), Self::Error>>;
+    type Error;
 
-    fn unlock<C>(&mut self, credentials: C) -> Self::PairFut;
+    fn unlock(&mut self, cred: Self::Credentials) -> Self::AuthDone;
+
+    fn get_root(&self) -> Option<&RootAccount>;
 }
 
-/// The root account references the key pairs stored in the vault and cannot be used directly,
+/// The root account is a container of the key pairs stored in the vault and cannot be used directly,
 /// we always derive new key pairs from it to create and use accounts with the wallet.
 #[derive(Debug)]
 pub struct RootAccount {
@@ -49,10 +53,38 @@ pub struct RootAccount {
     sub: key_pair::sr25519::Pair,
 }
 
+impl RootAccount {
+    fn from_bytes(seed: &[u8]) -> Self {
+        RootAccount {
+            #[cfg(feature = "substrate")]
+            sub: <key_pair::sr25519::Pair as crate::Pair>::from_bytes(seed),
+        }
+    }
+
+    #[cfg(feature = "rand")]
+    fn generate<R>(rng: &mut R) -> Self
+    where
+        R: rand_core::CryptoRng + rand_core::RngCore,
+    {
+        let seed = util::random_bytes::<_, 32>(rng);
+        Self::from_bytes(&seed)
+    }
+
+    #[cfg(feature = "rand")]
+    fn generate_with_phrase<R>(rng: &mut R, lang: Language) -> (Self, Mnemonic)
+    where
+        R: rand_core::CryptoRng + rand_core::RngCore,
+    {
+        let seed = util::random_bytes::<_, 32>(rng);
+        let phrase = mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid");
+        (Self::from_bytes(&seed), phrase)
+    }
+}
+
 impl<'a> Derive for &'a RootAccount {
     type Pair = any::Pair;
 
-    fn derive(&self, path: &str) -> Option<Self::Pair>
+    fn derive(&self, _path: &str) -> Self::Pair
     where
         Self: Sized,
     {
@@ -67,30 +99,28 @@ impl<'a> Derive for &'a RootAccount {
 /// Wallets have the concept of a `default account` that is used to sign messages
 /// when no account is specified. Messages can be queued to be signed later in bulk.
 #[derive(Debug)]
-pub struct Wallet<'a, V, const A: usize = 5, const M: usize = A> {
+pub struct Wallet<V, const A: usize = 5, const M: usize = A> {
     vault: V,
-    root: Option<&'a RootAccount>,
-    default_account: Option<Account<'a>>,
-    accounts: ArrayVec<Account<'a>, A>,
+    default_account: Account,
+    accounts: ArrayVec<Account, A>,
     pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
 }
 
-impl<'a, V, const A: usize, const M: usize> Wallet<'a, V, A, M>
+impl<'a, V, const A: usize, const M: usize> Wallet<V, A, M>
 where
-    V: Vault<'a>,
+    V: Vault,
 {
     pub fn new(vault: V) -> Self {
         Wallet {
             vault,
-            root: None,
-            default_account: None,
+            default_account: Account::new(None),
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
         }
     }
 
     pub fn default_account(&self) -> &Account {
-        self.default_account.as_ref().expect("unlocked")
+        &self.default_account
     }
 
     /// A locked wallet uses its vault to retrive the key pair used to sign transactions.
@@ -107,16 +137,19 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock<C>(&mut self, credentials: C) -> Result<()> {
+    pub async fn unlock(&mut self, credentials: V::Credentials) -> Result<(), Error> {
         if self.is_locked() {
-            self.root = self.vault.unlock(credentials).await?.into();
-            self.default_account = self.root.map(|r| Account::new(&r, None));
+            self.vault
+                .unlock(credentials)
+                .await
+                .map_err(|_| Error::InvalidCredentials)?;
+            self.default_account.unlock(self.vault.get_root().unwrap());
         }
         Ok(())
     }
 
     pub fn is_locked(&self) -> bool {
-        self.root.is_none()
+        self.vault.get_root().is_none()
     }
 
     /// Sign a message with the default account and return the 512bit signature.
@@ -129,7 +162,7 @@ where
     /// # assert!(signature.is_ok());
     /// # Ok(()) }
     /// ```
-    pub fn sign(&self, message: &[u8]) -> Result<impl Signature> {
+    pub fn sign(&self, message: &[u8]) -> Result<impl Signature, Error> {
         Ok(self.default_account().sign_msg(message))
     }
 
@@ -271,5 +304,17 @@ impl std::error::Error for Error {}
 impl From<mnemonic::Error> for Error {
     fn from(_: mnemonic::Error) -> Self {
         Error::InvalidPhrase
+    }
+}
+
+mod util {
+    #[cfg(feature = "rand")]
+    pub fn random_bytes<R, const S: usize>(rng: &mut R) -> [u8; S]
+    where
+        R: rand_core::CryptoRng + rand_core::RngCore,
+    {
+        let mut bytes = [0u8; S];
+        rng.fill_bytes(&mut bytes);
+        bytes
     }
 }

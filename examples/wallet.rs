@@ -1,10 +1,10 @@
 use clap::{App, Arg};
-use libwallet::{self, sr25519::Pair, Mnemonic, Result, SimpleVault};
+use libwallet::{self, Mnemonic, SimpleVault};
 
-type Wallet = libwallet::Wallet<SimpleVault<Pair>>;
+type Wallet = libwallet::Wallet<SimpleVault>;
 
 #[async_std::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = App::new("Wallet Generator")
         .version("0.1.0")
         .author("Virto Team <we@virto.team>")
@@ -24,21 +24,21 @@ async fn main() -> Result<()> {
                 .help("Formats the address to specified network."),
         )
         .get_matches();
-    let network: &str = matches.value_of("network").unwrap_or("substrate");
+    let _network: &str = matches.value_of("network").unwrap_or("substrate");
 
     let phrase = match matches.value_of("seed") {
-        Some(mnemonic) => mnemonic.parse()?,
+        Some(mnemonic) => mnemonic.parse().unwrap(),
         None => {
             let entropy = [0; 32];
-            Mnemonic::from_entropy(entropy)?
+            Mnemonic::from_entropy(entropy).unwrap()
         }
     };
     println!("Secret Key: \"{}\"", &phrase);
 
-    let vault = SimpleVault::<Pair>::from_phrase(phrase);
-    let mut wallet = Wallet::new(vault).unlock("").await?;
-    let account = wallet.switch_default_network(network)?;
+    let mut wallet = Wallet::new(SimpleVault::from_phrase(phrase));
+    wallet.unlock(()).await?;
+    let account = wallet.default_account();
 
-    println!("Public key ({}): {:?}", account.network(), account.public());
+    println!("Public key: {}", account);
     Ok(())
 }

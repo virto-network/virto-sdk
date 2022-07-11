@@ -1,8 +1,8 @@
-use libwallet::{self, sr25519::Pair, OSVault};
+use libwallet::{self, Language, OSVault};
 
 use std::error::Error;
 
-type Wallet = libwallet::Wallet<OSVault<Pair>>;
+type Wallet = libwallet::Wallet<OSVault>;
 
 const TEST_USER: &str = "test_user";
 
@@ -12,11 +12,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .unwrap_or_else(|| TEST_USER.to_string());
 
-    let (vault, phrase) = OSVault::<Pair>::new(&user).generate()?;
-    let wallet = Wallet::new(vault).unlock(()).await?;
-    let account = wallet.root_account()?;
+    let vault = OSVault::new(&user, Language::default());
+    let mut wallet = Wallet::new(vault);
+    wallet.unlock(()).await?;
 
-    println!("Public key ({}): {}", account.network(), account);
-    println!("Phrase: {phrase}");
+    let account = wallet.default_account();
+    println!("Default account: {}", account);
+
     Ok(())
 }
