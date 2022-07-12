@@ -4,18 +4,18 @@ use crate::{RootAccount, Vault};
 use mnemonic::Mnemonic;
 
 /// A vault that holds secrets in memory
-pub struct SimpleVault {
+pub struct Simple {
     locked: Option<RootAccount>,
     unlocked: Option<RootAccount>,
 }
 
-impl SimpleVault {
+impl Simple {
     /// A vault with a random seed, once dropped the the vault can't be restored
     ///
     /// ```
-    /// # use libwallet::{SimpleVault, Vault};
+    /// # use libwallet::{vault, Vault};
     /// # #[async_std::main] async fn main() -> Result<(), ()> {
-    /// let (mut vault, _) = SimpleVault::new();
+    /// let (mut vault, _) = vault::Simple::new();
     /// vault.unlock(()).await?;
     /// assert!(vault.get_root().is_some());
     /// # Ok(()) }
@@ -25,7 +25,7 @@ impl SimpleVault {
         let (root, phrase) =
             RootAccount::generate_with_phrase(&mut rand_core::OsRng, Default::default());
         (
-            SimpleVault {
+            Simple {
                 locked: Some(root),
                 unlocked: None,
             },
@@ -40,14 +40,14 @@ impl SimpleVault {
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
         let root = RootAccount::from_bytes(phrase.entropy());
-        SimpleVault {
+        Simple {
             locked: Some(root),
             unlocked: None,
         }
     }
 }
 
-impl Vault for SimpleVault {
+impl Vault for Simple {
     type Credentials = ();
     type Error = ();
     type AuthDone = Ready<Result<(), Self::Error>>;

@@ -20,7 +20,7 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 async-std = { version = "1.10.0", features = ["attributes"] }
 
 [features]
-default = ["std", "substrate", "simple", "mnemonic", "rand", "osvault"]
+default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_os"]
 std = [
 	"serde",
 	"rand_core/getrandom"
@@ -28,5 +28,5 @@ std = [
 rand = ["rand_core"]
 substrate = ["sr25519"]
 sr25519 = ["schnorrkel/u64_backend"]
-simple = []
-osvault = ["keyring"]
+vault_simple = []
+vault_os = ["keyring"]

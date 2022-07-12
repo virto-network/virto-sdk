@@ -1,7 +1,7 @@
 use clap::{App, Arg};
-use libwallet::{self, Mnemonic, SimpleVault};
+use libwallet::{self, vault, Mnemonic};
 
-type Wallet = libwallet::Wallet<SimpleVault>;
+type Wallet = libwallet::Wallet<vault::Simple>;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("Secret Key: \"{}\"", &phrase);
 
-    let mut wallet = Wallet::new(SimpleVault::from_phrase(phrase));
+    let mut wallet = Wallet::new(vault::Simple::from_phrase(phrase));
     wallet.unlock(()).await?;
     let account = wallet.default_account();
 

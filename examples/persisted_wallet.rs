@@ -1,8 +1,8 @@
-use libwallet::{self, Language, OSKeyring};
+use libwallet::{self, vault, Language};
 
 use std::error::Error;
 
-type Wallet = libwallet::Wallet<OSKeyring>;
+type Wallet = libwallet::Wallet<vault::OSKeyring>;
 
 const TEST_USER: &str = "test_user";
 
@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .nth(1)
         .unwrap_or_else(|| TEST_USER.to_string());
 
-    let vault = OSKeyring::new(&user, Language::default());
+    let vault = vault::OSKeyring::new(&user, Language::default());
     let mut wallet = Wallet::new(vault);
     wallet.unlock(()).await?;
 

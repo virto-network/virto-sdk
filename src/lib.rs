@@ -10,10 +10,6 @@ compile_error!("Enable at least one type of signature algorithm");
 
 mod account;
 mod key_pair;
-#[cfg(feature = "osvault")]
-mod osvault;
-#[cfg(feature = "simple")]
-mod simple;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
 
@@ -28,10 +24,7 @@ pub use account::Account;
 pub use key_pair::*;
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{Language, Mnemonic};
-#[cfg(feature = "osvault")]
-pub use osvault::OSKeyring;
-#[cfg(feature = "simple")]
-pub use simple::SimpleVault;
+pub mod vault;
 
 const MSG_MAX_SIZE: usize = u8::MAX as usize;
 type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
@@ -139,10 +132,10 @@ where
     /// Use credentials to unlock the vault.
     ///
     /// ```
-    /// # use libwallet::{Wallet, Error, SimpleVault};
+    /// # use libwallet::{Wallet, Error, vault};
     /// # use std::convert::TryInto;
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = SimpleVault::new();
+    /// # let (vault, _) = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
     ///     wallet.unlock(()).await?;
@@ -171,9 +164,9 @@ where
     /// Sign a message with the default account and return the signature.
     ///
     /// ```
-    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # use libwallet::{Wallet, vault, Error};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = SimpleVault::new();
+    /// # let (vault, _) = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// let signature = wallet.sign(&[0x01, 0x02, 0x03]);
     ///
@@ -187,9 +180,9 @@ where
     /// Save data to be signed some time later.
     ///
     /// ```
-    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # use libwallet::{Wallet, vault, Error};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = SimpleVault::new();
+    /// # let (vault, _) = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     ///
@@ -210,9 +203,9 @@ where
     /// Try to sign all messages in the queue returning the list of signatures
     ///
     /// ```
-    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # use libwallet::{Wallet, vault, Error};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = SimpleVault::new();
+    /// # let (vault, _) = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(()).await?;
     ///
@@ -238,9 +231,9 @@ where
     /// Iteratate over the messages pending for signature for all the accounts.
     ///
     /// ```
-    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # use libwallet::{Wallet, vault, Error};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = SimpleVault::new();
+    /// # let (vault, _) = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01]);
     /// wallet.sign_later(&[0x02]);
