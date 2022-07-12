@@ -2,6 +2,7 @@ use core::fmt::Debug;
 
 type Bytes<const N: usize> = [u8; N];
 
+/// A key pair with a public key
 pub trait Pair: Signer + Derive {
     type Seed: Seed;
     type Public: Public;
@@ -24,11 +25,13 @@ impl<const N: usize> Public for Bytes<N> {}
 pub trait Signature: AsRef<[u8]> {}
 impl<const N: usize> Signature for Bytes<N> {}
 
+/// Something that can sign messages
 pub trait Signer {
     type Signature: Signature;
     fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature;
 }
 
+/// Something to derive key pairs form
 pub trait Derive {
     type Pair: Signer;
 
@@ -37,6 +40,7 @@ pub trait Derive {
         Self: Sized;
 }
 
+/// Wrappers to represent any supported key pair.
 pub mod any {
     use super::{Public, Seed, Signature};
     use core::fmt;

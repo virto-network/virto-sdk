@@ -5,23 +5,32 @@ use mnemonic::Mnemonic;
 
 /// A vault that holds secrets in memory
 pub struct SimpleVault {
-    root: RootAccount,
+    locked: Option<RootAccount>,
+    unlocked: Option<RootAccount>,
 }
 
 impl SimpleVault {
     /// A vault with a random seed, once dropped the the vault can't be restored
+    ///
     /// ```
-    /// # use libwallet::{SimpleVault, Vault, Result, sr25519};
-    /// # #[async_std::main] async fn main() -> Result<()> {
-    /// let mut vault = SimpleVault::<sr25519::Pair>::new();
-    /// assert!(vault.unlock(()).await.is_ok());
+    /// # use libwallet::{SimpleVault, Vault};
+    /// # #[async_std::main] async fn main() -> Result<(), ()> {
+    /// let (mut vault, _) = SimpleVault::new();
+    /// vault.unlock(()).await?;
+    /// assert!(vault.get_root().is_some());
     /// # Ok(()) }
     /// ```
     #[cfg(feature = "std")]
     pub fn new() -> (Self, Mnemonic) {
         let (root, phrase) =
             RootAccount::generate_with_phrase(&mut rand_core::OsRng, Default::default());
-        (SimpleVault { root }, phrase)
+        (
+            SimpleVault {
+                locked: Some(root),
+                unlocked: None,
+            },
+            phrase,
+        )
     }
 
     // Provide your own seed
@@ -30,8 +39,10 @@ impl SimpleVault {
             .as_ref()
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
+        let root = RootAccount::from_bytes(phrase.entropy());
         SimpleVault {
-            root: RootAccount::from_bytes(phrase.entropy()),
+            locked: Some(root),
+            unlocked: None,
         }
     }
 }
@@ -42,10 +53,11 @@ impl Vault for SimpleVault {
     type AuthDone = Ready<Result<(), Self::Error>>;
 
     fn unlock(&mut self, _cred: ()) -> Self::AuthDone {
+        self.unlocked = self.locked.take();
         ready(Ok(()))
     }
 
     fn get_root(&self) -> Option<&RootAccount> {
-        Some(&self.root)
+        self.unlocked.as_ref()
     }
 }

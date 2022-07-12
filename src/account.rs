@@ -9,8 +9,7 @@ use arrayvec::ArrayString;
 const NAME_MAX_LEN: usize = 16;
 
 /// Account is an abstration around public/private key pairs that are more convenient to use and
-/// can hold extra metadata. Accounts can only be constructed by the wallet and can be either a
-/// root account or a sub-account derived from a root account.
+/// can hold extra metadata. Accounts are constructed by the wallet and are used to sign messages.
 #[derive(Debug)]
 pub struct Account {
     pair: Option<any::Pair>,
@@ -63,7 +62,7 @@ impl crate::Signer for Account {
     type Signature = AnySignature;
 
     fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
-        self.pair.as_ref().expect("unlocked").sign_msg(msg)
+        self.pair.as_ref().expect("account unlocked").sign_msg(msg)
     }
 }
 

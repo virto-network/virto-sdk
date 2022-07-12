@@ -9,30 +9,31 @@ use keyring;
 
 const SERVICE: &str = "libwallet_account";
 
-pub struct OSVault {
+/// A vault that stores keys in the default OS secure store
+pub struct OSKeyring {
     entry: keyring::Entry,
     root: Option<RootAccount>,
     auto_generate: Option<Language>,
 }
 
-impl OSVault {
-    // Make new OSVault from entry with name.
-    // Doesn't save any password.
-    // If password doesn't exist in the system, it will fail later.
+impl OSKeyring {
+    /// Create a new OSKeyring vault for the given user.
+    /// The optional `lang` instructs the vault to generarte a backup phrase
+    /// in the given language in case one does not exist.
     pub fn new(uname: &str, lang: impl Into<Option<Language>>) -> Self {
-        OSVault {
+        OSKeyring {
             entry: keyring::Entry::new(SERVICE, &uname),
             root: None,
             auto_generate: lang.into(),
         }
     }
 
-    // Create new password saved in OS with given name.
-    // Save seed as password in the OS.
+    /// Relace the stored backap phrase with a new one.
     pub fn update(&self, phrase: &str) -> Result<(), ()> {
         self.entry.set_password(phrase).map_err(|_| ())
     }
 
+    /// Returned the stored phrase from the OS secure storage
     pub fn get(&self) -> Result<String, Error> {
         self.entry
             .get_password()
@@ -50,7 +51,7 @@ impl OSVault {
         Ok(RootAccount::from_bytes(phrase.entropy()))
     }
 
-    /// Create new random seed and save it in the OS keyring.
+    // Create new random seed and save it in the OS keyring.
     fn generate(&self, lang: Language) -> Result<RootAccount, Error> {
         let (root, phrase) = RootAccount::generate_with_phrase(&mut rand_core::OsRng, lang);
         self.entry
@@ -81,7 +82,7 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-impl Vault for OSVault {
+impl Vault for OSKeyring {
     type Credentials = ();
     type AuthDone = Ready<Result<(), Self::Error>>;
     type Error = Error;

@@ -1,7 +1,10 @@
 // #![feature(result_option_inspect)]
 #![cfg_attr(not(feature = "std"), no_std)]
-//! With `libwallet` you can build crypto currency wallets that
-//! manage private keys of different kinds saved in a secure storage.
+//! `libwallet` is the one-stop tool to build easy, slightly opinionated crypto wallets
+//! that run in all kinds of environments and plattforms including embedded hardware,
+//! mobile apps or the Web.
+//! It's easy to extend implementing different vault backends and it's designed to
+//! be compatible with all kinds of key formats found in many different blockchains.
 #[cfg(not(any(feature = "sr25519")))]
 compile_error!("Enable at least one type of signature algorithm");
 
@@ -26,27 +29,32 @@ pub use key_pair::*;
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{Language, Mnemonic};
 #[cfg(feature = "osvault")]
-pub use osvault::OSVault;
+pub use osvault::OSKeyring;
 #[cfg(feature = "simple")]
 pub use simple::SimpleVault;
 
-// pub type Result<T> = core::result::Result<T, Error>;
+const MSG_MAX_SIZE: usize = u8::MAX as usize;
+type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
 
-type Message = ArrayVec<u8, { u8::MAX as usize }>;
-
-/// Abstration for storage of private keys that are protected behind some credentials.
+/// Abstration for storage of private keys that are protected by some credentials.
 pub trait Vault {
     type Credentials;
     type AuthDone: Future<Output = core::result::Result<(), Self::Error>>;
     type Error;
 
+    /// Use a set of credentials to make the guarded keys available to the user.
+    /// It returns a `Future` to allow for vaults that might take an arbitrary amount
+    /// of time getting the secret ready like waiting for some user phisical interaction.
     fn unlock(&mut self, cred: Self::Credentials) -> Self::AuthDone;
 
+    /// Get the root account container of the supported private key pairs
+    /// if the vault hasn't been unlocked it should return `None`
     fn get_root(&self) -> Option<&RootAccount>;
 }
 
-/// The root account is a container of the key pairs stored in the vault and cannot be used directly,
-/// we always derive new key pairs from it to create and use accounts with the wallet.
+/// The root account is a container of the key pairs stored in the vault and cannot be
+/// used to sign messages directly, we always derive new key pairs from it to create
+/// and use accounts with the wallet.
 #[derive(Debug)]
 pub struct RootAccount {
     #[cfg(feature = "substrate")]
@@ -92,12 +100,15 @@ impl<'a> Derive for &'a RootAccount {
     }
 }
 
-/// Wallet is the main interface to interact with blockchain accounts. Before being able
-/// to use the accounts for signing for example the wallet needs to be unlocked with the
-/// set of credentials supported by the underlying vault.  
+/// Wallet is the main interface to interact with the accounts of a user.
 ///
-/// Wallets have the concept of a `default account` that is used to sign messages
-/// when no account is specified. Messages can be queued to be signed later in bulk.
+/// Before being able to sign messages a wallet must be unlocked using valid credentials
+/// supported by the underlying vault.
+///
+/// Wallets can hold many user defined accounts and always have one account set as "default",
+/// if no account is set as default one is generated and will be used to sign messages when no account is specified.
+///
+/// Wallets also support queuing and bulk signing of messages in case transactions need to be reviewed before signing.
 #[derive(Debug)]
 pub struct Wallet<V, const A: usize = 5, const M: usize = A> {
     vault: V,
@@ -106,10 +117,11 @@ pub struct Wallet<V, const A: usize = 5, const M: usize = A> {
     pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
 }
 
-impl<'a, V, const A: usize, const M: usize> Wallet<V, A, M>
+impl<V, const A: usize, const M: usize> Wallet<V, A, M>
 where
     V: Vault,
 {
+    /// Create a new Wallet with a default account
     pub fn new(vault: V) -> Self {
         Wallet {
             vault,
@@ -119,21 +131,24 @@ where
         }
     }
 
+    /// Get the account currently set as default
     pub fn default_account(&self) -> &Account {
         &self.default_account
     }
 
-    /// A locked wallet uses its vault to retrive the key pair used to sign transactions.
+    /// Use credentials to unlock the vault.
+    ///
     /// ```
-    /// # use libwallet::{Wallet, Error, SimpleVault, sr25519};
+    /// # use libwallet::{Wallet, Error, SimpleVault};
     /// # use std::convert::TryInto;
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// let vault: SimpleVault<sr25519::Pair> = "//Alice".into();
-    /// let mut wallet = Wallet::from(vault);
+    /// # let (vault, _) = SimpleVault::new();
+    /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
-    ///     wallet = wallet.unlock(()).await?;
+    ///     wallet.unlock(()).await?;
     /// }
-    /// # assert_eq!(wallet.is_locked(), false);
+    ///
+    /// assert!(!wallet.is_locked());
     /// # Ok(())
     /// # }
     /// ```
@@ -148,59 +163,68 @@ where
         Ok(())
     }
 
+    /// Check if the vault has been unlocked.
     pub fn is_locked(&self) -> bool {
         self.vault.get_root().is_none()
     }
 
-    /// Sign a message with the default account and return the 512bit signature.
-    /// ```
-    /// # use libwallet::{Wallet, SimpleVault, sr25519, Result};
-    /// # #[async_std::main] async fn main() -> Result<()> {
+    /// Sign a message with the default account and return the signature.
     ///
-    /// let wallet = Wallet::new(SimpleVault::<sr25519::Pair>::new()).unlock(()).await?;
+    /// ```
+    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # let (vault, _) = SimpleVault::new();
+    /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// let signature = wallet.sign(&[0x01, 0x02, 0x03]);
-    /// # assert!(signature.is_ok());
+    ///
+    /// assert!(signature.is_ok());
     /// # Ok(()) }
     /// ```
     pub fn sign(&self, message: &[u8]) -> Result<impl Signature, Error> {
         Ok(self.default_account().sign_msg(message))
     }
 
-    /// Save data to be signed later by root account
-    /// ```
-    /// # use libwallet::{Wallet, SimpleVault, sr25519, Result};
-    /// # #[async_std::main] async fn main() -> Result<()> {
+    /// Save data to be signed some time later.
     ///
-    /// let mut wallet = Wallet::new(SimpleVault::<sr25519::Pair>::new()).unlock(()).await?;
-    /// let res = wallet.sign_later(&[0x01, 0x02, 0x03]);
-    /// assert!(res.is_ok());
+    /// ```
+    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # let (vault, _) = SimpleVault::new();
+    /// let mut wallet: Wallet<_> = Wallet::new(vault);
+    /// wallet.sign_later(&[0x01, 0x02, 0x03]);
+    ///
+    /// assert_eq!(wallet.pending().count(), 1);
     /// # Ok(()) }
     /// ```
-    pub fn sign_later<'b: 'a, T>(&'b mut self, message: T)
+    pub fn sign_later<T>(&mut self, message: T)
     where
         T: AsRef<[u8]>,
     {
-        let msg = message.as_ref()[..self.pending_sign.capacity()]
+        let msg = message.as_ref();
+        let msg = msg
             .try_into()
-            .unwrap();
+            .unwrap_or_else(|_| msg[..MSG_MAX_SIZE].try_into().unwrap());
         self.pending_sign.push((msg, None));
     }
 
-    /// Try to sign all messages in the queue of an account
-    /// Returns signed transactions
-    /// ```
-    /// # use libwallet::{Wallet, SimpleVault, sr25519, Result};
-    /// # #[async_std::main] async fn main() -> Result<()> {
+    /// Try to sign all messages in the queue returning the list of signatures
     ///
-    /// let mut wallet = Wallet::new(SimpleVault::<sr25519::Pair>::new()).unlock(()).await?;
+    /// ```
+    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # let (vault, _) = SimpleVault::new();
+    /// let mut wallet: Wallet<_> = Wallet::new(vault);
+    /// wallet.unlock(()).await?;
+    ///
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
-    /// wallet.sign_later(&[0x01, 0x02]);
-    /// wallet.sign_pending("ROOT");
-    /// let res = wallet.get_pending("ROOT").collect::<Vec<_>>();
-    /// assert!(res.is_empty());
+    /// wallet.sign_later(&[0x04, 0x05, 0x06]);
+    /// let signatures = wallet.sign_pending();
+    ///
+    /// assert_eq!(signatures.len(), 2);
+    /// assert_eq!(wallet.pending().count(), 0);
     /// # Ok(()) }
     /// ```
-    pub fn sign_pending(&mut self) -> [AnySignature; M] {
+    pub fn sign_pending(&mut self) -> ArrayVec<AnySignature, M> {
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
             let account = a
@@ -208,24 +232,24 @@ where
                 .unwrap_or_else(|| self.default_account());
             signatures.push(account.sign_msg(&msg));
         }
-        signatures.into_inner().expect("signatures")
+        signatures
     }
 
-    /// Iteratate over the messages with pending signature of all the accounts.
-    /// It panics if the wallet is locked.
+    /// Iteratate over the messages pending for signature for all the accounts.
     ///
     /// ```
-    /// # use libwallet::{Wallet, SimpleVault, sr25519, Result};
-    /// # #[async_std::main] async fn main() -> Result<()> {
+    /// # use libwallet::{Wallet, SimpleVault, Error};
+    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # let (vault, _) = SimpleVault::new();
+    /// let mut wallet: Wallet<_> = Wallet::new(vault);
+    /// wallet.sign_later(&[0x01]);
+    /// wallet.sign_later(&[0x02]);
+    /// wallet.sign_later(&[0x03]);
     ///
-    /// let mut wallet = Wallet::new(SimpleVault::<sr25519::Pair>::new()).unlock(()).await?;
-    /// wallet.sign_later(&[0x01, 0x02, 0x03]);
-    /// wallet.sign_later(&[0x01, 0x02]);
-    /// let res = wallet.get_pending("ROOT").collect::<Vec<_>>();
-    /// assert_eq!(vec![vec![0x01, 0x02, 0x03], vec![0x01, 0x02]], res);
+    /// assert_eq!(wallet.pending().count(), 3);
     /// # Ok(()) }
     /// ```
-    pub fn get_pending(&self) -> impl Iterator<Item = &[u8]> {
+    pub fn pending(&self) -> impl Iterator<Item = &[u8]> {
         self.pending_sign.iter().map(|(msg, _)| msg.as_ref())
     }
 
@@ -244,7 +268,7 @@ where
     }
 }
 
-// Represents the blockchain network in use by an account
+/// Represents the blockchain network in use by an account
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Network {
