@@ -1,5 +1,7 @@
 use core::fmt::Debug;
 
+pub use derive::Derive;
+
 type Bytes<const N: usize> = [u8; N];
 
 /// A key pair with a public key
@@ -29,15 +31,6 @@ impl<const N: usize> Signature for Bytes<N> {}
 pub trait Signer {
     type Signature: Signature;
     fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature;
-}
-
-/// Something to derive key pairs form
-pub trait Derive {
-    type Pair: Signer;
-
-    fn derive(&self, path: &str) -> Self::Pair
-    where
-        Self: Sized;
 }
 
 /// Wrappers to represent any supported key pair.
@@ -204,6 +197,65 @@ pub mod sr25519 {
             Self: Sized,
         {
             todo!()
+        }
+    }
+}
+
+mod derive {
+    use core::convert::identity;
+
+    use super::Bytes;
+
+    /// Something to derive key pairs form
+    pub trait Derive {
+        type Pair: super::Signer;
+
+        fn derive(&self, path: &str) -> Self::Pair
+        where
+            Self: Sized;
+    }
+
+    const JUNCTION_LEN: usize = 32;
+
+    pub(super) fn parse_substrate_junctions(
+        path: &str,
+    ) -> impl Iterator<Item = (Bytes<JUNCTION_LEN>, bool)> + '_ {
+        path.split_inclusive("/")
+            .flat_map(|s| if s == "/" { "" } else { s }.split("/")) // "//Alice//Bob" -> ["","","Alice","","","Bob"]
+            .scan(0u8, |x, part| {
+                Some(if part.is_empty() {
+                    *x += 1;
+                    None
+                } else {
+                    let hard = *x > 1;
+                    *x = 0;
+                    Some((encoded_junction(part), hard))
+                })
+            })
+            .filter_map(identity)
+    }
+
+    fn encoded_junction(part: &str) -> Bytes<JUNCTION_LEN> {
+        let mut code = [0; JUNCTION_LEN];
+        if let Ok(n) = part.parse::<u64>() {
+            code[..8].copy_from_slice(&n.to_le_bytes());
+        } else {
+            let len = part.len().min(JUNCTION_LEN - 1);
+            code[0] = (len as u8) << 2;
+            code[1..len + 1].copy_from_slice(&part[..len].as_bytes());
+        }
+        code
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::*;
+
+        #[test]
+        fn substrate_junctions() {
+            let path = "//Alice//Bob/123//loremipsumdolor";
+            let out: Vec<_> = parse_substrate_junctions(path).map(|(_, h)| h).collect();
+            assert_eq!(out, vec![true, true, false, true]);
         }
     }
 }
