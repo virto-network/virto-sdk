@@ -11,6 +11,8 @@ serde = { version = "1.0", default-features = false, features = ["derive"], opti
 #serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 schnorrkel = { version = "0.10.2", default-features = false, optional = true }
 rand_core = { version = "0.6.3", optional = true }
+# soft derivation in no_std
+rand_chacha = { version = "0.3.1", default-features = false, optional = true } 
 # os vault
 keyring = { version = "1.1.2", optional = true }
 
@@ -23,7 +25,8 @@ async-std = { version = "1.10.0", features = ["attributes"] }
 default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_os"]
 std = [
 	"serde",
-	"rand_core/getrandom"
+	"rand_core/getrandom",
+	"schnorrkel/getrandom",
 ]
 rand = ["rand_core"]
 substrate = ["sr25519"]

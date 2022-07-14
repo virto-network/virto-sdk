@@ -153,8 +153,11 @@ pub mod any {
 
 #[cfg(feature = "sr25519")]
 pub mod sr25519 {
-    use super::{Bytes, Derive, Signer};
-    use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, MINI_SECRET_KEY_LENGTH};
+    use super::{derive::Junction, Bytes, Derive, Signer};
+    use schnorrkel::{
+        derive::{ChainCode, Derivation},
+        signing_context, ExpansionMode, MiniSecretKey, SecretKey, MINI_SECRET_KEY_LENGTH,
+    };
 
     pub use schnorrkel::Keypair as Pair;
     pub(super) const SEED_LEN: usize = MINI_SECRET_KEY_LENGTH;
@@ -192,11 +195,69 @@ pub mod sr25519 {
     impl Derive for Pair {
         type Pair = Self;
 
-        fn derive(&self, _path: &str) -> Self
+        fn derive(&self, path: &str) -> Self
         where
             Self: Sized,
         {
-            todo!()
+            super::derive::parse_substrate_junctions(path)
+                .fold(self.secret.clone(), |key, (part, hard)| {
+                    if hard {
+                        key.hard_derive_mini_secret_key(Some(ChainCode(part)), &[])
+                            .0
+                            .expand(ExpansionMode::Ed25519)
+                    } else {
+                        derive_simple(key, part)
+                    }
+                })
+                .into()
+        }
+    }
+
+    #[cfg(not(feature = "rand_chacha"))]
+    fn derive_simple(key: SecretKey, j: Junction) -> SecretKey {
+        key.derived_key_simple(ChainCode(j), &[]).0
+    }
+    #[cfg(feature = "rand_chacha")]
+    fn derive_simple(key: SecretKey, j: Junction) -> SecretKey {
+        use rand_core::SeedableRng;
+        // As noted in https://docs.rs/schnorrkel/latest/schnorrkel/context/fn.attach_rng.html
+        // it's not recommended by should be ok for our simple use cases
+        let rng = rand_chacha::ChaChaRng::from_seed([0; 32]);
+        key.derived_key_simple_rng(ChainCode(j), &[], rng).0
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::{Derive, Pair};
+
+        #[test]
+        fn derive_substrate_keypair() {
+            // "rotate increase color sustain print future moon rigid hunt wild diagram online"
+            let seed = b"\x70\x8a\x2b\xe9\x96\xb8\x7d\x1e\x7b\xb2\x3f\x3c\xfa\x9b\xac\x80\x4c\x83\x35\x9e\x30\x85\x98\xb0\xcb\x20\x72\x82\x90\x68\x47\x57";
+
+            for (path, pubkey) in [
+                // from subkey
+                (
+                    "//test",
+                    b"\x0a\x04\x17\x5e\x09\x7c\x49\x26\x45\xa9\x8e\x1f\x28\x18\xa3\x95\x07\xb9\xfc\xba\x02\x03\x4d\x24\x4d\x27\xa3\x4d\xd3\xea\x2a\x11",
+                ), (
+                    "/test",
+                    b"\x9e\x75\x15\xf2\x87\x0a\xee\x0c\x54\x5f\x84\x35\x1f\xd4\xed\xd3\xc2\x48\x26\x8d\x2c\xb5\xfd\x97\x88\x55\x12\x10\xb8\x99\x9b\x76",
+                ), (
+                    "//test//123",
+                    b"\x50\xb3\x99\x79\xff\x3b\x54\x7d\x41\x7c\x8e\xda\xe8\xab\x84\x21\x0a\x6d\xef\x64\x14\x3f\x3e\xdc\x46\x7a\xf5\x2a\xf5\x53\x72\x06",
+                ), (
+                    "//test/123",
+                    b"\x7a\x39\xc7\x6b\x2a\x0c\x25\xc7\x37\x92\x0d\x5a\x4c\xc4\x07\x6e\xdd\x7a\xe2\xf0\x48\x99\x9b\x92\x54\xa7\xe6\x11\xcf\xf8\x78\x3a",
+                ), (
+                    "/test/123",
+                    b"\x48\xce\x4b\x7e\x7c\xe5\x87\xf6\xad\x1e\x14\x96\x51\x77\x94\xf1\x28\x82\xb9\xff\x69\xc9\x11\xf7\xda\x7c\x15\x7a\xdc\x9d\x24\x4e",
+                ),
+            ] {
+                let root: super::Pair = Pair::from_bytes(seed);
+                let derived = root.derive(path);
+                assert_eq!(&derived.public(), pubkey);
+            }
         }
     }
 }
@@ -216,26 +277,27 @@ mod derive {
     }
 
     const JUNCTION_LEN: usize = 32;
+    pub(super) type Junction = Bytes<JUNCTION_LEN>;
 
     pub(super) fn parse_substrate_junctions(
         path: &str,
-    ) -> impl Iterator<Item = (Bytes<JUNCTION_LEN>, bool)> + '_ {
+    ) -> impl Iterator<Item = (Junction, bool)> + '_ {
         path.split_inclusive("/")
             .flat_map(|s| if s == "/" { "" } else { s }.split("/")) // "//Alice//Bob" -> ["","","Alice","","","Bob"]
-            .scan(0u8, |x, part| {
+            .scan(0u8, |j, part| {
                 Some(if part.is_empty() {
-                    *x += 1;
+                    *j += 1;
                     None
                 } else {
-                    let hard = *x > 1;
-                    *x = 0;
+                    let hard = *j > 1;
+                    *j = 0;
                     Some((encoded_junction(part), hard))
                 })
             })
             .filter_map(identity)
     }
 
-    fn encoded_junction(part: &str) -> Bytes<JUNCTION_LEN> {
+    fn encoded_junction(part: &str) -> Junction {
         let mut code = [0; JUNCTION_LEN];
         if let Ok(n) = part.parse::<u64>() {
             code[..8].copy_from_slice(&n.to_le_bytes());
@@ -248,7 +310,7 @@ mod derive {
     }
 
     #[cfg(test)]
-    mod test {
+    mod tests {
         use super::*;
 
         #[test]
