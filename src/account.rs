@@ -64,6 +64,13 @@ impl crate::Signer for Account {
     fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
         self.pair.as_ref().expect("account unlocked").sign_msg(msg)
     }
+
+    fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
+        self.pair
+            .as_ref()
+            .expect("account unlocked")
+            .verify(msg, sig)
+    }
 }
 
 #[cfg(feature = "serde")]

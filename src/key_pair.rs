@@ -6,7 +6,6 @@ type Bytes<const N: usize> = [u8; N];
 
 /// A key pair with a public key
 pub trait Pair: Signer + Derive {
-    type Seed: Seed;
     type Public: Public;
 
     fn from_bytes(seed: &[u8]) -> Self
@@ -16,26 +15,22 @@ pub trait Pair: Signer + Derive {
     fn public(&self) -> Self::Public;
 }
 
-// NOTE: seed could be just a type alias for an array with generic length
-// https://github.com/rust-lang/rust/issues/60551
-pub trait Seed: AsRef<[u8]> {}
-impl<const N: usize> Seed for Bytes<N> {}
-
 pub trait Public: AsRef<[u8]> + Debug {}
 impl<const N: usize> Public for Bytes<N> {}
 
-pub trait Signature: AsRef<[u8]> {}
+pub trait Signature: AsRef<[u8]> + Debug + PartialEq {}
 impl<const N: usize> Signature for Bytes<N> {}
 
 /// Something that can sign messages
 pub trait Signer {
     type Signature: Signature;
     fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature;
+    fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool;
 }
 
 /// Wrappers to represent any supported key pair.
 pub mod any {
-    use super::{Public, Seed, Signature};
+    use super::{Public, Signature};
     use core::fmt;
 
     #[derive(Debug)]
@@ -47,7 +42,6 @@ pub mod any {
     }
 
     impl super::Pair for Pair {
-        type Seed = AnySeed;
         type Public = AnyPublic;
 
         fn from_bytes(seed: &[u8]) -> Self
@@ -62,18 +56,29 @@ pub mod any {
         }
 
         fn public(&self) -> Self::Public {
-            todo!()
+            match self {
+                Pair::Sr25519(p) => AnyPublic::Sr25519(p.public()),
+            }
         }
     }
 
     impl super::Derive for Pair {
         type Pair = Pair;
 
-        fn derive(&self, _path: &str) -> Self::Pair
+        fn derive(&self, path: &str) -> Self::Pair
         where
             Self: Sized,
         {
-            todo!()
+            match self {
+                Pair::Sr25519(kp) => Pair::Sr25519(kp.derive(path)),
+            }
+        }
+    }
+
+    #[cfg(feature = "sr25519")]
+    impl From<super::sr25519::Pair> for Pair {
+        fn from(p: super::sr25519::Pair) -> Self {
+            Self::Sr25519(p)
         }
     }
 
@@ -84,22 +89,15 @@ pub mod any {
             match self {
                 #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => p.sign_msg(msg).into(),
-                #[cfg(not(feature = "sr25519"))]
-                _ => unreachable!(),
+            }
+        }
+
+        fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
+            match self {
+                Pair::Sr25519(p) => super::Signer::verify(p, msg, sig),
             }
         }
     }
-
-    #[derive(Debug)]
-    pub enum AnySeed {}
-
-    impl AsRef<[u8]> for AnySeed {
-        fn as_ref(&self) -> &[u8] {
-            todo!()
-        }
-    }
-
-    impl Seed for AnySeed {}
 
     #[derive(Debug)]
     pub enum AnyPublic {
@@ -111,7 +109,9 @@ pub mod any {
 
     impl AsRef<[u8]> for AnyPublic {
         fn as_ref(&self) -> &[u8] {
-            todo!()
+            match self {
+                AnyPublic::Sr25519(p) => p.as_ref(),
+            }
         }
     }
 
@@ -125,7 +125,7 @@ pub mod any {
     }
     impl Public for AnyPublic {}
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq)]
     pub enum AnySignature {
         #[cfg(feature = "sr25519")]
         Sr25519(super::Bytes<{ super::sr25519::SIG_LEN }>),
@@ -168,7 +168,6 @@ pub mod sr25519 {
     const SIGNING_CTX: &[u8] = b"substrate";
 
     impl super::Pair for Pair {
-        type Seed = Seed;
         type Public = Public;
 
         fn from_bytes(bytes: &[u8]) -> Self {
@@ -189,6 +188,16 @@ pub mod sr25519 {
         fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
             let context = signing_context(SIGNING_CTX);
             self.sign(context.bytes(msg.as_ref())).to_bytes()
+        }
+
+        fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
+            let sig = match schnorrkel::Signature::from_bytes(sig) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            self.public
+                .verify_simple(SIGNING_CTX, msg.as_ref(), &sig)
+                .is_ok()
         }
     }
 

@@ -85,11 +85,15 @@ impl RootAccount {
 impl<'a> Derive for &'a RootAccount {
     type Pair = any::Pair;
 
-    fn derive(&self, _path: &str) -> Self::Pair
+    fn derive(&self, path: &str) -> Self::Pair
     where
         Self: Sized,
     {
-        todo!()
+        match &path[..2] {
+            "//" => self.sub.derive(path).into(),
+            "m/" => unimplemented!(),
+            _ => self.sub.derive("//default").into(),
+        }
     }
 }
 
@@ -162,19 +166,24 @@ where
     }
 
     /// Sign a message with the default account and return the signature.
+    /// The wallet needs to be unlocked.
     ///
     /// ```
-    /// # use libwallet::{Wallet, vault, Error};
+    /// # use libwallet::{Wallet, vault, Error, Signer};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
     /// # let (vault, _) = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// let signature = wallet.sign(&[0x01, 0x02, 0x03]);
+    /// wallet.unlock(()).await?;
     ///
-    /// assert!(signature.is_ok());
+    /// let msg = &[0x12, 0x34, 0x56];
+    /// let signature = wallet.sign(msg);
+    ///
+    /// assert!(wallet.default_account().verify(msg, signature.as_ref()));
     /// # Ok(()) }
     /// ```
-    pub fn sign(&self, message: &[u8]) -> Result<impl Signature, Error> {
-        Ok(self.default_account().sign_msg(message))
+    pub fn sign(&self, message: &[u8]) -> impl Signature {
+        assert!(!self.is_locked());
+        self.default_account().sign_msg(message)
     }
 
     /// Save data to be signed some time later.
