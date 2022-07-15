@@ -21,7 +21,16 @@ impl Simple {
     /// # Ok(()) }
     /// ```
     #[cfg(feature = "std")]
-    pub fn new() -> (Self, Mnemonic) {
+    pub fn new() -> Self {
+        let root = RootAccount::generate(&mut rand_core::OsRng);
+        Simple {
+            locked: Some(root),
+            unlocked: None,
+        }
+    }
+
+    #[cfg(feature = "std")]
+    pub fn new_with_phrase() -> (Self, Mnemonic) {
         let (root, phrase) =
             RootAccount::generate_with_phrase(&mut rand_core::OsRng, Default::default());
         (

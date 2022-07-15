@@ -1,5 +1,5 @@
 use clap::{App, Arg};
-use libwallet::{self, vault, Mnemonic};
+use libwallet::{self, vault};
 
 type Wallet = libwallet::Wallet<vault::Simple>;
 
@@ -26,19 +26,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_matches();
     let _network: &str = matches.value_of("network").unwrap_or("substrate");
 
-    let phrase = match matches.value_of("seed") {
-        Some(mnemonic) => mnemonic.parse().unwrap(),
-        None => {
-            let entropy = [0; 32];
-            Mnemonic::from_entropy(entropy).unwrap()
+    let (vault, phrase) = match matches.value_of("seed") {
+        Some(mnemonic) => {
+            let phrase: libwallet::Mnemonic = mnemonic.parse().expect("Invalid phrase");
+            (vault::Simple::from_phrase(&phrase), phrase)
         }
+        None => vault::Simple::new_with_phrase(),
     };
-    println!("Secret Key: \"{}\"", &phrase);
 
-    let mut wallet = Wallet::new(vault::Simple::from_phrase(phrase));
+    let mut wallet = Wallet::new(vault);
     wallet.unlock(()).await?;
     let account = wallet.default_account();
 
-    println!("Public key: {}", account);
+    println!("Secret phrase: \"{phrase}\"");
+    println!("Default Account: {account}");
     Ok(())
 }

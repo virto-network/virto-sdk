@@ -6,7 +6,7 @@ use arrayvec::ArrayString;
 // use regex::Regex;
 // use sp_core::crypto::DeriveJunction;
 
-const NAME_MAX_LEN: usize = 16;
+const MAX_PATH_LEN: usize = 16;
 
 /// Account is an abstration around public/private key pairs that are more convenient to use and
 /// can hold extra metadata. Accounts are constructed by the wallet and are used to sign messages.
@@ -14,16 +14,20 @@ const NAME_MAX_LEN: usize = 16;
 pub struct Account {
     pair: Option<any::Pair>,
     network: Network,
-    name: ArrayString<NAME_MAX_LEN>,
+    path: ArrayString<MAX_PATH_LEN>,
+    name: ArrayString<{ MAX_PATH_LEN - 2 }>,
 }
 
 impl Account {
     pub(crate) fn new<'a>(name: impl Into<Option<&'a str>>) -> Self {
+        let n = name.into().unwrap_or_else(|| "default");
+        let mut path = ArrayString::from("//").unwrap();
+        path.push_str(&n);
         Account {
             pair: None,
             network: Network::default(),
-            //pending_sign: Vec::new(),
-            name: ArrayString::from(name.into().unwrap_or_else(|| "default")).expect("short name"),
+            name: ArrayString::from(&n).expect("short name"),
+            path,
         }
     }
 
@@ -52,7 +56,7 @@ impl Account {
 
     pub(crate) fn unlock(&mut self, root: &RootAccount) -> &Self {
         if self.is_locked() {
-            self.pair = Some(root.derive(&self.name));
+            self.pair = Some(root.derive(&self.path));
         }
         self
     }
@@ -83,6 +87,7 @@ impl serde::Serialize for Account {
 
         let mut state = serializer.serialize_struct("Account", 1)?;
         state.serialize_field("network", &self.network)?;
+        state.serialize_field("path", self.path.as_str())?;
         state.serialize_field("name", self.name.as_str())?;
         state.end()
     }
