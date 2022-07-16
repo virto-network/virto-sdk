@@ -38,7 +38,7 @@ pub trait Vault {
     /// Use a set of credentials to make the guarded keys available to the user.
     /// It returns a `Future` to allow for vaults that might take an arbitrary amount
     /// of time getting the secret ready like waiting for some user phisical interaction.
-    fn unlock(&mut self, cred: Self::Credentials) -> Self::AuthDone;
+    fn unlock(&mut self, cred: impl Into<Self::Credentials>) -> Self::AuthDone;
 
     /// Get the root account container of the supported private key pairs
     /// if the vault hasn't been unlocked it should return `None`
@@ -139,7 +139,7 @@ where
     /// # use libwallet::{Wallet, Error, vault};
     /// # use std::convert::TryInto;
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = vault::Simple::new();
+    /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
     ///     wallet.unlock(()).await?;
@@ -149,7 +149,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(&mut self, credentials: V::Credentials) -> Result<(), Error> {
+    pub async fn unlock(&mut self, credentials: impl Into<V::Credentials>) -> Result<(), Error> {
         if self.is_locked() {
             self.vault
                 .unlock(credentials)
@@ -171,7 +171,7 @@ where
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Signer};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = vault::Simple::new();
+    /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(()).await?;
     ///
@@ -191,7 +191,7 @@ where
     /// ```
     /// # use libwallet::{Wallet, vault, Error};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = vault::Simple::new();
+    /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     ///
@@ -214,7 +214,7 @@ where
     /// ```
     /// # use libwallet::{Wallet, vault, Error};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = vault::Simple::new();
+    /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(()).await?;
     ///
@@ -242,7 +242,7 @@ where
     /// ```
     /// # use libwallet::{Wallet, vault, Error};
     /// # #[async_std::main] async fn main() -> Result<(), Error> {
-    /// # let (vault, _) = vault::Simple::new();
+    /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01]);
     /// wallet.sign_later(&[0x02]);

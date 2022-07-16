@@ -171,7 +171,8 @@ pub mod sr25519 {
         type Public = Public;
 
         fn from_bytes(bytes: &[u8]) -> Self {
-            let minikey = MiniSecretKey::from_bytes(&bytes).expect("Seed size");
+            assert!(bytes.len() >= SEED_LEN);
+            let minikey = MiniSecretKey::from_bytes(&bytes[..SEED_LEN]).unwrap();
             minikey.expand_to_keypair(ExpansionMode::Ed25519)
         }
 

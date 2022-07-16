@@ -15,6 +15,9 @@ rand_core = { version = "0.6.3", optional = true }
 rand_chacha = { version = "0.3.1", default-features = false, optional = true } 
 # os vault
 keyring = { version = "1.1.2", optional = true }
+pbkdf2 = { version = "0.11.0", default-features = false, optional = true }
+sha2 = { version = "0.10.2", default-features = false, optional = true }
+hmac = { version = "0.12.1", default-features = false, optional = true }
 
 [dev-dependencies]
 clap = "2.33.3"
@@ -32,4 +35,4 @@ rand = ["rand_core"]
 substrate = ["sr25519"]
 sr25519 = ["schnorrkel/u64_backend"]
 vault_simple = []
-vault_os = ["keyring"]
+vault_os = ["keyring", "pbkdf2", "hmac", "sha2"]

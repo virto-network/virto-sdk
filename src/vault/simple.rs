@@ -15,7 +15,7 @@ impl Simple {
     /// ```
     /// # use libwallet::{vault, Vault};
     /// # #[async_std::main] async fn main() -> Result<(), ()> {
-    /// let (mut vault, _) = vault::Simple::new();
+    /// let mut vault = vault::Simple::new();
     /// vault.unlock(()).await?;
     /// assert!(vault.get_root().is_some());
     /// # Ok(()) }
@@ -61,7 +61,7 @@ impl Vault for Simple {
     type Error = ();
     type AuthDone = Ready<Result<(), Self::Error>>;
 
-    fn unlock(&mut self, _cred: ()) -> Self::AuthDone {
+    fn unlock(&mut self, _cred: impl Into<Self::Credentials>) -> Self::AuthDone {
         self.unlocked = self.locked.take();
         ready(Ok(()))
     }
