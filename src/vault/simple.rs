@@ -1,6 +1,6 @@
 use core::future::{ready, Ready};
 
-use crate::{RootAccount, Vault};
+use crate::{util, RootAccount, Vault};
 use mnemonic::Mnemonic;
 
 /// A vault that holds secrets in memory
@@ -22,7 +22,7 @@ impl Simple {
     /// ```
     #[cfg(feature = "std")]
     pub fn new() -> Self {
-        let root = RootAccount::generate(&mut rand_core::OsRng);
+        let root = RootAccount::from_bytes(&util::random_bytes::<_, 32>(&mut rand_core::OsRng));
         Simple {
             locked: Some(root),
             unlocked: None,
@@ -31,8 +31,8 @@ impl Simple {
 
     #[cfg(feature = "std")]
     pub fn new_with_phrase() -> (Self, Mnemonic) {
-        let (root, phrase) =
-            RootAccount::generate_with_phrase(&mut rand_core::OsRng, Default::default());
+        let phrase = util::gen_phrase(&mut rand_core::OsRng, Default::default());
+        let root = RootAccount::from_bytes(phrase.entropy());
         (
             Simple {
                 locked: Some(root),
@@ -43,7 +43,7 @@ impl Simple {
     }
 
     // Provide your own seed
-    pub fn from_phrase<T: AsRef<str>>(phrase: T) -> Self {
+    pub fn from_phrase(phrase: impl AsRef<str>) -> Self {
         let phrase = phrase
             .as_ref()
             .parse::<mnemonic::Mnemonic>()

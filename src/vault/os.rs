@@ -1,11 +1,9 @@
-use core::{future::Ready, iter::repeat, ops::Deref};
-
 use crate::{
     mnemonic::{Language, Mnemonic},
+    util::Pin,
     RootAccount, Vault,
 };
-
-use arrayvec::ArrayString;
+use core::future::Ready;
 use keyring;
 
 const SERVICE: &str = "libwallet_account";
@@ -45,30 +43,19 @@ impl OSKeyring {
     }
 
     fn get_key(&self, pin: &Pin) -> Result<RootAccount, Error> {
-        use hmac::Hmac;
-        use pbkdf2::pbkdf2;
-        use sha2::Sha512;
-
         let phrase = self
             .get()?
             .parse::<Mnemonic>()
             .map_err(|_| Error::BadPhrase)?;
 
-        // using same hashing strategy as Substrate to have some compatibility
-        let mut salt = ArrayString::<{ 8 + PIN_LEN }>::new_const();
-        let _len = pin.eq(&0).then_some(0).unwrap_or(PIN_LEN);
-        salt.push_str("mnemonic");
-        salt.push_str("");
-        let mut seed = [0; 64];
-        pbkdf2::<Hmac<Sha512>>(phrase.entropy(), salt.as_bytes(), 2048, &mut seed);
-
-        println!("{:x?}", &seed);
+        let seed = pin.protect::<64>(phrase.entropy());
         Ok(RootAccount::from_bytes(&seed))
     }
 
     // Create new random seed and save it in the OS keyring.
-    fn generate(&self, lang: Language) -> Result<RootAccount, Error> {
-        let (root, phrase) = RootAccount::generate_with_phrase(&mut rand_core::OsRng, lang);
+    fn generate(&self, pin: &Pin, lang: Language) -> Result<RootAccount, Error> {
+        let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
+        let root = RootAccount::from_bytes(&pin.protect::<64>(phrase.entropy()));
         self.entry
             .set_password(phrase.phrase())
             // .inspect_err(|e| {
@@ -106,10 +93,13 @@ impl Vault for OSKeyring {
 
     fn unlock(&mut self, pin: impl Into<Self::Credentials>) -> Self::AuthDone {
         let pin = pin.into();
-        // TODO make truly async
         let res = self
             .get_key(&pin)
-            .or_else(|err| self.auto_generate.ok_or(err).and_then(|l| self.generate(l)))
+            .or_else(|err| {
+                self.auto_generate
+                    .ok_or(err)
+                    .and_then(|l| self.generate(&pin, l))
+            })
             .and_then(move |r| {
                 self.root = Some(r);
                 Ok(())
@@ -119,41 +109,5 @@ impl Vault for OSKeyring {
 
     fn get_root(&self) -> Option<&RootAccount> {
         self.root.as_ref()
-    }
-}
-
-pub struct Pin(u16);
-
-const PIN_LEN: usize = 4;
-
-// Use 4 chars long hex string as pin. i.e. "ABCD", "1234"
-impl<'a> From<&'a str> for Pin {
-    fn from(s: &str) -> Self {
-        let n = s.len().min(PIN_LEN);
-        let chars = s.chars().take(n).chain(repeat('0').take(PIN_LEN - n));
-        Pin(chars
-            .map(|c| c.to_digit(16).unwrap_or(0))
-            .enumerate()
-            .fold(0, |pin, (i, d)| pin | ((d as u16) << i * PIN_LEN)))
-    }
-}
-
-impl From<()> for Pin {
-    fn from(_: ()) -> Self {
-        Self(0)
-    }
-}
-
-impl From<u16> for Pin {
-    fn from(n: u16) -> Self {
-        Self(n)
-    }
-}
-
-impl Deref for Pin {
-    type Target = u16;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
