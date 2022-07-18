@@ -61,7 +61,10 @@ impl OSKeyring {
             // .inspect_err(|e| {
             //     dbg!(e);
             // })
-            .map_err(|_| Error::Keyring)?;
+            .map_err(|e| {
+                dbg!(e);
+                Error::Keyring
+            })?;
         Ok(root)
     }
 }

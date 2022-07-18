@@ -71,8 +71,10 @@ impl<'a> Derive for &'a RootAccount {
         Self: Sized,
     {
         match &path[..2] {
+            #[cfg(feature = "substrate")]
             "//" => self.sub.derive(path).into(),
             "m/" => unimplemented!(),
+            #[cfg(feature = "substrate")]
             _ => self.sub.derive("//default").into(),
         }
     }
@@ -353,6 +355,7 @@ mod util {
     impl Pin {
         const LEN: usize = 4;
 
+        #[cfg(feature = "util_pin")]
         pub fn protect<const S: usize>(&self, data: &[u8]) -> [u8; S] {
             use hmac::Hmac;
             use pbkdf2::pbkdf2;
