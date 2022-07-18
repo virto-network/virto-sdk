@@ -14,7 +14,7 @@ mod key_pair;
 mod substrate_ext;
 
 use arrayvec::ArrayVec;
-use core::{convert::TryInto, future::Future};
+use core::{convert::TryInto, fmt, future::Future};
 use key_pair::any::AnySignature;
 
 #[cfg(feature = "mnemonic")]
@@ -117,9 +117,10 @@ where
     /// Use credentials to unlock the vault.
     ///
     /// ```
-    /// # use libwallet::{Wallet, Error, vault};
+    /// # use libwallet::{Wallet, Error, vault, Vault};
     /// # use std::convert::TryInto;
-    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
@@ -130,12 +131,15 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(&mut self, credentials: impl Into<V::Credentials>) -> Result<(), Error> {
+    pub async fn unlock(
+        &mut self,
+        credentials: impl Into<V::Credentials>,
+    ) -> Result<(), Error<V::Error>> {
         if self.is_locked() {
             self.vault
                 .unlock(credentials)
                 .await
-                .map_err(|_| Error::InvalidCredentials)?;
+                .map_err(|e| Error::Vault(e))?;
             self.default_account.unlock(self.vault.get_root().unwrap());
         }
         Ok(())
@@ -150,8 +154,9 @@ where
     /// The wallet needs to be unlocked.
     ///
     /// ```
-    /// # use libwallet::{Wallet, vault, Error, Signer};
-    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # use libwallet::{Wallet, vault, Error, Signer, Vault};
+    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(()).await?;
@@ -170,8 +175,9 @@ where
     /// Save data to be signed some time later.
     ///
     /// ```
-    /// # use libwallet::{Wallet, vault, Error};
-    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # use libwallet::{Wallet, vault, Error, Vault};
+    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
@@ -193,8 +199,9 @@ where
     /// Try to sign all messages in the queue returning the list of signatures
     ///
     /// ```
-    /// # use libwallet::{Wallet, vault, Error};
-    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # use libwallet::{Wallet, vault, Error, Vault};
+    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(()).await?;
@@ -221,8 +228,9 @@ where
     /// Iteratate over the messages pending for signature for all the accounts.
     ///
     /// ```
-    /// # use libwallet::{Wallet, vault, Error};
-    /// # #[async_std::main] async fn main() -> Result<(), Error> {
+    /// # use libwallet::{Wallet, vault, Error, Vault};
+    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::new();
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01]);
@@ -273,8 +281,8 @@ impl Default for Network {
     }
 }
 
-impl core::fmt::Display for Network {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl fmt::Display for Network {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             #[cfg(feature = "substrate")]
             Self::Substrate(_) => write!(f, "substrate"),
@@ -284,19 +292,22 @@ impl core::fmt::Display for Network {
 }
 
 #[derive(Debug)]
-pub enum Error {
+pub enum Error<V> {
+    Vault(V),
     Locked,
-    InvalidCredentials,
     DeriveError,
     #[cfg(feature = "mnemonic")]
     InvalidPhrase,
 }
 
-impl core::fmt::Display for Error {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl<V> fmt::Display for Error<V>
+where
+    V: fmt::Debug + fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Error::Vault(e) => write!(f, "Vault error: {}", e),
             Error::Locked => write!(f, "Locked"),
-            Error::InvalidCredentials => write!(f, "Invalid credentials"),
             Error::DeriveError => write!(f, "Cannot derive"),
             #[cfg(feature = "mnemonic")]
             Error::InvalidPhrase => write!(f, "Invalid phrase"),
@@ -305,10 +316,10 @@ impl core::fmt::Display for Error {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for Error {}
+impl<V> std::error::Error for Error<V> where V: fmt::Debug + fmt::Display {}
 
 #[cfg(feature = "mnemonic")]
-impl From<mnemonic::Error> for Error {
+impl<V> From<mnemonic::Error> for Error<V> {
     fn from(_: mnemonic::Error) -> Self {
         Error::InvalidPhrase
     }

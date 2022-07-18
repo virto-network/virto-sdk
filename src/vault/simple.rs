@@ -13,8 +13,9 @@ impl Simple {
     /// A vault with a random seed, once dropped the the vault can't be restored
     ///
     /// ```
-    /// # use libwallet::{vault, Vault};
-    /// # #[async_std::main] async fn main() -> Result<(), ()> {
+    /// # use libwallet::{vault, Vault, Error};
+    /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
+    /// # #[async_std::main] async fn main() -> Result {
     /// let mut vault = vault::Simple::new();
     /// vault.unlock(()).await?;
     /// assert!(vault.get_root().is_some());
@@ -56,9 +57,19 @@ impl Simple {
     }
 }
 
+#[derive(Debug)]
+pub struct Error;
+impl core::fmt::Display for Error {
+    fn fmt(&self, _f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        Ok(())
+    }
+}
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
+
 impl Vault for Simple {
     type Credentials = ();
-    type Error = ();
+    type Error = Error;
     type AuthDone = Ready<Result<(), Self::Error>>;
 
     fn unlock(&mut self, _cred: impl Into<Self::Credentials>) -> Self::AuthDone {
