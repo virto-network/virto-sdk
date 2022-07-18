@@ -5,7 +5,7 @@ type Wallet = libwallet::Wallet<vault::Simple>;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let phrase = env::args().skip(1).collect::<String>();
+    let phrase = env::args().skip(1).collect::<Vec<_>>().join(" ");
 
     let (vault, phrase) = if phrase.is_empty() {
         vault::Simple::generate_with_phrase(&mut rand_core::OsRng)
