@@ -3,6 +3,7 @@ name = "libwallet"
 version = "0.3.0"
 authors = ["Daniel Olano <me@olanod.com>"]
 edition = "2018"
+autoexamples = false
 
 [dependencies]
 arrayvec = { version = "0.7.2", default-features = false }
@@ -19,21 +20,28 @@ pbkdf2 = { version = "0.11.0", default-features = false, optional = true }
 sha2 = { version = "0.10.2", default-features = false, optional = true }
 hmac = { version = "0.12.1", default-features = false, optional = true }
 
+[[example]]
+name = "account_generation"
+path = "examples/account_generation.rs"
+
+# needs feature vault_os
+# [[example]]
+# name = "persisted_in_keyring"
+# path = "examples/persisted_in_keyring.rs"
+
 [dev-dependencies]
-clap = "2.33.3"
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 async-std = { version = "1.10.0", features = ["attributes"] }
 
 [features]
-default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_os"]
+default = ["std", "substrate", "vault_simple", "mnemonic", "rand"]
 std = [
-	"serde",
 	"rand_core/getrandom",
 	"schnorrkel/getrandom",
 ]
 rand = ["rand_core"]
 substrate = ["sr25519"]
 sr25519 = ["schnorrkel/u64_backend"]
-vault_simple = []
 util_pin = ["pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring", "util_pin"]
+vault_simple = []

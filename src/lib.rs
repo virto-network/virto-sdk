@@ -123,7 +123,7 @@ where
     /// # use std::convert::TryInto;
     /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::new();
+    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
     ///     wallet.unlock(()).await?;
@@ -159,7 +159,7 @@ where
     /// # use libwallet::{Wallet, vault, Error, Signer, Vault};
     /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::new();
+    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(()).await?;
     ///
@@ -180,7 +180,7 @@ where
     /// # use libwallet::{Wallet, vault, Error, Vault};
     /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::new();
+    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     ///
@@ -204,7 +204,7 @@ where
     /// # use libwallet::{Wallet, vault, Error, Vault};
     /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::new();
+    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(()).await?;
     ///
@@ -233,7 +233,7 @@ where
     /// # use libwallet::{Wallet, vault, Error, Vault};
     /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::new();
+    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01]);
     /// wallet.sign_later(&[0x02]);

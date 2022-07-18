@@ -15,24 +15,29 @@ impl Simple {
     /// # use libwallet::{vault, Vault, Error};
     /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// let mut vault = vault::Simple::new();
+    /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// vault.unlock(()).await?;
     /// assert!(vault.get_root().is_some());
     /// # Ok(()) }
     /// ```
-    #[cfg(feature = "std")]
-    pub fn new() -> Self {
-        let root =
-            RootAccount::from_bytes(&crate::util::random_bytes::<_, 32>(&mut rand_core::OsRng));
+    #[cfg(feature = "rand")]
+    pub fn generate<R>(rng: &mut R) -> Self
+    where
+        R: rand_core::CryptoRng + rand_core::RngCore,
+    {
+        let root = RootAccount::from_bytes(&crate::util::random_bytes::<_, 32>(rng));
         Simple {
             locked: Some(root),
             unlocked: None,
         }
     }
 
-    #[cfg(feature = "std")]
-    pub fn new_with_phrase() -> (Self, mnemonic::Mnemonic) {
-        let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, Default::default());
+    #[cfg(all(feature = "rand", feature = "mnemonic"))]
+    pub fn generate_with_phrase<R>(rng: &mut R) -> (Self, mnemonic::Mnemonic)
+    where
+        R: rand_core::CryptoRng + rand_core::RngCore,
+    {
+        let phrase = crate::util::gen_phrase(rng, Default::default());
         let root = RootAccount::from_bytes(phrase.entropy());
         (
             Simple {
