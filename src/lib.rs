@@ -350,6 +350,8 @@ mod util {
         phrase
     }
 
+    /// A simple pin credential that can be used to add some
+    /// extra level of protection to seeds stored in vaults
     pub struct Pin(u16);
 
     impl Pin {
@@ -372,7 +374,7 @@ mod util {
             let mut seed = [0; S];
             // using same hashing strategy as Substrate to have some compatibility
             // when pin is 0(no pin) we produce the same addresses
-            let len = self.eq(&0).then_some(salt.len() - 2).unwrap_or(0);
+            let len = self.eq(&0).then_some(salt.len() - 2).unwrap_or(salt.len());
             pbkdf2::<Hmac<Sha512>>(data, &salt[..len], 2048, &mut seed);
             seed
         }
@@ -381,15 +383,17 @@ mod util {
     // Use 4 chars long hex string as pin. i.e. "ABCD", "1234"
     impl<'a> From<&'a str> for Pin {
         fn from(s: &str) -> Self {
-            let n = s.len().min(Pin::LEN);
+            let l = s.len().min(Pin::LEN);
             let chars = s
                 .chars()
-                .take(n)
-                .chain(iter::repeat('0').take(Pin::LEN - n));
+                .take(l)
+                .chain(iter::repeat('0').take(Pin::LEN - l));
             Pin(chars
                 .map(|c| c.to_digit(16).unwrap_or(0))
                 .enumerate()
-                .fold(0, |pin, (i, d)| pin | ((d as u16) << i * Pin::LEN)))
+                .fold(0, |pin, (i, d)| {
+                    pin | ((d as u16) << (Pin::LEN - 1 - i) * Pin::LEN)
+                }))
         }
     }
 
@@ -416,6 +420,28 @@ mod util {
 
         fn deref(&self) -> &Self::Target {
             &self.0
+        }
+    }
+
+    #[test]
+    fn pin_parsing() {
+        for (s, expected) in [
+            ("0000", 0),
+            // we only take the first 4 characters and ignore the rest
+            ("0000001", 0),
+            // non hex chars are ignored and defaulted to 0, here a,d are kept
+            ("zasdasjgkadg", 0x0A0D),
+            ("ABCD", 0xABCD),
+            ("1000", 0x1000),
+            ("000F", 0x000F),
+            ("FFFF", 0xFFFF),
+        ] {
+            let pin = Pin::from(s);
+            assert_eq!(
+                *pin, expected,
+                "(input:\"{}\", l:{:X} == r:{:X})",
+                s, *pin, expected
+            );
         }
     }
 }
