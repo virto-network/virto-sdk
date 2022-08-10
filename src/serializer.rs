@@ -215,9 +215,23 @@ where
             Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
-            _ => {
-                self.out.put_u64_le(v);
-            }
+            _ => self.out.put_u64_le(v),
+        }
+        Ok(())
+    }
+
+    fn serialize_u128(self, v: u128) -> Result<Self::Ok> {
+        self.maybe_some()?;
+        match self.ty {
+            Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
+            Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
+            Some(SpecificType::I32) => self.serialize_i32(v as i32)?,
+            Some(SpecificType::I64) => self.serialize_i64(v as i64)?,
+            Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
+            Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
+            Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
+            Some(SpecificType::U64) => self.serialize_u64(v as u64)?,
+            _ => self.out.put_u128_le(v),
         }
         Ok(())
     }
@@ -414,6 +428,46 @@ where
                     format!("{:?}", ty),
                 )),
             },
+            Some(SpecificType::U8) => {
+                let n = val.parse().map_err(|_| Error::BadInput("u8".into()))?;
+                Ok(Some(self.out.put_u8(n)))
+            }
+            Some(SpecificType::U16) => {
+                let n = val.parse().map_err(|_| Error::BadInput("u16".into()))?;
+                Ok(Some(self.out.put_u16_le(n)))
+            }
+            Some(SpecificType::U32) => {
+                let n = val.parse().map_err(|_| Error::BadInput("u32".into()))?;
+                Ok(Some(self.out.put_u32_le(n)))
+            }
+            Some(SpecificType::U64) => {
+                let n = val.parse().map_err(|_| Error::BadInput("u64".into()))?;
+                Ok(Some(self.out.put_u64_le(n)))
+            }
+            Some(SpecificType::U128) => {
+                let n = val.parse().map_err(|_| Error::BadInput("u128".into()))?;
+                Ok(Some(self.out.put_u128_le(n)))
+            }
+            Some(SpecificType::I8) => {
+                let n = val.parse().map_err(|_| Error::BadInput("i8".into()))?;
+                Ok(Some(self.out.put_i8(n)))
+            }
+            Some(SpecificType::I16) => {
+                let n = val.parse().map_err(|_| Error::BadInput("i16".into()))?;
+                Ok(Some(self.out.put_i16_le(n)))
+            }
+            Some(SpecificType::I32) => {
+                let n = val.parse().map_err(|_| Error::BadInput("i32".into()))?;
+                Ok(Some(self.out.put_i32_le(n)))
+            }
+            Some(SpecificType::I64) => {
+                let n = val.parse().map_err(|_| Error::BadInput("i64".into()))?;
+                Ok(Some(self.out.put_i64_le(n)))
+            }
+            Some(SpecificType::I128) => {
+                let n = val.parse().map_err(|_| Error::BadInput("i128".into()))?;
+                Ok(Some(self.out.put_i128_le(n)))
+            }
             #[cfg(feature = "hex")]
             Some(SpecificType::Bytes(_)) => {
                 if val.starts_with("0x") {
@@ -793,6 +847,18 @@ mod tests {
     }
 
     #[test]
+    fn primitive_u128() -> Result<()> {
+        const INPUT: u128 = 0xFF_EE_DD_CC__BB_AA_99_88__77_66_55_44__33_22_11_00;
+        let mut out = [0u8; size_of::<u128>()];
+        let expected = INPUT.encode();
+
+        to_bytes(out.as_mut(), &INPUT)?;
+
+        assert_eq!(out.as_mut(), expected);
+        Ok(())
+    }
+
+    #[test]
     fn primitive_i16() -> Result<()> {
         const INPUT: i16 = i16::MIN;
         let mut out = [0u8; size_of::<i16>()];
@@ -996,6 +1062,20 @@ mod tests {
         let mut reg = Registry::new();
         let sym = reg.register_type(&meta_type::<T>());
         (sym.id(), reg.into())
+    }
+
+    #[test]
+    fn str_as_u128() -> Result<()> {
+        const INPUT: &str = "340282366920938463463374607431768211455";
+        let mut out = [0u8; size_of::<u128>()];
+        let expected = u128::MAX.encode();
+
+        let (id, reg) = register(&0u128);
+
+        to_bytes_with_info(out.as_mut(), &INPUT, Some((&reg, id)))?;
+
+        assert_eq!(out.as_mut(), expected);
+        Ok(())
     }
 
     #[test]
