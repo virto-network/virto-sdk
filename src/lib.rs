@@ -43,7 +43,7 @@ type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
 #[derive(Debug)]
 pub struct Wallet<V: Vault, const A: usize = 5, const M: usize = A> {
     vault: V,
-    cached_creeds: Option<V::Credentials>,
+    cached_creds: Option<V::Credentials>,
     default_account: Account,
     accounts: ArrayVec<Account, A>,
     pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
@@ -60,7 +60,7 @@ where
             default_account: Account::new(None),
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
-            cached_creeds: None,
+            cached_creds: None,
         }
     }
 
@@ -101,14 +101,14 @@ where
                 })
                 .await
                 .map_err(|e| Error::Vault(e))?;
-            self.cached_creeds = Some(creds);
+            self.cached_creds = Some(creds);
         }
         Ok(())
     }
 
     /// Check if the vault has been unlocked.
     pub fn is_locked(&self) -> bool {
-        self.cached_creeds.is_none()
+        self.cached_creds.is_none()
     }
 
     /// Sign a message with the default account and return the signature.
