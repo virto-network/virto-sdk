@@ -3,7 +3,6 @@ use crate::{
     util::Pin,
     RootAccount, Vault,
 };
-use core::future::Ready;
 use keyring;
 
 const SERVICE: &str = "libwallet_account";
@@ -93,21 +92,20 @@ impl Vault for OSKeyring {
     type Credentials = Pin;
     type Error = Error;
 
-    async fn unlock(&mut self, pin: impl Into<Self::Credentials>) -> Result<(), Self::Error> {
-        let pin = pin.into();
-        self.get_key(&pin)
+    async fn unlock<T>(
+        &mut self,
+        pin: &Self::Credentials,
+        mut cb: impl FnMut(&RootAccount) -> T,
+    ) -> Result<T, Self::Error> {
+        self.get_key(pin)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
                     .and_then(|l| self.generate(&pin, l))
             })
-            .and_then(move |r| {
+            .and_then(|r| {
                 self.root = Some(r);
-                Ok(())
+                Ok(cb(self.root.as_ref().unwrap()))
             })
-    }
-
-    fn get_root(&self) -> Option<&RootAccount> {
-        self.root.as_ref()
     }
 }

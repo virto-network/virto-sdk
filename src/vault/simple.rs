@@ -79,12 +79,13 @@ impl Vault for Simple {
     type Credentials = ();
     type Error = Error;
 
-    async fn unlock(&mut self, _cred: impl Into<Self::Credentials>) -> Result<(), Self::Error> {
+    async fn unlock<T>(
+        &mut self,
+        _cred: &Self::Credentials,
+        mut cb: impl FnMut(&RootAccount) -> T,
+    ) -> Result<T, Self::Error> {
         self.unlocked = self.locked.take();
-        Ok(())
-    }
-
-    fn get_root(&self) -> Option<&RootAccount> {
-        self.unlocked.as_ref()
+        let root_account = &self.unlocked.as_ref().unwrap();
+        Ok(cb(root_account))
     }
 }

@@ -31,7 +31,7 @@ path = "examples/account_generation.rs"
 # name = "persisted_in_keyring"
 # path = "examples/persisted_in_keyring.rs"
 
-# needs feature vault_pass dirs
+# needs feature vault_pass
 # [[example]]
 # name = "persisted_in_pass"
 # path = "examples/persisted_in_pass.rs"

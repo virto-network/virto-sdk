@@ -37,12 +37,12 @@ pub trait Vault {
 
     /// Use a set of credentials to make the guarded keys available to the user.
     /// It returns a `Future` to allow for vaults that might take an arbitrary amount
-    /// of time getting the secret ready like waiting for some user phisical interaction.
-    async fn unlock(&mut self, cred: impl Into<Self::Credentials>) -> Result<(), Self::Error>;
-
-    /// Get the root account container of the supported private key pairs
-    /// if the vault hasn't been unlocked it should return `None`
-    fn get_root(&self) -> Option<&RootAccount>;
+    /// of time getting the secret ready like waiting for some user physical interaction.
+    async fn unlock<T>(
+        &mut self,
+        cred: &Self::Credentials,
+        cb: impl FnMut(&RootAccount) -> T,
+    ) -> Result<T, Self::Error>;
 }
 
 /// The root account is a container of the key pairs stored in the vault and cannot be
@@ -90,8 +90,9 @@ impl<'a> Derive for &'a RootAccount {
 ///
 /// Wallets also support queuing and bulk signing of messages in case transactions need to be reviewed before signing.
 #[derive(Debug)]
-pub struct Wallet<V, const A: usize = 5, const M: usize = A> {
+pub struct Wallet<V: Vault, const A: usize = 5, const M: usize = A> {
     vault: V,
+    cached_creeds: Option<V::Credentials>,
     default_account: Account,
     accounts: ArrayVec<Account, A>,
     pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
@@ -108,6 +109,7 @@ where
             default_account: Account::new(None),
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
+            cached_creeds: None,
         }
     }
 
@@ -138,18 +140,24 @@ where
         credentials: impl Into<V::Credentials>,
     ) -> Result<(), Error<V::Error>> {
         if self.is_locked() {
-            self.vault
-                .unlock(credentials)
+            let vault = &mut self.vault;
+            let def = &mut self.default_account;
+            let creds = credentials.into();
+
+            vault
+                .unlock(&creds, |root| {
+                    def.unlock(root);
+                })
                 .await
                 .map_err(|e| Error::Vault(e))?;
-            self.default_account.unlock(self.vault.get_root().unwrap());
+            self.cached_creeds = Some(creds);
         }
         Ok(())
     }
 
     /// Check if the vault has been unlocked.
     pub fn is_locked(&self) -> bool {
-        self.vault.get_root().is_none()
+        self.cached_creeds.is_none()
     }
 
     /// Sign a message with the default account and return the signature.

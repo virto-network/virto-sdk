@@ -1,4 +1,3 @@
-use core::future::Ready;
 use mnemonic::Language;
 use prs_lib::{
     crypto::{self, IsContext, Proto},
@@ -15,7 +14,7 @@ pub struct Pass {
     auto_generate: Option<Language>,
 }
 
-const SERVICE_NAME: &str = "libwallet_service/";
+const DEFAULT_DIR: &str = "libwallet_accounts/";
 
 impl Pass {
     /// Create a new `Pass` vault in the given location.
@@ -32,8 +31,8 @@ impl Pass {
     }
 
     fn get_key(&self, credentials: &PassCreds) -> Result<RootAccount, Error> {
-        let mut secret_path = String::from(SERVICE_NAME);
-        secret_path.push_str(&credentials.secret_path);
+        let mut secret_path = String::from(DEFAULT_DIR);
+        secret_path.push_str(&credentials.account);
 
         let secret = match self.store.find(Some(secret_path)) {
             FindSecret::Exact(secret) => Some(secret),
@@ -63,8 +62,8 @@ impl Pass {
 
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
-        let mut secret_path = String::from(SERVICE_NAME);
-        secret_path.push_str(&credentials.secret_path);
+        let mut secret_path = String::from(DEFAULT_DIR);
+        secret_path.push_str(&credentials.account);
         let secret_path = self
             .store
             .normalize_secret_path(secret_path, None, true)
@@ -112,28 +111,33 @@ impl core::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 pub struct PassCreds {
-    pub secret_path: String,
+    account: String,
+}
+
+impl From<String> for PassCreds {
+    fn from(account: String) -> Self {
+        PassCreds { account }
+    }
 }
 
 impl Vault for Pass {
     type Credentials = PassCreds;
     type Error = Error;
 
-    async fn unlock(&mut self, creds: impl Into<Self::Credentials>) -> Result<(), Self::Error> {
-        let creds = creds.into();
-        self.get_key(&creds)
+    async fn unlock<T>(
+        &mut self,
+        creds: &Self::Credentials,
+        mut cb: impl FnMut(&RootAccount) -> T,
+    ) -> Result<T, Self::Error> {
+        self.get_key(creds)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
                     .and_then(|l| self.generate(&creds, l))
             })
-            .and_then(move |r| {
+            .and_then(|r| {
                 self.root = Some(r);
-                Ok(())
+                Ok(cb(self.root.as_ref().unwrap()))
             })
-    }
-
-    fn get_root(&self) -> Option<&RootAccount> {
-        self.root.as_ref()
     }
 }
