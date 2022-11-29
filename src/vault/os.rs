@@ -91,13 +91,11 @@ impl std::error::Error for Error {}
 
 impl Vault for OSKeyring {
     type Credentials = Pin;
-    type AuthDone = Ready<Result<(), Self::Error>>;
     type Error = Error;
 
-    fn unlock(&mut self, pin: impl Into<Self::Credentials>) -> Self::AuthDone {
+    async fn unlock(&mut self, pin: impl Into<Self::Credentials>) -> Result<(), Self::Error> {
         let pin = pin.into();
-        let res = self
-            .get_key(&pin)
+        self.get_key(&pin)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
@@ -106,8 +104,7 @@ impl Vault for OSKeyring {
             .and_then(move |r| {
                 self.root = Some(r);
                 Ok(())
-            });
-        core::future::ready(res)
+            })
     }
 
     fn get_root(&self) -> Option<&RootAccount> {

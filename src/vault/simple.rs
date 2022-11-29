@@ -1,5 +1,3 @@
-use core::future::{ready, Ready};
-
 use crate::{RootAccount, Vault};
 
 /// A vault that holds secrets in memory
@@ -80,11 +78,10 @@ impl std::error::Error for Error {}
 impl Vault for Simple {
     type Credentials = ();
     type Error = Error;
-    type AuthDone = Ready<Result<(), Self::Error>>;
 
-    fn unlock(&mut self, _cred: impl Into<Self::Credentials>) -> Self::AuthDone {
+    async fn unlock(&mut self, _cred: impl Into<Self::Credentials>) -> Result<(), Self::Error> {
         self.unlocked = self.locked.take();
-        ready(Ok(()))
+        Ok(())
     }
 
     fn get_root(&self) -> Option<&RootAccount> {

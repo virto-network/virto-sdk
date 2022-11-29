@@ -118,12 +118,10 @@ pub struct PassCreds {
 impl Vault for Pass {
     type Credentials = PassCreds;
     type Error = Error;
-    type AuthDone = Ready<Result<(), Self::Error>>;
 
-    fn unlock(&mut self, creds: impl Into<Self::Credentials>) -> Self::AuthDone {
+    async fn unlock(&mut self, creds: impl Into<Self::Credentials>) -> Result<(), Self::Error> {
         let creds = creds.into();
-        let res = self
-            .get_key(&creds)
+        self.get_key(&creds)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
@@ -132,8 +130,7 @@ impl Vault for Pass {
             .and_then(move |r| {
                 self.root = Some(r);
                 Ok(())
-            });
-        core::future::ready(res)
+            })
     }
 
     fn get_root(&self) -> Option<&RootAccount> {

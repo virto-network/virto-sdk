@@ -1,3 +1,4 @@
+#![feature(async_fn_in_trait, impl_trait_projections)]
 // #![feature(result_option_inspect)]
 #![cfg_attr(not(feature = "std"), no_std)]
 //! `libwallet` is the one-stop tool to build easy, slightly opinionated crypto wallets
@@ -14,7 +15,7 @@ mod key_pair;
 mod substrate_ext;
 
 use arrayvec::ArrayVec;
-use core::{convert::TryInto, fmt, future::Future};
+use core::{convert::TryInto, fmt};
 use key_pair::any::AnySignature;
 
 #[cfg(feature = "mnemonic")]
@@ -32,13 +33,12 @@ type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
 /// Abstration for storage of private keys that are protected by some credentials.
 pub trait Vault {
     type Credentials;
-    type AuthDone: Future<Output = core::result::Result<(), Self::Error>>;
     type Error;
 
     /// Use a set of credentials to make the guarded keys available to the user.
     /// It returns a `Future` to allow for vaults that might take an arbitrary amount
     /// of time getting the secret ready like waiting for some user phisical interaction.
-    fn unlock(&mut self, cred: impl Into<Self::Credentials>) -> Self::AuthDone;
+    async fn unlock(&mut self, cred: impl Into<Self::Credentials>) -> Result<(), Self::Error>;
 
     /// Get the root account container of the supported private key pairs
     /// if the vault hasn't been unlocked it should return `None`
