@@ -9,7 +9,7 @@ repository = "https://github.com/valibre-org/sube"
 
 [dependencies]
 async-trait = "0.1.53"
-blake2 = { version = "0.10.4", default-features = false }
+sp-core = { version = "7.0.0", default-features = false, features = ["std"] }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
 frame-metadata = { version = "15.0.0", default-features = false, features = ["std"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
