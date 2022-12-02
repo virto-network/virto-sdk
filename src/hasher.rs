@@ -1,6 +1,9 @@
 use crate::meta_ext::Hasher;
 use crate::prelude::*;
-use sp_core::hashing::{blake2_128, blake2_256};
+use blake2::{
+    digest::{Update, VariableOutput},
+    Blake2bVar,
+};
 use core::hash::Hasher as _;
 
 /// hashes and encodes the provided input with the specified hasher
@@ -13,10 +16,16 @@ pub fn hash<I: AsRef<[u8]>>(hasher: &Hasher, input: I) -> Vec<u8> {
         input = data.as_ref();
     };
 
+    fn blake2(size: usize, input: &[u8]) -> Vec<u8> {
+        let mut hasher = Blake2bVar::new(size).expect("valid size");
+        hasher.update(input);
+        hasher.finalize_boxed().to_vec()
+    }
+
     match hasher {
-        Hasher::Blake2_128 => blake2_128(input).to_vec(),
-        Hasher::Blake2_256 => blake2_256(input).to_vec(),
-        Hasher::Blake2_128Concat => [blake2_128(input).as_slice(), input].concat(),
+        Hasher::Blake2_128 => blake2(16, input),
+        Hasher::Blake2_256 => blake2(32, input).to_vec(),
+        Hasher::Blake2_128Concat => [blake2(16, input).as_slice(), input].concat(),
         Hasher::Twox128 => twox_hash(&input),
         Hasher::Twox256 => unimplemented!(),
         Hasher::Twox64Concat => twox_hash_concat(input),
