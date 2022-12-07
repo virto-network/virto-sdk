@@ -4,8 +4,9 @@ use core::{borrow::Borrow, slice};
 use codec::Decode;
 #[cfg(any(feature = "v12", feature = "v13"))]
 use frame_metadata::decode_different::DecodeDifferent;
-use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
+use frame_metadata::{PalletCallMetadata, RuntimeMetadata, RuntimeMetadataPrefixed};
 
+use scale_info::{form::PortableForm};
 #[cfg(feature = "v12")]
 pub use v12::*;
 #[cfg(feature = "v13")]
@@ -108,6 +109,8 @@ pub trait Pallet<'a> {
 
     fn name(&self) -> &str;
     fn storage(&self) -> Option<&Self::Storage>;
+    fn ty_id(&self) -> u32;
+    fn get_calls(&self) -> Option<&PalletCallMetadata<PortableForm>>;
 }
 
 pub trait Storage<'a> {
@@ -228,6 +231,17 @@ impl<'a> Pallet<'a> for PalletMeta {
         #[cfg(not(feature = "v14"))]
         let name = self.name.decoded();
         name
+    }
+
+    fn get_calls(&self) -> Option<&PalletCallMetadata<PortableForm>> {
+        self.calls.iter().find(|_call| {
+            true
+        })
+    }
+
+    fn ty_id(&self) -> u32 {
+        dbg!(self);
+        0u32
     }
 }
 

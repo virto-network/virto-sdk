@@ -324,6 +324,10 @@ impl StorageKey {
         let map_keys = path.collect::<Vec<_>>();
         Some((pallet, item, map_keys))
     }
+
+    pub fn ty_id (&self) -> u32 {
+        self.1
+    }
 }
 
 impl fmt::Display for StorageKey {
@@ -338,7 +342,7 @@ impl AsRef<[u8]> for StorageKey {
     }
 }
 
-fn to_camel(term: &str) -> String {
+pub fn to_camel(term: &str) -> String {
     let underscore_count = term.chars().filter(|c| *c == '-').count();
     let mut result = String::with_capacity(term.len() - underscore_count);
     let mut at_new_word = true;

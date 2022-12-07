@@ -66,15 +66,17 @@ enum Cmd {
     #[structopt(visible_alias = "e")]
     Encode {
         /// An id or the name of a type that exists in the type registry
-        #[structopt(short, required_unless = "pallet-call")]
-        ty: Option<String>,
-        /// Indicates that the input values are the parameters of `<pallet>/<call>`
+        #[structopt(short, required_unless = "pallet-call", default_value = "0")]
+        ty: String,
+        /// Indicates that the input values are the parameters of `<pallet>/<call>` 
         #[structopt(short = "c", conflicts_with = "ty")]
         pallet_call: Option<String>,
         /// Create an object from the provided list of values which can be
         /// - primitive
         #[structopt(value_name = "VALUE")]
         values: Vec<String>,
+        #[structopt(subcommand)]
+        cmd: Option<EncodeOpt>,
     },
     /// Convert SCALE encoded data to a human-readable format(JSON)
     #[structopt(visible_alias = "d")]
@@ -119,6 +121,21 @@ arg_enum! {
         Id,
         Name,
         Entry,
+    }
+}
+
+#[derive(StructOpt, Debug)]
+enum EncodeOpt {
+    /// Encode extrinsics calls payloads.
+    /// Returns the unsigned encoded call, without the call hash
+    #[structopt(visible_alias = "e")]
+    Extrinsic {
+        #[structopt(short, long)]
+        pallet: String,
+        #[structopt(short, long)]
+        call: String,
+        #[structopt(value_name = "VALUE")]
+        values: Vec<String>,
     }
 }
 
@@ -270,27 +287,81 @@ async fn run() -> Result<()> {
             ty,
             values,
             pallet_call,
+            cmd,
         } => {
-            let ty = if let Some(_call) = pallet_call {
-                0
-            } else {
-                let ty = ty.unwrap();
-                parse_ty(&ty, &meta.types)
-                    .ok_or_else(|| anyhow!("'{}' is not in the registry", ty))?
-            };
+            fn get_pairs<'a>(values: &'a Vec<String>) -> Vec<(&str, JsonValue)> {
+                values
+                    .iter()
+                    .map(|it| {
+                        let (k, v) = it.split_once("=").expect("could not split value");
+                        let value = v
+                            .parse::<JsonValue>()
+                            .expect(&format!("value for {} should be parsed", k).to_string());
 
-            let pairs = values
-                .iter()
-                .map(|it| {
-                    it.split_once("=")
-                        .map(|(k, v)| v.parse::<JsonValue>().map(|v| (k, v)))
-                        .transpose()
-                })
-                .collect::<core::result::Result<Vec<_>, _>>()?;
-            println!("{:?}", pairs);
+                        (k, value)
+                    })
+                    .collect()
+            }
 
-            // Check that every input value is a key-value pair
-            client.encode_iter(pairs, ty).await?
+            match cmd {
+                // Extrinsic encode
+                Some(EncodeOpt::Extrinsic {
+                    pallet,
+                    call,
+                    values,
+                }) => {
+                    let ty = {
+                        let pallet = meta.pallet_by_name(&pallet).expect("pallet does not exist");
+                        pallet
+                            .get_calls()
+                            .expect("pallet does not have calls")
+                            .ty
+                            .id()
+                    };
+
+                    let pairs = get_pairs(&values);
+
+                    let params = {
+                        let mut params = serde_json::json!({})
+                            .as_object()
+                            .expect("create json object")
+                            .clone();
+
+                        for (k, v) in pairs {
+                            params.insert(String::from(k), v);
+                        }
+
+                        JsonValue::Object(params)
+                    };
+                    
+                    let value = {
+                        let mut root = serde_json::json!({})
+                            .as_object()
+                            .expect("create json object")
+                            .clone();
+                        root.insert(call, params);
+
+                        JsonValue::Object(root)
+                    };
+
+                    client.encode(value, ty).await?
+                }
+                // Storage encode (default)
+                _ => {
+                    let ty = if let Some(_call) = pallet_call {
+                        0
+                    } else {
+                        parse_ty(&ty, &meta.types)
+                            .ok_or_else(|| anyhow!("'{}' is not in the registry", ty))?
+                    };
+                    
+                    let pairs = get_pairs(&values);
+                    println!("{:?}", pairs);
+                    
+                    // Check that every input value is a key-value pair
+                    client.encode_iter(pairs, ty).await?
+                }
+            }
         }
         Cmd::Decode { ty } => {
             let ty = parse_ty(&ty, &meta.types)
