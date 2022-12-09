@@ -68,7 +68,7 @@ enum Cmd {
         /// An id or the name of a type that exists in the type registry
         #[structopt(short, required_unless = "pallet-call", default_value = "0")]
         ty: String,
-        /// Indicates that the input values are the parameters of `<pallet>/<call>` 
+        /// Indicates that the input values are the parameters of `<pallet>/<call>`
         #[structopt(short = "c", conflicts_with = "ty")]
         pallet_call: Option<String>,
         /// Create an object from the provided list of values which can be
@@ -136,7 +136,7 @@ enum EncodeOpt {
         call: String,
         #[structopt(value_name = "VALUE")]
         values: Vec<String>,
-    }
+    },
 }
 
 #[async_std::main]
@@ -303,6 +303,36 @@ async fn run() -> Result<()> {
                     .collect()
             }
 
+            fn decode_addresses(value: &JsonValue) -> JsonValue {
+                match value {
+                    JsonValue::Object(o) => {
+                        let mut m = serde_json::json!({}).clone();
+                        let m = m.as_object_mut().unwrap();
+
+                        for (k, v) in o.clone() {
+                            m.insert(k.clone(), decode_addresses(&v.clone()));
+                        }
+
+                        JsonValue::Object(m.clone())
+                    }
+                    JsonValue::String(s) => {
+                        if s.starts_with("0x") {
+                            let input = s.as_str();
+                            let decoded = hex::decode(&input[2..])
+                                .expect("strings that start with 0x should be hex encoded")
+                                .into_iter()
+                                .map(|b| serde_json::json!(b))
+                                .collect::<Vec<JsonValue>>();
+
+                            JsonValue::Array(decoded)
+                        } else {
+                            JsonValue::String(s.clone())
+                        }
+                    }
+                    _ => value.clone(),
+                }
+            }
+
             match cmd {
                 // Extrinsic encode
                 Some(EncodeOpt::Extrinsic {
@@ -328,12 +358,12 @@ async fn run() -> Result<()> {
                             .clone();
 
                         for (k, v) in pairs {
-                            params.insert(String::from(k), v);
+                            params.insert(String::from(k), decode_addresses(&v));
                         }
 
                         JsonValue::Object(params)
                     };
-                    
+
                     let value = {
                         let mut root = serde_json::json!({})
                             .as_object()
@@ -354,10 +384,10 @@ async fn run() -> Result<()> {
                         parse_ty(&ty, &meta.types)
                             .ok_or_else(|| anyhow!("'{}' is not in the registry", ty))?
                     };
-                    
+
                     let pairs = get_pairs(&values);
                     println!("{:?}", pairs);
-                    
+
                     // Check that every input value is a key-value pair
                     client.encode_iter(pairs, ty).await?
                 }
