@@ -340,13 +340,16 @@ async fn run() -> Result<()> {
                     call,
                     values,
                 }) => {
-                    let ty = {
+                    let (ty, index) = {
                         let pallet = meta.pallet_by_name(&pallet).expect("pallet does not exist");
-                        pallet
-                            .get_calls()
-                            .expect("pallet does not have calls")
-                            .ty
-                            .id()
+                        (
+                            pallet
+                                .get_calls()
+                                .expect("pallet does not have calls")
+                                .ty
+                                .id(),
+                            pallet.index,
+                        )
                     };
 
                     let pairs = get_pairs(&values);
@@ -374,7 +377,7 @@ async fn run() -> Result<()> {
                         JsonValue::Object(root)
                     };
 
-                    client.encode(value, ty).await?
+                    [vec![index], client.encode(value, ty).await?].concat()
                 }
                 // Storage encode (default)
                 _ => {
@@ -401,6 +404,13 @@ async fn run() -> Result<()> {
             output.format(client.decode(input, ty).await?)?
         }
     };
+
+    let out = match output {
+        Output::Json(_) => out,
+        Output::Scale => todo!(),
+        Output::Hex => format!("0x{}", hex::encode(out)).as_bytes().to_vec(),
+    };
+
     io::stdout().write_all(&out).await?;
     writeln!(io::stdout()).await?;
     Ok(())
