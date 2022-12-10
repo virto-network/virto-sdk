@@ -59,6 +59,7 @@ pub enum SpecificType {
     Tuple(TupleOrArray),
     Struct(Vec<(String, TypeId)>), StructUnit, StructNewType(TypeId), StructTuple(Vec<TypeId>),
     Variant(String, Vec<Variant>, Option<u8>),
+    Compact(TypeId),
 }
 
 impl From<(&Type, &PortableRegistry)> for SpecificType {
@@ -147,7 +148,7 @@ impl From<(&Type, &PortableRegistry)> for SpecificType {
                 TypeDefPrimitive::U256 => unimplemented!(),
                 TypeDefPrimitive::I256 => unimplemented!(),
             },
-            Def::Compact(_c) => todo!(),
+            Def::Compact(c) => Self::Compact(c.type_param().id()),
             Def::BitSequence(_b) => todo!(),
         }
     }

@@ -1,6 +1,7 @@
 use crate::{EnumVariant, SpecificType};
 use alloc::{collections::BTreeMap, vec::Vec};
 use bytes::{Buf, Bytes};
+use codec::Encode;
 use core::{convert::TryInto, str};
 use scale_info::{prelude::*, PortableRegistry, TypeDefPrimitive as Primitive};
 use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple, SerializeTupleStruct};
@@ -111,6 +112,28 @@ impl<'a> Serialize for Value<'a> {
             I32 => ser.serialize_i32(data.get_i32_le()),
             I64 => ser.serialize_i64(data.get_i64_le()),
             I128 => ser.serialize_i128(data.get_i128_le()),
+            Compact(ty) => {
+                let type_def = self
+                    .registry
+                    .resolve(ty)
+                    .expect("not found in registry")
+                    .type_def();
+
+                    if let scale_info::TypeDef::Primitive(p) = type_def {
+                        use codec::Compact;
+                        if matches!(p, Primitive::U32) {
+                            ser.serialize_bytes(&Compact(data.get_u32_le()).encode())
+                        } else if matches!(p, Primitive::U64) {
+                            ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
+                        } else if matches!(p, Primitive::U128) {
+                            ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
+                        } else {
+                            unimplemented!()
+                        }
+                    } else {
+                        unimplemented!()
+                    }
+            },
             Bytes(_) => {
                 let (_, s) = sequence_len(data.chunk());
                 data.advance(s);

@@ -1,7 +1,8 @@
 use crate::prelude::*;
 use bytes::BufMut;
+use codec::Encode;
 use core::fmt;
-use scale_info::{PortableRegistry, TypeInfo};
+use scale_info::{PortableRegistry, TypeDefPrimitive, TypeInfo};
 use serde::{ser, Serialize};
 
 use crate::{EnumVariant, SpecificType, TupleOrArray};
@@ -133,6 +134,34 @@ where
         };
         Serializer { out, ty, registry }
     }
+
+    fn serialize_compact(&mut self, ty: u32, v: u128) -> Result<()> {
+        let type_def = self
+            .registry
+            .expect("registry not present")
+            .resolve(ty)
+            .expect("type T for Compact<T> not found in registry")
+            .type_def();
+
+        let compact_buffer = if let scale_info::TypeDef::Primitive(p) = type_def {
+            use codec::Compact;
+            if matches!(p, TypeDefPrimitive::U32) {
+                Compact(v as u32).encode()
+            } else if matches!(p, TypeDefPrimitive::U64) {
+                Compact(v as u64).encode()
+            } else if matches!(p, TypeDefPrimitive::U128) {
+                Compact(v).encode()
+            } else {
+                todo!()
+            }
+        } else {
+            todo!()
+        };
+
+        self.out.put_slice(&compact_buffer[..]);
+        
+        Ok(())
+    }
 }
 
 impl<'a, 'reg, B> ser::Serializer for &'a mut Serializer<'reg, B>
@@ -215,6 +244,7 @@ where
             Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
+            Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
             _ => self.out.put_u64_le(v),
         }
         Ok(())
@@ -231,6 +261,7 @@ where
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
             Some(SpecificType::U64) => self.serialize_u64(v as u64)?,
+            Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
             _ => self.out.put_u128_le(v),
         }
         Ok(())
