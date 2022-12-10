@@ -108,7 +108,7 @@ pub mod ws;
 mod hasher;
 pub mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
-mod rpc;
+pub mod rpc;
 
 /// Main interface for interacting with the Substrate based blockchain
 #[derive(Debug)]
