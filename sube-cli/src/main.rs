@@ -285,6 +285,7 @@ async fn run() -> Result<()> {
                     it.split_once("=")
                         .map(|(k, v)| v.parse::<JsonValue>().map(|v| (k, v)))
                         .transpose()
+                        .map(|k| k.unwrap())
                 })
                 .collect::<core::result::Result<Vec<_>, _>>()?;
             println!("{:?}", pairs);
