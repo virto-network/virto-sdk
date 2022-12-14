@@ -143,17 +143,14 @@ where
             .expect("type T for Compact<T> not found in registry")
             .type_def();
 
-        let compact_buffer = if let scale_info::TypeDef::Primitive(p) = type_def {
-            use codec::Compact;
-            if matches!(p, TypeDefPrimitive::U32) {
-                Compact(v as u32).encode()
-            } else if matches!(p, TypeDefPrimitive::U64) {
-                Compact(v as u64).encode()
-            } else if matches!(p, TypeDefPrimitive::U128) {
-                Compact(v).encode()
-            } else {
-                todo!()
-            }
+        use scale_info::TypeDef::Primitive;
+        use codec::Compact;
+        let compact_buffer = if matches!(type_def, Primitive(TypeDefPrimitive::U32)) {
+            Compact(v as u32).encode()
+        } else if matches!(type_def, Primitive(TypeDefPrimitive::U64)) {
+            Compact(v as u64).encode()
+        } else if matches!(type_def, Primitive(TypeDefPrimitive::U128)) {
+            Compact(v).encode()
         } else {
             todo!()
         };
