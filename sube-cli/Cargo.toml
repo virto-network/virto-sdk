@@ -1,0 +1,47 @@
+[package]
+name = "sube-cli"
+description = "CLI for SUBE"
+license = "Apache-2.0"
+version = "0.5.1"
+authors = ["Daniel Olano <daniel@olanod.com>"]
+edition = "2018"
+repository = "https://github.com/valibre-org/sube"
+
+[dependencies]
+async-trait = "0.1.53"
+log = "0.4.17"
+codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
+structopt = { version = "0.3.26", optional = true }
+async-std = { version = "1.11.0", default_features = false, optional = true }
+anyhow = { version = "1.0.57", optional = true }
+surf = { version = "2.3.2", default_features = false, optional = true }
+sube = { path = "../sube-core" }
+scales = { version = "1.0.0-beta2", package = "scale-serialization", default-features = false, optional = true }
+stderrlog = { version = "0.5.1", optional = true }
+serde = { version = "1.0.137", default-features = false, optional = true }
+serde_json = { version = "1.0.80", default-features = false, optional = true }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+async-std = { version = "1.11.0", features = ["attributes"] }
+
+[features]
+default = [
+	"surf",
+	"scales",
+	"stderrlog",
+	"structopt",
+	"anyhow",
+	"serde",
+	"serde_json",
+	"sube/bin",
+	"async-std/attributes"
+]
+
+[[bin]]
+name = "sube"
+path = "src/main.rs"
+required-features = ["default"]
+
+[package.metadata.docs.rs]
+features = ["http"]
