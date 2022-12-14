@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use bytes::BufMut;
 use codec::Encode;
-use core::fmt;
+use core::fmt::{self, Debug};
 use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
 
@@ -39,7 +39,7 @@ where
 pub fn to_bytes<B, T>(bytes: B, value: &T) -> Result<()>
 where
     T: Serialize + ?Sized,
-    B: BufMut,
+    B: BufMut + Debug,
 {
     to_bytes_with_info(bytes, value, None)
 }
@@ -51,7 +51,7 @@ pub fn to_bytes_with_info<B, T>(
 ) -> Result<()>
 where
     T: Serialize + ?Sized,
-    B: BufMut,
+    B: BufMut + Debug,
 {
     let mut serializer = Serializer::new(bytes, registry_type);
     value.serialize(&mut serializer)?;
@@ -65,7 +65,7 @@ pub fn to_bytes_from_iter<B, I, K, V>(
     registry_type: (&PortableRegistry, TypeId),
 ) -> Result<()>
 where
-    B: BufMut,
+    B: BufMut + Debug,
     I: IntoIterator<Item = (K, V)>,
     K: Into<String>,
     V: Into<crate::JsonValue>,
@@ -112,7 +112,11 @@ where
 
 /// A serializer that encodes types to SCALE with the option to coerce
 /// the output to an equivalent representation given by some type information.
-pub struct Serializer<'reg, B> {
+#[derive(Debug)]
+pub struct Serializer<'reg, B>
+where
+    B: Debug
+{
     out: B,
     ty: Option<SpecificType>,
     registry: Option<&'reg PortableRegistry>,
@@ -120,7 +124,7 @@ pub struct Serializer<'reg, B> {
 
 impl<'reg, B> Serializer<'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     pub fn new(out: B, registry_type: Option<(&'reg PortableRegistry, TypeId)>) -> Self {
         let (registry, ty) = match registry_type.map(|(reg, ty_id)| {
@@ -157,7 +161,7 @@ where
 
 impl<'a, 'reg, B> ser::Serializer for &'a mut Serializer<'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
@@ -410,7 +414,7 @@ where
 
 impl<'a, 'reg, B> Serializer<'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     // A check to run for every serialize fn since any type could be an Option::Some
     // if the type info says its an Option assume its Some and extract the inner type
@@ -510,14 +514,20 @@ where
 }
 
 ///
-pub enum TypedSerializer<'a, 'reg, B> {
+pub enum TypedSerializer<'a, 'reg, B>
+where
+    B: Debug
+{
     Empty(&'a mut Serializer<'reg, B>),
     Composite(&'a mut Serializer<'reg, B>, Vec<TypeId>),
     Sequence(&'a mut Serializer<'reg, B>, TypeId),
     Enum(&'a mut Serializer<'reg, B>),
 }
 
-impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 'reg, B> {
+impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 'reg, B>
+where
+    B: Debug
+{
     fn from(ser: &'a mut Serializer<'reg, B>) -> Self {
         use SpecificType::*;
         match ser.ty.take() {
@@ -545,7 +555,11 @@ impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 
     }
 }
 
-impl<'a, 'reg, B> TypedSerializer<'a, 'reg, B> {
+
+impl<'a, 'reg, B> TypedSerializer<'a, 'reg, B>
+where
+    B: Debug
+{
     fn serializer(&mut self) -> &mut Serializer<'reg, B> {
         match self {
             Self::Empty(ser)
@@ -558,7 +572,7 @@ impl<'a, 'reg, B> TypedSerializer<'a, 'reg, B> {
 
 impl<'a, 'reg, B> ser::SerializeMap for TypedSerializer<'a, 'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
@@ -616,7 +630,7 @@ where
 
 impl<'a, 'reg, B> ser::SerializeSeq for TypedSerializer<'a, 'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
@@ -652,7 +666,7 @@ where
 
 impl<'a, 'reg, B> ser::SerializeStruct for TypedSerializer<'a, 'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
@@ -671,7 +685,7 @@ where
 
 impl<'a, 'reg, B> ser::SerializeStructVariant for TypedSerializer<'a, 'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
@@ -690,7 +704,7 @@ where
 
 impl<'a, 'reg, B> ser::SerializeTuple for TypedSerializer<'a, 'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
@@ -709,7 +723,7 @@ where
 
 impl<'a, 'reg, B> ser::SerializeTupleStruct for TypedSerializer<'a, 'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
@@ -728,7 +742,7 @@ where
 
 impl<'a, 'reg, B> ser::SerializeTupleVariant for TypedSerializer<'a, 'reg, B>
 where
-    B: BufMut,
+    B: BufMut + Debug,
 {
     type Ok = ();
     type Error = Error;
