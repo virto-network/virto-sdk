@@ -2,7 +2,7 @@ use crate::prelude::*;
 use bytes::BufMut;
 use codec::Encode;
 use core::fmt;
-use scale_info::{PortableRegistry, TypeDefPrimitive, TypeInfo};
+use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
 
 use crate::{EnumVariant, SpecificType, TupleOrArray};
@@ -136,20 +136,14 @@ where
     }
 
     fn serialize_compact(&mut self, ty: u32, v: u128) -> Result<()> {
-        let type_def = self
-            .registry
-            .expect("registry not present")
-            .resolve(ty)
-            .expect("type T for Compact<T> not found in registry")
-            .type_def();
+        let type_def = self.resolve(ty);
 
-        use scale_info::TypeDef::Primitive;
         use codec::Compact;
-        let compact_buffer = if matches!(type_def, Primitive(TypeDefPrimitive::U32)) {
+        let compact_buffer = if matches!(type_def, SpecificType::U32) {
             Compact(v as u32).encode()
-        } else if matches!(type_def, Primitive(TypeDefPrimitive::U64)) {
+        } else if matches!(type_def, SpecificType::U64) {
             Compact(v as u64).encode()
-        } else if matches!(type_def, Primitive(TypeDefPrimitive::U128)) {
+        } else if matches!(type_def, SpecificType::U128) {
             Compact(v).encode()
         } else {
             todo!()
