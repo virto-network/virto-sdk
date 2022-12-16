@@ -289,7 +289,7 @@ async fn run() -> Result<()> {
             pallet_call,
             cmd,
         } => {
-            fn get_pairs<'a>(values: &'a Vec<String>) -> Vec<(&str, JsonValue)> {
+            fn get_pairs(values: &[String]) -> Vec<(&str, JsonValue)> {
                 values
                     .iter()
                     .map(|it| {
@@ -306,14 +306,7 @@ async fn run() -> Result<()> {
             fn decode_addresses(value: &JsonValue) -> JsonValue {
                 match value {
                     JsonValue::Object(o) => {
-                        let mut m = serde_json::json!({}).clone();
-                        let m = m.as_object_mut().unwrap();
-
-                        for (k, v) in o.clone() {
-                            m.insert(k.clone(), decode_addresses(&v.clone()));
-                        }
-
-                        JsonValue::Object(m.clone())
+                        o.iter().map(|(k, v)| (k, decode_addresses(v))).collect()
                     }
                     JsonValue::String(s) => {
                         if s.starts_with("0x") {
@@ -353,29 +346,8 @@ async fn run() -> Result<()> {
                     };
 
                     let pairs = get_pairs(&values);
-
-                    let params = {
-                        let mut params = serde_json::json!({})
-                            .as_object()
-                            .expect("create json object")
-                            .clone();
-
-                        for (k, v) in pairs {
-                            params.insert(String::from(k), decode_addresses(&v));
-                        }
-
-                        JsonValue::Object(params)
-                    };
-
-                    let value = {
-                        let mut root = serde_json::json!({})
-                            .as_object()
-                            .expect("create json object")
-                            .clone();
-                        root.insert(call, params);
-
-                        JsonValue::Object(root)
-                    };
+                    let params = pairs.iter().map(|(k, v)| (*k, decode_addresses(v))).collect::<JsonValue>();
+                    let value = serde_json::json!({ call: params });
 
                     [vec![index], client.encode(value, ty).await?].concat()
                 }
