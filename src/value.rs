@@ -119,21 +119,20 @@ impl<'a> Serialize for Value<'a> {
                     .expect("not found in registry")
                     .type_def();
 
-                    if let scale_info::TypeDef::Primitive(p) = type_def {
-                        use codec::Compact;
-                        if matches!(p, Primitive::U32) {
-                            ser.serialize_bytes(&Compact(data.get_u32_le()).encode())
-                        } else if matches!(p, Primitive::U64) {
-                            ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
-                        } else if matches!(p, Primitive::U128) {
-                            ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
-                        } else {
-                            unimplemented!()
-                        }
-                    } else {
-                        unimplemented!()
+                use codec::Compact;
+                match type_def {
+                    TypeDef::Primitive(Primitive::U32) => {
+                        ser.serialize_bytes(&Compact(data.get_u32_le()).encode())
                     }
-            },
+                    TypeDef::Primitive(Primitive::U64) => {
+                        ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
+                    }
+                    TypeDef::Primitive(Primitive::U128) => {
+                        ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
+                    }
+                    _ => unimplemented!(),
+                }
+            }
             Bytes(_) => {
                 let (_, s) = sequence_len(data.chunk());
                 data.advance(s);

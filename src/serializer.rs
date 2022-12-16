@@ -115,7 +115,7 @@ where
 #[derive(Debug)]
 pub struct Serializer<'reg, B>
 where
-    B: Debug
+    B: Debug,
 {
     out: B,
     ty: Option<SpecificType>,
@@ -143,18 +143,15 @@ where
         let type_def = self.resolve(ty);
 
         use codec::Compact;
-        let compact_buffer = if matches!(type_def, SpecificType::U32) {
-            Compact(v as u32).encode()
-        } else if matches!(type_def, SpecificType::U64) {
-            Compact(v as u64).encode()
-        } else if matches!(type_def, SpecificType::U128) {
-            Compact(v).encode()
-        } else {
-            todo!()
+        let compact_buffer = match type_def {
+            SpecificType::U32 => Compact(v as u32).encode(),
+            SpecificType::U64 => Compact(v as u64).encode(),
+            SpecificType::U128 => Compact(v).encode(),
+            _ => todo!(),
         };
 
         self.out.put_slice(&compact_buffer[..]);
-        
+
         Ok(())
     }
 }
@@ -516,7 +513,7 @@ where
 ///
 pub enum TypedSerializer<'a, 'reg, B>
 where
-    B: Debug
+    B: Debug,
 {
     Empty(&'a mut Serializer<'reg, B>),
     Composite(&'a mut Serializer<'reg, B>, Vec<TypeId>),
@@ -526,7 +523,7 @@ where
 
 impl<'a, 'reg, B: 'a> From<&'a mut Serializer<'reg, B>> for TypedSerializer<'a, 'reg, B>
 where
-    B: Debug
+    B: Debug,
 {
     fn from(ser: &'a mut Serializer<'reg, B>) -> Self {
         use SpecificType::*;
@@ -555,10 +552,9 @@ where
     }
 }
 
-
 impl<'a, 'reg, B> TypedSerializer<'a, 'reg, B>
 where
-    B: Debug
+    B: Debug,
 {
     fn serializer(&mut self) -> &mut Serializer<'reg, B> {
         match self {
