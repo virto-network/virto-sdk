@@ -109,7 +109,6 @@ pub trait Pallet<'a> {
 
     fn name(&self) -> &str;
     fn storage(&self) -> Option<&Self::Storage>;
-    fn ty_id(&self) -> u32;
     fn get_calls(&self) -> Option<&PalletCallMetadata<PortableForm>>;
 }
 
@@ -234,14 +233,7 @@ impl<'a> Pallet<'a> for PalletMeta {
     }
 
     fn get_calls(&self) -> Option<&PalletCallMetadata<PortableForm>> {
-        self.calls.iter().find(|_call| {
-            true
-        })
-    }
-
-    fn ty_id(&self) -> u32 {
-        dbg!(self);
-        0u32
+        self.calls.iter().find(|_| true)
     }
 }
 

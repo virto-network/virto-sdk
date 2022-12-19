@@ -71,6 +71,8 @@ compile_error!("Only one metadata version can be enabled at the moment");
 #[macro_use]
 extern crate alloc;
 
+pub mod util;
+
 pub use codec;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use meta::Metadata;
@@ -90,6 +92,8 @@ use once_cell::unsync::OnceCell;
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
+
+use crate::util::to_camel;
 
 mod prelude {
     pub use alloc::boxed::Box;
@@ -340,22 +344,4 @@ impl AsRef<[u8]> for StorageKey {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
     }
-}
-
-pub fn to_camel(term: &str) -> String {
-    let underscore_count = term.chars().filter(|c| *c == '-').count();
-    let mut result = String::with_capacity(term.len() - underscore_count);
-    let mut at_new_word = true;
-
-    for c in term.chars().skip_while(|&c| c == '-') {
-        if c == '-' {
-            at_new_word = true;
-        } else if at_new_word {
-            result.push(c.to_ascii_uppercase());
-            at_new_word = false;
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
