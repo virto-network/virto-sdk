@@ -233,7 +233,7 @@ impl<'a> Pallet<'a> for PalletMeta {
     }
 
     fn get_calls(&self) -> Option<&PalletCallMetadata<PortableForm>> {
-        self.calls.iter().find(|_| true)
+        self.calls.as_ref()
     }
 }
 
