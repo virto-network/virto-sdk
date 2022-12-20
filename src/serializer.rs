@@ -611,7 +611,14 @@ where
             TypedSerializer::Enum(ser) => {
                 if let Some(var @ SpecificType::Variant(_, _, Some(_))) = &ser.ty {
                     if let EnumVariant::NewType(_, _, ty_id) = var.into() {
-                        ser.ty = Some(ser.resolve(ty_id));
+                        let ty = ser.resolve(ty_id);
+
+                        ser.ty = Some(if let SpecificType::StructNewType(ty_id) = ty {
+                            let ty = ser.resolve(ty_id);
+                            ty
+                        } else {
+                            ty
+                        });
                     }
                 }
             }
