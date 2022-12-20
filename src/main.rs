@@ -65,16 +65,6 @@ enum Cmd {
     /// Convert human-readable data(JSON atm.) to SCALE format
     #[structopt(visible_alias = "e")]
     Encode {
-        /// An id or the name of a type that exists in the type registry
-        #[structopt(short, required_unless = "pallet-call", default_value = "0")]
-        ty: String,
-        /// Indicates that the input values are the parameters of `<pallet>/<call>`
-        #[structopt(short = "c", conflicts_with = "ty")]
-        pallet_call: Option<String>,
-        /// Create an object from the provided list of values which can be
-        /// - primitive
-        #[structopt(value_name = "VALUE")]
-        values: Vec<String>,
         #[structopt(subcommand)]
         cmd: Option<EncodeOpt>,
     },
@@ -129,11 +119,23 @@ enum EncodeOpt {
     /// Encode extrinsics calls payloads.
     /// Returns the unsigned encoded call, without the call hash
     #[structopt(visible_alias = "e")]
-    Extrinsic {
+    Call {
         #[structopt(short, long)]
         pallet: String,
         #[structopt(short, long)]
         call: String,
+        #[structopt(value_name = "VALUE")]
+        values: Vec<String>,
+    },
+    Type {
+        /// An id or the name of a type that exists in the type registry
+        #[structopt(short, required_unless = "pallet-call")]
+        ty: String,
+        /// Indicates that the input values are the parameters of `<pallet>/<call>`
+        #[structopt(short = "c", conflicts_with = "ty")]
+        pallet_call: Option<String>,
+        /// Create an object from the provided list of values which can be
+        /// - primitive
         #[structopt(value_name = "VALUE")]
         values: Vec<String>,
     },
@@ -283,12 +285,7 @@ async fn run() -> Result<()> {
                 _ => output.format(&meta.types)?,
             }
         }
-        Cmd::Encode {
-            ty,
-            values,
-            pallet_call,
-            cmd,
-        } => {
+        Cmd::Encode { cmd } => {
             fn get_pairs(values: &[String]) -> Vec<(&str, JsonValue)> {
                 values
                     .iter()
@@ -328,7 +325,7 @@ async fn run() -> Result<()> {
 
             match cmd {
                 // Extrinsic encode
-                Some(EncodeOpt::Extrinsic {
+                Some(EncodeOpt::Call {
                     pallet,
                     call,
                     values,
@@ -346,13 +343,20 @@ async fn run() -> Result<()> {
                     };
 
                     let pairs = get_pairs(&values);
-                    let params = pairs.iter().map(|(k, v)| (*k, decode_addresses(v))).collect::<JsonValue>();
+                    let params = pairs
+                        .iter()
+                        .map(|(k, v)| (*k, decode_addresses(v)))
+                        .collect::<JsonValue>();
                     let value = serde_json::json!({ call: params });
 
                     [vec![index], client.encode(value, ty).await?].concat()
                 }
                 // Storage encode (default)
-                _ => {
+                Some(EncodeOpt::Type {
+                    ty,
+                    pallet_call,
+                    values,
+                }) => {
                     let ty = if let Some(_call) = pallet_call {
                         0
                     } else {
@@ -365,7 +369,8 @@ async fn run() -> Result<()> {
 
                     // Check that every input value is a key-value pair
                     client.encode_iter(pairs, ty).await?
-                }
+                },
+                _ => vec!(),
             }
         }
         Cmd::Decode { ty } => {
