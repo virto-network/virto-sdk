@@ -511,6 +511,7 @@ where
 }
 
 ///
+#[derive(Debug)]
 pub enum TypedSerializer<'a, 'reg, B>
 where
     B: Debug,
