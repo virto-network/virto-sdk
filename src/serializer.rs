@@ -253,7 +253,7 @@ where
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
             Some(SpecificType::U64) => self.serialize_u64(v as u64)?,
-            Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
+            Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v)?,
             _ => self.out.put_u128_le(v),
         }
         Ok(())
@@ -409,7 +409,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> Serializer<'reg, B>
+impl<'reg, B> Serializer<'reg, B>
 where
     B: BufMut + Debug,
 {
@@ -453,49 +453,58 @@ where
             },
             Some(SpecificType::U8) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u8".into()))?;
-                Ok(Some(self.out.put_u8(n)))
+                self.out.put_u8(n);
+                Ok(Some(()))
             }
             Some(SpecificType::U16) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u16".into()))?;
-                Ok(Some(self.out.put_u16_le(n)))
+                self.out.put_u16_le(n);
+                Ok(Some(()))
             }
             Some(SpecificType::U32) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u32".into()))?;
-                Ok(Some(self.out.put_u32_le(n)))
+                self.out.put_u32_le(n);
+                Ok(Some(()))
             }
             Some(SpecificType::U64) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u64".into()))?;
-                Ok(Some(self.out.put_u64_le(n)))
+                self.out.put_u64_le(n);
+                Ok(Some(()))
             }
             Some(SpecificType::U128) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u128".into()))?;
-                Ok(Some(self.out.put_u128_le(n)))
+                self.out.put_u128_le(n);
+                Ok(Some(()))
             }
             Some(SpecificType::I8) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i8".into()))?;
-                Ok(Some(self.out.put_i8(n)))
+                self.out.put_i8(n);
+                Ok(Some(()))
             }
             Some(SpecificType::I16) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i16".into()))?;
-                Ok(Some(self.out.put_i16_le(n)))
+                self.out.put_i16_le(n);
+                Ok(Some(()))
             }
             Some(SpecificType::I32) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i32".into()))?;
-                Ok(Some(self.out.put_i32_le(n)))
+                self.out.put_i32_le(n);
+                Ok(Some(()))
             }
             Some(SpecificType::I64) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i64".into()))?;
-                Ok(Some(self.out.put_i64_le(n)))
+                self.out.put_i64_le(n);
+                Ok(Some(()))
             }
             Some(SpecificType::I128) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i128".into()))?;
-                Ok(Some(self.out.put_i128_le(n)))
+                self.out.put_i128_le(n);
+                Ok(Some(()))
             }
             #[cfg(feature = "hex")]
             Some(SpecificType::Bytes(_)) => {
-                if val.starts_with("0x") {
-                    let bytes =
-                        hex::decode(&val[2..]).map_err(|e| Error::BadInput(e.to_string()))?;
+                if let Some(bytes) = val.strip_prefix("0x") {
+                    let bytes = hex::decode(bytes).map_err(|e| Error::BadInput(e.to_string()))?;
                     ser::Serializer::serialize_bytes(self, &bytes)?;
                     Ok(Some(()))
                 } else {
@@ -614,8 +623,7 @@ where
                         let ty = ser.resolve(ty_id);
 
                         ser.ty = Some(if let SpecificType::StructNewType(ty_id) = ty {
-                            let ty = ser.resolve(ty_id);
-                            ty
+                            ser.resolve(ty_id)
                         } else {
                             ty
                         });
@@ -1148,13 +1156,13 @@ mod tests {
     #[test]
     fn json_mix() -> Result<()> {
         #[derive(Debug, Serialize, Encode, TypeInfo)]
-        struct Foo<'a> {
+        struct Foo {
             a: Vec<String>,
-            b: (Bar<'a>, Bar<'a>, Bar<'a>),
+            b: (Bar, Bar, Bar),
         }
         #[derive(Debug, Serialize, Encode, TypeInfo)]
-        enum Bar<'a> {
-            A { thing: &'a str },
+        enum Bar {
+            A { thing: &'static str },
             B(Baz),
             C(BTreeMap<String, bool>, i64),
         }

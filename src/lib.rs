@@ -115,7 +115,7 @@ impl From<(&Type, &PortableRegistry)> for SpecificType {
                     )
                 }
             }
-            Def::Variant(v) => Self::Variant(name.into(), v.variants().into(), None),
+            Def::Variant(v) => Self::Variant(name, v.variants().into(), None),
             Def::Sequence(s) => {
                 let ty = s.type_param();
                 if matches!(
@@ -181,7 +181,7 @@ impl SpecificType {
             SpecificType::Variant(_, ref mut variants, idx @ None) => {
                 let i = variants
                     .iter()
-                    .map(|v| get_field(v))
+                    .map(get_field)
                     .position(|f| f.as_ref() == selection.as_ref())? as u8;
                 variants.retain(|v| v.index() == i);
                 *idx = Some(i);
@@ -222,26 +222,26 @@ impl<'a> From<&'a SpecificType> for EnumVariant<'a> {
                     if name == "Option" && vname == "None" {
                         Self::OptionNone
                     } else {
-                        Self::Unit(*idx, &vname)
+                        Self::Unit(*idx, vname)
                     }
                 } else if is_tuple!(variant) {
                     if fields.len() == 1 {
                         let ty = fields.first().map(|f| f.ty().id()).unwrap();
-                        return if name == "Option" && variant.name() == &"Some" {
+                        return if name == "Option" && variant.name() == "Some" {
                             Self::OptionSome(ty)
                         } else {
-                            Self::NewType(*idx, &vname, ty)
+                            Self::NewType(*idx, vname, ty)
                         };
                     } else {
                         let fields = fields.iter().map(|f| f.ty().id()).collect();
-                        Self::Tuple(*idx, &vname, fields)
+                        Self::Tuple(*idx, vname, fields)
                     }
                 } else {
                     let fields = fields
                         .iter()
                         .map(|f| (f.name().unwrap().deref(), f.ty().id()))
                         .collect();
-                    Self::Struct(*idx, &vname, fields)
+                    Self::Struct(*idx, vname, fields)
                 }
             }
             _ => panic!("Only for enum variants"),

@@ -303,9 +303,9 @@ impl<'reg> core::fmt::Display for Value<'reg> {
 }
 
 #[cfg(feature = "json")]
-impl<'reg> Into<crate::JsonValue> for Value<'reg> {
-    fn into(self) -> crate::JsonValue {
-        serde_json::value::to_value(self).unwrap()
+impl<'reg> From<Value<'reg>> for crate::JsonValue {
+    fn from(val: Value<'reg>) -> Self {
+        serde_json::value::to_value(val).unwrap()
     }
 }
 
@@ -628,15 +628,15 @@ mod tests {
     #[test]
     fn serialize_tuple_struct() -> Result<(), Error> {
         #[derive(Encode, Serialize, TypeInfo)]
-        struct Foo<'a>([u8; 4], (bool, Option<()>), Baz<'a>, Baz<'a>);
+        struct Foo([u8; 4], (bool, Option<()>), Baz, Baz);
 
         #[derive(Encode, Serialize, TypeInfo)]
         struct Bar;
 
         #[derive(Encode, Serialize, TypeInfo)]
-        enum Baz<'a> {
+        enum Baz {
             A(Bar),
-            B { bb: &'a str },
+            B { bb: &'static str },
         }
 
         let in_value = Foo(
