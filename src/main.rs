@@ -536,4 +536,12 @@ impl Backend for AnyBackend {
             AnyBackend::Offline(b) => b.metadata().await,
         }
     }
+
+    async fn block_info(&self, at: Option<u32>) -> sube::Result<sube::meta::BlockInfo> {
+        match self {
+            AnyBackend::Ws(b) => b.block_info(at).await,
+            AnyBackend::Http(b) => b.block_info(at).await,
+            AnyBackend::Offline(b) => b.block_info(at).await,
+        }
+    }
 }

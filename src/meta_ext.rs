@@ -70,6 +70,18 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
     Ok(meta)
 }
 
+pub struct BlockInfo {
+    pub number: u64,
+    pub hash: [u8; 32],
+    pub parent: [u8; 32],
+}
+
+impl Into<Vec<u8>> for BlockInfo {
+    fn into(self) -> Vec<u8> {
+        self.hash.into()
+    }
+}
+
 type Entries<'a, E> = slice::Iter<'a, E>;
 type EntryFor<'a, M> = <<<M as Meta<'a>>::Pallet as Pallet<'a>>::Storage as Storage<'a>>::Entry;
 

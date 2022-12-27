@@ -112,7 +112,7 @@ pub mod ws;
 pub mod hasher;
 pub mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
-pub mod rpc;
+mod rpc;
 
 /// Main interface for interacting with the Substrate based blockchain
 #[derive(Debug)]
@@ -236,6 +236,8 @@ pub trait Backend {
         T: AsRef<[u8]> + Send;
 
     async fn metadata(&self) -> Result<Metadata>;
+
+    async fn block_info(&self, at: Option<u32>) -> Result<meta::BlockInfo>;
 }
 
 /// A Dummy backend for offline querying of metadata
@@ -257,6 +259,10 @@ impl Backend for Offline {
 
     async fn metadata(&self) -> Result<Metadata> {
         Ok(self.0.cloned())
+    }
+
+    async fn block_info(&self, _: Option<u32>) -> Result<meta::BlockInfo> {
+        Err(Error::ChainUnavailable)
     }
 }
 
@@ -329,7 +335,7 @@ impl StorageKey {
         Some((pallet, item, map_keys))
     }
 
-    pub fn ty_id (&self) -> u32 {
+    pub fn ty_id(&self) -> u32 {
         self.1
     }
 }

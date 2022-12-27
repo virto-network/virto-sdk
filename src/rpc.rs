@@ -1,3 +1,5 @@
+use core::convert::TryInto;
+
 use async_trait::async_trait;
 use jsonrpc::serde_json::value::RawValue;
 pub use jsonrpc::{error, Error, Request, Response};
@@ -59,5 +61,40 @@ impl<R: Rpc> Backend for R {
         let meta = meta::from_bytes(&mut meta.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
         log::trace!("Metadata {:#?}", meta);
         Ok(meta)
+    }
+
+    async fn block_info(&self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
+        async fn block_info <R> (s: &R, params: &[&str]) -> crate::Result<Vec<u8>> 
+            where R: Rpc
+        {
+            Ok(s
+                .rpc(
+                    "chain_getBlockHash",
+                    params,
+                )
+                .await
+                .map_err(|e| crate::Error::Node(e.to_string()))?)
+        }
+        
+        let block_hash = if let Some(block_number) = at {
+            let block_number = block_number.to_string();
+            block_info(self, &[&block_number]).await?
+        } else {
+            block_info(self, &[]).await?
+        };
+        
+        // TODO: Make sure to complete this in a future
+        // Hint: RPC should not deserialize the JSON-RPC result
+        // This produces a deserialization error
+        // let block = self
+        //     .rpc("chain_getBlock", &[&hex::encode(&block_hash)])
+        //     .await
+        //     .map_err(|e| crate::Error::Node(e.to_string()))?;
+
+        Ok(meta::BlockInfo {
+            number: at.unwrap_or(0) as u64,
+            hash: block_hash[0..32].try_into().unwrap(),
+            parent: block_hash[0..32].try_into().unwrap(),
+        })
     }
 }
