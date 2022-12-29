@@ -84,7 +84,10 @@ impl<'a> Value<'a> {
                 (0..len).fold(prefix_size, |c, _| c + self.ty_len(&data[c..], ty_id))
             }
             TypeDef::Array(a) => a.len().try_into().unwrap(),
-            TypeDef::Tuple(t) => t.fields().len(),
+            TypeDef::Tuple(t) => t
+                .fields()
+                .iter()
+                .fold(0, |c, f| c + self.ty_len(&data[c..], f.id())),
             TypeDef::Compact(_) => compact_len(data),
             TypeDef::BitSequence(_) => unimplemented!(),
         }
