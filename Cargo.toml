@@ -2,9 +2,9 @@
 name = "sube"
 description = "SUBmit Extrinsics to a Substrate node"
 license = "Apache-2.0"
-version = "0.5.1"
+version = "1.0.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
-edition = "2018"
+edition = "2021"
 repository = "https://github.com/valibre-org/sube"
 
 [dependencies]
@@ -30,41 +30,17 @@ futures-channel = { version = "0.3.21", default-features = false, features = ["a
 futures-util = { version = "0.3.21", default-features = false, features = ["sink"], optional = true }
 async-mutex = { version = "1.4.0", optional = true }
 async-tls = { version = "0.11.0", default-features = false, optional = true }
-
-# bin target
-anyhow = { version = "1.0.57", optional = true }
 async-std = { version = "1.11.0", default_features = false, optional = true }
-serde_json = { version = "1.0.80", default-features = false, optional = true }
-stderrlog = { version = "0.5.1", optional = true }
-structopt = { version = "0.3.26", optional = true }
-url = { version = "2.2.2", optional = true }
-serde = { version = "1.0.137", default-features = false, optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
 
 [features]
-default = ["bin", "json", "std"]
+# default = ["json", "std"]
 #default = ["v14", "ws", "decode", "json", "std"]
-bin = [
-	"anyhow",
-	"async-std/attributes",
-	"http",
-	"decode",
-	"encode",
-	"serde",
-	"serde_json",
-	"scales/hex",
-	"std",
-	"stderrlog",
-	"structopt",
-	"url",
-	"v14",
-	"wss",
-]
-decode = ["v14", "serde", "scales/codec"]
-encode = ["v14", "scales/experimental-serializer"]
+# decode = ["v14", "serde", "scales/codec"]
+# encode = ["v14", "scales/experimental-serializer"]
 http = ["jsonrpc", "surf/h1-client-rustls"]
 http-web = ["jsonrpc", "surf/wasm-client"]
 json = ["v14", "scales/json"]
@@ -75,9 +51,11 @@ v14 = ["frame-metadata/v14", "scale-info", "scales"]
 ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
 wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 
-[[bin]]
-name = "sube"
-required-features = ["bin"]
-
 [package.metadata.docs.rs]
 features = ["http"]
+
+[workspace]
+default-members = ["cli"]
+members = [
+	"cli",
+]

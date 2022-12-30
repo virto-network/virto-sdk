@@ -1,0 +1,18 @@
+[package]
+name = "cli"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.57"
+async-std = "1.11.0"
+serde_json = "1.0.80"
+stderrlog = "0.5.1"
+structopt = "0.3.26"
+url = "2.2.2"
+log = "0.4.17"
+serde = { version = "1.0.137", default-features = false }
+codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+
+sube = { path = "..", features = ["v14", "ws", "std"] }

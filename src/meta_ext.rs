@@ -44,6 +44,7 @@ mod v14 {
     pub type Metadata = RuntimeMetadataV14;
     pub type ExtrinsicMeta = ExtrinsicMetadata;
     pub type PalletMeta = PalletMetadata<PortableForm>;
+    pub type CallsMeta = PalletCallMetadata<PortableForm>;
     pub type StorageMeta = PalletStorageMetadata<PortableForm>;
     pub type EntryMeta = StorageEntryMetadata<PortableForm>;
     pub type EntryType = StorageEntryType<PortableForm>;
@@ -83,15 +84,6 @@ pub trait Meta<'a> {
         self.pallets()
             .find(|p| p.name().to_lowercase() == name.to_lowercase())
     }
-
-    fn storage_entries(&'a self, pallet: &str) -> Option<Entries<EntryFor<Self>>> {
-        Some(self.pallet_by_name(pallet)?.storage()?.entries())
-    }
-
-    fn storage_entry(&'a self, pallet: &str, entry: &str) -> Option<&EntryFor<Self>> {
-        self.storage_entries(pallet)?.find(|e| e.name() == entry)
-    }
-
     fn cloned(&self) -> Self;
 }
 
@@ -108,6 +100,7 @@ pub trait Pallet<'a> {
 
     fn name(&self) -> &str;
     fn storage(&self) -> Option<&Self::Storage>;
+    fn calls(&self) -> Option<&CallsMeta>;
 }
 
 pub trait Storage<'a> {
@@ -228,6 +221,10 @@ impl<'a> Pallet<'a> for PalletMeta {
         #[cfg(not(feature = "v14"))]
         let name = self.name.decoded();
         name
+    }
+
+    fn calls(&self) -> Option<&CallsMeta> {
+        self.calls.as_ref()
     }
 }
 
