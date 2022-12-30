@@ -1,8 +1,11 @@
 use crate::meta_ext::Hasher;
 use crate::prelude::*;
 use blake2::{
-    digest::{Update, VariableOutput},
-    Blake2bVar,
+    digest::{
+        typenum::{U16, U32},
+        Output,
+    },
+    Blake2b, Digest,
 };
 use core::hash::Hasher as _;
 
@@ -16,16 +19,17 @@ pub fn hash<I: AsRef<[u8]>>(hasher: &Hasher, input: I) -> Vec<u8> {
         input = data.as_ref();
     };
 
-    fn blake2(size: usize, input: &[u8]) -> Vec<u8> {
-        let mut hasher = Blake2bVar::new(size).expect("valid size");
+    #[inline]
+    fn digest<T: Digest>(input: &[u8]) -> Output<T> {
+        let mut hasher = T::new();
         hasher.update(input);
-        hasher.finalize_boxed().to_vec()
+        hasher.finalize()
     }
 
     match hasher {
-        Hasher::Blake2_128 => blake2(16, input),
-        Hasher::Blake2_256 => blake2(32, input).to_vec(),
-        Hasher::Blake2_128Concat => [blake2(16, input).as_slice(), input].concat(),
+        Hasher::Blake2_128 => digest::<Blake2b<U16>>(input).to_vec(),
+        Hasher::Blake2_256 => digest::<Blake2b<U32>>(input).to_vec(),
+        Hasher::Blake2_128Concat => [digest::<Blake2b<U16>>(input).as_slice(), input].concat(),
         Hasher::Twox128 => twox_hash(&input),
         Hasher::Twox256 => unimplemented!(),
         Hasher::Twox64Concat => twox_hash_concat(input),
