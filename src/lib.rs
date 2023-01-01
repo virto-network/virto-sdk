@@ -57,14 +57,8 @@ assert!(
 
 */
 
-#[cfg(not(any(feature = "v12", feature = "v13", feature = "v14")))]
+#[cfg(not(any(feature = "v13", feature = "v14")))]
 compile_error!("Enable one of the metadata versions");
-#[cfg(all(feature = "v12", feature = "v13", feature = "v14"))]
-compile_error!("Only one metadata version can be enabled at the moment");
-#[cfg(all(feature = "v12", feature = "v13"))]
-compile_error!("Only one metadata version can be enabled at the moment");
-#[cfg(all(feature = "v12", feature = "v14"))]
-compile_error!("Only one metadata version can be enabled at the moment");
 #[cfg(all(feature = "v13", feature = "v14"))]
 compile_error!("Only one metadata version can be enabled at the moment");
 
@@ -72,6 +66,7 @@ compile_error!("Only one metadata version can be enabled at the moment");
 extern crate alloc;
 
 pub use codec;
+use codec::Encode;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use meta::Metadata;
 pub use meta_ext as meta;
@@ -83,13 +78,10 @@ pub use scales::Value;
 use async_trait::async_trait;
 use core::fmt;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
-#[cfg(feature = "std")]
-use once_cell::sync::OnceCell;
-#[cfg(not(feature = "std"))]
-use once_cell::unsync::OnceCell;
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
+use serde::Serialize;
 
 mod prelude {
     pub use alloc::boxed::Box;
@@ -110,46 +102,76 @@ pub mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
 mod rpc;
 
-enum Response {
-    Query,
-    Tx,
-    Meta,
-    Registry,
-}
-
 /// ```
+/// Multipurpose function to interact with a Substrate based chain
+/// using a URL-path-like syntax.
+///
 /// # use sube::sube;
-/// let kusama = sube::ws::Backend::new();
+/// let backend = sube::ws::Backend::new();
 /// sube
 /// ```
 pub async fn sube<'m>(
     chain: impl Backend,
     meta: &'m Metadata,
-    cmd: &str,
+    path: &str,
     maybe_tx_data: Option<()>,
     signer: impl Fn(&[u8], &mut [u8]),
-) -> Result<scales::Value<'m>> {
-    match cmd {
-        "_meta" => {}
-        "_meta/registry" => {}
+) -> Result<Response<'m>> {
+    Ok(match path {
+        "_meta" => Response::Meta(meta),
+        "_meta/registry" => Response::Registry(&meta.types),
         // "_chain/block"
         _ => {
-            let (pallet, item_or_call, keys) = parse_uri(cmd).ok_or(Error::BadInput)?;
+            let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
             let pallet = meta
                 .pallet_by_name(&pallet)
                 .ok_or_else(|| Error::PalletNotFound)?;
-            let key_res = StorageKey::new(pallet, &item_or_call, &keys);
+
+            if item_or_call == "_constants" {
+                let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
+                let const_meta = pallet
+                    .constants
+                    .iter()
+                    .find(|c| c.name == const_name)
+                    .ok_or_else(|| Error::ConstantNotFound(const_name))?;
+                return Ok(Response::Value(Value::new(
+                    const_meta.value.clone(),
+                    const_meta.ty.id(),
+                    &meta.types,
+                )));
+            }
+
+            if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {}
             if let Some(tx_data) = maybe_tx_data {}
+
+            Response::Value(Value::new(vec![], 0, &meta.types))
         }
-    }
-    Ok(Value::new(vec![], 0, &meta.types))
+    })
 }
 
-fn parse_uri(uri: &str) -> Option<(String, String, Vec<&str>)> {
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+pub enum Response<'m> {
+    Value(scales::Value<'m>),
+    Meta(&'m Metadata),
+    Registry(&'m PortableRegistry),
+}
+
+impl From<Response<'_>> for Vec<u8> {
+    fn from(res: Response) -> Self {
+        match res {
+            Response::Value(v) => v.as_ref().into(),
+            Response::Meta(m) => m.encode(),
+            Response::Registry(r) => r.encode(),
+        }
+    }
+}
+
+fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
     let mut path = uri.trim_matches('/').split('/');
     let pallet = path.next().map(to_camel)?;
     let item = path.next().map(to_camel)?;
-    let map_keys = path.collect::<Vec<_>>();
+    let map_keys = path.map(to_camel).collect::<Vec<_>>();
     Some((pallet, item, map_keys))
 }
 
@@ -236,6 +258,8 @@ pub enum Error {
     StorageKeyNotFound,
     PalletNotFound,
     CallNotFound,
+    MissingConstantName,
+    ConstantNotFound(String),
 }
 
 impl fmt::Display for Error {
@@ -265,7 +289,7 @@ pub struct StorageKey {
 }
 
 impl StorageKey {
-    pub fn new(meta: &PalletMeta, item: &str, map_keys: &[&str]) -> Result<Self> {
+    pub fn new<T: AsRef<str>>(meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
         let entry = meta
             .storage()
             .map(|s| s.entries().find(|e| e.name() == item))
@@ -295,8 +319,8 @@ impl AsRef<[u8]> for StorageKey {
 }
 
 fn to_camel(term: &str) -> String {
-    let underscore_count = term.chars().filter(|c| *c == '-').count();
-    let mut result = String::with_capacity(term.len() - underscore_count);
+    let dash_count = term.chars().filter(|c| *c == '-').count();
+    let mut result = String::with_capacity(term.len() - dash_count);
     let mut at_new_word = true;
 
     for c in term.chars().skip_while(|&c| c == '-') {

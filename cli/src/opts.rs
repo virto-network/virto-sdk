@@ -1,6 +1,5 @@
 use crate::Result;
 use async_std::path::PathBuf;
-use codec::Encode;
 use std::str::FromStr;
 use structopt::StructOpt;
 
@@ -39,7 +38,7 @@ pub(crate) enum Output {
 impl Output {
     pub(crate) fn format<O>(&self, out: O) -> Result<Vec<u8>>
     where
-        O: serde::Serialize + AsRef<[u8]>,
+        O: serde::Serialize + Into<Vec<u8>>,
     {
         Ok(match self {
             Output::Json(pretty) => {
@@ -49,8 +48,8 @@ impl Output {
                     serde_json::to_vec(&out)?
                 }
             }
-            Output::Scale => out.as_ref().into(),
-            Output::Hex => format!("0x{}", hex::encode(out.as_ref())).into(),
+            Output::Scale => out.into(),
+            Output::Hex => format!("0x{}", hex::encode(out.into())).into(),
         })
     }
 }

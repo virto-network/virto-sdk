@@ -11,15 +11,15 @@ repository = "https://github.com/valibre-org/sube"
 async-trait = "0.1.53"
 blake2 = { version = "0.10.5", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
-frame-metadata = { version = "15.0.0", default-features = false, features = ["std"] }
+frame-metadata = { version = "15.0.0", git = "https://github.com/paritytech/frame-metadata.git", default-features = false, features = ["serde_full", "decode"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 log = "0.4.17"
-once_cell = { version = "1.10.0", default-features = false }
 twox-hash = { version = "1.6.2", default-features = false }
+serde = { version = "1.0.137", default-features = false }
 
-scale-info = { version = "2.1.1", optional = true }
+scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { version = "1.0.0-beta2", package = "scale-serialization", default-features = false, optional = true }
+scales = { git = "https://github.com/pandres95/scales.git", branch = "fix/tuple_deserialization", package = "scale-serialization", default-features = false, features = ["codec"] }
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }
@@ -45,9 +45,8 @@ http = ["jsonrpc", "surf/h1-client-rustls"]
 http-web = ["jsonrpc", "surf/wasm-client"]
 json = ["v14", "scales/json"]
 std = []
-v12 = ["frame-metadata/v12"]
 v13 = ["frame-metadata/v13"]
-v14 = ["frame-metadata/v14", "scale-info", "scales"]
+v14 = ["frame-metadata/v14", "scale-info"]
 ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
 wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 
@@ -55,7 +54,6 @@ wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 features = ["http"]
 
 [workspace]
-default-members = ["cli"]
 members = [
 	"cli",
 ]

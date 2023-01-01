@@ -21,7 +21,8 @@ async fn run() -> Result<()> {
         .unwrap();
 
     let url = chain_string_to_url(&opt.chain)?;
-    let backend = sube::ws::Backend::new_ws2(url.as_str()).await?;
+    // let backend = sube::ws::Backend::new_ws2(url.as_str()).await?;
+    let backend = sube::http::Backend::new(url.as_str());
     let meta = if let Some(m) = opt.metadata {
         get_meta_from_fs(&m)
             .await
@@ -56,7 +57,7 @@ fn chain_string_to_url(chain: &str) -> Result<Url> {
         && !chain.starts_with("http://")
         && !chain.starts_with("https://")
     {
-        ["ws", &chain].join("://")
+        ["wss", &chain].join("://")
     } else {
         chain.into()
     };

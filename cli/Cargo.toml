@@ -15,4 +15,11 @@ serde = { version = "1.0.137", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 
-sube = { path = "..", features = ["v14", "ws", "std"] }
+[dependencies.sube]
+path = ".."
+features = [
+  "std",
+  "v14", 
+  "http",
+  # "wss", 
+]
