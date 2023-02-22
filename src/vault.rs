@@ -46,7 +46,7 @@ impl RootAccount {
             sub: <key_pair::sr25519::Pair as crate::Pair>::from_entropy(entropy),
         }
     }
-    
+
     fn from_bytes(seed: &[u8]) -> Self {
         RootAccount {
             #[cfg(feature = "substrate")]

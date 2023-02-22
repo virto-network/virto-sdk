@@ -58,7 +58,7 @@ pub mod any {
             let p = Self::_None;
             p
         }
-        
+
         fn from_bytes(seed: &[u8]) -> Self
         where
             Self: Sized,
@@ -174,9 +174,9 @@ pub mod sr25519 {
         signing_context, ExpansionMode, MiniSecretKey, SecretKey, MINI_SECRET_KEY_LENGTH,
     };
 
-    use sha2::Sha512;
     use hmac::Hmac;
     use pbkdf2::pbkdf2;
+    use sha2::Sha512;
     use zeroize::Zeroize;
 
     pub use schnorrkel::Keypair as Pair;
@@ -188,29 +188,28 @@ pub mod sr25519 {
     const SIGNING_CTX: &[u8] = b"substrate";
 
     /// Calculates the 64-byte entropy from a given phrase, no password provided
-    /// 
+    ///
     /// From [paritytech/substrate-bip39](https://github.com/paritytech/substrate-bip39/blob/master/src/lib.rs#L45)
     fn seed_from_entropy(entropy: &[u8]) -> [u8; 64] {
         assert!(entropy.len() >= 16 && entropy.len() <= 32 && entropy.len() % 4 == 0);
 
         let mut salt = String::with_capacity(8);
         salt.push_str("mnemonic");
-    
+
         let mut seed = [0u8; 64];
-    
+
         pbkdf2::<Hmac<Sha512>>(entropy, salt.as_bytes(), 2048, &mut seed);
-    
+
         salt.zeroize();
         seed
     }
-    
 
     impl super::Pair for Pair {
         type Public = Public;
 
         fn from_entropy(entropy: &[u8]) -> Self {
             let seed = seed_from_entropy(entropy);
-            
+
             assert!(seed.len() >= SEED_LEN);
             let minikey = MiniSecretKey::from_bytes(&seed[..SEED_LEN]).unwrap();
             minikey.expand_to_keypair(ExpansionMode::Ed25519)
@@ -284,8 +283,8 @@ pub mod sr25519 {
 
     #[cfg(test)]
     mod tests {
+        use crate::Mnemonic;
         use crate::{Derive, Pair};
-        use crate::{Mnemonic};
 
         #[test]
         fn derive_substrate_keypair() {
@@ -320,7 +319,8 @@ pub mod sr25519 {
         #[test]
         fn derive_keypair_from_phrase() {
             // 0x708a2be996b87d1e7bb23f3cfa9bac804c83359e308598b0cb20728290684757
-            let phrase = "rotate increase color sustain print future moon rigid hunt wild diagram online";
+            let phrase =
+                "rotate increase color sustain print future moon rigid hunt wild diagram online";
 
             for (path, pubkey) in [
                 // from subkey
