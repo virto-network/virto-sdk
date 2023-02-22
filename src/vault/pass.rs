@@ -50,7 +50,7 @@ impl Pass {
             .parse::<mnemonic::Mnemonic>()
             .map_err(|_e| Error::Plaintext)?;
 
-        Ok(RootAccount::from_bytes(phrase.entropy()))
+        Ok(RootAccount::from_entropy(&phrase.entropy()))
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
@@ -80,7 +80,7 @@ impl Pass {
             )
             .map_err(map_encrypt_error)?;
 
-        Ok(RootAccount::from_bytes(phrase.entropy()))
+        Ok(RootAccount::from_entropy(&phrase.entropy()))
     }
 }
 

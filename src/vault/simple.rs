@@ -36,7 +36,7 @@ impl Simple {
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
-        let root = RootAccount::from_bytes(phrase.entropy());
+        let root = RootAccount::from_entropy(phrase.entropy());
         (
             Simple {
                 locked: Some(root),
@@ -57,7 +57,7 @@ impl Simple {
     }
 
     pub fn from_seed(seed: impl AsRef<[u8]>) -> Self {
-        let root = RootAccount::from_bytes(seed.as_ref());
+        let root = RootAccount::from_entropy(seed.as_ref());
         Simple {
             locked: Some(root),
             unlocked: None,

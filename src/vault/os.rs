@@ -48,13 +48,13 @@ impl OSKeyring {
             .map_err(|_| Error::BadPhrase)?;
 
         let seed = pin.protect::<64>(phrase.entropy());
-        Ok(RootAccount::from_bytes(&seed))
+        Ok(RootAccount::from_entropy(&seed))
     }
 
     // Create new random seed and save it in the OS keyring.
     fn generate(&self, pin: &Pin, lang: Language) -> Result<RootAccount, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
-        let root = RootAccount::from_bytes(&pin.protect::<64>(phrase.entropy()));
+        let root = RootAccount::from_entropy(&pin.protect::<64>(phrase.entropy()));
         self.entry
             .set_password(phrase.phrase())
             // .inspect_err(|e| {
