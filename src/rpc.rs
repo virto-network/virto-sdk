@@ -64,25 +64,22 @@ impl<R: Rpc> Backend for R {
     }
 
     async fn block_info(&self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
-        async fn block_info <R> (s: &R, params: &[&str]) -> crate::Result<Vec<u8>> 
-            where R: Rpc
+        async fn block_info<R>(s: &R, params: &[&str]) -> crate::Result<Vec<u8>>
+        where
+            R: Rpc,
         {
-            Ok(s
-                .rpc(
-                    "chain_getBlockHash",
-                    params,
-                )
+            Ok(s.rpc("chain_getBlockHash", params)
                 .await
                 .map_err(|e| crate::Error::Node(e.to_string()))?)
         }
-        
+
         let block_hash = if let Some(block_number) = at {
             let block_number = block_number.to_string();
             block_info(self, &[&block_number]).await?
         } else {
             block_info(self, &[]).await?
         };
-        
+
         // TODO: Make sure to complete this in a future
         // Hint: RPC should not deserialize the JSON-RPC result
         // This produces a deserialization error

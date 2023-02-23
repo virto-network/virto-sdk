@@ -291,6 +291,7 @@ async fn run() -> Result<()> {
                     .iter()
                     .map(|it| {
                         let (k, v) = it.split_once("=").expect("could not split value");
+
                         let value = v
                             .parse::<JsonValue>()
                             .expect(&format!("value for {} should be parsed", k).to_string());
@@ -347,6 +348,7 @@ async fn run() -> Result<()> {
                         .iter()
                         .map(|(k, v)| (*k, decode_addresses(v)))
                         .collect::<JsonValue>();
+
                     let value = serde_json::json!({ call: params });
 
                     [vec![index], client.encode(value, ty).await?].concat()
@@ -369,8 +371,8 @@ async fn run() -> Result<()> {
 
                     // Check that every input value is a key-value pair
                     client.encode_iter(pairs, ty).await?
-                },
-                _ => vec!(),
+                }
+                _ => vec![],
             }
         }
         Cmd::Decode { ty } => {
@@ -480,6 +482,7 @@ fn chain_string_to_url(chain: Option<String>) -> Result<Url> {
         return Ok(Url::parse("about:offline")?);
     }
     let mut chain = chain.unwrap();
+
     if !chain.starts_with("ws://")
         && !chain.starts_with("wss://")
         && !chain.starts_with("http://")
@@ -489,6 +492,7 @@ fn chain_string_to_url(chain: Option<String>) -> Result<Url> {
     }
 
     let mut url = Url::parse(&chain)?;
+
     if url.host_str().eq(&Some("localhost")) && url.port().is_none() {
         const WS_PORT: u16 = 9944;
         const HTTP_PORT: u16 = 9933;

@@ -6,7 +6,7 @@ use codec::Decode;
 use frame_metadata::decode_different::DecodeDifferent;
 use frame_metadata::{PalletCallMetadata, RuntimeMetadata, RuntimeMetadataPrefixed};
 
-use scale_info::{form::PortableForm};
+use scale_info::form::PortableForm;
 #[cfg(feature = "v12")]
 pub use v12::*;
 #[cfg(feature = "v13")]
@@ -166,11 +166,13 @@ pub trait EntryTy {
         if map_keys.len() != hashers.len() {
             return None;
         }
+
         for (i, h) in hashers.iter().enumerate() {
             let hasher = h.borrow();
             if map_keys[i].is_empty() {
                 return None;
             }
+
             key.append(&mut hash(hasher, map_keys[i]))
         }
         Some(key)

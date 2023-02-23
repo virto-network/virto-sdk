@@ -10,7 +10,7 @@ repository = "https://github.com/valibre-org/sube"
 [dependencies]
 log = "0.4.17"
 async-trait = "0.1.53"
-blake2 = { version = "0.10.4", default-features = false }
+blake2 = { version = "0.10.5", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
 frame-metadata = { version = "15.0.0", default-features = false, features = ["std"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
@@ -19,7 +19,7 @@ twox-hash = { version = "1.6.2", default-features = false }
 
 scale-info = { version = "2.1.1", optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { version = "1.0.0-beta2", package = "scale-serialization", default-features = false, optional = true }
+scales = { git = "https://github.com/pandres95/scales.git", branch="fix/tuple_deserialization", package = "scale-serialization", detault-features = false, optional = true }
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }
@@ -64,6 +64,7 @@ http = ["jsonrpc", "surf/h1-client-rustls"]
 http-web = ["jsonrpc", "surf/wasm-client"]
 json = ["v14", "scales/json"]
 std = []
+js = ["surf/wasm-client", "jsonrpc", "encode", "decode", "v14", "json"]
 v12 = ["frame-metadata/v12"]
 v13 = ["frame-metadata/v13"]
 v14 = ["frame-metadata/v14", "scale-info", "scales"]
@@ -75,6 +76,6 @@ features = ["http"]
 
 [workspace]
 members = [
-	"sube-core",
+	"sube-js",
 	"sube-cli"
 ]

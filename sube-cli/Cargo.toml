@@ -16,7 +16,7 @@ structopt = { version = "0.3.26", optional = true }
 async-std = { version = "1.11.0", default_features = false, optional = true }
 anyhow = { version = "1.0.57", optional = true }
 surf = { version = "2.3.2", default_features = false, optional = true }
-scales = { version = "1.0.0-beta2", package = "scale-serialization", default-features = false, optional = true }
+scales = { git = "https://github.com/pandres95/scales.git", branch="fix/tuple_deserialization", package = "scale-serialization", detault-features = false, optional = true }
 stderrlog = { version = "0.5.1", optional = true }
 serde = { version = "1.0.137", default-features = false, optional = true }
 serde_json = { version = "1.0.80", default-features = false, optional = true }

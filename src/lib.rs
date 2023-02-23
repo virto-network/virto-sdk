@@ -103,7 +103,7 @@ mod prelude {
 
 pub type Result<T> = core::result::Result<T, Error>;
 /// Surf based backend
-#[cfg(any(feature = "http", feature = "http-web"))]
+#[cfg(any(feature = "http", feature = "http-web", feature = "js"))]
 pub mod http;
 /// Tungstenite based backend
 #[cfg(feature = "ws")]
@@ -111,8 +111,8 @@ pub mod ws;
 
 pub mod hasher;
 pub mod meta_ext;
-#[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
-mod rpc;
+#[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
+pub mod rpc;
 
 /// Main interface for interacting with the Substrate based blockchain
 #[derive(Debug)]
@@ -320,6 +320,7 @@ impl StorageKey {
         let entry = meta
             .storage_entry(pallet, item)
             .ok_or(Error::StorageKeyNotFound)?;
+
         let key = entry
             .key(pallet, map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
