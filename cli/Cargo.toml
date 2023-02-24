@@ -1,5 +1,5 @@
 [package]
-name = "sube-cli"
+name = "cli"
 description = "CLI for SUBE"
 license = "Apache-2.0"
 version = "0.5.1"
