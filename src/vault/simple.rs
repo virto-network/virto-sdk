@@ -1,3 +1,4 @@
+use crate::util::Pin;
 use crate::{RootAccount, Vault};
 
 /// A vault that holds secrets in memory
@@ -10,12 +11,13 @@ impl Simple {
     /// A vault with a random seed, once dropped the the vault can't be restored
     ///
     /// ```
-    /// # use libwallet::{vault, Vault, Error};
+    /// # use libwallet::{vault, Error, Derive, Pair, Vault};
     /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
     /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
-    /// vault.unlock(&(), |_| {}).await?;
-    /// // assert!(vault.get_root().is_some());
+    /// let root = vault.unlock(&(), |root| {
+    ///     println!("{}", root.derive("//default").public());
+    /// }).await?;
     /// # Ok(()) }
     /// ```
     #[cfg(feature = "rand")]
@@ -36,7 +38,9 @@ impl Simple {
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
-        let root = RootAccount::from_entropy(phrase.entropy());
+
+        let seed = Pin::from("").protect::<64>(&phrase.entropy());
+        let root = RootAccount::from_bytes(&seed);
         (
             Simple {
                 locked: Some(root),
@@ -53,11 +57,13 @@ impl Simple {
             .as_ref()
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
-        Self::from_seed(phrase.entropy())
+
+        let seed = Pin::from("").protect::<64>(&phrase.entropy());
+        Self::from_seed(&seed)
     }
 
     pub fn from_seed(seed: impl AsRef<[u8]>) -> Self {
-        let root = RootAccount::from_entropy(seed.as_ref());
+        let root = RootAccount::from_bytes(seed.as_ref());
         Simple {
             locked: Some(root),
             unlocked: None,

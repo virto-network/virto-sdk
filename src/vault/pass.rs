@@ -5,7 +5,7 @@ use prs_lib::{
     Plaintext,
 };
 
-use crate::{RootAccount, Vault};
+use crate::{util::Pin, RootAccount, Vault};
 
 /// A vault that stores secrets in a `pass` compatible repository
 pub struct Pass {
@@ -50,7 +50,8 @@ impl Pass {
             .parse::<mnemonic::Mnemonic>()
             .map_err(|_e| Error::Plaintext)?;
 
-        Ok(RootAccount::from_entropy(&phrase.entropy()))
+        let seed = Pin::from("").protect::<64>(&phrase.entropy());
+        Ok(RootAccount::from_bytes(&seed))
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
@@ -80,7 +81,8 @@ impl Pass {
             )
             .map_err(map_encrypt_error)?;
 
-        Ok(RootAccount::from_entropy(&phrase.entropy()))
+        let seed = Pin::from("").protect::<64>(&phrase.entropy());
+        Ok(RootAccount::from_bytes(&seed))
     }
 }
 

@@ -8,10 +8,6 @@ type Bytes<const N: usize> = [u8; N];
 pub trait Pair: Signer + Derive {
     type Public: Public;
 
-    fn from_entropy(entropy: &[u8]) -> Self
-    where
-        Self: Sized;
-
     fn from_bytes(seed: &[u8]) -> Self
     where
         Self: Sized;
@@ -47,17 +43,6 @@ pub mod any {
 
     impl super::Pair for Pair {
         type Public = AnyPublic;
-
-        fn from_entropy(entropy: &[u8]) -> Self
-        where
-            Self: Sized,
-        {
-            #[cfg(feature = "sr25519")]
-            let p = Self::Sr25519(<super::sr25519::Pair as super::Pair>::from_entropy(entropy));
-            #[cfg(not(feature = "sr25519"))]
-            let p = Self::_None;
-            p
-        }
 
         fn from_bytes(seed: &[u8]) -> Self
         where
@@ -174,11 +159,6 @@ pub mod sr25519 {
         signing_context, ExpansionMode, MiniSecretKey, SecretKey, MINI_SECRET_KEY_LENGTH,
     };
 
-    use hmac::Hmac;
-    use pbkdf2::pbkdf2;
-    use sha2::Sha512;
-    use zeroize::Zeroize;
-
     pub use schnorrkel::Keypair as Pair;
     pub(super) const SEED_LEN: usize = MINI_SECRET_KEY_LENGTH;
     pub(super) const SIG_LEN: usize = 64;
@@ -187,33 +167,8 @@ pub mod sr25519 {
     pub type Signature = Bytes<64>;
     const SIGNING_CTX: &[u8] = b"substrate";
 
-    /// Calculates the 64-byte entropy from a given phrase, no password provided
-    ///
-    /// From [paritytech/substrate-bip39](https://github.com/paritytech/substrate-bip39/blob/master/src/lib.rs#L45)
-    fn seed_from_entropy(entropy: &[u8]) -> [u8; 64] {
-        assert!(entropy.len() >= 16 && entropy.len() <= 32 && entropy.len() % 4 == 0);
-
-        let mut salt = String::with_capacity(8);
-        salt.push_str("mnemonic");
-
-        let mut seed = [0u8; 64];
-
-        pbkdf2::<Hmac<Sha512>>(entropy, salt.as_bytes(), 2048, &mut seed);
-
-        salt.zeroize();
-        seed
-    }
-
     impl super::Pair for Pair {
         type Public = Public;
-
-        fn from_entropy(entropy: &[u8]) -> Self {
-            let seed = seed_from_entropy(entropy);
-
-            assert!(seed.len() >= SEED_LEN);
-            let minikey = MiniSecretKey::from_bytes(&seed[..SEED_LEN]).unwrap();
-            minikey.expand_to_keypair(ExpansionMode::Ed25519)
-        }
 
         fn from_bytes(bytes: &[u8]) -> Self {
             assert!(bytes.len() >= SEED_LEN);
@@ -284,7 +239,7 @@ pub mod sr25519 {
     #[cfg(test)]
     mod tests {
         use crate::Mnemonic;
-        use crate::{Derive, Pair};
+        use crate::{util::Pin, Derive, Pair};
 
         #[test]
         fn derive_substrate_keypair() {
@@ -342,7 +297,8 @@ pub mod sr25519 {
                 ),
             ] {
                 let phrase = Mnemonic::from_phrase(phrase).unwrap();
-                let root: super::Pair = Pair::from_entropy(&phrase.entropy());
+                let seed = Pin::from("").protect::<64>(&phrase.entropy());
+                let root: super::Pair = Pair::from_bytes(&seed);
                 let derived = root.derive(path);
                 assert_eq!(&derived.public(), pubkey);
             }
