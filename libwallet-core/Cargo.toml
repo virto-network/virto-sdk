@@ -31,6 +31,7 @@ std = [
   "rand_core/getrandom",
   "schnorrkel/getrandom",
 ]
+subaccounts = []
 substrate = ["sr25519"]
 util_pin = ["pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
