@@ -1,0 +1,31 @@
+name: JS
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
+    - name: Prepare dependencies
+      run: |
+        rustup target add wasm32-unknown-unknown
+        curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    - name: Build
+      working-directory: libwallet-js
+      run: |
+        wasm-pack build --dev --target nodejs --all-features
+    - name: Run tests
+      working-directory: libwallet-js/test
+      run: |
+        npm ci
+        npm test
