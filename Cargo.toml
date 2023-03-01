@@ -1,0 +1,5 @@
+[workspace]
+members = [
+  "libwallet-core",
+  "libwallet-js"
+]

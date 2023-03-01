@@ -1,0 +1,27 @@
+[package]
+authors = ["Pablo Dorado <hola@pablodorado.com>"]
+autoexamples = true
+edition = "2021"
+name = "libwallet-js"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libwallet = {path = "../libwallet-core", default-features = false}
+rand_core = {version = "0.6.3", features = ["getrandom"]}
+serde = {version = "1.0.152", features = ["derive"]}
+serde-wasm-bindgen = "0.4.5"
+wasm-bindgen = "0.2.84"
+wasm-bindgen-futures = "0.4.34"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.34"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
+features = ["js"]
+
+[features]
+default = ["js", "libwallet/substrate", "libwallet/vault_simple", "libwallet/mnemonic", "libwallet/rand"]
+js = []
