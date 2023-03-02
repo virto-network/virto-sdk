@@ -14,7 +14,6 @@ alloc = ["wee_alloc"]
 [dependencies]
 wasm-bindgen = "0.2.63"
 wee_alloc = { version = "0.4.5", optional = true }
-sube = { path = "../", features=["js", "v14"] }
 wasm-bindgen-futures = "0.4.33"
 serde = "1.0.152"
 serde_json = "1.0.91"
@@ -27,6 +26,14 @@ parity-scale-codec = "3.2.1"
 [dev-dependencies]
 console_error_panic_hook = { version = "0.1.6" }
 wasm-bindgen-test = "0.3.13"
+
+
+[dependencies.sube]
+path = ".."
+features = [
+  "http-web",
+  "v14"
+]
 
 # [profile.release]
 # opt-level = "s"

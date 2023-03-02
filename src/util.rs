@@ -1,3 +1,5 @@
+use alloc::string::String;
+
 pub fn to_camel(term: &str) -> String {
     let underscore_count = term.chars().filter(|c| *c == '-').count();
     let mut result = String::with_capacity(term.len() - underscore_count);

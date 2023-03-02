@@ -7,31 +7,14 @@ use sube::{
     meta_ext::Pallet,
     rpc,
     util::to_camel,
-    Backend, JsonValue, Sube,
+    Backend
 };
+
+use serde_json::Value;
 
 pub type SubeClient = Sube<HttpBackend>;
 pub type Result<T> = core::result::Result<T, JsError>;
 
-pub fn get_client_and_path(url: String) -> Result<(Sube<HttpBackend>, String)> {
-    let url = Url::parse(url.as_str()).expect("Invalid url");
-    // i'm cloning here
-    let path = url.path().to_string();
-    let rpc_uri = match url.scheme() {
-        "http" | "https" => {
-            let url_str = format!(
-                "{}://{}:{}",
-                url.scheme(),
-                url.host_str().expect("No host"),
-                url.port().or_else(|| Some(80)).unwrap()
-            );
-            Ok(Url::parse(url_str.as_str()).expect("Invalid Url"))
-        }
-        _ => Err(JsError::new("Invalid URL scheme")),
-    }?;
-
-    Ok((Sube::new(HttpBackend::new(rpc_uri)).into(), path))
-}
 
 pub fn decode_addresses(value: &JsonValue) -> JsonValue {
     match value {

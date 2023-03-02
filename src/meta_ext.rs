@@ -2,13 +2,10 @@ use crate::prelude::*;
 use core::{borrow::Borrow, slice};
 
 use codec::Decode;
-#[cfg(any(feature = "v12", feature = "v13"))]
+#[cfg(any(feature = "v13"))]
 use frame_metadata::decode_different::DecodeDifferent;
 use frame_metadata::{PalletCallMetadata, RuntimeMetadata, RuntimeMetadataPrefixed};
 
-use scale_info::form::PortableForm;
-#[cfg(feature = "v12")]
-pub use v12::*;
 #[cfg(feature = "v13")]
 pub use v13::*;
 #[cfg(feature = "v14")]
@@ -16,17 +13,6 @@ pub use v14::*;
 
 use crate::hasher::hash;
 
-#[cfg(feature = "v12")]
-mod v12 {
-    use frame_metadata::v12::*;
-    pub type Metadata = RuntimeMetadataV12;
-    pub type ExtrinsicMeta = ExtrinsicMetadata;
-    pub type PalletMeta = ModuleMetadata;
-    pub type StorageMeta = StorageMetadata;
-    pub type EntryMeta = StorageEntryMetadata;
-    pub type EntryType = StorageEntryType;
-    pub type Hasher = StorageHasher;
-}
 #[cfg(feature = "v13")]
 mod v13 {
     use frame_metadata::v13::*;
@@ -45,7 +31,9 @@ mod v14 {
     pub type Metadata = RuntimeMetadataV14;
     pub type ExtrinsicMeta = ExtrinsicMetadata;
     pub type PalletMeta = PalletMetadata<PortableForm>;
+    pub type CallsMeta = PalletCallMetadata<PortableForm>;
     pub type StorageMeta = PalletStorageMetadata<PortableForm>;
+    pub type ConstMeta = PalletConstantMetadata<PortableForm>;
     pub type EntryMeta = StorageEntryMetadata<PortableForm>;
     pub type EntryType = StorageEntryType<PortableForm>;
     pub type Hasher = StorageHasher;
@@ -59,8 +47,6 @@ mod v14 {
 pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
     let meta = match meta.1 {
-        #[cfg(feature = "v12")]
-        RuntimeMetadata::V12(m) => m,
         #[cfg(feature = "v13")]
         RuntimeMetadata::V13(m) => m,
         #[cfg(feature = "v14")]
@@ -83,7 +69,6 @@ impl Into<Vec<u8>> for BlockInfo {
 }
 
 type Entries<'a, E> = slice::Iter<'a, E>;
-type EntryFor<'a, M> = <<<M as Meta<'a>>::Pallet as Pallet<'a>>::Storage as Storage<'a>>::Entry;
 
 /// An extension trait for a decoded metadata object that provides
 /// convenient methods to navigate and extract data from it.
@@ -96,15 +81,6 @@ pub trait Meta<'a> {
         self.pallets()
             .find(|p| p.name().to_lowercase() == name.to_lowercase())
     }
-
-    fn storage_entries(&'a self, pallet: &str) -> Option<Entries<EntryFor<Self>>> {
-        Some(self.pallet_by_name(pallet)?.storage()?.entries())
-    }
-
-    fn storage_entry(&'a self, pallet: &str, entry: &str) -> Option<&EntryFor<Self>> {
-        self.storage_entries(pallet)?.find(|e| e.name() == entry)
-    }
-
     fn cloned(&self) -> Self;
 }
 
@@ -121,7 +97,7 @@ pub trait Pallet<'a> {
 
     fn name(&self) -> &str;
     fn storage(&self) -> Option<&Self::Storage>;
-    fn get_calls(&self) -> Option<&PalletCallMetadata<PortableForm>>;
+    fn calls(&self) -> Option<&CallsMeta>;
 }
 
 pub trait Storage<'a> {
@@ -142,23 +118,24 @@ pub trait Entry {
     fn ty(&self) -> &Self::Type;
     fn ty_id(&self) -> u32;
 
-    fn key(&self, pallet: &str, map_keys: &[&str]) -> Option<Vec<u8>> {
+    fn key<T: AsRef<str>>(&self, pallet: &str, map_keys: &[T]) -> Option<Vec<u8>> {
         self.ty().key(pallet, self.name(), map_keys)
     }
 }
 
 pub trait EntryTy {
-    fn key(&self, pallet: &str, item: &str, map_keys: &[&str]) -> Option<Vec<u8>>;
+    fn key<T: AsRef<str>>(&self, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>>;
 
-    fn build_key<H>(
+    fn build_key<H, T>(
         &self,
         pallet: &str,
         item: &str,
-        map_keys: &[&str],
+        map_keys: &[T],
         hashers: &[H],
     ) -> Option<Vec<u8>>
     where
         H: Borrow<Hasher>,
+        T: AsRef<str>,
     {
         let mut key = hash(&Hasher::Twox128, &pallet);
         key.append(&mut hash(&Hasher::Twox128, &item));
@@ -169,11 +146,11 @@ pub trait EntryTy {
 
         for (i, h) in hashers.iter().enumerate() {
             let hasher = h.borrow();
-            if map_keys[i].is_empty() {
+            let k = map_keys[i].as_ref();
+            if k.is_empty() {
                 return None;
             }
-
-            key.append(&mut hash(hasher, map_keys[i]))
+            key.append(&mut hash(hasher, k))
         }
         Some(key)
     }
@@ -246,7 +223,7 @@ impl<'a> Pallet<'a> for PalletMeta {
         name
     }
 
-    fn get_calls(&self) -> Option<&PalletCallMetadata<PortableForm>> {
+    fn calls(&self) -> Option<&CallsMeta> {
         self.calls.as_ref()
     }
 }
@@ -297,20 +274,20 @@ impl<'a> Entry for EntryMeta {
 }
 
 impl EntryTy for EntryType {
-    fn key(&self, pallet: &str, item: &str, map_keys: &[&str]) -> Option<Vec<u8>> {
+    fn key<T: AsRef<str>>(&self, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>> {
         match self {
             Self::Plain(ty) => {
                 log::debug!("Item Type: {:?}", ty);
-                self.build_key::<Hasher>(pallet, item, &[], &[])
+                self.build_key::<Hasher, &str>(pallet, item, &[], &[])
             }
-            #[cfg(any(feature = "v12", feature = "v13"))]
+            #[cfg(any(feature = "v13"))]
             Self::Map {
                 hasher, key, value, ..
             } => {
                 log::debug!("Item Type: {:?} => {:?}", key, value);
                 self.build_key(pallet, item, map_keys, &[hasher])
             }
-            #[cfg(any(feature = "v12", feature = "v13"))]
+            #[cfg(any(feature = "v13"))]
             Self::DoubleMap {
                 hasher,
                 key2_hasher,
@@ -343,13 +320,13 @@ impl EntryTy for EntryType {
     }
 }
 
-#[cfg(any(feature = "v12", feature = "v13"))]
+#[cfg(any(feature = "v13"))]
 trait Decoded {
     type Output;
     fn decoded(&self) -> &Self::Output;
 }
 
-#[cfg(any(feature = "v12", feature = "v13"))]
+#[cfg(any(feature = "v13"))]
 impl<B, O> Decoded for DecodeDifferent<B, O> {
     type Output = O;
     fn decoded(&self) -> &Self::Output {

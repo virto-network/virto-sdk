@@ -14,6 +14,7 @@ mod opts;
 
 async fn run() -> Result<()> {
     let opt = Opt::from_args();
+
     stderrlog::new()
         .verbosity(opt.verbose)
         .quiet(opt.quiet)
@@ -21,8 +22,10 @@ async fn run() -> Result<()> {
         .unwrap();
 
     let url = chain_string_to_url(&opt.chain)?;
+
     // let backend = sube::ws::Backend::new_ws2(url.as_str()).await?;
     let backend = sube::http::Backend::new(url.as_str());
+
     let meta = if let Some(m) = opt.metadata {
         get_meta_from_fs(&m)
             .await
@@ -32,7 +35,7 @@ async fn run() -> Result<()> {
     };
 
     let res = sube(backend, &meta, &opt.input, None, |_, _| {}).await?;
-
+    println!("GOT a response ");
     io::stdout().write_all(&opt.output.format(res)?).await?;
     writeln!(io::stdout()).await?;
     Ok(())

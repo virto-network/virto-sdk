@@ -1,47 +1,29 @@
 [package]
 name = "cli"
-description = "CLI for SUBE"
-license = "Apache-2.0"
-version = "0.5.1"
-authors = ["Daniel Olano <daniel@olanod.com>"]
-edition = "2018"
-repository = "https://github.com/valibre-org/sube"
+version = "1.0.0"
+edition = "2021"
 
 [dependencies]
-async-trait = "0.1.53"
+anyhow = "1.0.57"
+async-std = "1.11.0"
+serde_json = "1.0.80"
+stderrlog = "0.5.1"
+structopt = "0.3.26"
+url = "2.2.2"
 log = "0.4.17"
-sube = { path = "../" }
+serde = { version = "1.0.137", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
-structopt = { version = "0.3.26", optional = true }
-async-std = { version = "1.11.0", default_features = false, optional = true }
-anyhow = { version = "1.0.57", optional = true }
-surf = { version = "2.3.2", default_features = false, optional = true }
-scales = { git = "https://github.com/pandres95/scales.git", branch="fix/tuple_deserialization", package = "scale-serialization", detault-features = false, optional = true }
-stderrlog = { version = "0.5.1", optional = true }
-serde = { version = "1.0.137", default-features = false, optional = true }
-serde_json = { version = "1.0.80", default-features = false, optional = true }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 
-[dev-dependencies]
-async-std = { version = "1.11.0", features = ["attributes"] }
-
-[features]
-default = [
-	"surf",
-	"scales",
-	"stderrlog",
-	"structopt",
-	"anyhow",
-	"serde",
-	"serde_json",
-	"sube/bin",
-	"async-std/attributes"
+[dependencies.sube]
+path = ".."
+features = [
+  "std",
+  "v14", 
+  "http",
+  # "wss", 
 ]
-
-[package.metadata.docs.rs]
-features = ["http"]
 
 [[bin]]
 name = "sube"
 path = "src/main.rs"
-required-features = ["default"]

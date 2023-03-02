@@ -57,14 +57,8 @@ assert!(
 
 */
 
-#[cfg(not(any(feature = "v12", feature = "v13", feature = "v14")))]
+#[cfg(not(any(feature = "v13", feature = "v14")))]
 compile_error!("Enable one of the metadata versions");
-#[cfg(all(feature = "v12", feature = "v13", feature = "v14"))]
-compile_error!("Only one metadata version can be enabled at the moment");
-#[cfg(all(feature = "v12", feature = "v13"))]
-compile_error!("Only one metadata version can be enabled at the moment");
-#[cfg(all(feature = "v12", feature = "v14"))]
-compile_error!("Only one metadata version can be enabled at the moment");
 #[cfg(all(feature = "v13", feature = "v14"))]
 compile_error!("Only one metadata version can be enabled at the moment");
 
@@ -74,6 +68,7 @@ extern crate alloc;
 pub mod util;
 
 pub use codec;
+use codec::Encode;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use meta::Metadata;
 pub use meta_ext as meta;
@@ -83,15 +78,12 @@ pub use scales::JsonValue;
 pub use scales::Value;
 
 use async_trait::async_trait;
-use core::{fmt, ops::Deref};
-use meta::{Entry, Meta};
-#[cfg(feature = "std")]
-use once_cell::sync::OnceCell;
-#[cfg(not(feature = "std"))]
-use once_cell::unsync::OnceCell;
+use core::{fmt, any::Any};
+use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
+use serde::Serialize;
 
 use crate::util::to_camel;
 
@@ -114,100 +106,107 @@ pub mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
 
-/// Main interface for interacting with the Substrate based blockchain
-#[derive(Debug)]
-pub struct Sube<B> {
-    backend: B,
-    meta: OnceCell<Metadata>,
-}
+/// ```
+/// Multipurpose function to interact with a Substrate based chain
+/// using a URL-path-like syntax.
+///
+/// # use sube::sube;
+/// let backend = sube::ws::Backend::new();
+/// sube
+/// ```
+pub async fn sube<'m>(
+    chain: impl Backend,
+    meta: &'m Metadata,
+    path: &str,
+    maybe_tx_data: Option<()>,
+    signer: impl Fn(&[u8], &mut [u8]),
+) -> Result<Response<'m>> {
+    Ok(match path {
+        "_meta" => Response::Meta(meta),
+        "_meta/registry" => Response::Registry(&meta.types),
+        // "_chain/block"
+        _ => {
+            println!("hello worl here");
+            let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+            println!("{:?} {:?}", pallet, item_or_call);
+            let pallet = meta
+                .pallet_by_name(&pallet)
+                .ok_or_else(|| Error::PalletNotFound)?;
+            
+            if item_or_call == "_constants" {
+                let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
+                let const_meta = pallet
+                    .constants
+                    .iter()
+                    .find(|c| {
+                        println!("name {:?} - {:?}", c.name, const_name);
+                        c.name == const_name
+                    })
+                    .ok_or_else(|| Error::ConstantNotFound(const_name))?;
 
-impl<B: Backend> Sube<B> {
-    pub fn new(backend: B) -> Self {
-        Sube {
-            backend,
-            meta: OnceCell::new(),
-        }
-    }
+                return Ok(Response::Value(Value::new(
+                    const_meta.value.clone(),
+                    const_meta.ty.id(),
+                    &meta.types,
+                )));
+            }
 
-    pub fn new_with_meta(backend: B, meta: Metadata) -> Self {
-        Sube {
-            backend,
-            meta: meta.into(),
-        }
-    }
-
-    /// Get the chain metadata and cache it for future calls
-    pub async fn metadata(&self) -> Result<&Metadata> {
-        match self.meta.get() {
-            Some(meta) => Ok(meta),
-            None => {
-                let meta = self.backend.metadata().await?;
-                self.meta.set(meta).expect("unset");
-                Ok(self.meta.get().unwrap())
+            if let Some(tx_data) = maybe_tx_data {
+                Response::Value(Value::new(vec![], 0, &meta.types))
+            } else if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {
+                println!("GOT HERE MY FRIEND");
+                let res = chain.query_storage(&key_res).await?;
+                Response::Value(Value::new(res, key_res.ty, &meta.types))
+            } else {
+                Response::Value(Value::new(vec![], 0, &meta.types))
             }
         }
-    }
+    })
+}
 
-    /// Use a path-like syntax to query storage items(e.g. `"pallet/item/keyN"`)
-    #[cfg(feature = "v14")]
-    pub async fn query(&self, key: &str) -> Result<Value<'_>> {
-        let key = self.key_from_path(key).await?;
-        let res = self.query_storage(&key).await?;
-        let reg = self.registry().await?;
-        Ok(Value::new(res, key.1, reg))
-    }
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+pub enum Response<'m> {
+    Value(scales::Value<'m>),
+    Meta(&'m Metadata),
+    Registry(&'m PortableRegistry),
+}
 
-    pub async fn key_from_path(&self, path: &str) -> Result<StorageKey> {
-        StorageKey::from_uri(self.metadata().await?, path)
-    }
-
-    /// Get the type registry of the chain
-    #[cfg(feature = "v14")]
-    pub async fn registry(&self) -> Result<&PortableRegistry> {
-        Ok(&self.metadata().await?.types)
-    }
-
-    #[cfg(feature = "decode")]
-    pub async fn decode<'a, T>(
-        &'a self,
-        data: T,
-        ty: u32,
-    ) -> Result<impl serde::Serialize + codec::Encode + 'a>
-    where
-        T: Into<scales::Bytes> + 'static,
-    {
-        Ok(Value::new(data, ty, self.registry().await?))
-    }
-
-    #[cfg(feature = "encode")]
-    pub async fn encode(&self, value: impl serde::Serialize, ty: u32) -> Result<Vec<u8>> {
-        let reg = self.registry().await?;
-        scales::to_vec_with_info(&value, (reg, ty).into()).map_err(|e| Error::Encode(e.to_string()))
-    }
-
-    #[cfg(feature = "encode")]
-    pub async fn encode_iter<I, K, V>(&self, value: I, ty: u32) -> Result<Vec<u8>>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<JsonValue>,
-    {
-        let reg = self.registry().await?;
-        scales::to_vec_from_iter(value, (reg, ty)).map_err(|e| Error::Encode(e.to_string()))
+impl From<Response<'_>> for Vec<u8> {
+    fn from(res: Response) -> Self {
+        match res {
+            Response::Value(v) => v.as_ref().into(),
+            Response::Meta(m) => m.encode(),
+            Response::Registry(r) => r.encode(),
+        }
     }
 }
 
-impl<B: Backend> From<B> for Sube<B> {
-    fn from(b: B) -> Self {
-        Sube::new(b)
-    }
+fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
+    let mut path = uri.trim_matches('/').split('/');
+    let pallet = path.next().map(to_camel)?;
+    let item = path.next().map(to_camel)?;
+    let map_keys = path.map(to_camel).collect::<Vec<_>>();
+    Some((pallet, item, map_keys))
 }
 
-impl<T: Backend> Deref for Sube<T> {
-    type Target = T;
+struct PalletCall {
+    pallet_idx: u8,
+    ty: u32,
+}
 
-    fn deref(&self) -> &Self::Target {
-        &self.backend
+impl PalletCall {
+    fn new(pallet: &PalletMeta, reg: &PortableRegistry, call: &str) -> Result<Self> {
+        let calls = pallet
+            .calls
+            .as_ref()
+            .map(|c| reg.resolve(c.ty.id()))
+            .flatten()
+            .ok_or_else(|| Error::CallNotFound)?
+            .type_def();
+        log::debug!("{:?}", calls);
+        let pallet_idx = pallet.index;
+        Ok(PalletCall { pallet_idx, ty: 0 })
     }
 }
 
@@ -278,6 +277,10 @@ pub enum Error {
     Node(String),
     ParseStorageItem,
     StorageKeyNotFound,
+    PalletNotFound,
+    CallNotFound,
+    MissingConstantName,
+    ConstantNotFound(String),
 }
 
 impl fmt::Display for Error {
@@ -301,54 +304,43 @@ impl std::error::Error for Error {}
 
 /// Represents a key of the blockchain storage in its raw form
 #[derive(Clone, Debug)]
-pub struct StorageKey(Vec<u8>, u32);
+pub struct StorageKey {
+    key: Vec<u8>,
+    pub ty: u32,
+}
 
 impl StorageKey {
-    /// Parse the StorageKey from a URL-like path
-    pub fn from_uri(meta: &Metadata, uri: &str) -> Result<Self> {
-        let (pallet, item, map_keys) = Self::parse_uri(uri).ok_or(Error::ParseStorageItem)?;
-        log::debug!(
-            "StorageKey parts: [module]={} [item]={} [keys]={:?}",
-            pallet,
-            item,
-            map_keys,
-        );
-        Self::new(meta, &pallet, &item, &map_keys)
-    }
-
-    pub fn new(meta: &Metadata, pallet: &str, item: &str, map_keys: &[&str]) -> Result<Self> {
+    pub fn new<T: AsRef<str>>(meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
         let entry = meta
-            .storage_entry(pallet, item)
+        .storage()
+        .map(|s| s.entries().find(|e| {
+            
+                println!("Storage.key {:?} -  {:?}", e.name, item);
+                e.name() == item
+            }))
+            .flatten()
             .ok_or(Error::StorageKeyNotFound)?;
+
 
         let key = entry
-            .key(pallet, map_keys)
+            .key(meta.name(), map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
 
-        Ok(StorageKey(key, entry.ty_id()))
-    }
-
-    pub fn parse_uri(uri: &str) -> Option<(String, String, Vec<&str>)> {
-        let mut path = uri.trim_matches('/').split('/');
-        let pallet = path.next().map(to_camel)?;
-        let item = path.next().map(to_camel)?;
-        let map_keys = path.collect::<Vec<_>>();
-        Some((pallet, item, map_keys))
-    }
-
-    pub fn ty_id(&self) -> u32 {
-        self.1
+        Ok(StorageKey {
+            key,
+            ty: entry.ty_id(),
+        })
     }
 }
 
 impl fmt::Display for StorageKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "0x{}", hex::encode(&self.0))
+        write!(f, "0x{}", hex::encode(&self.key))
     }
 }
 
 impl AsRef<[u8]> for StorageKey {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
+        self.key.as_ref()
     }
 }
