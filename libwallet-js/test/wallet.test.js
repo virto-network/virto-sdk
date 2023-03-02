@@ -26,9 +26,10 @@ describe("Wallet", () => {
       throws(() => wallet.address);
     });
 
-    it("fails to retrieve if wallet is unlocked", async () => {
+    it("unlocks and retrieves an address", async () => {
       const wallet = new Wallet({ Simple: phrase });
       await wallet.unlock();
+
       deepEqual(
         [...wallet.address],
         [
@@ -36,6 +37,16 @@ describe("Wallet", () => {
           113, 10, 136, 122, 112, 31, 72, 132, 118, 58, 116, 31, 226, 197, 27,
           238, 54, 17,
         ]
+      );
+    });
+
+    it("when available, retrieves the public address as hex string", async () => {
+      const wallet = new Wallet({ Simple: phrase });
+      await wallet.unlock();
+
+      deepEqual(
+        wallet.toHex(),
+        "0x6ccccedfb301dce1cd759597bce1710a887a701f4884763a741fe2c51bee3611"
       );
     });
   });

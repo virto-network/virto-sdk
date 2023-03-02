@@ -9,6 +9,8 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
+hex = {version = "0.4.3", optional = true}
+js-sys = "0.3.61"
 libwallet = {path = "../libwallet-core", default-features = false}
 rand_core = {version = "0.6.3", features = ["getrandom"]}
 serde = {version = "1.0.152", features = ["derive"]}
@@ -23,5 +25,8 @@ wasm-bindgen-test = "0.3.34"
 features = ["js"]
 
 [features]
-default = ["js", "libwallet/substrate", "libwallet/vault_simple", "libwallet/mnemonic", "libwallet/rand"]
+default = ["std", "wallet", "js", "hex"]
+hex = ["dep:hex"]
 js = []
+std = []
+wallet = ["libwallet/substrate", "libwallet/vault_simple", "libwallet/mnemonic", "libwallet/rand"]
