@@ -1,4 +1,4 @@
-import { throws, deepEqual } from "node:assert";
+import { ok, throws, deepEqual } from "node:assert";
 import { describe, it } from "node:test";
 import { Wallet } from "libwallet-js";
 
@@ -48,6 +48,22 @@ describe("Wallet", () => {
         wallet.toHex(),
         "0x6ccccedfb301dce1cd759597bce1710a887a701f4884763a741fe2c51bee3611"
       );
+    });
+  });
+
+  describe("sign/verify", () => {
+    it("sign and verify a known message", async () => {
+      const message = Buffer.from(
+        "This message should be signed and verified against the obtained signature"
+      );
+
+      const wallet = new Wallet({
+        Simple: phrase,
+      });
+      await wallet.unlock();
+
+      const sig = wallet.sign(message);
+      ok(wallet.verify(message, sig));
     });
   });
 });

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
 
-use libwallet::{vault::Simple, Wallet};
+use libwallet::{vault::Simple, Signer, Wallet};
 
 #[derive(Serialize, Deserialize)]
 pub enum WalletConstructor {
@@ -82,5 +82,37 @@ impl JsWallet {
       let public_vec = self.wallet.default_account().public().as_ref().to_vec();
       
       format!("0x{}", hex::encode(public_vec)).into()
+    }
+
+    #[wasm_bindgen]
+    pub fn sign(&self, message: &[u8]) -> Result<Box<[u8]>, JsError> {
+        if self.wallet.is_locked() {
+            return Err(JsError::new(
+                "The wallet is locked. You should unlock it first by using the .unlock() method",
+            ));
+        }
+
+        let sig = self.wallet.sign(message);
+
+        if !self
+            .wallet
+            .default_account()
+            .verify(&message, &sig.as_ref())
+        {
+            return Err(JsError::new("Message could not be verified"));
+        }
+
+        Ok(sig.as_ref().to_vec().into_boxed_slice())
+    }
+
+    #[wasm_bindgen]
+    pub fn verify(&self, msg: &[u8], sig: &[u8]) -> Result<bool, JsError> {
+        if self.wallet.is_locked() {
+            return Err(JsError::new(
+                "The wallet is locked. You should unlock it first by using the .unlock() method",
+            ));
+        }
+
+        Ok(self.wallet.default_account().verify(msg, sig))
     }
 }
