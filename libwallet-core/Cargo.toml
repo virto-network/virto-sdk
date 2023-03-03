@@ -26,10 +26,9 @@ serde_json = {version = "1.0", default-features = false, features = ["alloc"]}
 [features]
 default = ["std", "substrate", "vault_simple", "mnemonic", "rand"]
 rand = ["rand_core"]
-sr25519 = ["schnorrkel/u64_backend"]
+sr25519 = ["schnorrkel/u64_backend", "schnorrkel/getrandom"]
 std = [
   "rand_core/getrandom",
-  "schnorrkel/getrandom",
 ]
 substrate = ["sr25519"]
 util_pin = ["pbkdf2", "hmac", "sha2"]
