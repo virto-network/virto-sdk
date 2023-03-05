@@ -57,7 +57,26 @@ h1 {
 }
 
 .card {
-  padding: 2em;
+  /* padding: 2em; */
+  /* max-width: 80%; */
+  display: flex;
+  flex-direction: column;
+} 
+
+.card > .row {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  padding: .2rem 0rem;
+}
+
+.row > label {
+  margin-right: 20px;
+  width: calc(30% - 20px);
+  text-align: left;
+}
+.row > input {
+  width: 70%;
 }
 
 .read-the-docs {
@@ -82,16 +101,16 @@ button:focus,
 button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
+input {
+  all: unset;
+  border: 2px solid;
+  border-color: rgba(#646cff, 0.1);
+  border-radius: 5px;
+}
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+input:focus {
+  border-radius: 5px;
+  border: 2px solid;
+  border-color: #646cff;
+  outline: none;
 }

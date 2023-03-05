@@ -18,9 +18,10 @@ once_cell = { version = "1.10.0", default-features = false }
 twox-hash = { version = "1.6.2", default-features = false }
 serde = { version = "1.0.137", default-features = false }
 
+
 scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { path = "../scales", package = "scale-serialization", default-features = false, features = ["codec"] }
+scales = { path = "../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer"] }
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }
@@ -37,12 +38,15 @@ async-std = { version = "1.11.0", default_features = false, optional = true }
 serde_json = { version = "1.0.80", default-features = false, optional = true }
 url = { version = "2.2.2", optional = true }
 
+wasm-bindgen = "0.2.63"
+
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
 
 [features]
 # default = ["json", "std"]
+default = ["async-std"]
 #default = ["v14", "ws", "decode", "json", "std"]
 # decode = ["v14", "serde", "scales/codec"]
 # encode = ["v14", ]

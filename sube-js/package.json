@@ -1,0 +1,34 @@
+{
+  "name": "@virtonetwork/sube",
+  "version": "1.0.0-alpha.1",
+  "description": "fetch like API to interact with dotsama blockchains",
+  "type": "module",
+  "scripts": {
+    "test": "node test/index.js",
+    "build": "rm -rf dist pkg-web pkg-node && npx concurrently \"npm:build:*\" && npm run build:cp",
+    "build:pkg:node": "wasm-pack build --target nodejs --out-dir ./dist/pkg-node",
+    "build:pkg:web": "wasm-pack build --target web --out-dir ./dist/pkg-web",
+    "build:js": "npm run build:esm && npm run build:cjs",
+    "build:esm": "tsc --module es2015 --target esnext --outDir dist/esm",
+    "build:cjs": "tsc --module commonjs --target esnext --outDir dist/cjs",
+    "build:cp": "mv ./pkg-web/ ./dist/pkg-web"
+  },
+  "files": [
+    "dist/"
+  ],
+  "main": "./dist/cjs/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "exports": {
+    "import": "./dist/esm/index.js",
+    "require": "./dist/cjs/index.js"
+  },
+  "imports": {
+    "sube-web": "./dist/pkg-web"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5"
+  }
+}

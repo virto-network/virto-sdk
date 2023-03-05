@@ -40,7 +40,6 @@ impl Output {
     where
         O: serde::Serialize + Into<Vec<u8>>,
     {
-        println!("Hello world {:?}", self);
         Ok(match self {
             Output::Json(pretty) => {
                 if *pretty {

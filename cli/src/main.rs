@@ -34,8 +34,8 @@ async fn run() -> Result<()> {
         backend.metadata().await?
     };
 
-    let res = sube(backend, &meta, &opt.input, None, |_, _| {}).await?;
-    println!("GOT a response ");
+    let res = sube::<u8>(backend, &meta, &opt.input, None, |_, _| {}).await?;
+
     io::stdout().write_all(&opt.output.format(res)?).await?;
     writeln!(io::stdout()).await?;
     Ok(())

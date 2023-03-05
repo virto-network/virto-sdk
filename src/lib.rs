@@ -67,23 +67,32 @@ extern crate alloc;
 
 pub mod util;
 
+use async_std::io::Chain;
 pub use codec;
-use codec::Encode;
+use codec::{Decode, Encode};
 pub use frame_metadata::RuntimeMetadataPrefixed;
+
 pub use meta::Metadata;
 pub use meta_ext as meta;
 #[cfg(feature = "json")]
 pub use scales::JsonValue;
 #[cfg(feature = "v14")]
-pub use scales::Value;
+pub use scales::{Serializer, Value};
 
 use async_trait::async_trait;
-use core::{fmt, any::Any};
+use codec::Compact;
+use core::{
+    any::Any,
+    borrow::{Borrow, BorrowMut},
+    fmt,
+};
+use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use surf::http::content::AcceptEncoding;
 
 use crate::util::to_camel;
 
@@ -91,6 +100,13 @@ mod prelude {
     pub use alloc::boxed::Box;
     pub use alloc::string::{String, ToString};
     pub use alloc::vec::Vec;
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ExtrinicData<Value> {
+    pub nonce: Option<u64>,
+    pub body: Value,
+    pub from: Vec<u8>,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
@@ -106,6 +122,27 @@ pub mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
 
+#[derive(Deserialize, Decode)]
+struct ChainVersion {
+    spec_version: u64,
+    transaction_version: u64,
+}
+
+#[derive(Deserialize, Serialize, Decode)]
+struct AccountInfo {
+    nonce: u64,
+}
+
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+extern "C" {
+    // Use `js_namespace` here to bind `console.log(..)` instead of just
+    // `log(..)`
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+}
+
 /// ```
 /// Multipurpose function to interact with a Substrate based chain
 /// using a URL-path-like syntax.
@@ -114,59 +151,218 @@ pub mod rpc;
 /// let backend = sube::ws::Backend::new();
 /// sube
 /// ```
-pub async fn sube<'m>(
+pub async fn sube<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
-    maybe_tx_data: Option<()>,
-    signer: impl Fn(&[u8], &mut [u8]),
-) -> Result<Response<'m>> {
+    maybe_tx_data: Option<ExtrinicData<V>>,
+    mut signer: impl Fn(&[u8], &mut [u8; 64]) -> Result<()>,
+) -> Result<Response<'m>>
+where
+    V: serde::Serialize,
+{
     Ok(match path {
         "_meta" => Response::Meta(meta),
         "_meta/registry" => Response::Registry(&meta.types),
-        // "_chain/block"
         _ => {
-            println!("hello worl here");
-            let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
-            println!("{:?} {:?}", pallet, item_or_call);
-            let pallet = meta
-                .pallet_by_name(&pallet)
-                .ok_or_else(|| Error::PalletNotFound)?;
-            
-            if item_or_call == "_constants" {
-                let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
-                let const_meta = pallet
-                    .constants
-                    .iter()
-                    .find(|c| {
-                        println!("name {:?} - {:?}", c.name, const_name);
-                        c.name == const_name
-                    })
-                    .ok_or_else(|| Error::ConstantNotFound(const_name))?;
-
-                return Ok(Response::Value(Value::new(
-                    const_meta.value.clone(),
-                    const_meta.ty.id(),
-                    &meta.types,
-                )));
-            }
-
             if let Some(tx_data) = maybe_tx_data {
-                Response::Value(Value::new(vec![], 0, &meta.types))
-            } else if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {
-                println!("GOT HERE MY FRIEND");
-                let res = chain.query_storage(&key_res).await?;
-                Response::Value(Value::new(res, key_res.ty, &meta.types))
+                submit(chain, meta, path, tx_data, signer).await?
             } else {
-                Response::Value(Value::new(vec![], 0, &meta.types))
+                query(&chain, meta, path).await?
             }
         }
     })
 }
 
+async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
+    let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+
+    let pallet = meta
+        .pallet_by_name(&pallet)
+        .ok_or_else(|| Error::PalletNotFound(pallet))?;
+
+    if item_or_call == "_constants" {
+        let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
+        let const_meta = pallet
+            .constants
+            .iter()
+            .find(|c| c.name == const_name)
+            .ok_or_else(|| Error::ConstantNotFound(const_name))?;
+
+        return Ok(Response::Value(Value::new(
+            const_meta.value.clone(),
+            const_meta.ty.id(),
+            &meta.types,
+        )));
+    }
+
+    if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {
+        let res = chain.query_storage(&key_res).await?;
+        Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)))
+    } else {
+        Err(Error::ChainUnavailable)
+    }
+}
+
+async fn submit<'m, V>(
+    chain: impl Backend,
+    meta: &'m Metadata,
+    path: &str,
+    tx_data: ExtrinicData<V>,
+    mut signer: impl Fn(&[u8], &mut [u8; 64]) -> Result<()>,
+) -> Result<Response<'m>>
+where
+    V: serde::Serialize,
+{
+    let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+
+    let pallet = meta
+        .pallet_by_name(&pallet)
+        .ok_or_else(|| Error::PalletNotFound(pallet))?;
+
+    let reg = &meta.types;
+
+    let ty = pallet.calls().expect("pallet does not have calls").ty.id();
+
+    let mut encoded_call = vec![pallet.index];
+
+    let call_data = scales::to_vec_with_info(&tx_data.body, (reg, ty).into())
+        .map_err(|e| Error::Encode(e.to_string()))?;
+
+    encoded_call.extend(&call_data);
+
+    let extra_params = {
+        // ImmortalEra
+        let era = 0u8;
+
+        // Impl. Note: in a real-world use case, you should store your account's nonce somewhere else
+        let nonce = {
+            if let Some(nonce) = tx_data.nonce {
+                Ok(nonce)
+            } else {
+                let response = query(
+                    &chain,
+                    meta,
+                    &format!("system/account/0x{}", hex::encode(&tx_data.from)),
+                )
+                .await?;
+
+                match response {
+                    Response::Value(value) => {
+                        let bytes: [u8; 8] = value.as_ref()[..8].try_into().expect("fits");
+                        let nonce = u64::from_le_bytes(bytes);
+                        Ok(nonce)
+                    }
+                    _ => Err(Error::AccountNotFound),
+                }
+            }
+        }?;
+
+        let tip: u128 = 0;
+
+        [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
+    };
+
+    let additional_params = {
+        // Error: Still failing to deserialize the const
+        let metadata = meta;
+
+        let mut constants = metadata
+            .pallet_by_name("System")
+            .ok_or(Error::PalletNotFound(String::from("System")))?
+            .constants
+            .clone()
+            .into_iter();
+
+        let data = constants
+            .find(|c| c.name == "Version")
+            .ok_or(Error::ConstantNotFound("System_Version".into()))?;
+
+        let chain_value: JsonValue = Value::new(data.value, data.ty.id(), &meta.types).into();
+
+        let iter = chain_value
+            .as_object()
+            .ok_or(Error::ConstantNotFound("System_Version".into()))?;
+
+        let transaction_version = iter.get("transaction_version").ok_or(Error::Mapping(
+            "System_Version.transaction_version not found in transaction version".into(),
+        ))?;
+
+        let spec_version = iter.get("spec_version").ok_or(Error::Mapping(
+            "System_Version.spec_version not found in transaction version".into(),
+        ))?;
+        // chain_version
+
+        let spec_version = spec_version.as_u64().ok_or(Error::Mapping(
+            "System_Version.spec_version is not a number".into(),
+        ))? as u32;
+
+        let transaction_version = transaction_version.as_u64().ok_or(Error::Mapping(
+            "System_Version.transaction_version is not a number".into(),
+        ))? as u32;
+
+        let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
+
+        [
+            spec_version.to_le_bytes().to_vec(),
+            transaction_version.to_le_bytes().to_vec(),
+            genesis_block.clone(),
+            genesis_block.clone(),
+        ]
+        .concat()
+    };
+
+    let signature_payload = [
+        encoded_call.clone(),
+        extra_params.clone(),
+        additional_params.clone(),
+    ]
+    .concat();
+
+    let payload = if signature_payload.len() > 256 {
+        hash(&meta::Hasher::Blake2_256, &signature_payload[..])
+    } else {
+        signature_payload
+    };
+
+    let raw = payload.as_slice();
+    let mut signature: [u8; 64] = [0u8; 64];
+
+    signer(raw, &mut signature)?;
+
+    let extrinsic_call = {
+        let encoded_inner = [
+            // header: "is signed" (1 byte) + transaction protocol version (7 bytes)
+            vec![0b10000000 + 4u8],
+            // signer
+            vec![0x00],
+            tx_data.from.to_vec(),
+            // signature
+            [vec![0x01], signature.to_vec()].concat(),
+            // extra
+            extra_params,
+            // call data
+            encoded_call,
+        ]
+        .concat();
+
+        let len = Compact(
+            u32::try_from(encoded_inner.len()).expect("extrinsic size expected to be <4GB"),
+        )
+        .encode();
+
+        [len, encoded_inner].concat()
+    };
+
+    chain.submit(&extrinsic_call).await?;
+
+    Ok(Response::Void)
+}
+
 #[derive(Serialize, Debug)]
 #[serde(untagged)]
 pub enum Response<'m> {
+    Void,
     Value(scales::Value<'m>),
     Meta(&'m Metadata),
     Registry(&'m PortableRegistry),
@@ -178,6 +374,7 @@ impl From<Response<'_>> for Vec<u8> {
             Response::Value(v) => v.as_ref().into(),
             Response::Meta(m) => m.encode(),
             Response::Registry(r) => r.encode(),
+            Response::Void => vec![0],
         }
     }
 }
@@ -277,9 +474,12 @@ pub enum Error {
     Node(String),
     ParseStorageItem,
     StorageKeyNotFound,
-    PalletNotFound,
+    PalletNotFound(String),
     CallNotFound,
     MissingConstantName,
+    Signing,
+    Mapping(String),
+    AccountNotFound,
     ConstantNotFound(String),
 }
 
@@ -312,15 +512,10 @@ pub struct StorageKey {
 impl StorageKey {
     pub fn new<T: AsRef<str>>(meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
         let entry = meta
-        .storage()
-        .map(|s| s.entries().find(|e| {
-            
-                println!("Storage.key {:?} -  {:?}", e.name, item);
-                e.name() == item
-            }))
+            .storage()
+            .map(|s| s.entries().find(|e| e.name() == item))
             .flatten()
             .ok_or(Error::StorageKeyNotFound)?;
-
 
         let key = entry
             .key(meta.name(), map_keys)
