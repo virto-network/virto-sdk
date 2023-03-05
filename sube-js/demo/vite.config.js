@@ -6,5 +6,10 @@ export default defineConfig({
   plugins: [
     wasm(),
     topLevelAwait()
-  ]
+  ],
+  server: {
+    fs: {
+      allow: ['../dist', '.', '/Users/davidbarinas/db/virto/libwallet/libwallet-js/pkg']
+    }
+  }
 });

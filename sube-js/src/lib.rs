@@ -1,22 +1,24 @@
-mod utils;
+mod util;
 
+use parity_scale_codec::Encode;
 use serde::{Deserialize, Serialize};
-use serde_json;
+use serde_json::{self, Error};
 use serde_wasm_bindgen;
-use std::{fmt, string, collections::HashMap};
+use std::{collections::HashMap, fmt, string};
 use sube::{
     http::{Backend as HttpBackend, Url},
     meta::Meta,
     meta_ext::Pallet,
-    rpc,
+    rpc, sube,
     util::to_camel,
-    Backend
+    Backend, Error as SubeError, ExtrinicBody, JsonValue, Response,
 };
 
 // use sp_core::{crypto::Ss58Codec, hexdisplay::AsBytesRef};
-use wasm_bindgen::JsValue;
+use util::*;
 use wasm_bindgen::prelude::*;
-use utils::*;
+use wasm_bindgen::JsValue;
+extern crate console_error_panic_hook;
 
 #[cfg(feature = "wee_alloc")]
 #[global_allocator]
@@ -30,52 +32,95 @@ extern "C" {
     fn log(s: &str);
 }
 
-#[derive(Serialize, Deserialize)]
-struct SubeOptions {
-    pub nonce: Option<u64>,
-    pub signer: Closure<dyn Fn()>,
-    pub params: HashMap<String, JsValue>
+fn chain_string_to_url(chain: &str) -> Result<Url> {
+    let chain = if !chain.starts_with("ws://")
+        && !chain.starts_with("wss://")
+        && !chain.starts_with("http://")
+        && !chain.starts_with("https://")
+    {
+        ["wss", &chain].join("://")
+    } else {
+        chain.into()
+    };
+
+    let mut url = Url::parse(&chain)?;
+    if url.host_str().eq(&Some("localhost")) && url.port().is_none() {
+        const WS_PORT: u16 = 9944;
+        const HTTP_PORT: u16 = 9933;
+        let port = match url.scheme() {
+            "ws" => WS_PORT,
+            _ => HTTP_PORT,
+        };
+        url.set_port(Some(port)).expect("known port");
+    }
+
+    Ok(url)
 }
 
 #[wasm_bindgen]
-pub async fn sube_js(url: &str, params: JsValue, signer: js_sys::Function) -> Result<JsValue> {
-    let (client, path) = get_client_and_path(url.to_string())?;
+pub async fn sube_js(
+    url: &str,
+    params: JsValue,
+    signer: Option<js_sys::Function>,
+) -> Result<JsValue> {
+    let url = chain_string_to_url(url)?;
+
+    let backend = sube::http::Backend::new(url.clone());
+    console_error_panic_hook::set_once();
+
+    let meta = backend
+        .metadata()
+        .await
+        .map_err(|e| JsError::new("Error fetching metadata"))?;
 
     if params.is_undefined() {
-        let value = client.query(path.as_str()).await?;
-        Ok(serde_wasm_bindgen::to_value(&value).expect("Json parsing error"))
-    } else {        
-        let meta = client.metadata().await?;
+        let response = sube::<()>(backend, &meta, url.path(), None, move |_, _| Ok(()))
+            .await
+            .map_err(|e| JsError::new(&format!("Error querying: {:?}", &e.to_string())))?;
 
-        let mut path = path.trim_matches('/').split('/');
-        let pallet = path.next().map(to_camel).expect("Unknown path");
-        let call = path.next().expect("Unknown item");
+        let value = match response {
+            v @ Response::Value(_) | v @ Response::Meta(_) | v @ Response::Registry(_) => {
+                let value = serde_wasm_bindgen::to_value(&v)
+                    .map_err(|_| JsError::new("failed to serialize response"))?;
+                Ok(value)
+            }
+            _ => Err(JsError::new("Nonve value at query")),
+        }?;
 
-        let (ty, index) = {
-            let pallet = meta.pallet_by_name(&pallet).expect("pallet does not exist");
+        return Ok(value);
+    }
 
-            (
-                pallet
-                    .get_calls()
-                    .expect("pallet does not have calls")
-                    .ty
-                    .id(),
-                pallet.index,
-            )
-        };
+    let mut extrinsic_value: ExtrinicBody<JsonValue> = serde_wasm_bindgen::from_value(params)?;
 
-        let params = serde_wasm_bindgen::from_value(params)?;
-        let params = decode_addresses(&params);
-        let value = serde_json::json!({ call: params });
-        log(format!("Payload Params({}, {}) {:?} ", index, ty, value).as_str());
+    extrinsic_value.body = decode_addresses(&extrinsic_value.body);
 
-        let value = [vec![index], client.encode(value, ty).await?].concat();
-        let call_data = client.encode(value, ty).await?;
+    let value = sube::<JsonValue>(
+        backend,
+        &meta,
+        url.path(),
+        Some(extrinsic_value),
+        |message, out: &mut [u8; 64]| unsafe {
+            let response: JsValue = signer
+                .ok_or(SubeError::BadInput)?
+                .call1(
+                    &JsValue::null(),
+                    &JsValue::from(js_sys::Uint8Array::from(message)),
+                )
+                .map_err(|_| SubeError::Signing)?;
 
-        let mut encoded_call = vec![index];
-        encoded_call.extend(call_data);
+            let mut vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
+                .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;
 
-        log(format!("encoded: {:?}", encoded_call).as_str());
-        Ok(JsValue::UNDEFINED)
+            out.copy_from_slice(&vec);
+
+            Ok(())
+        },
+    )
+    .await
+    .map_err(|e| JsError::new(&format!("Error trying: {:?}", e.to_string())))?;
+
+    match value {
+        Response::Void => Ok(JsValue::null()),
+        _ => Err(JsError::new("Unknown Response")),
     }
 }

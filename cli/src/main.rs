@@ -34,8 +34,8 @@ async fn run() -> Result<()> {
         backend.metadata().await?
     };
 
-    let res = sube(backend, &meta, &opt.input, None, |_, _| {}).await?;
-    println!("GOT a response ");
+    let res = sube::<u8>(backend, &meta, &opt.input, None, |_, _| {}).await?;
+
     io::stdout().write_all(&opt.output.format(res)?).await?;
     writeln!(io::stdout()).await?;
     Ok(())
@@ -66,6 +66,7 @@ fn chain_string_to_url(chain: &str) -> Result<Url> {
     };
 
     let mut url = Url::parse(&chain)?;
+
     if url.host_str().eq(&Some("localhost")) && url.port().is_none() {
         const WS_PORT: u16 = 9944;
         const HTTP_PORT: u16 = 9933;
@@ -73,6 +74,7 @@ fn chain_string_to_url(chain: &str) -> Result<Url> {
             "ws" => WS_PORT,
             _ => HTTP_PORT,
         };
+
         url.set_port(Some(port)).expect("known port");
     }
 

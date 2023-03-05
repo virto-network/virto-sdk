@@ -1,23 +1,34 @@
 import './style.css'
-import typescriptLogo from './typescript.svg'
-import { setupCounter } from './counter'
+import { setupSign } from './sube'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
-    <a href="https://vitejs.dev" target="_blank">
-      <img src="/vite.svg" class="logo" alt="Vite logo" />
-    </a>
-    <a href="https://www.typescriptlang.org/" target="_blank">
-      <img src="${typescriptLogo}" class="logo vanilla" alt="TypeScript logo" />
-    </a>
-    <h1>Vite + TypeScript</h1>
     <div class="card">
-      <button id="counter" type="button"></button>
+        <h4> Sube Demo </h4>
+        <div class="row">
+            <label for="mnonic">Wallet nmonic</label>
+            <input id="mnomic">
+        </div>
+        <div class="row">
+            <label for="uri">URI</label>
+            <input id="uri">
+        </div>
+        <div class="row">
+            <label for="data">Body</label>
+            <textarea id="data" name="textarea" rows="10" cols="50">
+              {  
+                "transfer": {
+                  "dest": {
+                      "Id": "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b"
+                  },
+                  "value": 100000
+                }
+              }
+            </textarea>
+        </div>
+        <button id="counter" type="button"> Submit </button>
     </div>
-    <p class="read-the-docs">
-      Click on the Vite and TypeScript logos to learn more
-    </p>
   </div>
 `
 
-setupCounter(document.querySelector<HTMLButtonElement>('#counter')!)
+setupSign(document.querySelector<HTMLButtonElement>('#counter')!)

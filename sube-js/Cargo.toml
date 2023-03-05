@@ -21,6 +21,7 @@ serde-wasm-bindgen = "0.4.5"
 js-sys = "0.3.60"
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 parity-scale-codec = "3.2.1"
+console_error_panic_hook = "0.1.7"
 # sp-core = "10.0.0"
 
 [dev-dependencies]
@@ -32,7 +33,8 @@ wasm-bindgen-test = "0.3.13"
 path = ".."
 features = [
   "http-web",
-  "v14"
+  "v14",
+  "json"
 ]
 
 # [profile.release]

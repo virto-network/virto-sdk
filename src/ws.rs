@@ -93,7 +93,8 @@ pub type WS2 = futures_util::sink::SinkErrInto<
 >;
 
 impl Backend<WS2> {
-    pub async fn new_ws2(url: &str) -> core::result::Result<Self, WsError> {
+    pub async fn new_ws2<'a, U: Into<&'a str>>(url: U) -> core::result::Result<Self, WsError> {
+        let url = url.into();
         log::trace!("WS connecting to {}", url);
         let (stream, _) = async_tungstenite::async_std::connect_async(url).await?;
         let (tx, rx) = stream.split();
