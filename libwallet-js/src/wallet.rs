@@ -10,13 +10,13 @@ pub enum WalletConstructor {
     Simple(Option<String>),
 }
 
-#[wasm_bindgen(js_name = Wallet, inspectable)]
+#[wasm_bindgen(inspectable)]
 pub struct JsWallet {
     phrase: String,
     wallet: Wallet<Simple>,
 }
 
-#[wasm_bindgen(js_class = Wallet)]
+#[wasm_bindgen]
 impl JsWallet {
     #[wasm_bindgen(constructor)]
     pub fn new(constructor: JsValue) -> Self {
@@ -63,25 +63,17 @@ impl JsWallet {
         Ok(())
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn address(&self) -> Result<Uint8Array, JsError> {
+    #[wasm_bindgen(js_name = getAddress)]
+    pub fn get_address(&self) -> Result<JsPublicAddress, JsError> {
         if self.wallet.is_locked() {
             return Err(JsError::new(
                 "The wallet is locked. You should unlock it first by using the .unlock() method",
             ));
         }
 
-        let public = Uint8Array::from(self.wallet.default_account().public().as_ref());
-
-        Ok(public)
-    }
-
-    #[cfg(feature = "hex")]
-    #[wasm_bindgen(js_name = toHex)]
-    pub fn to_hex(&self) -> JsValue {
-      let public_vec = self.wallet.default_account().public().as_ref().to_vec();
-      
-      format!("0x{}", hex::encode(public_vec)).into()
+        Ok(JsPublicAddress {
+            repr: self.wallet.default_account().public().as_ref().to_vec(),
+        })
     }
 
     #[wasm_bindgen]
@@ -114,5 +106,24 @@ impl JsWallet {
         }
 
         Ok(self.wallet.default_account().verify(msg, sig))
+    }
+}
+
+#[wasm_bindgen(inspectable)]
+pub struct JsPublicAddress {
+    repr: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl JsPublicAddress {
+    #[cfg(feature = "hex")]
+    #[wasm_bindgen(js_name = toHex)]
+    pub fn to_hex(&self) -> JsValue {
+        format!("0x{}", hex::encode(&self.repr)).into()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn repr(&self) -> Uint8Array {
+        Uint8Array::from(self.repr.as_slice())
     }
 }

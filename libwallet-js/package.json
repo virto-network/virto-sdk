@@ -1,0 +1,25 @@
+{
+  "name": "@virtonetwork/libwallet",
+  "version": "1.0.0-alpha.1",
+  "description": "Exposes libwallet to be used on Javascript environments",
+  "type": "module",
+  "scripts": {
+    "test": "node test/index.js"
+  },
+  "files": [
+    "pkg/",
+    "src/"
+  ],
+  "exports": {
+    ".": {
+      "node": {
+        "require": "./src/lib.cjs",
+        "import": "./src/lib.js",
+        "types": "./src/lib.d.ts"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

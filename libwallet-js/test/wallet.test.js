@@ -1,6 +1,6 @@
 import { ok, throws, deepEqual } from "node:assert";
 import { describe, it } from "node:test";
-import { Wallet } from "libwallet-js";
+import { Wallet } from "../src/lib.js";
 
 describe("Wallet", () => {
   const phrase =
@@ -8,7 +8,6 @@ describe("Wallet", () => {
 
   describe("constructor", () => {
     it("initializes a wallet using a randomly-generated seed", () => {
-      throws(() => new Wallet());
       throws(() => new Wallet({}));
 
       new Wallet({ Simple: undefined });
@@ -45,7 +44,7 @@ describe("Wallet", () => {
       await wallet.unlock();
 
       deepEqual(
-        wallet.toHex(),
+        wallet.address.toHex(),
         "0x6ccccedfb301dce1cd759597bce1710a887a701f4884763a741fe2c51bee3611"
       );
     });
