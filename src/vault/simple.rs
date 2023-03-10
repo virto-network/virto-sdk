@@ -1,10 +1,10 @@
-use crate::util::Pin;
+use crate::util::{Pin, gen_seed_from_entropy};
 use crate::{RootAccount, Vault};
 
 /// A vault that holds secrets in memory
 pub struct Simple {
-    locked: Option<RootAccount>,
-    unlocked: Option<RootAccount>,
+    locked: Option<Vec<u8>>,
+    unlocked: Option<Vec<u8>>,
 }
 
 impl Simple {
@@ -15,7 +15,7 @@ impl Simple {
     /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
     /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
-    /// let root = vault.unlock(&(), |root| {
+    /// let root = vault.unlock(None, |root| {
     ///     println!("{}", root.derive("//default").public());
     /// }).await?;
     /// # Ok(()) }
@@ -25,9 +25,10 @@ impl Simple {
     where
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
-        let root = RootAccount::from_bytes(&crate::util::random_bytes::<_, 32>(rng));
+        let seed = &crate::util::random_bytes::<_, 32>(rng);
+
         Simple {
-            locked: Some(root),
+            locked: Some(seed.to_vec()),
             unlocked: None,
         }
     }
@@ -39,11 +40,9 @@ impl Simple {
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
 
-        let seed = Pin::from("").protect::<64>(&phrase.entropy());
-        let root = RootAccount::from_bytes(&seed);
         (
             Simple {
-                locked: Some(root),
+                locked: Some(phrase.entropy().to_vec()),
                 unlocked: None,
             },
             phrase,
@@ -58,16 +57,20 @@ impl Simple {
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
 
-        let seed = Pin::from("").protect::<64>(&phrase.entropy());
-        Self::from_seed(&seed)
-    }
-
-    pub fn from_seed(seed: impl AsRef<[u8]>) -> Self {
-        let root = RootAccount::from_bytes(seed.as_ref());
         Simple {
-            locked: Some(root),
+            locked: Some(phrase.entropy().to_vec()),
             unlocked: None,
         }
+    }
+
+    fn get_key(&self, pin: &Option<Pin>) -> Result<RootAccount, Error> {
+        if let Some(entropy) = &self.unlocked {
+            let seed = gen_seed_from_entropy(pin, entropy.as_ref());
+            Ok(RootAccount::from_bytes(seed))
+        } else {
+            Err(Error)
+        }
+
     }
 }
 
@@ -82,16 +85,16 @@ impl core::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl Vault for Simple {
-    type Credentials = ();
+    type Credentials = Option<Pin>;
     type Error = Error;
 
     async fn unlock<T>(
         &mut self,
-        _cred: &Self::Credentials,
+        pin: &Self::Credentials,
         mut cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error> {
         self.unlocked = self.locked.take();
-        let root_account = &self.unlocked.as_ref().unwrap();
+        let root_account = &self.get_key(pin)?;
         Ok(cb(root_account))
     }
 }

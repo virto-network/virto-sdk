@@ -1,6 +1,6 @@
 use crate::{
     mnemonic::{Language, Mnemonic},
-    util::Pin,
+    util::{Pin, gen_seed_from_entropy},
     RootAccount, Vault,
 };
 use keyring;
@@ -47,7 +47,7 @@ impl OSKeyring {
             .parse::<Mnemonic>()
             .map_err(|_| Error::BadPhrase)?;
 
-        let seed = pin.protect::<64>(&phrase.entropy());
+        let seed = gen_seed_from_entropy(Some(pin), &phrase.entropy());
         Ok(RootAccount::from_bytes(&seed))
     }
 
@@ -55,7 +55,7 @@ impl OSKeyring {
     fn generate(&self, pin: &Pin, lang: Language) -> Result<RootAccount, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
-        let seed = pin.protect::<64>(phrase.entropy());
+        let seed = gen_seed_from_entropy(Some(pin), phrase.entropy());
         let root = RootAccount::from_bytes(&seed);
 
         self.entry

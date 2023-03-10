@@ -5,7 +5,10 @@ use prs_lib::{
     Plaintext,
 };
 
-use crate::{util::Pin, RootAccount, Vault};
+use crate::{
+    util::{gen_seed_from_entropy, Pin},
+    RootAccount, Vault,
+};
 
 /// A vault that stores secrets in a `pass` compatible repository
 pub struct Pass {
@@ -50,7 +53,7 @@ impl Pass {
             .parse::<mnemonic::Mnemonic>()
             .map_err(|_e| Error::Plaintext)?;
 
-        let seed = Pin::from("").protect::<64>(&phrase.entropy());
+        let seed = gen_seed_from_entropy(&Some(credentials.pin), &phrase.entropy());
         Ok(RootAccount::from_bytes(&seed))
     }
 
@@ -81,7 +84,7 @@ impl Pass {
             )
             .map_err(map_encrypt_error)?;
 
-        let seed = Pin::from("").protect::<64>(&phrase.entropy());
+        let seed = gen_seed_from_entropy(&Some(credentials.pin), &phrase.entropy());
         Ok(RootAccount::from_bytes(&seed))
     }
 }
@@ -114,11 +117,15 @@ impl std::error::Error for Error {}
 
 pub struct PassCreds {
     account: String,
+    pin: Pin,
 }
 
 impl From<String> for PassCreds {
     fn from(account: String) -> Self {
-        PassCreds { account }
+        PassCreds {
+            account,
+            pin: Pin::from(""),
+        }
     }
 }
 
