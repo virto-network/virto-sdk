@@ -1,4 +1,4 @@
-use crate::util::{Pin, gen_seed_from_entropy};
+use crate::util::{seed_from_entropy, Pin};
 use crate::{RootAccount, Vault};
 
 /// A vault that holds secrets in memory
@@ -15,7 +15,7 @@ impl Simple {
     /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
     /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
-    /// let root = vault.unlock(None, |root| {
+    /// let root = vault.unlock(&None, |root| {
     ///     println!("{}", root.derive("//default").public());
     /// }).await?;
     /// # Ok(()) }
@@ -63,14 +63,14 @@ impl Simple {
         }
     }
 
-    fn get_key(&self, pin: &Option<Pin>) -> Result<RootAccount, Error> {
+    fn get_key(&self, pin: Pin) -> Result<RootAccount, Error> {
         if let Some(entropy) = &self.unlocked {
-            let seed = gen_seed_from_entropy(pin, entropy.as_ref());
+            let seed = entropy.as_slice();
+            seed_from_entropy!(seed, pin);
             Ok(RootAccount::from_bytes(seed))
         } else {
             Err(Error)
         }
-
     }
 }
 
@@ -90,10 +90,11 @@ impl Vault for Simple {
 
     async fn unlock<T>(
         &mut self,
-        pin: &Self::Credentials,
+        credentials: &Self::Credentials,
         mut cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error> {
         self.unlocked = self.locked.take();
+        let pin = credentials.unwrap_or_default();
         let root_account = &self.get_key(pin)?;
         Ok(cb(root_account))
     }

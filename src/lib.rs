@@ -309,16 +309,20 @@ mod util {
         phrase
     }
 
-    pub fn gen_seed_from_entropy<'a>(pin: &Option<Pin>, entropy: &'a[u8]) -> &'a[u8] {
-        if cfg!(feature = "util_pin") {
-            &(pin.unwrap_or(Pin::from("")).protect::<64>(entropy))
-        } else {
-            entropy
-        }
+    macro_rules! seed_from_entropy {
+        ($seed: ident, $pin: expr) => {
+            #[cfg(feature = "util_pin")]
+            let protected_seed = $pin.protect::<64>($seed);
+            #[cfg(feature = "util_pin")]
+            let $seed = &protected_seed;
+        };
     }
+
+    pub(crate) use seed_from_entropy;
 
     /// A simple pin credential that can be used to add some
     /// extra level of protection to seeds stored in vaults
+    #[derive(Default, Copy, Clone)]
     pub struct Pin(u16);
 
     impl Pin {

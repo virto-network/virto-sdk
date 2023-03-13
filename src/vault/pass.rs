@@ -6,7 +6,7 @@ use prs_lib::{
 };
 
 use crate::{
-    util::{gen_seed_from_entropy, Pin},
+    util::{seed_from_entropy, Pin},
     RootAccount, Vault,
 };
 
@@ -53,8 +53,9 @@ impl Pass {
             .parse::<mnemonic::Mnemonic>()
             .map_err(|_e| Error::Plaintext)?;
 
-        let seed = gen_seed_from_entropy(&Some(credentials.pin), &phrase.entropy());
-        Ok(RootAccount::from_bytes(&seed))
+        let seed = phrase.entropy();
+        seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
+        Ok(RootAccount::from_bytes(seed))
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
@@ -84,8 +85,9 @@ impl Pass {
             )
             .map_err(map_encrypt_error)?;
 
-        let seed = gen_seed_from_entropy(&Some(credentials.pin), &phrase.entropy());
-        Ok(RootAccount::from_bytes(&seed))
+        let seed = phrase.entropy();
+        seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
+        Ok(RootAccount::from_bytes(seed))
     }
 }
 
@@ -117,14 +119,14 @@ impl std::error::Error for Error {}
 
 pub struct PassCreds {
     account: String,
-    pin: Pin,
+    pin: Option<Pin>,
 }
 
 impl From<String> for PassCreds {
     fn from(account: String) -> Self {
         PassCreds {
             account,
-            pin: Pin::from(""),
+            pin: Some(Pin::from("")),
         }
     }
 }
@@ -142,7 +144,7 @@ impl Vault for Pass {
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
-                    .and_then(|l| self.generate(&creds, l))
+                    .and_then(|l| self.generate(creds, l))
             })
             .and_then(|r| {
                 self.root = Some(r);
