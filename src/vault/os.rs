@@ -1,6 +1,6 @@
 use crate::{
     mnemonic::{Language, Mnemonic},
-    util::{Pin, seed_from_entropy},
+    util::{seed_from_entropy, Pin},
     RootAccount, Vault,
 };
 use keyring;
@@ -100,14 +100,15 @@ impl Vault for OSKeyring {
 
     async fn unlock<T>(
         &mut self,
-        pin: &Self::Credentials,
+        cred: impl Into<Self::Credentials>,
         mut cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error> {
-        self.get_key(*pin)
+        let pin = cred.into();
+        self.get_key(pin)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
-                    .and_then(|l| self.generate(*pin, l))
+                    .and_then(|l| self.generate(pin, l))
             })
             .and_then(|r| {
                 self.root = Some(r);

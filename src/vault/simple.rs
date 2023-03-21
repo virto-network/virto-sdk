@@ -15,7 +15,7 @@ impl Simple {
     /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
     /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
-    /// let root = vault.unlock(&None, |root| {
+    /// let root = vault.unlock(None, |root| {
     ///     println!("{}", root.derive("//default").public());
     /// }).await?;
     /// # Ok(()) }
@@ -90,12 +90,12 @@ impl Vault for Simple {
 
     async fn unlock<T>(
         &mut self,
-        credentials: &Self::Credentials,
+        credentials: impl Into<Self::Credentials>,
         mut cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error> {
         self.unlocked = self.locked.take();
-        let pin = credentials.unwrap_or_default();
-        let root_account = &self.get_key(pin)?;
+        let pin = credentials.into();
+        let root_account = &self.get_key(pin.unwrap_or_default())?;
         Ok(cb(root_account))
     }
 }

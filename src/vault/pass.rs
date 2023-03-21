@@ -117,6 +117,7 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
+#[derive(Clone)]
 pub struct PassCreds {
     account: String,
     pin: Option<Pin>,
@@ -137,14 +138,16 @@ impl Vault for Pass {
 
     async fn unlock<T>(
         &mut self,
-        creds: &Self::Credentials,
+        creds: impl Into<Self::Credentials>,
         mut cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error> {
-        self.get_key(creds)
+        let credentials = creds.into();
+
+        self.get_key(&credentials)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
-                    .and_then(|l| self.generate(creds, l))
+                    .and_then(|l| self.generate(&credentials, l))
             })
             .and_then(|r| {
                 self.root = Some(r);
