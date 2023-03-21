@@ -43,7 +43,7 @@ type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
 #[derive(Debug)]
 pub struct Wallet<V: Vault, const A: usize = 5, const M: usize = A> {
     vault: V,
-    cached_creds: Option<V::Credentials>,
+    is_locked: bool,
     default_account: Account,
     accounts: ArrayVec<Account, A>,
     pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
@@ -60,7 +60,7 @@ where
             default_account: Account::new(None),
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
-            cached_creds: None,
+            is_locked: true
         }
     }
 
@@ -79,7 +79,7 @@ where
     /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
-    ///     wallet.unlock(()).await?;
+    ///     wallet.unlock(None).await?;
     /// }
     ///
     /// assert!(!wallet.is_locked());
@@ -88,27 +88,26 @@ where
     /// ```
     pub async fn unlock(
         &mut self,
-        credentials: impl Into<V::Credentials>,
+        cred: impl Into<V::Credentials>,
     ) -> Result<(), Error<V::Error>> {
         if self.is_locked() {
             let vault = &mut self.vault;
             let def = &mut self.default_account;
-            let creds = credentials.into();
 
             vault
-                .unlock(&creds, |root| {
+                .unlock(cred, |root| {
                     def.unlock(root);
                 })
                 .await
                 .map_err(|e| Error::Vault(e))?;
-            self.cached_creds = Some(creds);
+            self.is_locked = false;
         }
         Ok(())
     }
 
     /// Check if the vault has been unlocked.
     pub fn is_locked(&self) -> bool {
-        self.cached_creds.is_none()
+        self.is_locked
     }
 
     /// Sign a message with the default account and return the signature.
@@ -120,7 +119,7 @@ where
     /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(()).await?;
+    /// wallet.unlock(None).await?;
     ///
     /// let msg = &[0x12, 0x34, 0x56];
     /// let signature = wallet.sign(msg);
@@ -165,7 +164,7 @@ where
     /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(()).await?;
+    /// wallet.unlock(None).await?;
     ///
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     /// wallet.sign_later(&[0x04, 0x05, 0x06]);
@@ -309,8 +308,20 @@ mod util {
         phrase
     }
 
+    macro_rules! seed_from_entropy {
+        ($seed: ident, $pin: expr) => {
+            #[cfg(feature = "util_pin")]
+            let protected_seed = $pin.protect::<64>($seed);
+            #[cfg(feature = "util_pin")]
+            let $seed = &protected_seed;
+        };
+    }
+
+    pub(crate) use seed_from_entropy;
+
     /// A simple pin credential that can be used to add some
     /// extra level of protection to seeds stored in vaults
+    #[derive(Default, Copy, Clone)]
     pub struct Pin(u16);
 
     impl Pin {

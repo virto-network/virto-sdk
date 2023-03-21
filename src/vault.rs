@@ -25,7 +25,7 @@ pub trait Vault {
     /// of time getting the secret ready like waiting for some user physical interaction.
     async fn unlock<T>(
         &mut self,
-        cred: &Self::Credentials,
+        cred: impl Into<Self::Credentials>,
         cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error>;
 }

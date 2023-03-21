@@ -5,7 +5,10 @@ use prs_lib::{
     Plaintext,
 };
 
-use crate::{RootAccount, Vault};
+use crate::{
+    util::{seed_from_entropy, Pin},
+    RootAccount, Vault,
+};
 
 /// A vault that stores secrets in a `pass` compatible repository
 pub struct Pass {
@@ -50,7 +53,9 @@ impl Pass {
             .parse::<mnemonic::Mnemonic>()
             .map_err(|_e| Error::Plaintext)?;
 
-        Ok(RootAccount::from_bytes(phrase.entropy()))
+        let seed = phrase.entropy();
+        seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
+        Ok(RootAccount::from_bytes(seed))
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
@@ -80,7 +85,9 @@ impl Pass {
             )
             .map_err(map_encrypt_error)?;
 
-        Ok(RootAccount::from_bytes(phrase.entropy()))
+        let seed = phrase.entropy();
+        seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
+        Ok(RootAccount::from_bytes(seed))
     }
 }
 
@@ -110,13 +117,18 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
+#[derive(Clone)]
 pub struct PassCreds {
     account: String,
+    pin: Option<Pin>,
 }
 
 impl From<String> for PassCreds {
     fn from(account: String) -> Self {
-        PassCreds { account }
+        PassCreds {
+            account,
+            pin: Some(Pin::from("")),
+        }
     }
 }
 
@@ -126,14 +138,16 @@ impl Vault for Pass {
 
     async fn unlock<T>(
         &mut self,
-        creds: &Self::Credentials,
+        creds: impl Into<Self::Credentials>,
         mut cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error> {
-        self.get_key(creds)
+        let credentials = creds.into();
+
+        self.get_key(&credentials)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
-                    .and_then(|l| self.generate(&creds, l))
+                    .and_then(|l| self.generate(&credentials, l))
             })
             .and_then(|r| {
                 self.root = Some(r);

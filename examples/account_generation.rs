@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut wallet = Wallet::new(vault);
-    wallet.unlock(()).await?;
+    wallet.unlock(None).await?;
     let account = wallet.default_account();
 
     println!("Secret phrase: \"{phrase}\"");

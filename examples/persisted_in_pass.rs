@@ -12,6 +12,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let vault = Pass::new(store_path.to_str().unwrap(), Language::default());
     let mut wallet = Wallet::new(vault);
+
     wallet.unlock(account).await?;
 
     let account = wallet.default_account();

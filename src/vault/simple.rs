@@ -1,21 +1,23 @@
+use crate::util::{seed_from_entropy, Pin};
 use crate::{RootAccount, Vault};
 
 /// A vault that holds secrets in memory
 pub struct Simple {
-    locked: Option<RootAccount>,
-    unlocked: Option<RootAccount>,
+    locked: Option<Vec<u8>>,
+    unlocked: Option<Vec<u8>>,
 }
 
 impl Simple {
     /// A vault with a random seed, once dropped the the vault can't be restored
     ///
     /// ```
-    /// # use libwallet::{vault, Vault, Error};
+    /// # use libwallet::{vault, Error, Derive, Pair, Vault};
     /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
     /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
-    /// vault.unlock(()).await?;
-    /// assert!(vault.get_root().is_some());
+    /// let root = vault.unlock(None, |root| {
+    ///     println!("{}", root.derive("//default").public());
+    /// }).await?;
     /// # Ok(()) }
     /// ```
     #[cfg(feature = "rand")]
@@ -23,9 +25,10 @@ impl Simple {
     where
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
-        let root = RootAccount::from_bytes(&crate::util::random_bytes::<_, 32>(rng));
+        let seed = &crate::util::random_bytes::<_, 32>(rng);
+
         Simple {
-            locked: Some(root),
+            locked: Some(seed.to_vec()),
             unlocked: None,
         }
     }
@@ -36,10 +39,10 @@ impl Simple {
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
-        let root = RootAccount::from_bytes(phrase.entropy());
+
         (
             Simple {
-                locked: Some(root),
+                locked: Some(phrase.entropy().to_vec()),
                 unlocked: None,
             },
             phrase,
@@ -53,14 +56,20 @@ impl Simple {
             .as_ref()
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
-        Self::from_seed(phrase.entropy())
+
+        Simple {
+            locked: Some(phrase.entropy().to_vec()),
+            unlocked: None,
+        }
     }
 
-    pub fn from_seed(seed: impl AsRef<[u8]>) -> Self {
-        let root = RootAccount::from_bytes(seed.as_ref());
-        Simple {
-            locked: Some(root),
-            unlocked: None,
+    fn get_key(&self, pin: Pin) -> Result<RootAccount, Error> {
+        if let Some(entropy) = &self.unlocked {
+            let seed = entropy.as_slice();
+            seed_from_entropy!(seed, pin);
+            Ok(RootAccount::from_bytes(seed))
+        } else {
+            Err(Error)
         }
     }
 }
@@ -76,16 +85,17 @@ impl core::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl Vault for Simple {
-    type Credentials = ();
+    type Credentials = Option<Pin>;
     type Error = Error;
 
     async fn unlock<T>(
         &mut self,
-        _cred: &Self::Credentials,
+        credentials: impl Into<Self::Credentials>,
         mut cb: impl FnMut(&RootAccount) -> T,
     ) -> Result<T, Self::Error> {
         self.unlocked = self.locked.take();
-        let root_account = &self.unlocked.as_ref().unwrap();
+        let pin = credentials.into();
+        let root_account = &self.get_key(pin.unwrap_or_default())?;
         Ok(cb(root_account))
     }
 }
