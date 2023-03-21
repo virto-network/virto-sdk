@@ -90,8 +90,12 @@ impl<R: Rpc> Backend for R {
 
         Ok(meta::BlockInfo {
             number: at.unwrap_or(0) as u64,
-            hash: block_hash[0..32].try_into().unwrap(),
-            parent: block_hash[0..32].try_into().unwrap(),
+            hash: block_hash[0..32]
+                .try_into()
+                .expect("Block hash is not 32 bytes"),
+            parent: block_hash[0..32]
+                .try_into()
+                .expect("Block hash is not 32 bytes"),
         })
     }
 }

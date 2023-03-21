@@ -11,7 +11,7 @@ use sube::{
     meta_ext::Pallet,
     rpc, sube,
     util::to_camel,
-    Backend, Error as SubeError, ExtrinicData, JsonValue, Response,
+    Backend, Error as SubeError, ExtrinicBody, JsonValue, Response,
 };
 
 // use sp_core::{crypto::Ss58Codec, hexdisplay::AsBytesRef};
@@ -58,8 +58,13 @@ fn chain_string_to_url(chain: &str) -> Result<Url> {
 }
 
 #[wasm_bindgen]
-pub async fn sube_js(url: &str, params: JsValue, signer: js_sys::Function) -> Result<JsValue> {
+pub async fn sube_js(
+    url: &str,
+    params: JsValue,
+    signer: Option<js_sys::Function>,
+) -> Result<JsValue> {
     let url = chain_string_to_url(url)?;
+
     let backend = sube::http::Backend::new(url.clone());
     console_error_panic_hook::set_once();
 
@@ -85,7 +90,7 @@ pub async fn sube_js(url: &str, params: JsValue, signer: js_sys::Function) -> Re
         return Ok(value);
     }
 
-    let mut extrinsic_value: ExtrinicData<JsonValue> = serde_wasm_bindgen::from_value(params)?;
+    let mut extrinsic_value: ExtrinicBody<JsonValue> = serde_wasm_bindgen::from_value(params)?;
 
     extrinsic_value.body = decode_addresses(&extrinsic_value.body);
 
@@ -96,6 +101,7 @@ pub async fn sube_js(url: &str, params: JsValue, signer: js_sys::Function) -> Re
         Some(extrinsic_value),
         |message, out: &mut [u8; 64]| unsafe {
             let response: JsValue = signer
+                .ok_or(SubeError::BadInput)?
                 .call1(
                     &JsValue::null(),
                     &JsValue::from(js_sys::Uint8Array::from(message)),
@@ -106,6 +112,7 @@ pub async fn sube_js(url: &str, params: JsValue, signer: js_sys::Function) -> Re
                 .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;
 
             out.copy_from_slice(&vec);
+
             Ok(())
         },
     )

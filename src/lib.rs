@@ -67,7 +67,6 @@ extern crate alloc;
 
 pub mod util;
 
-use async_std::io::Chain;
 pub use codec;
 use codec::{Decode, Encode};
 pub use frame_metadata::RuntimeMetadataPrefixed;
@@ -92,7 +91,6 @@ use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
-use surf::http::content::AcceptEncoding;
 
 use crate::util::to_camel;
 
@@ -103,13 +101,16 @@ mod prelude {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct ExtrinicData<Value> {
+pub struct ExtrinicBody<Body> {
     pub nonce: Option<u64>,
-    pub body: Value,
+    pub body: Body,
     pub from: Vec<u8>,
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
+pub trait SignerFn: FnMut(&[u8], &mut [u8; 64]) -> Result<()> {}
+impl<T: FnMut(&[u8], &mut [u8; 64]) -> Result<()>> SignerFn for T {}
+
 /// Surf based backend
 #[cfg(any(feature = "http", feature = "http-web", feature = "js"))]
 pub mod http;
@@ -117,8 +118,11 @@ pub mod http;
 #[cfg(feature = "ws")]
 pub mod ws;
 
+#[cfg(any(feature = "builder"))]
+pub mod builder;
 pub mod hasher;
 pub mod meta_ext;
+
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
 
@@ -150,17 +154,21 @@ extern "C" {
 /// # use sube::sube;
 /// let backend = sube::ws::Backend::new();
 /// sube
+///
 /// ```
-pub async fn sube<'m, V>(
+pub async fn exec<'m, Body, P: Into<&'m str>, S>(
     chain: impl Backend,
     meta: &'m Metadata,
-    path: &str,
-    maybe_tx_data: Option<ExtrinicData<V>>,
-    mut signer: impl Fn(&[u8], &mut [u8; 64]) -> Result<()>,
+    path: P,
+    maybe_tx_data: Option<ExtrinicBody<Body>>,
+    mut signer: S,
 ) -> Result<Response<'m>>
 where
-    V: serde::Serialize,
+    Body: serde::Serialize,
+    S: SignerFn,
 {
+    let path = path.into();
+
     Ok(match path {
         "_meta" => Response::Meta(meta),
         "_meta/registry" => Response::Registry(&meta.types),
@@ -204,17 +212,18 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     }
 }
 
-async fn submit<'m, V>(
+async fn submit<'m, V, S>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
-    tx_data: ExtrinicData<V>,
-    mut signer: impl Fn(&[u8], &mut [u8; 64]) -> Result<()>,
+    tx_data: ExtrinicBody<V>,
+    mut signer: S,
 ) -> Result<Response<'m>>
 where
     V: serde::Serialize,
+    S: SignerFn,
 {
-    let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+    let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
 
     let pallet = meta
         .pallet_by_name(&pallet)
