@@ -8,12 +8,6 @@ export function setupSign(element: HTMLButtonElement) {
     const mnomic = document.querySelector<HTMLInputElement>('#mnomic')?.value ?? '';
     const uri = document.querySelector<HTMLInputElement>('#uri')?.value ?? '';
     const body = JSON.parse(document.querySelector<HTMLInputElement>('#data')?.value ?? '');
-
-    console.log({
-      uri,
-      mnomic,
-      body
-    });
     
     await Initwallet();
 
@@ -26,13 +20,12 @@ export function setupSign(element: HTMLButtonElement) {
     await sube(uri, {
       body,
       from: wallet.getAddress().repr,
-      sign: (message: Uint8Array) => wallet.sign(message)
+      sign: (message: Uint8Array) => wallet.sign(message),
     });
 
     counter = count
     element.innerHTML = `Tx is ${counter}`
   }
 
-  element.addEventListener('click', () => setCounter(counter + 1))
-  // setCounter(0)
+  element.addEventListener('click', () => setCounter(counter + 1));
 }

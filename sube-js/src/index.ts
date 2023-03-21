@@ -21,8 +21,6 @@ export async function sube<T>(url: string, options?: SubeOptions) {
     from: options.from,
     body: options.body,
   }, options ? function (i: Uint8Array) {
-    const signature = options.sign(i);
-    console.log(signature);
-    return signature;
+    return options.sign(i);
   } : () => {}) as Promise<T>;
 }
