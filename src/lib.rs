@@ -1,3 +1,5 @@
+#![feature(trait_alias)]
+#![feature(type_alias_impl_trait)]
 #![cfg_attr(not(feature = "std"), no_std)]
 /*!
 Sube is a lightweight Substrate client with multi-backend support
@@ -67,6 +69,7 @@ extern crate alloc;
 
 pub mod util;
 
+use builder::SignerFn;
 pub use codec;
 use codec::{Decode, Encode};
 pub use frame_metadata::RuntimeMetadataPrefixed;
@@ -108,8 +111,6 @@ pub struct ExtrinicBody<Body> {
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
-pub trait SignerFn: FnMut(&[u8], &mut [u8; 64]) -> Result<()> {}
-impl<T: FnMut(&[u8], &mut [u8; 64]) -> Result<()>> SignerFn for T {}
 
 /// Surf based backend
 #[cfg(any(feature = "http", feature = "http-web", feature = "js"))]
@@ -161,11 +162,10 @@ pub async fn exec<'m, Body, P: Into<&'m str>, S>(
     meta: &'m Metadata,
     path: P,
     maybe_tx_data: Option<ExtrinicBody<Body>>,
-    mut signer: S,
+    signer: impl SignerFn,
 ) -> Result<Response<'m>>
 where
     Body: serde::Serialize,
-    S: SignerFn,
 {
     let path = path.into();
 
@@ -212,16 +212,15 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     }
 }
 
-async fn submit<'m, V, S>(
+async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
     tx_data: ExtrinicBody<V>,
-    mut signer: S,
+    signer: impl SignerFn,
 ) -> Result<Response<'m>>
 where
     V: serde::Serialize,
-    S: SignerFn,
 {
     let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
 

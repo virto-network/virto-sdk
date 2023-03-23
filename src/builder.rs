@@ -1,5 +1,5 @@
 use crate::http::Backend as HttpBackend;
-use crate::{prelude::*, SignerFn};
+use crate::prelude::*;
 use crate::rpc::RpcResult;
 use crate::ws::{Backend as WSbackend, WS2};
 use crate::{
@@ -15,7 +15,11 @@ use scale_info::build;
 use serde::Serializer;
 use url::Url;
 
-pub struct SubeBuilder<'a, Body>
+pub trait SignerFn: Fn(&[u8], &mut [u8; 64]) -> SubeResult<()> {}
+impl<T> SignerFn for T where T: Fn(&[u8], &mut [u8; 64]) -> SubeResult<()> {}
+// pub type SignerFn = impl Fn(&[u8], &mut [u8; 64]) -> SubeResult<()>;
+
+pub struct SubeBuilder<'a, Body, F>
 where
     Body: serde::Serialize,
 {
@@ -23,57 +27,90 @@ where
     nonce: Option<u64>,
     body: Option<ExtrinicBody<Body>>,
     address: Option<&'a [u8]>,
-    signer: Option<Box<dyn SignerFn>>,
+    signer: Option<F>,
     metadata: Option<Metadata>,
 }
 
-impl<'a, Body> SubeBuilder<'a, Body>
+impl<'a, Body, F> Default for SubeBuilder<'a, Body, F>
 where
     Body: serde::Serialize,
 {
-    pub fn call_mut<U: Into<&'a str>>(url: U) -> &'a mut Self {
-        let mut builder = SubeBuilder {
-            url: Some(url.into()),
+    fn default() -> Self {
+        SubeBuilder {
+            url: None,
             nonce: None,
             body: None,
             address: None,
             signer: None,
             metadata: None,
-        };
+        }
+    }
+}
 
-        builder.set_url(url.into());
+impl<'a, Body, F> SubeBuilder<'a, Body, F>
+where
+    Body: serde::Serialize,
+    F: SignerFn,
+{
+    // pub fn new(url: &'a str) -> Self {
+    //     SubeBuilder { url, ..Default::default() }
+    // }
 
-        &mut builder
+    // pub fn call_mut<U: Into<&'a str>>(url: U) -> &'a mut Self {
+    //     let mut builder = SubeBuilder {
+    //         url: Some(url.into()),
+    //         nonce: None,
+    //         body: None,
+    //         address: None,
+    //         signer: None,
+    //         metadata: None,
+    //     };
+
+    //     builder.set_url(url.into());
+
+    //     &mut builder
+    // }
+
+    fn with_url(self, url: &str) -> Self {
+        Self {
+            url: Some(url),
+            ..self
+        }
     }
 
-    fn set_url<U: Into<&'a str>>(&mut self, url: U) -> &mut Self {
-        self.url = Some(url.into());
-        self
+    fn with_body(self, body: ExtrinicBody<Body>) -> Self {
+        Self {
+            body: Some(body),
+            ..self
+        }
     }
 
-    fn with_body(&mut self, body: ExtrinicBody<Body>) -> &mut Self {
-        self.body = Some(body);
-        self
+    fn with_signer(self, signer: F) -> Self {
+        Self {
+            signer: Some(signer),
+            ..self
+        }
     }
 
-    fn sign<F: Fn(&[u8], &mut [u8; 64]) -> SubeResult<()> + 'a>(&mut self, func: F) -> &mut Self {
-        self.signer = Some(Box::new(func));
-        self
+    fn with_nonce(self, nonce: u64) -> Self {
+        Self {
+            nonce: Some(nonce),
+            ..self
+        }
     }
 
-    fn with_nonce(&mut self, nonce: u64) -> &mut Self {
-        self.nonce = Some(nonce);
-        self
+    fn with_meta(self, metadata: Metadata) -> Self {
+        Self {
+            metadata: Some(metadata),
+            ..self
+        }
     }
 
-    fn set_meta(&mut self, metadata: Metadata) -> &mut Self {
-        self.metadata = Some(metadata);
-        self
-    }
-
-    fn from(&mut self, address: &'a [u8]) -> &mut Self {
-        self.address = Some(address);
-        self
+    fn with_from(self, address: &[u8]) -> Self {
+        Self {
+            address: Some(address),
+            ..self
+        }
     }
 }
 
@@ -151,12 +188,14 @@ async fn get_backend_by_url(url: Url) -> SubeResult<AnyBackend> {
         _ => Err(Error::BadInput),
     }
 }
-impl<'a, 'b, 'c, Body> IntoFuture for SubeBuilder<'a, Body>
+impl<'a, Body, F> IntoFuture for SubeBuilder<'a, Body, F>
 where
     Body: serde::Serialize,
+    F: SignerFn,
 {
-    type Output = SubeResult<Response<'a>>;
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    // type Output = SubeResult<Response<'m>>;
+    type Output = SubeResult<()>;
+    type IntoFuture = impl Future<Output = Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
         Ok(async move {
@@ -168,23 +207,23 @@ where
                 None => backend.metadata().await.map_err(|e| Error::BadMetadata)?,
             };
 
+            let signer = self.signer.unwrap_or(|_a, _b| Ok(()));
             if self.signer.is_none() {
                 return Ok(exec(
                     backend,
                     &meta,
                     self.url.expect("url must be defined"),
                     None,
-                    move |a: &[u8], b: &mut [u8; 64]| Ok(()),
+                    signer,
                 ));
             }
 
-            let signer = self.signer.expect("signer defined");
             Ok(exec(
                 backend,
                 &meta,
                 self.url.expect("url must be defined"),
                 Some(self.body.expect("to have a body")),
-                move |a: &'b [u8], b: &'c mut [u8; 64]| Ok(()),
+                signer,
             ))
         })
     }
