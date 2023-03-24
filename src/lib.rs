@@ -83,11 +83,7 @@ pub use scales::{Serializer, Value};
 
 use async_trait::async_trait;
 use codec::Compact;
-use core::{
-    any::Any,
-    borrow::{Borrow, BorrowMut},
-    fmt,
-};
+use core::fmt;
 use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
@@ -146,40 +142,6 @@ extern "C" {
     // `log(..)`
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
-}
-
-/// ```
-/// Multipurpose function to interact with a Substrate based chain
-/// using a URL-path-like syntax.
-///
-/// # use sube::sube;
-/// let backend = sube::ws::Backend::new();
-/// sube
-///
-/// ```
-pub async fn exec<'m, Body, P: Into<&'m str>, S>(
-    chain: impl Backend,
-    meta: &'m Metadata,
-    path: P,
-    maybe_tx_data: Option<ExtrinicBody<Body>>,
-    signer: impl SignerFn,
-) -> Result<Response<'m>>
-where
-    Body: serde::Serialize,
-{
-    let path = path.into();
-
-    Ok(match path {
-        "_meta" => Response::Meta(meta),
-        "_meta/registry" => Response::Registry(&meta.types),
-        _ => {
-            if let Some(tx_data) = maybe_tx_data {
-                submit(chain, meta, path, tx_data, signer).await?
-            } else {
-                query(&chain, meta, path).await?
-            }
-        }
-    })
 }
 
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {

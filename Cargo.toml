@@ -14,10 +14,9 @@ blake2 = { version = "0.10.5", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
 frame-metadata = { version = "15.0.0", git = "https://github.com/paritytech/frame-metadata.git", default-features = false, features = ["serde_full", "decode"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
-once_cell = { version = "1.10.0", default-features = false }
 twox-hash = { version = "1.6.2", default-features = false }
 serde = { version = "1.0.137", default-features = false }
-
+async-once-cell = "0.4.4"
 
 scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
