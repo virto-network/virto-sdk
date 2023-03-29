@@ -1,4 +1,5 @@
 use crate::http::Backend as HttpBackend;
+use crate::meta::Meta;
 use crate::prelude::*;
 use crate::ws::{Backend as WSbackend, WS2};
 use crate::{
@@ -8,10 +9,19 @@ use crate::{
 
 use async_trait::async_trait;
 use core::future::{Future, IntoFuture};
+use core::pin::Pin;
+use heapless::Vec as HVec;
+use once_cell::sync::OnceCell;
+use scale_info::build;
+use serde::Serializer;
 use url::Url;
 
 pub trait SignerFn: Fn(&[u8], &mut [u8; 64]) -> SubeResult<()> {}
 impl<T> SignerFn for T where T: Fn(&[u8], &mut [u8; 64]) -> SubeResult<()> {}
+
+type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
+
+static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
 
 pub struct SubeBuilder<'a, Body, F>
 where
@@ -109,8 +119,10 @@ where
             signer,
             metadata,
         } = self;
+
         async move {
             let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
+
             let backend = BACKEND
                 .get_or_try_init(get_backend_by_url(url.clone()))
                 .await?;
@@ -125,8 +137,8 @@ where
                 .await?;
 
             let signer = signer.ok_or(Error::BadInput)?;
-
             let path = url.path();
+
             Ok(match path {
                 "_meta" => Response::Meta(meta),
                 "_meta/registry" => Response::Registry(&meta.types),
@@ -212,4 +224,18 @@ impl Backend for &AnyBackend {
             AnyBackend::Ws(b) => b.query_storage(&key).await,
         }
     }
+}
+
+
+#[inline]
+async fn get_metadata(b: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<Metadata> {
+    match metadata {
+        Some(m) => Ok(m),
+        None => Ok(b.metadata().await?)
+    }
+}
+
+pub async fn sube(url: &str) -> SubeBuilder<_, _> {
+    SubeBuilder::default()
+        .with_url(url)
 }

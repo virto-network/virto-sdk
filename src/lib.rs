@@ -123,26 +123,6 @@ pub mod meta_ext;
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
 
-#[derive(Deserialize, Decode)]
-struct ChainVersion {
-    spec_version: u64,
-    transaction_version: u64,
-}
-
-#[derive(Deserialize, Serialize, Decode)]
-struct AccountInfo {
-    nonce: u64,
-}
-
-use wasm_bindgen::prelude::*;
-
-#[wasm_bindgen]
-extern "C" {
-    // Use `js_namespace` here to bind `console.log(..)` instead of just
-    // `log(..)`
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
 
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
