@@ -23,6 +23,8 @@ type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
 
 static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
 
+
+
 pub struct SubeBuilder<'a, Body, F>
 where
     Body: serde::Serialize,
@@ -235,7 +237,28 @@ async fn get_metadata(b: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<
     }
 }
 
-pub async fn sube(url: &str) -> SubeBuilder<_, _> {
-    SubeBuilder::default()
-        .with_url(url)
+#[macro_export]
+macro_rules! sube {
+    ($url:expr) => {
+        use crate::SubeBuilder;
+
+        SubeBuilder::default().with_url($url)
+    };
+
+    // Two parameters
+    // Match when the macro is called with an expression (url) followed by a block of key-value pairs
+    ($url:expr, { $($key:ident: $value:expr),+ $(,)? }) => {
+        {
+            use crate::SubeBuilder;
+            // Create a SubeBuilder instance with the default values and set the url
+            let mut builder = SubeBuilder::default().with_url($url);
+            // Iterate over the key-value pairs provided in the macro
+            $(
+                // Update the builder by calling the method corresponding to the key with the value
+                builder = builder.with_$key($value);
+            )+
+            // Return the updated builder
+            builder
+        }
+    };
 }
