@@ -50,9 +50,9 @@ impl JsWallet {
     pub async fn unlock(&mut self, credentials: JsValue) -> Result<(), JsValue> {
         let credentials: <Simple as libwallet::Vault>::Credentials =
             if credentials.is_null() || credentials.is_undefined() {
-                ()
+                None
             } else {
-                from_value(credentials).unwrap_or(())
+                from_value(credentials).unwrap_or(None)
             };
 
         self.wallet
@@ -71,9 +71,9 @@ impl JsWallet {
             ));
         }
 
-        Ok(JsPublicAddress {
-            repr: self.wallet.default_account().public().as_ref().to_vec(),
-        })
+        Ok(JsPublicAddress::new(
+            self.wallet.default_account().public().as_ref().to_vec(),
+        ))
     }
 
     #[wasm_bindgen]
@@ -116,6 +116,11 @@ pub struct JsPublicAddress {
 
 #[wasm_bindgen]
 impl JsPublicAddress {
+    #[wasm_bindgen(constructor)]
+    pub fn new(repr: Vec<u8>) -> Self {
+        Self { repr }
+    }
+
     #[cfg(feature = "hex")]
     #[wasm_bindgen(js_name = toHex)]
     pub fn to_hex(&self) -> JsValue {

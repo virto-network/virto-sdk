@@ -4,6 +4,7 @@
   "description": "Exposes libwallet to be used on Javascript environments",
   "type": "module",
   "scripts": {
+    "build": "zx scripts/build.js",
     "test": "node test/index.js"
   },
   "files": [
@@ -21,5 +22,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "zx": "^7.2.1"
   }
 }
