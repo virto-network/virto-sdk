@@ -60,7 +60,7 @@ where
             default_account: Account::new(None),
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
-            is_locked: true
+            is_locked: true,
         }
     }
 
@@ -86,10 +86,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(
-        &mut self,
-        cred: impl Into<V::Credentials>,
-    ) -> Result<(), Error<V::Error>> {
+    pub async fn unlock(&mut self, cred: impl Into<V::Credentials>) -> Result<(), Error<V::Error>> {
         if self.is_locked() {
             let vault = &mut self.vault;
             let def = &mut self.default_account;
@@ -322,6 +319,7 @@ mod util {
     /// A simple pin credential that can be used to add some
     /// extra level of protection to seeds stored in vaults
     #[derive(Default, Copy, Clone)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct Pin(u16);
 
     impl Pin {

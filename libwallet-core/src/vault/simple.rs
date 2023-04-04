@@ -1,10 +1,12 @@
+use core::convert::TryInto;
+
 use crate::util::{seed_from_entropy, Pin};
 use crate::{RootAccount, Vault};
 
 /// A vault that holds secrets in memory
 pub struct Simple {
-    locked: Option<Vec<u8>>,
-    unlocked: Option<Vec<u8>>,
+    locked: Option<[u8; 32]>,
+    unlocked: Option<[u8; 32]>,
 }
 
 impl Simple {
@@ -25,10 +27,8 @@ impl Simple {
     where
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
-        let seed = &crate::util::random_bytes::<_, 32>(rng);
-
         Simple {
-            locked: Some(seed.to_vec()),
+            locked: Some(crate::util::random_bytes::<_, 32>(rng)),
             unlocked: None,
         }
     }
@@ -39,13 +39,9 @@ impl Simple {
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
-
         (
-            Simple {
-                locked: Some(phrase.entropy().to_vec()),
-                unlocked: None,
-            },
-            phrase,
+            Self::from_phrase(&phrase),
+            phrase
         )
     }
 
@@ -56,16 +52,17 @@ impl Simple {
             .as_ref()
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
+        let entropy = phrase.entropy().try_into().expect("Size should be 32 bytes");
 
         Simple {
-            locked: Some(phrase.entropy().to_vec()),
+            locked: Some(entropy),
             unlocked: None,
         }
     }
 
     fn get_key(&self, pin: Pin) -> Result<RootAccount, Error> {
-        if let Some(entropy) = &self.unlocked {
-            let seed = entropy.as_slice();
+        if let Some(entropy) = self.unlocked {
+            let seed = &entropy;
             seed_from_entropy!(seed, pin);
             Ok(RootAccount::from_bytes(seed))
         } else {
