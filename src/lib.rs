@@ -311,6 +311,8 @@ mod util {
             let protected_seed = $pin.protect::<64>($seed);
             #[cfg(feature = "util_pin")]
             let $seed = &protected_seed;
+            #[cfg(not(feature = "util_pin"))]
+            let _ = &$pin; // use the variable to avoid warning
         };
     }
 

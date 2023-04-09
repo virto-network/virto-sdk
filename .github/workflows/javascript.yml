@@ -21,11 +21,11 @@ jobs:
         rustup target add wasm32-unknown-unknown
         curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
     - name: Build
-      working-directory: libwallet-js
+      working-directory: js
       run: |
         wasm-pack build --dev --target nodejs --all-features
     - name: Run tests
-      working-directory: libwallet-js/test
+      working-directory: js/test
       run: |
         npm ci
         npm test

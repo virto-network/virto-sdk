@@ -9,11 +9,11 @@ version = "0.1.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-hex = {version = "0.4.3", optional = true}
+libwallet = { path = "..", default-features = false }
+hex = { version = "0.4.3", optional = true }
 js-sys = "0.3.61"
-libwallet = {path = "../libwallet-core", default-features = false}
-rand_core = {version = "0.6.3", features = ["getrandom"]}
-serde = {version = "1.0.152", features = ["derive"]}
+rand_core = { version = "0.6.3", features = ["getrandom"] }
+serde = { version = "1.0.152", features = ["derive"] }
 serde-wasm-bindgen = "0.4.5"
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4.34"

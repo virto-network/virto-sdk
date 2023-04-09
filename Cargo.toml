@@ -1,5 +1,53 @@
+[package]
+authors = ["Daniel Olano <me@olanod.com>"]
+autoexamples = true
+edition = "2018"
+name = "libwallet"
+version = "0.3.0"
+
+[dependencies]
+# base dependencies
+arrayvec = {version = "0.7.2", default-features = false}
+
+serde = {version = "1.0", default-features = false, features = ["derive"], optional = true}
+
+# feature util_pin
+hmac = {version = "0.12.1", default-features = false, optional = true}
+pbkdf2 = {version = "0.11.0", default-features = false, optional = true}
+sha2 = {version = "0.10.2", default-features = false, optional = true}
+
+mnemonic = {package = "bip0039", version = "0.10.1", default-features = false, optional = true}
+
+rand_core = {version = "0.6.3", optional = true}
+# substrate related
+schnorrkel = {version = "0.10.2", default-features = false, optional = true}# soft derivation in no_std
+rand_chacha = {version = "0.3.1", default-features = false, optional = true}
+
+# vault os
+keyring = {version = "1.1.2", optional = true}
+# vault pass
+prs-lib = {version = "0.2.1", optional = true}
+
+[dev-dependencies]
+async-std = {version = "1.10.0", features = ["attributes"]}
+serde_json = {version = "1.0", default-features = false, features = ["alloc"]}
+# pass vault example
+dirs = "4.0"
+
+[features]
+default = ["std", "substrate", "vault_simple", "mnemonic", "rand"]
+rand = ["rand_core"]
+sr25519 = ["schnorrkel/u64_backend", "schnorrkel/getrandom"]
+std = [
+  "rand_core/getrandom",
+]
+substrate = ["sr25519"]
+util_pin = ["pbkdf2", "hmac", "sha2"]
+vault_os = ["keyring"]
+vault_pass = ["prs-lib"]
+vault_simple = []
+
 [workspace]
 members = [
-  "libwallet-core",
-  "libwallet-js"
+  "js",
 ]
