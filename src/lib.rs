@@ -1,6 +1,6 @@
 #![feature(trait_alias)]
 #![feature(type_alias_impl_trait)]
-#![cfg_attr(not(feature = "std"), no_std)]
+// #![cfg_attr(not(feature = "std"), no_std)]
 /*!
 Sube is a lightweight Substrate client with multi-backend support
 that can use a chain's type information to auto encode/decode data
@@ -69,7 +69,7 @@ extern crate alloc;
 
 pub mod util;
 
-use builder::SignerFn;
+
 pub use codec;
 use codec::{Decode, Encode};
 pub use frame_metadata::RuntimeMetadataPrefixed;
@@ -83,7 +83,8 @@ pub use scales::{Serializer, Value};
 
 use async_trait::async_trait;
 use codec::Compact;
-use core::fmt;
+use serde_json::json;
+use core::{fmt};
 use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
@@ -99,14 +100,12 @@ mod prelude {
     pub use alloc::vec::Vec;
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ExtrinicBody<Body> {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ExtrinicBody<'a, Body> {
     pub nonce: Option<u64>,
     pub body: Body,
-    pub from: Vec<u8>,
+    pub from: &'a [u8],
 }
-
-pub type Result<T> = core::result::Result<T, Error>;
 
 /// Surf based backend
 #[cfg(any(feature = "http", feature = "http-web", feature = "js"))]
@@ -117,11 +116,17 @@ pub mod ws;
 
 #[cfg(any(feature = "builder"))]
 pub mod builder;
+
 pub mod hasher;
 pub mod meta_ext;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+pub trait SignerFn: Default + Fn(&[u8]) -> Result<[u8; 64]> {}
+impl<T> SignerFn for T where T: Default + Fn(&[u8]) -> Result<[u8; 64]> {}
 
 
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
@@ -158,14 +163,14 @@ async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
-    tx_data: ExtrinicBody<V>,
+    tx_data: ExtrinicBody<'m, V>,
     signer: impl SignerFn,
 ) -> Result<Response<'m>>
 where
-    V: serde::Serialize,
+    V: serde::Serialize + std::fmt::Debug,
 {
     let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
-
+    println!("{:?}", item_or_call);
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
@@ -176,10 +181,19 @@ where
 
     let mut encoded_call = vec![pallet.index];
 
-    let call_data = scales::to_vec_with_info(&tx_data.body, (reg, ty).into())
+    println!("before buiding the call");
+    println!("Body={:?}", tx_data.body);
+    println!("Payload={:?}", json!({
+        &item_or_call.to_lowercase(): &tx_data.body
+    }));
+ 
+    let call_data = scales::to_vec_with_info(&json!( {
+        &item_or_call.to_lowercase(): &tx_data.body
+    }), (reg, ty).into())
         .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
+    println!("done build the call");
 
     let extra_params = {
         // ImmortalEra
@@ -276,9 +290,7 @@ where
     };
 
     let raw = payload.as_slice();
-    let mut signature: [u8; 64] = [0u8; 64];
-
-    signer(raw, &mut signature)?;
+    let signature = signer(raw)?;
 
     let extrinsic_call = {
         let encoded_inner = [

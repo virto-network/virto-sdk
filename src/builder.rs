@@ -1,9 +1,9 @@
 use crate::http::Backend as HttpBackend;
 use crate::meta::Meta;
-use crate::prelude::*;
+use crate::{prelude::*, NoSigner};
 use crate::ws::{Backend as WSbackend, WS2};
 use crate::{
-    meta::BlockInfo, Backend, Error, ExtrinicBody, Metadata, Response, Result as SubeResult,
+    meta::BlockInfo, Backend, Error, ExtrinicBody, Metadata, Response, Result as SubeResult, SignerFn,
     StorageKey,
 };
 
@@ -16,30 +16,30 @@ use scale_info::build;
 use serde::Serializer;
 use url::Url;
 
-pub trait SignerFn: Fn(&[u8], &mut [u8; 64]) -> SubeResult<()> {}
-impl<T> SignerFn for T where T: Fn(&[u8], &mut [u8; 64]) -> SubeResult<()> {}
+
 
 type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
 
 static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
 
 
-
-pub struct SubeBuilder<'a, Body, F>
+pub struct SubeBuilder<'a, Signer = NoSigner, Body = ()>
 where
-    Body: serde::Serialize,
+    Body: serde::Serialize
 {
     url: Option<&'a str>,
     nonce: Option<u64>,
-    body: Option<ExtrinicBody<Body>>,
+    body: Option<Body>,
     sender: Option<&'a [u8]>,
-    signer: Option<F>,
+    signer: Option<Signer>,
     metadata: Option<Metadata>,
 }
 
-impl<'a, Body, F> Default for SubeBuilder<'a, Body, F>
-where
+// default for non body queries
+impl<'a, Signer, Body> Default for SubeBuilder<'a, Signer, Body> 
+where 
     Body: serde::Serialize,
+    Signer: SignerFn
 {
     fn default() -> Self {
         SubeBuilder {
@@ -47,17 +47,20 @@ where
             nonce: None,
             body: None,
             sender: None,
-            signer: None,
+            signer: Option::<NoSigner>::None,
             metadata: None,
         }
     }
 }
 
-impl<'a, Body, F> SubeBuilder<'a, Body, F>
+
+
+impl<'a, Signer, Body> SubeBuilder<'a, Signer, Body>
 where
     Body: serde::Serialize,
-    F: SignerFn,
+    Signer: SignerFn
 {
+       
     pub fn with_url(self, url: &'a str) -> Self {
         Self {
             url: Some(url),
@@ -65,14 +68,14 @@ where
         }
     }
 
-    pub fn with_body(self, body: ExtrinicBody<Body>) -> Self {
+    pub fn with_body(self, body: Body) -> Self {
         Self {
             body: Some(body),
             ..self
         }
     }
 
-    pub fn with_signer(self, signer: F) -> Self {
+    pub fn with_signer(self, signer: Signer) -> Self {
         Self {
             signer: Some(signer),
             ..self
@@ -104,10 +107,13 @@ where
 static BACKEND: async_once_cell::OnceCell<AnyBackend> = async_once_cell::OnceCell::new();
 static META: async_once_cell::OnceCell<Metadata> = async_once_cell::OnceCell::new();
 
-impl<'a, Body, F> IntoFuture for SubeBuilder<'a, Body, F>
+
+
+
+impl<'a, Signer, Body> IntoFuture for SubeBuilder<'a, Signer, Body>
 where
-    Body: serde::Serialize,
-    F: SignerFn,
+    Body: serde::Serialize + core::fmt::Debug,
+    Signer: SignerFn
 {
     type Output = SubeResult<Response<'a>>;
     type IntoFuture = impl Future<Output = Self::Output>;
@@ -115,20 +121,22 @@ where
     fn into_future(self) -> Self::IntoFuture {
         let Self {
             url,
-            nonce: _,
+            nonce,
             body,
-            sender: _,
+            sender,
             signer,
             metadata,
         } = self;
 
         async move {
+            println!("GETTING chain string to url");
             let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
 
             let backend = BACKEND
                 .get_or_try_init(get_backend_by_url(url.clone()))
                 .await?;
 
+            println!("backend");
             let meta = META
                 .get_or_try_init(async {
                     match metadata {
@@ -138,15 +146,22 @@ where
                 })
                 .await?;
 
-            let signer = signer.ok_or(Error::BadInput)?;
+            println!("meta");
+
             let path = url.path();
 
+            println!("path {:?}", path);
             Ok(match path {
                 "_meta" => Response::Meta(meta),
                 "_meta/registry" => Response::Registry(&meta.types),
                 _ => {
                     if let Some(tx_data) = body {
-                        crate::submit(backend, meta, path, tx_data, signer).await?
+                        let signer = signer.ok_or(Error::BadInput)?;
+                        crate::submit(backend, meta, path, ExtrinicBody {
+                            nonce: nonce,
+                            body: tx_data,
+                            from: sender.ok_or(Error::BadInput)?
+                        }, signer).await?
                     } else {
                         crate::query(&backend, meta, path).await?
                     }
@@ -239,26 +254,28 @@ async fn get_metadata(b: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<
 
 #[macro_export]
 macro_rules! sube {
-    ($url:expr) => {
-        use crate::SubeBuilder;
 
-        SubeBuilder::default().with_url($url)
+    ($url:expr) => {
+        async {
+            $crate::builder::SubeBuilder::default().with_url($url).await
+        }
     };
 
     // Two parameters
     // Match when the macro is called with an expression (url) followed by a block of key-value pairs
-    ($url:expr, { $($key:ident: $value:expr),+ $(,)? }) => {
-        {
-            use crate::SubeBuilder;
-            // Create a SubeBuilder instance with the default values and set the url
-            let mut builder = SubeBuilder::default().with_url($url);
-            // Iterate over the key-value pairs provided in the macro
-            $(
-                // Update the builder by calling the method corresponding to the key with the value
-                builder = builder.with_$key($value);
-            )+
+    ( $url:literal => { $($key:ident: $value:expr),+ $(,)? }) => {
+        
+        async {
+            let mut builder = $crate::builder::SubeBuilder::default().with_url($url);
+
+            use paste::paste;
+            
+            paste!($(
+                builder = builder.[<with_ $key>]($value);
+            )*);
+    
             // Return the updated builder
-            builder
+            builder.await
         }
     };
 }

@@ -23,8 +23,8 @@ export function setupSign(element: HTMLButtonElement) {
       sign: (message: Uint8Array) => wallet.sign(message),
     });
 
-    counter = count
-    element.innerHTML = `Tx is ${counter}`
+    counter = count;
+    element.innerHTML = `Tx is ${counter}`;
   }
 
   element.addEventListener('click', () => setCounter(counter + 1));

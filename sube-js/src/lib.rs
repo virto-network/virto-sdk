@@ -108,12 +108,10 @@ pub async fn sube_js(
                 )
                 .map_err(|_| SubeError::Signing)?;
 
-            let mut vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
+            let vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
                 .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;
 
-            out.copy_from_slice(&vec);
-
-            Ok(())
+            Ok(vec.as_slice())
         },
     )
     .await

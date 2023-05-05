@@ -36,6 +36,6 @@ features = [
   "v14",
   "json"
 ]
-
+default-features = false 
 # [profile.release]
 # opt-level = "s"
