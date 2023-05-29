@@ -7,6 +7,8 @@ use rand_core::OsRng;
 
 type Wallet = libwallet::Wallet<vault::Simple>;
 
+use anyhow::{ Result, anyhow };
+
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let phrase = env::args().skip(1).collect::<Vec<_>>().join(" ");
@@ -24,8 +26,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let account = wallet.default_account();
     let public = account.public();
 
-    println!("hello world ");
-
     let response = sube!("https://kusama.olanod.com/balances/transfer" => {
         signer: |message: &[u8]| Ok(wallet.sign(message).into()),
         sender: public.as_ref(),
@@ -36,14 +36,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "value": 100000
         }),
     })
-    .map_err(|err| {
-        println!("{:?}", err);
-        "error"
-    })
+    .map_err(|err| anyhow!(format!("SubeError {:?}", err)))
     .await?;
 
 
     println!("Secret phrase: \"{phrase}\"");
     println!("Default Account: 0x{account}");
+
     Ok(())
 }

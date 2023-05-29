@@ -92,6 +92,9 @@ use prelude::*;
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "builder")]
+pub use paste::paste;
+
 use crate::util::to_camel;
 
 mod prelude {
@@ -117,6 +120,7 @@ pub mod ws;
 #[cfg(any(feature = "builder"))]
 pub mod builder;
 
+
 pub mod hasher;
 pub mod meta_ext;
 
@@ -125,9 +129,8 @@ pub mod rpc;
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-pub trait SignerFn: Default + Fn(&[u8]) -> Result<[u8; 64]> {}
-impl<T> SignerFn for T where T: Default + Fn(&[u8]) -> Result<[u8; 64]> {}
-
+pub trait SignerFn: Fn(&[u8]) -> Result<[u8; 64]> {}
+impl<T> SignerFn for T where T: Fn(&[u8]) -> Result<[u8; 64]> {}
 
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;

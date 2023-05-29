@@ -41,6 +41,7 @@ url = { version = "2.2.2", optional = true }
 heapless = "0.7.16"
 once_cell = "1.17.1"
 rand_core = {version = "0.6.3"}
+anyhow = { version = "1.0.40", optional = true }
 
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
@@ -49,7 +50,7 @@ libwallet = { path = "../libwallet" }
 
 [features]
 # default = ["json", "std"]
-default = ["async-std", "builder", "v14", "url", "wss", "ws", "http", "json"]
+default = ["async-std", "builder", "v14", "url", "wss", "ws", "http", "json", "examples"]
 #default = ["v14", "ws", "decode", "json", "std"]
 # decode = ["v14", "serde", "scales/codec"]
 # encode = ["v14", ]
@@ -63,7 +64,7 @@ v13 = ["frame-metadata/v13"]
 v14 = ["frame-metadata/v14", "scale-info"]
 ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
 wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
-
+examples = ["anyhow"]
 
 [package.metadata.docs.rs]
 features = ["http"]

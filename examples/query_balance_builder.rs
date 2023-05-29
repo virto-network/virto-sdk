@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 
-use sube::{ Response, sube, Result, builder::SubeBuilder, SignerFn, ExtrinicBody };
+use sube::{ Response, sube, Result, builder::QueryBuilder, SignerFn, ExtrinicBody };
 
 #[async_std::main]
 async fn main() -> Result<()> {
-    let builder = SubeBuilder::default()
+    let builder = QueryBuilder::default()
         .with_url("https://kusama.olanod.com/system/_constants/version")
         .await?;
 

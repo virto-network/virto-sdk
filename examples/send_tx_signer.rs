@@ -1,15 +1,16 @@
-use jsonrpc::error;
+use futures_util::TryFutureExt;
 use serde_json::json;
 use libwallet::{self, vault};
-use sube::{builder::TxBuilder};
+use sube::{ sube };
 use std::env;
 use rand_core::OsRng;
 
 type Wallet = libwallet::Wallet<vault::Simple>;
+
 use anyhow::{ Result, anyhow };
 
 #[async_std::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let phrase = env::args().skip(1).collect::<Vec<_>>().join(" ");
 
     let (vault, phrase) = if phrase.is_empty() {
@@ -20,25 +21,27 @@ async fn main() -> Result<()> {
     };
 
     let mut wallet = Wallet::new(vault);
-
     wallet.unlock(None).await?;
 
     let account = wallet.default_account();
-    
-    let response = TxBuilder::default()
-        .with_url("https://kusama.olanod.com/balances/transfer")
-        .with_signer(|message: &[u8]| Ok(wallet.sign(message).into()))
-        .with_sender(wallet.default_account().public().as_ref())
-        .with_body(json!({
+    let public = account.public();
+
+
+    let response = sube!(
+        "https://kusama.olanod.com/balances/transfer" => 
+        (wallet, json!({
             "dest": {
-                "Id": wallet.default_account().public().as_ref()
+                "Id": public.as_ref(),   
             },
             "value": 100000
         }))
-        .await
-        .map_err(|err| {
-            anyhow!(format!("Error {:?}", err))
-        })?;
+    )
+    .map_err(|err| anyhow!(format!("SubeError {:?}", err)))
+    .await?;
+
+
+    println!("Secret phrase: \"{phrase}\"");
+    // println!("Default Account: 0x{account}");
 
     Ok(())
 }

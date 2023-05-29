@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use core::future::{Future, IntoFuture};
-use sube::{ Response, sube, Result, builder::SubeBuilder };
+use sube::{ Response, sube, Result };
 
 #[async_std::main]
 async fn main() -> Result<()> {
     
-    sube!("https://kusama.olanod.com/system/_constants/version").await?;
+    let result = sube!("https://kusama.olanod.com/system/_constants/version").await?;
 
+    println!("{:?}", result);
     Ok(())
 }
