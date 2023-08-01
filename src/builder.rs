@@ -228,7 +228,7 @@ where
                     let from = sender.ok_or(Error::BadInput)?;
 
                     crate::submit(backend, meta, path, ExtrinicBody {
-                        nonce: nonce,
+                        nonce,
                         body,
                         from
                     }, signer).await?

@@ -82,8 +82,9 @@ pub async fn sube_js(
 
         return Ok(value);
     }
+    
 
-    let mut extrinsic_value: ExtrinicBody<JsonValue> = serde_wasm_bindgen::from_value(params)?;
+    let mut extrinsic_value: ExtrinicBody<'_, JsonValue> = serde_wasm_bindgen::from_value(params)?;
 
     extrinsic_value.body = decode_addresses(&extrinsic_value.body);
 
