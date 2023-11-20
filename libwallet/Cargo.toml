@@ -20,7 +20,7 @@ mnemonic = {package = "bip0039", version = "0.10.1", default-features = false, o
 
 rand_core = {version = "0.6.3", optional = true}
 # substrate related
-schnorrkel = {version = "0.10.2", default-features = false, optional = true}# soft derivation in no_std
+schnorrkel = {git = "https://github.com/virto-network/schnorrkel.git", default-features = false, optional = true}# soft derivation in no_std
 rand_chacha = {version = "0.3.1", default-features = false, optional = true}
 
 # vault os
