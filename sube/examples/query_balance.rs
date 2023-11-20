@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
 
     match response {
         Response::Value(value) => {
-            let data = value.as_ref(); // Obtiene los datos como un slice de bytes
+            let data = value.as_ref(); // Get data as a slice of bytes
             let account_info = AccountInfo::decode(&mut &data[..])
                 .map_err(|_| Error::Decode("Failed to decode AccountInfo".into()))?;
 
