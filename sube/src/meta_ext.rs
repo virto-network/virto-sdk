@@ -4,7 +4,7 @@ use core::{borrow::Borrow, slice};
 use codec::Decode;
 #[cfg(any(feature = "v13"))]
 use frame_metadata::decode_different::DecodeDifferent;
-use frame_metadata::{PalletCallMetadata, RuntimeMetadata, RuntimeMetadataPrefixed};
+use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 
 #[cfg(feature = "v13")]
 pub use v13::*;
