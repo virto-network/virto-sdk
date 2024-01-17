@@ -1,4 +1,5 @@
 #![feature(async_fn_in_trait, impl_trait_projections)]
+#![feature(trait_alias)]
 // #![feature(result_option_inspect)]
 #![cfg_attr(not(feature = "std"), no_std)]
 //! `libwallet` is the one-stop tool to build easy, slightly opinionated crypto wallets
