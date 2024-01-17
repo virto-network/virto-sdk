@@ -1,6 +1,5 @@
-use core::convert::TryInto;
-
-use crate::util::{seed_from_entropy, Pin};
+use super::seed_from_entropy;
+use crate::util::Pin;
 use crate::{RootAccount, Vault};
 
 /// A vault that holds secrets in memory
@@ -39,20 +38,21 @@ impl Simple {
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
-        (
-            Self::from_phrase(&phrase),
-            phrase
-        )
+        (Self::from_phrase(&phrase), phrase)
     }
 
     #[cfg(feature = "mnemonic")]
     // Provide your own seed
     pub fn from_phrase(phrase: impl AsRef<str>) -> Self {
+        use core::convert::TryInto;
         let phrase = phrase
             .as_ref()
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
-        let entropy = phrase.entropy().try_into().expect("Size should be 32 bytes");
+        let entropy = phrase
+            .entropy()
+            .try_into()
+            .expect("Size should be 32 bytes");
 
         Simple {
             locked: Some(entropy),

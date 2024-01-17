@@ -57,7 +57,10 @@ pub mod any {
 
         fn public(&self) -> Self::Public {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => AnyPublic::Sr25519(p.public()),
+                #[cfg(not(feature = "sr25519"))]
+                Pair::_None => unreachable!(),
             }
         }
     }
@@ -70,7 +73,10 @@ pub mod any {
             Self: Sized,
         {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(kp) => Pair::Sr25519(kp.derive(path)),
+                #[cfg(not(feature = "sr25519"))]
+                Pair::_None => unreachable!(),
             }
         }
     }
@@ -94,7 +100,10 @@ pub mod any {
 
         fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => super::Signer::verify(p, msg, sig),
+                #[cfg(not(feature = "sr25519"))]
+                Pair::_None => unreachable!(),
             }
         }
     }
@@ -110,7 +119,10 @@ pub mod any {
     impl AsRef<[u8]> for AnyPublic {
         fn as_ref(&self) -> &[u8] {
             match self {
+                #[cfg(feature = "sr25519")]
                 AnyPublic::Sr25519(p) => p.as_ref(),
+                #[cfg(not(feature = "sr25519"))]
+                AnyPublic::_None => unreachable!(),
             }
         }
     }
@@ -225,13 +237,13 @@ pub mod sr25519 {
 
     #[cfg(not(feature = "rand_chacha"))]
     fn derive_simple(key: SecretKey, j: Junction) -> SecretKey {
-        key.derived_key_simple(ChainCode(j), &[]).0
+        key.derived_key_simple(ChainCode(j), []).0
     }
     #[cfg(feature = "rand_chacha")]
     fn derive_simple(key: SecretKey, j: Junction) -> SecretKey {
         use rand_core::SeedableRng;
         // As noted in https://docs.rs/schnorrkel/latest/schnorrkel/context/fn.attach_rng.html
-        // it's not recommended by should be ok for our simple use cases
+        // it's not recommended but should be ok for our simple use cases
         let rng = rand_chacha::ChaChaRng::from_seed([0; 32]);
         key.derived_key_simple_rng(ChainCode(j), &[], rng).0
     }
@@ -356,6 +368,8 @@ mod derive {
     #[cfg(test)]
     mod tests {
         use super::*;
+        extern crate alloc;
+        use alloc::vec::Vec;
 
         #[test]
         fn substrate_junctions() {

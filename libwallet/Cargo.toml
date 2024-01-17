@@ -20,7 +20,7 @@ mnemonic = {package = "bip0039", version = "0.10.1", default-features = false, o
 
 rand_core = {version = "0.6.3", optional = true}
 # substrate related
-schnorrkel = {version = "0.10.2", default-features = false, optional = true}# soft derivation in no_std
+schnorrkel = {version = "0.11.4", default-features = false, optional = true}# soft derivation in no_std
 rand_chacha = {version = "0.3.1", default-features = false, optional = true}
 
 # vault os
@@ -35,9 +35,10 @@ serde_json = {version = "1.0", default-features = false, features = ["alloc"]}
 dirs = "4.0"
 
 [features]
-default = ["std", "substrate", "vault_simple", "mnemonic", "rand"]
-rand = ["rand_core"]
-sr25519 = ["schnorrkel/u64_backend", "schnorrkel/getrandom"]
+# The library has no default features but this can be uncommented during development
+# default = [ "std",  "substrate",  "vault_simple",  "vault_os",  "vault_pass",  "mnemonic",  "util_pin", "rand", ]
+rand = ["rand_core", "schnorrkel?/getrandom"]
+sr25519 = ["dep:schnorrkel"]
 std = [
   "rand_core/getrandom",
 ]
@@ -45,7 +46,6 @@ substrate = ["sr25519"]
 util_pin = ["pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
-vault_simple = []
 
 [workspace]
 members = [

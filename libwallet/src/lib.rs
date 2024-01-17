@@ -1,6 +1,4 @@
-#![feature(async_fn_in_trait, impl_trait_projections)]
-// #![feature(result_option_inspect)]
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 //! `libwallet` is the one-stop tool to build easy, slightly opinionated crypto wallets
 //! that run in all kinds of environments and plattforms including embedded hardware,
 //! mobile apps or the Web.
@@ -96,7 +94,7 @@ where
                     def.unlock(root);
                 })
                 .await
-                .map_err(|e| Error::Vault(e))?;
+                .map_err(Error::Vault)?;
             self.is_locked = false;
         }
         Ok(())
@@ -304,19 +302,6 @@ mod util {
         let phrase = mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid");
         phrase
     }
-
-    macro_rules! seed_from_entropy {
-        ($seed: ident, $pin: expr) => {
-            #[cfg(feature = "util_pin")]
-            let protected_seed = $pin.protect::<64>($seed);
-            #[cfg(feature = "util_pin")]
-            let $seed = &protected_seed;
-            #[cfg(not(feature = "util_pin"))]
-            let _ = &$pin; // use the variable to avoid warning
-        };
-    }
-
-    pub(crate) use seed_from_entropy;
 
     /// A simple pin credential that can be used to add some
     /// extra level of protection to seeds stored in vaults
