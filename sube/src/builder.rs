@@ -213,25 +213,22 @@ where
                 .get_or_try_init(async {
                     match metadata {
                         Some(m) => Ok(m),
-                        None => backend.metadata().await.map_err(|_| Error::BadMetadata),
+                        None => backend.metadata().await.map_err(|err| Error::BadMetadata ),
                     }
                 })
                 .await?;
 
  
-
             Ok(match path {
                 "_meta" => Response::Meta(meta),
                 "_meta/registry" => Response::Registry(&meta.types),
                 _ => {
-                      
                     let signer = signer.ok_or(Error::BadInput)?;
                     let from = sender.ok_or(Error::BadInput)?;
 
-                    crate::submit(backend, meta, path, ExtrinicBody {
+                    crate::submit(backend, meta, path, from, ExtrinicBody {
                         nonce,
                         body,
-                        from
                     }, signer).await?
                 }
             })
@@ -360,10 +357,11 @@ macro_rules! sube {
             let public = $wallet.default_account().public();
 
             builder
+                .with_url($url)
                 .with_signer(|message: &[u8]| Ok($wallet.sign(message).as_bytes()))
                 .with_sender(&public.as_ref())
                 .with_body($body)
-                .await;
+                .await?;
 
             $crate::Result::Ok($crate::Response::Void)
         }

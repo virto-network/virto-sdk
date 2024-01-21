@@ -27,9 +27,7 @@ async fn main() -> Result<()> {
     
     let response = TxBuilder::default()
         .with_url("https://kusama.olanod.com/balances/transfer")
-        .with_signer(|message: &[u8]| {
-            Ok(wallet.sign(message).as_bytes())
-        })
+        .with_signer(|message: &[u8]|  Ok(wallet.sign(message).as_bytes()) )
         .with_sender(wallet.default_account().public().as_ref())
         .with_body(json!({
             "dest": {

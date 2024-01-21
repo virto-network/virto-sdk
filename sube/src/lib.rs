@@ -105,10 +105,9 @@ mod prelude {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct ExtrinicBody<'a, Body> {
+pub struct ExtrinicBody<Body> {
     pub nonce: Option<u64>,
-    pub body: Body,
-    pub from: &'a [u8],
+    pub body: Body
 }
 
 /// Surf based backend
@@ -171,13 +170,14 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     }
 }
 
-async fn submit<'m, 'a,  V>(
+async fn submit<'m,  V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
-    tx_data: ExtrinicBody<'m, V>,
+    from: &'m [u8],
+    tx_data: ExtrinicBody<V>,
     signer: impl SignerFn,
-) -> Result<Response<'a>>
+) -> Result<Response<'m>>
 where
     V: serde::Serialize + std::fmt::Debug,
 {
@@ -219,7 +219,7 @@ where
                 let response = query(
                     &chain,
                     meta,
-                    &format!("system/account/0x{}", hex::encode(&tx_data.from)),
+                    &format!("system/account/0x{}", hex::encode(from)),
                 )
                 .await?;
 
@@ -302,6 +302,7 @@ where
     };
 
     let raw = payload.as_slice();
+
     let signature = signer(raw)?;
 
     let extrinsic_call = {
@@ -310,7 +311,7 @@ where
             vec![0b10000000 + 4u8],
             // signer
             vec![0x00],
-            tx_data.from.to_vec(),
+            from.to_vec(),
             // signature
             [vec![0x01], signature.to_vec()].concat(),
             // extra
