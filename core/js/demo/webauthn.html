@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Empty HTML Document</title>
+    <script type="module">
+      import init, { WebAuthN } from '../pkg/virto_sdk_js.js';
+      init();
+      
+      document.querySelector('#sign').addEventListener('click', async () => {
+        console.log('hello');
+        console.log({ WebAuthN });
+        // fs.run_hello();
+        let auth = new WebAuthN("localhost");
+
+        const res = await auth.register_user("david_barinas");
+        console.log(res);
+        const res2 = await auth.sign_payload(new Uint8Array([1,2,3,4,5,6,7,8,9]));
+      });
+    </script>
+</head>
+<body>
+  <button id="register"> Register </button>
+  <button id="sign"> Sign </button>
+</body>
+</html>

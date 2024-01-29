@@ -1,0 +1,50 @@
+
+[package]
+name = "virto-sdk-js"
+description = "virtoSDKJS"
+license = "Apache-2.0"
+version = "1.0.0"
+authors = ["David Barinas <david.barinas.dev@gmail.com>"]
+edition = "2021"
+repository = "https://github.com/virto-network/virto-dk/"
+
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2.84"
+async-trait = "0.1.53"
+js-sys = "0.3.61"
+serde = { version = "1.0.137", default-features = false }
+serde_json = { version = "1.0.111", default-features = false }
+serde-wasm-bindgen = "0.6.3"
+wasm-bindgen-futures = "0.4.34"
+
+[dependencies.web-sys]
+version = "0.3.4"
+features = [
+  'Window',
+  'Navigator',
+  'CredentialsContainer',
+  'CredentialCreationOptions',
+  'PublicKeyCredential',
+  'PublicKeyCredentialCreationOptions',
+  'AttestationConveyancePreference',
+  'PublicKeyCredentialRpEntity',
+  'PublicKeyCredentialUserEntity',
+  'AuthenticatorSelectionCriteria',
+  'AuthenticatorResponse',
+  'AuthenticationExtensionsClientOutputs',
+  'console',
+  'Crypto',
+  'CredentialRequestOptions',
+  'PublicKeyCredentialRequestOptions',
+  'AuthenticationExtensionsClientInputs',
+  'UserVerificationRequirement'
+]
+
+[dependencies.virto-sdk]
+path = "../"
+default-features = false
+features = ['js']

@@ -1,0 +1,29 @@
+[package]
+name = "virto-sdk"
+description = "virtoSDK"
+license = "Apache-2.0"
+version = "1.0.0"
+authors = ["David Barinas <david.barinas.dev@gmail.com>"]
+edition = "2021"
+repository = "https://github.com/virto-network/virto-dk/"
+
+
+[dependencies]
+async-trait = "0.1.53"
+serde_json = { version = "1.0.80" }
+serde = { version = "1.0.137", default-features = false }
+
+[dependencies.sube]
+path = "../sube"
+default-features = false
+
+
+[features]
+default = ['sube/default']
+js = ['sube/js']
+
+
+[workspace]
+members = [
+  "js"
+]

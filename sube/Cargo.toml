@@ -5,7 +5,7 @@ license = "Apache-2.0"
 version = "1.0.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2021"
-repository = "https://github.com/valibre-org/sube"
+repository = "https://github.com/valibre-org/virto-dk/sube"
 
 [dependencies]
 log = "0.4.17"
@@ -65,7 +65,7 @@ v14 = ["scale-info", "frame-metadata/current"]
 ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
 wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 examples = ["anyhow", "rand_core"]
-
+js = ["http-web", "json", "v14", "builder"]
 
 [package.metadata.docs.rs]
 features = ["http"]
