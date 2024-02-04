@@ -12,7 +12,7 @@ log = "0.4.17"
 async-trait = "0.1.53"
 blake2 = { version = "0.10.5", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
-frame-metadata = { version = "15.0.0", git = "https://github.com/paritytech/frame-metadata.git", default-features = false, features = ["serde_full", "decode"] }
+frame-metadata = { version = "16.0.0", git = "https://github.com/paritytech/frame-metadata.git", default-features = false, features = ["serde_full", "decode"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 twox-hash = { version = "1.6.2", default-features = false }
 serde = { version = "1.0.137", default-features = false }
@@ -20,7 +20,7 @@ async-once-cell = "0.4.4"
 
 scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { path = "../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer"] }
+scales = { git = "https://github.com/virto-network/scales.git", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer"] }
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }
@@ -54,9 +54,9 @@ http-web = ["jsonrpc", "surf/wasm-client"]
 json = ["v14", "scales/json"]
 std = []
 builder = []
-v12 = ["frame-metadata/v12"]
-v13 = ["frame-metadata/v13"]
-v14 = ["frame-metadata/v14", "scale-info"]
+v12 = ["frame-metadata/legacy"]
+v13 = ["frame-metadata/legacy"]
+v14 = ["frame-metadata/current", "scale-info"]
 ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
 wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 

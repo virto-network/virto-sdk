@@ -1,5 +1,6 @@
 #![feature(trait_alias)]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 #![cfg_attr(not(feature = "std"), no_std)]
 /*!
 Sube is a lightweight Substrate client with multi-backend support

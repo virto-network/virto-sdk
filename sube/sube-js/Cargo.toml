@@ -34,7 +34,8 @@ path = ".."
 features = [
   "http-web",
   "v14",
-  "json"
+  "json",
+  "builder"
 ]
 
 # [profile.release]
