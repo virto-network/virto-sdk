@@ -1,27 +1,117 @@
-<!DOCTYPE html>
+  <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Empty HTML Document</title>
+    <title>Marketplace</title>
+    <script data-consolejs-channel="ea5bd806-aa90-021d-e03d-dff35d7b0a07" src="https://remotejs.com/agent/agent.js"></script>
     <script type="module">
       import init, { WebAuthN } from '../pkg/virto_sdk_js.js';
-      init();
       
-      document.querySelector('#sign').addEventListener('click', async () => {
-        console.log('hello');
-        console.log({ WebAuthN });
-        // fs.run_hello();
-        let auth = new WebAuthN("localhost");
+      console.log('hello world');
+      init();
+      // console.log(init_panic_hook());
+      console.log('loaded');
+      document.querySelector('#register').addEventListener('click', async () => {
+        
+        const auth = new WebAuthN(window.location.hostname);
+        const signings = await auth.register_user("agg_live");
+        console.log('hello world')
+        console.log({ signings });
+      });
 
-        const res = await auth.register_user("david_barinas");
-        console.log(res);
-        const res2 = await auth.sign_payload(new Uint8Array([1,2,3,4,5,6,7,8,9]));
+      document.querySelector('#sign').addEventListener('click', async () => {
+        const auth = new WebAuthN(window.location.hostname);
+        
+        const payload = await auth.sign_payload(new Uint8Array([1,2,3,4,5,6,7,8,9]));
+        console.log({ payload });
       });
     </script>
+     <style>
+      body {
+          font-family: Arial, sans-serif;
+          margin: 20px;
+      }
+      header {
+          text-align: center;
+          margin-bottom: 20px;
+      }
+      section {
+          margin-bottom: 20px;
+      }
+      table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-top: 10px;
+      }
+      th, td {
+          border: 1px solid #ddd;
+          padding: 8px;
+          text-align: left;
+      }
+      th {
+          background-color: #f2f2f2;
+      }
+  </style>
 </head>
 <body>
-  <button id="register"> Register </button>
-  <button id="sign"> Sign </button>
+  <header>
+      <h1>Purchase Receipt</h1>
+      <p>Date: January 29, 2024</p>
+  </header>
+
+  <section>
+      <h2>Transaction Details</h2>
+      <table>
+          <tr>
+              <th>Item</th>
+              <th>Unit Price</th>
+              <th>Quantity</th>
+          </tr>
+          <tr>
+              <td>Fake Car Model</td>
+              <td>$25,000</td>
+              <td>2</td>
+          </tr>
+      </table>
+  </section>
+
+  <section>
+      <h2>Summary</h2>
+      <table>
+          <tr>
+              <td>Subtotal:</td>
+              <td>$50,000</td>
+          </tr>
+          <tr>
+              <td>Taxes (VAT):</td>
+              <td>$7,500</td>
+          </tr>
+          <tr>
+              <td>Discount:</td>
+              <td>-$2,000</td>
+          </tr>
+          <tr>
+              <th>Total:</th>
+              <th>$55,500</th>
+          </tr>
+      </table>
+  </section>
+
+  <section>
+      <h2>Payment Method</h2>
+      <p>Kusama Transaction</p>
+      <p></p>
+  </section>
+
+  <section>
+      <button id="register">Register</button>
+      <button id="sign">Pay Now</button>
+  </section>
+
+  <footer>
+      <p>Thank you for choosing our Car Marketplace! We hope you enjoy your new purchase. For any inquiries, contact us at support@example.com or call us at +1 (123) 456-7890.</p>
+      <p>Come back soon!</p>
+  </footer>
 </body>
 </html>
