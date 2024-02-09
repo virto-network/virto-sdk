@@ -72,7 +72,7 @@ pub mod util;
 
 
 pub use codec;
-use codec::{Decode, Encode};
+use codec::Encode;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 
 pub use meta::Metadata;
@@ -193,19 +193,12 @@ where
 
     let mut encoded_call = vec![pallet.index];
 
-    println!("before buiding the call");
-    println!("Body={:?}", tx_data.body);
-    println!("Payload={:?}", json!({
-        &item_or_call.to_lowercase(): &tx_data.body
-    }));
- 
     let call_data = scales::to_vec_with_info(&json!( {
         &item_or_call.to_lowercase(): &tx_data.body
     }), (reg, ty).into())
         .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
-    println!("done build the call");
 
     let extra_params = {
         // ImmortalEra
