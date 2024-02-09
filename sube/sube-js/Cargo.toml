@@ -8,13 +8,13 @@ edition = "2018"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wasm-bindgen = "=0.2.84"
+wasm-bindgen = "0.2.91"
 wee_alloc = { version = "0.4.5", optional = true }
-wasm-bindgen-futures = "0.4.33"
+wasm-bindgen-futures = "0.4.41"
 serde = "1.0.152"
 serde_json = "1.0.91"
-serde-wasm-bindgen = "0.4.5"
-js-sys = "0.3.60"
+serde-wasm-bindgen = "0.6.3"
+js-sys = "0.3.68"
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 parity-scale-codec = "3.2.1"
 console_error_panic_hook = "0.1.7"

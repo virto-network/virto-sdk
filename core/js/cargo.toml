@@ -13,13 +13,14 @@ repository = "https://github.com/virto-network/virto-dk/"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-wasm-bindgen = "0.2.84"
+wasm-bindgen = "0.2.91"
 async-trait = "0.1.53"
-js-sys = "0.3.61"
+js-sys = "0.3.68"
 serde = { version = "1.0.137", default-features = false }
 serde_json = { version = "1.0.111", default-features = false }
 serde-wasm-bindgen = "0.6.3"
-wasm-bindgen-futures = "0.4.34"
+wasm-bindgen-futures = "0.4.41"
+base64 = "0.21.7"
 
 [dependencies.web-sys]
 version = "0.3.4"
