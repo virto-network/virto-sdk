@@ -47,9 +47,9 @@ impl Authenticator for WebAuthN {
     let crypto = window.crypto().map_err(|_| AuthError::Platform("crypto is not defined".into()))?;
     crypto.get_random_values_with_u8_array(&mut slice).map_err(|_| AuthError::Platform("Can't be generated a random challenge".into()))?;
 
-    let challenge = Uint8Array::from(&slice[..]);
+    let challenge = Uint8Array::from(slice.as_slice());
     let id = &challenge;
-    
+
     let creds = vec![
       KeyType { alg: utils::signing_algorithm::RSA, type_credential: "public-key".to_string()  },
       KeyType { alg: utils::signing_algorithm::EDSA, type_credential: "public-key".to_string()  } // EDSA
