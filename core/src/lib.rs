@@ -20,7 +20,8 @@ impl<T, A> CallBack<A> for T where T: Fn(&A) -> SDKResult<()> {}
 pub struct VirtoSDK<'m,
   A: Authenticator, S: Signer,
   RegisterFn: CallBack<A::RegResponse>,
-  SignerFn: CallBack<S::SignedPayload>> {
+  SignerFn: CallBack<S::SignedPayload>
+> {
   profile: &'m A::Profile<'m>,
   signer: S,
   authenticator: A,
@@ -50,14 +51,15 @@ where A: 'a {
   }
 
   async fn register(&self) -> SDKResult<()> {
-    let register_res = self.authenticator.register(self.profile)
-      .await
-      .map_err(|_| VirtoError::Unknown)?;
+    let register_res = self
+      .authenticator.register(self.profile)
+        .await
+        .map_err(|_| VirtoError::Unknown)?;
     (self.send_register_cb)(&register_res);
     Ok(())
   }
 
-  async fn auth<'m>(&self, c: A::Credentials<'m>) -> SDKResult<()> where A: 'm{
+  async fn auth<'m>(&self, c: A::Credentials<'m>) -> SDKResult<()> {
     self.authenticator.auth(&c)
       .await
       .map_err(|_| VirtoError::Unknown)?; 
@@ -66,7 +68,7 @@ where A: 'a {
 
   async fn query<'n>(path: &'n str) -> SDKResult<Response<'n>> {
     QueryBuilder::default()
-      .with_url(&path)
+      .with_url(path)
       .await
       .map_err(|_| VirtoError::Unknown)
   }
@@ -76,7 +78,7 @@ where A: 'a {
       "url": url,
       "body": body
     });
-    
+
     let signed_payload = self.signer.sign(
       json_value
         .as_str()
