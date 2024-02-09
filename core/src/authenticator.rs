@@ -4,6 +4,8 @@ use async_trait::async_trait;
 
 pub enum AuthError {
   Unknown,
+  CanNotRegister,
+  Platform(String),
 }
 
 pub type AuthResult<T> = Result<T, AuthError>;

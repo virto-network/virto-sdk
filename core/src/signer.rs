@@ -4,6 +4,8 @@ use async_trait::async_trait;
 
 pub enum SignerError {
   Unknown,
+  WrongCredentials,
+  Platform(String)
 }
 
 pub type SignerResult<T> = Result<T, SignerError>;

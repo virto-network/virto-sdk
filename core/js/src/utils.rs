@@ -40,3 +40,8 @@ where
       }
   }
 }
+
+pub mod signing_algorithm {
+  pub const EDSA: i32 = -7;
+  pub const RSA: i32 = -257;
+}

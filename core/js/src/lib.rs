@@ -2,6 +2,7 @@ pub mod utils;
 mod models;
 use models::*;
 
+
 mod prelude {
   pub use wasm_bindgen_futures::JsFuture;
   pub use async_trait::async_trait;
@@ -11,6 +12,7 @@ mod prelude {
   pub use js_sys::Uint8Array;
   pub use virto_sdk::{ authenticator::AuthError, signer::SignerError, AuthResult, Authenticator, Signer, SignerResult };
   pub use crate::utils;
+  pub use base64;
 }
 
 use prelude::*;
@@ -22,6 +24,7 @@ pub struct Profile<'a> {
 pub struct Credentials<'a> {
   username: &'a str,
 }
+
 
 #[wasm_bindgen]
 pub struct WebAuthN  {
@@ -35,43 +38,41 @@ impl Authenticator for WebAuthN {
   type RegResponse = WebAuthnResult<RegResponse>;
 
   async fn register<'m>(&self, profile: &'m Profile<'_>) -> AuthResult<Self::RegResponse> {
-    let window = window().expect("expect window to exist");
-    let navigator = window.navigator();
-    let credential_manager = navigator.credentials();
+    let window = window().ok_or(AuthError::Platform("No window defined".into()))?;
+    let credential_manager = window.navigator().credentials();
     let mut credential_options = CredentialCreationOptions::new();
 
     let mut slice: [u8; 32] = [0; 32];
 
-    let crypto = window.crypto().expect("crypto to be enabled");
-    crypto.get_random_values_with_u8_array(&mut slice).expect("Error generating random bytes");
+    let crypto = window.crypto().map_err(|_| AuthError::Platform("crypto is not defined".into()))?;
+    crypto.get_random_values_with_u8_array(&mut slice).map_err(|_| AuthError::Platform("Can't be generated a random challenge".into()))?;
 
-    let challenge = unsafe { Uint8Array::new(&Uint8Array::view(slice.as_slice())) };
-    let id = unsafe { Uint8Array::new(&Uint8Array::view(slice.as_slice())) };
+    let challenge = Uint8Array::from(&slice[..]);
+    let id = &challenge;
     
     let creds = vec![
-      KeyType { alg: -257, type_credential: "public-key".to_string()  }, // RSA
-      KeyType { alg: -7, type_credential: "public-key".to_string()  } // EDSA
+      KeyType { alg: utils::signing_algorithm::RSA, type_credential: "public-key".to_string()  },
+      KeyType { alg: utils::signing_algorithm::EDSA, type_credential: "public-key".to_string()  } // EDSA
     ];
 
-    // let pub_key = P
     let pub_key = PublicKeyCredentialCreationOptions::new(
       &challenge,
       &serde_wasm_bindgen::to_value(&creds).unwrap(),
       &PublicKeyCredentialRpEntity::new(&self.rp_id),
-      &PublicKeyCredentialUserEntity::new(profile.username, profile.display_name, &id)
+      &PublicKeyCredentialUserEntity::new(profile.username, profile.display_name, id)
     );
   
     credential_options.public_key(&pub_key);
 
     let promise = credential_manager
       .create_with_options(&credential_options)
-      .map_err(|_| AuthError::Unknown)?;
+      .map_err(|_| AuthError::CanNotRegister)?;
 
-    let value = JsFuture::from(promise).await.map_err(|_| AuthError::Unknown)?;
+    let value = JsFuture::from(promise).await.map_err(|_| AuthError::CanNotRegister)?;
 
     let public_key_cred = serde_wasm_bindgen::from_value(
       value
-    ).expect("Error trying to build webauthn result");
+    ).map_err(|_| AuthError::Platform("Error Serializing Response".into()))?;
 
     Ok(public_key_cred)
   }
@@ -81,32 +82,34 @@ impl Authenticator for WebAuthN {
   }
 }
 
+
 #[async_trait(?Send)]
 impl Signer for WebAuthN {
   type SignedPayload = WebAuthnResult<SigningResponse>;
   
   async fn sign<'p>(&self, payload: &'p [u8]) -> SignerResult<<Self as Signer>::SignedPayload> {
-    let window = window().expect("expect window to exist");
-    let navigator = window.navigator();
-    let credential_manager = navigator.credentials();
+    let window = window().ok_or(SignerError::Platform("No window defined".into()))?;
+    let credential_manager = window.navigator().credentials();
     let mut credential_request = CredentialRequestOptions::new();
-    let challenge = unsafe { Uint8Array::new(&Uint8Array::view(payload)) };
+    let challenge = Uint8Array::from(payload);
 
     let mut pub_req = PublicKeyCredentialRequestOptions::new(&challenge);
-    // pub_req.user_verification(UserVerificationRequirement::Required);
+
     pub_req.rp_id(&self.rp_id);
     
     js_sys::Reflect::set(
       pub_req.as_ref(),
       &JsValue::from("attestation"),
       &JsValue::from("indirect"),
-    ).expect("error setting JsValue");
+    ).map_err(|_| SignerError::Platform("Error Serializing Response".into()))?;
 
     credential_request.public_key(&pub_req);
 
-    let promise = credential_manager.get_with_options(&credential_request).map_err(|_| SignerError::Unknown)?;
-    let value = JsFuture::from(promise).await.map_err(|_| SignerError::Unknown)?;
-    let public_key_cred = serde_wasm_bindgen::from_value(value).expect("hello");
+    let promise = credential_manager.get_with_options(&credential_request).map_err(|_| SignerError::WrongCredentials)?;
+    let value = JsFuture::from(promise).await.map_err(|_| SignerError::WrongCredentials)?;
+    let public_key_cred = serde_wasm_bindgen::from_value(value)
+    .map_err(|_| SignerError::Platform("Error serializing signature from webauthn".into()))?;
+
     Ok(public_key_cred)
   }
 }
@@ -116,7 +119,6 @@ impl Signer for WebAuthN {
 impl WebAuthN{
   #[wasm_bindgen(constructor)]
   pub fn  new(rp_id: String) -> WebAuthN {
-    console_error_panic_hook::set_once();
     WebAuthN {
       rp_id
     }
