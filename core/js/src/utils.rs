@@ -1,5 +1,5 @@
 use serde::{de::SeqAccess, Deserialize};
-use virto_sdk::authenticator::AuthError;
+use virto_sdk::{authenticator::AuthError, signer::SignerError};
 use wasm_bindgen::JsError;
 
 use core::marker::PhantomData;
@@ -43,4 +43,34 @@ where
 pub mod signing_algorithm {
     pub const EDSA: i32 = -7;
     pub const RSA: i32 = -257;
+}
+
+pub trait AsJsError {
+    fn as_error(&self) -> JsError;
+}
+
+impl AsJsError for AuthError {
+    fn as_error(&self) -> JsError {
+        match self {
+            AuthError::CanNotRegister => JsError::new("AuthError: Cannot register"),
+            AuthError::Platform(e) => JsError::new(&format!(
+                "AuthError: an error related to the platform ({}) has ocurred",
+                &e
+            )),
+            AuthError::Unknown => JsError::new("AuthError: unknown"),
+        }
+    }
+}
+
+impl AsJsError for SignerError {
+    fn as_error(&self) -> JsError {
+        match self {
+            SignerError::WrongCredentials => JsError::new("SignerError: Wrong credentials"),
+            SignerError::Platform(e) => JsError::new(&format!(
+                "SignerError: an error related to the platform ({}) has ocurred",
+                &e
+            )),
+            SignerError::Unknown => JsError::new("SignerError: unknown"),
+        }
+    }
 }

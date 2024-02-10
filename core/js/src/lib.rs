@@ -3,7 +3,7 @@ pub mod utils;
 use models::*;
 
 mod prelude {
-    pub use crate::utils;
+    pub use crate::utils::{self, AsJsError};
     pub use async_trait::async_trait;
     pub use base64;
     pub use js_sys::Uint8Array;
@@ -152,7 +152,7 @@ impl WebAuthN {
                 display_name: &username,
             })
             .await
-            .map_err(|_| JsError::new("Error Occurrend"))?;
+            .map_err(|e| e.as_error())?;
 
         Ok(pub_credential.into())
     }
@@ -162,7 +162,7 @@ impl WebAuthN {
         let pub_credential = self
             .sign(&payload.to_vec())
             .await
-            .map_err(|_| JsError::new("Error Occurrend"))?;
+            .map_err(|e| e.as_error())?;
 
         Ok(pub_credential.into())
     }
