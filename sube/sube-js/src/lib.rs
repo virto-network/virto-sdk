@@ -1,5 +1,6 @@
 mod util;
 
+use js_sys::Uint8Array;
 use parity_scale_codec::Encode;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Error};
@@ -58,6 +59,12 @@ fn chain_string_to_url(chain: &str) -> Result<Url> {
     Ok(url)
 }
 
+#[derive(Serialize, Deserialize)]
+struct ExtrinicBodyWithFrom {
+    from: Vec<u8>,
+    call: ExtrinicBody<JsonValue>,
+}
+
 #[wasm_bindgen]
 pub async fn sube_js(
     url: &str,
@@ -83,9 +90,9 @@ pub async fn sube_js(
         return Ok(value);
     }
 
-    let mut extrinsic_value: ExtrinicBody<JsonValue> = serde_wasm_bindgen::from_value(params)?;
+    let mut extrinsic_value: ExtrinicBodyWithFrom = serde_wasm_bindgen::from_value(params)?;
 
-    extrinsic_value.body = decode_addresses(&extrinsic_value.body);
+    extrinsic_value.call.body = decode_addresses(&extrinsic_value.call.body);
 
     let value = sube!(url => {
         signer: move |message: &[u8]| unsafe {
@@ -97,16 +104,16 @@ pub async fn sube_js(
                     &JsValue::from(js_sys::Uint8Array::from(message)),
                 )
                 .map_err(|_| SubeError::Signing)?;
-    
+
             let vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
                 .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;
-            
+
             let buffer: [u8; 64] = vec.try_into().expect("slice with incorrect length");
 
             Ok(buffer)
         },
-        sender: extrinsic_value.from,
-        body: extrinsic_value.body,
+        sender: extrinsic_value.from.as_slice(),
+        body: extrinsic_value.call,
     })
     .await
     .map_err(|e| JsError::new(&format!("Error trying: {:?}", e.to_string())))?;
