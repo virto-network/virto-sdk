@@ -75,3 +75,6 @@ members = [
 	"sube-js",
 	"cli"
 ]
+
+[patch.crates-io]
+cookie = { git = "https://github.com/S0c5/cookie-rs.git" }

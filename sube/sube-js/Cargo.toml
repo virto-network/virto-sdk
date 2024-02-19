@@ -29,10 +29,7 @@ wasm-bindgen-test = "0.3.13"
 path = ".."
 default-features=false
 features = [
-  "http-web",
-  "json",
-  "v14",
-  "builder"
+  "js"
 ]
 
 [features]
