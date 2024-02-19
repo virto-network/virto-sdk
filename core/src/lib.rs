@@ -1,6 +1,11 @@
+#![feature(associated_type_defaults)]
+
 pub mod authenticator;
 pub mod signer;
+pub mod transport;
 pub use authenticator::{AuthResult, Authenticator};
+pub use transport::Transport;
+
 use core::fmt::Debug;
 pub use signer::{Signer, SignerResult};
 
@@ -14,64 +19,56 @@ pub enum VirtoError {
 
 pub type SDKResult<T> = Result<T, VirtoError>;
 
-pub trait CallBack<A>: Fn(&A) -> SDKResult<()> {}
-impl<T, A> CallBack<A> for T where T: Fn(&A) -> SDKResult<()> {}
-
-pub struct VirtoSDK<
-    'm,
-    A: Authenticator,
-    S: Signer,
-    RegisterFn: CallBack<A::RegResponse>,
-    SignerFn: CallBack<S::SignedPayload>,
-> {
-    profile: &'m A::Profile<'m>,
-    signer: S,
-    authenticator: A,
-    send_register_cb: RegisterFn,
-    send_signed_cb: SignerFn,
+pub struct VirtoSDKOps {
+    device_name: String,
+    matrix_host_name: String,
 }
 
-impl<
-        'a,
-        A: Authenticator,
-        S: Signer,
-        RegisterFn: CallBack<A::RegResponse>,
-        SignerFn: CallBack<S::SignedPayload>,
-    > VirtoSDK<'a, A, S, RegisterFn, SignerFn>
+pub struct VirtoSDK<A: Authenticator, S: Signer, T: Transport> {
+    options: VirtoSDKOps,
+    signer: S,
+    authenticator: A,
+    transport: T,
+}
+
+#[derive(Serialize)]
+pub struct TxCall<Body> {
+    nonce: Option<u64>,
+    body: Body,
+}
+
+impl<A, S, T> VirtoSDK<A, S, T>
 where
-    A: 'a,
+    A: Authenticator,
+    S: Signer,
+    T: Transport,
 {
-    fn new(
-        profile: &'a A::Profile<'a>,
-        signer: S,
-        authenticator: A,
-        send_register_cb: RegisterFn,
-        send_signed_cb: SignerFn,
-    ) -> VirtoSDK<'a, A, S, RegisterFn, SignerFn> {
+    fn new(options: VirtoSDKOps, authenticator: A, signer: S, transport: T) -> Self {
         VirtoSDK {
-            profile,
-            signer,
+            options,
+            transport,
             authenticator,
-            send_register_cb,
-            send_signed_cb,
+            signer,
         }
     }
 
-    async fn register(&self) -> SDKResult<()> {
-        let register_res = self
-            .authenticator
-            .register(self.profile)
-            .await
-            .map_err(|_| VirtoError::Unknown)?;
-        (self.send_register_cb)(&register_res);
+    async fn register_device(&self) -> SDKResult<()> {
+        // let register_res = self
+        //     .authenticator
+        //     .register(self.profile)
+        //     .await
+        //     .map_err(|_| VirtoError::Unknown)?;
+
         Ok(())
     }
 
     async fn auth<'m>(&self, c: A::Credentials<'m>) -> SDKResult<()> {
-        self.authenticator
+        let f = self
+            .authenticator
             .auth(&c)
             .await
             .map_err(|_| VirtoError::Unknown)?;
+
         Ok(())
     }
 
@@ -82,10 +79,14 @@ where
             .map_err(|_| VirtoError::Unknown)
     }
 
-    async fn tx<'s, Body: Debug + Serialize>(&self, url: &str, body: &'s Body) -> SDKResult<()> {
+    async fn tx<'s, Body: Debug + Serialize>(
+        &self,
+        url: &str,
+        body: TxCall<&'s Body>,
+    ) -> SDKResult<()> {
         let json_value = json!({
           "url": url,
-          "body": body
+          "body": body,
         });
 
         let signed_payload = self
@@ -94,7 +95,6 @@ where
             .await
             .map_err(|_| VirtoError::Unknown)?;
 
-        (self.send_signed_cb)(&signed_payload);
         Ok(())
     }
 }

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde::Serialize;
 
 pub enum AuthError {
     Unknown,
@@ -12,7 +13,7 @@ pub type AuthResult<T> = Result<T, AuthError>;
 pub trait Authenticator {
     type Profile<'p>;
     type Credentials<'c>;
-    type RegResponse;
+    type RegResponse: Serialize;
 
     async fn register<'m>(&self, profile: &'m Self::Profile<'_>) -> AuthResult<Self::RegResponse>;
     async fn auth<'n>(&self, credentials: &'n Self::Credentials<'_>) -> AuthResult<()>;

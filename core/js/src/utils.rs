@@ -46,11 +46,11 @@ pub mod signing_algorithm {
 }
 
 pub trait AsJsError {
-    fn as_error(&self) -> JsError;
+    fn as_js_error(&self) -> JsError;
 }
 
 impl AsJsError for AuthError {
-    fn as_error(&self) -> JsError {
+    fn as_js_error(&self) -> JsError {
         match self {
             AuthError::CanNotRegister => JsError::new("AuthError: Cannot register"),
             AuthError::Platform(e) => JsError::new(&format!(
@@ -63,7 +63,7 @@ impl AsJsError for AuthError {
 }
 
 impl AsJsError for SignerError {
-    fn as_error(&self) -> JsError {
+    fn as_js_error(&self) -> JsError {
         match self {
             SignerError::WrongCredentials => JsError::new("SignerError: Wrong credentials"),
             SignerError::Platform(e) => JsError::new(&format!(

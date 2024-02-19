@@ -6,14 +6,22 @@ mod prelude {
     pub use crate::utils::{self, AsJsError};
     pub use async_trait::async_trait;
     pub use base64;
+    pub use core::fmt::Debug;
     pub use js_sys::Uint8Array;
     pub use serde::{
         de::{Error as DeError, SeqAccess, Visitor},
         Deserialize, Deserializer, Serialize, Serializer,
     };
     pub use virto_sdk::{
-        authenticator::AuthError, signer::SignerError, AuthResult, Authenticator, Signer,
+        authenticator::AuthError,
+        signer::SignerError,
+        // messages::{Chat, ChatResult, Message},
+        transport::Transport,
+        AuthResult,
+        Authenticator,
+        Signer,
         SignerResult,
+        VirtoSDK,
     };
     pub use wasm_bindgen::prelude::*;
     pub use wasm_bindgen_futures::JsFuture;
@@ -25,6 +33,7 @@ mod prelude {
 }
 
 use prelude::*;
+use virto_sdk::transport::{Content, TransportResult};
 
 pub struct Profile<'a> {
     username: &'a str,
@@ -34,7 +43,6 @@ pub struct Credentials<'a> {
     username: &'a str,
 }
 
-#[wasm_bindgen]
 pub struct WebAuthN {
     rp_id: String,
 }
@@ -138,32 +146,32 @@ impl Signer for WebAuthN {
     }
 }
 
-#[wasm_bindgen]
 impl WebAuthN {
-    #[wasm_bindgen(constructor)]
     pub fn new(rp_id: String) -> WebAuthN {
         WebAuthN { rp_id }
     }
-    #[wasm_bindgen()]
-    pub async fn register_user(&self, username: String) -> Result<JsValue, JsValue> {
-        let pub_credential = self
-            .register(&Profile {
-                username: &username,
-                display_name: &username,
-            })
-            .await
-            .map_err(|e| e.as_error())?;
+}
 
-        Ok(pub_credential.into())
-    }
+struct ChatJs;
 
-    #[wasm_bindgen()]
-    pub async fn sign_payload(&self, payload: Uint8Array) -> Result<JsValue, JsValue> {
-        let pub_credential = self
-            .sign(&payload.to_vec())
-            .await
-            .map_err(|e| e.as_error())?;
-
-        Ok(pub_credential.into())
+#[async_trait]
+impl Transport for ChatJs {
+    async fn send<'s, Body: Serialize + Debug + Send>(
+        key: &'s str,
+        content: Content<Body>,
+    ) -> TransportResult<()> {
+        Ok(())
     }
 }
+
+type SDK = VirtoSDK<WebAuthN, WebAuthN, ChatJs>;
+
+#[wasm_bindgen]
+struct VirtoSDKJs {
+    sdk: SDK,
+}
+
+// #[wasm_bindgen]
+// impl VirtoSDKJs {
+
+// }
