@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use sube::{ Response, sube, Result, builder::QueryBuilder, SignerFn, ExtrinicBody };
+use sube::{builder::QueryBuilder, sube, ExtrinicBody, Response, Result, SignerFn};
 
 #[async_std::main]
 async fn main() -> Result<()> {

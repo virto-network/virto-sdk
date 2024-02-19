@@ -4,10 +4,10 @@ use crate::http::Backend as HttpBackend;
 use crate::ws::{Backend as WSBackend, WS2};
 
 use crate::meta::Meta;
-use crate::{ prelude::* };
+use crate::prelude::*;
 use crate::{
-    meta::BlockInfo, Backend, Error, ExtrinicBody, Metadata, Response, Result as SubeResult, SignerFn,
-    StorageKey,
+    meta::BlockInfo, Backend, Error, ExtrinicBody, Metadata, Response, Result as SubeResult,
+    SignerFn, StorageKey,
 };
 
 use async_trait::async_trait;
@@ -19,20 +19,16 @@ use scale_info::build;
 use serde::Serializer;
 use url::Url;
 
-
 type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
 static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
 
-
-pub struct QueryBuilder<'a>
-{
+pub struct QueryBuilder<'a> {
     url: Option<&'a str>,
     metadata: Option<Metadata>,
 }
 
 // default for non body queries
-impl<'a> Default for QueryBuilder<'a>
-{
+impl<'a> Default for QueryBuilder<'a> {
     fn default() -> Self {
         QueryBuilder {
             url: Option::None,
@@ -54,8 +50,8 @@ where
 }
 
 // default for non body queries
-impl<'a, Body, Signer> Default for TxBuilder<'a, Signer, Body> 
-where 
+impl<'a, Body, Signer> Default for TxBuilder<'a, Signer, Body>
+where
     Body: serde::Serialize,
 {
     fn default() -> Self {
@@ -70,10 +66,7 @@ where
     }
 }
 
-
-impl<'a> QueryBuilder<'a>
-{
-       
+impl<'a> QueryBuilder<'a> {
     pub fn with_url(self, url: &'a str) -> Self {
         Self {
             url: Some(url),
@@ -89,12 +82,11 @@ impl<'a> QueryBuilder<'a>
     }
 }
 
-impl<'a, Signer, Body> TxBuilder<'a, Signer, Body>  where
-        Body: serde::Serialize,
-        Signer: SignerFn
+impl<'a, Signer, Body> TxBuilder<'a, Signer, Body>
+where
+    Body: serde::Serialize,
+    Signer: SignerFn,
 {
-
-
     pub fn with_url(self, url: &'a str) -> Self {
         Self {
             url: Some(url),
@@ -110,7 +102,6 @@ impl<'a, Signer, Body> TxBuilder<'a, Signer, Body>  where
     }
 
     pub fn with_signer(self, signer: Signer) -> Self {
-        
         Self {
             signer: Some(signer),
             ..self
@@ -139,7 +130,6 @@ impl<'a, Signer, Body> TxBuilder<'a, Signer, Body>  where
     }
 }
 
-
 static BACKEND: async_once_cell::OnceCell<AnyBackend> = async_once_cell::OnceCell::new();
 static META: async_once_cell::OnceCell<Metadata> = async_once_cell::OnceCell::new();
 
@@ -148,10 +138,7 @@ impl<'a> IntoFuture for QueryBuilder<'a> {
     type IntoFuture = impl Future<Output = Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let Self {
-            url,
-            metadata,
-        } = self;
+        let Self { url, metadata } = self;
 
         async move {
             let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
@@ -173,19 +160,16 @@ impl<'a> IntoFuture for QueryBuilder<'a> {
             Ok(match path {
                 "_meta" => Response::Meta(meta),
                 "_meta/registry" => Response::Registry(&meta.types),
-                _ => {
-                    crate::query(&backend, meta, path).await?
-                }
+                _ => crate::query(&backend, meta, path).await?,
             })
         }
     }
 }
 
-
 impl<'a, Signer, Body> IntoFuture for TxBuilder<'a, Signer, Body>
 where
     Body: serde::Serialize + core::fmt::Debug,
-    Signer: SignerFn
+    Signer: SignerFn,
 {
     type Output = SubeResult<Response<'a>>;
     type IntoFuture = impl Future<Output = Self::Output>;
@@ -213,12 +197,11 @@ where
                 .get_or_try_init(async {
                     match metadata {
                         Some(m) => Ok(m),
-                        None => backend.metadata().await.map_err(|err| Error::BadMetadata ),
+                        None => backend.metadata().await.map_err(|err| Error::BadMetadata),
                     }
                 })
                 .await?;
 
- 
             Ok(match path {
                 "_meta" => Response::Meta(meta),
                 "_meta/registry" => Response::Registry(&meta.types),
@@ -226,10 +209,15 @@ where
                     let signer = signer.ok_or(Error::BadInput)?;
                     let from = sender.ok_or(Error::BadInput)?;
 
-                    crate::submit(backend, meta, path, from, ExtrinicBody {
-                        nonce,
-                        body,
-                    }, signer).await?
+                    crate::submit(
+                        backend,
+                        meta,
+                        path,
+                        from,
+                        ExtrinicBody { nonce, body },
+                        signer,
+                    )
+                    .await?
                 }
             })
         }
@@ -315,12 +303,11 @@ impl Backend for &AnyBackend {
     }
 }
 
-
 #[inline]
 async fn get_metadata(b: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<Metadata> {
     match metadata {
         Some(m) => Ok(m),
-        None => Ok(b.metadata().await?)
+        None => Ok(b.metadata().await?),
     }
 }
 
@@ -336,7 +323,7 @@ macro_rules! sube {
     // Two parameters
     // Match when the macro is called with an expression (url) followed by a block of key-value pairs
     ( $url:expr => { $($key:ident: $value:expr),+ $(,)? }) => {
-        
+
         async {
             use $crate::paste;
 
@@ -367,4 +354,3 @@ macro_rules! sube {
         }
     };
 }
-

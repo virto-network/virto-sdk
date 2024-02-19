@@ -39,10 +39,7 @@ impl Simple {
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
-        (
-            Self::from_phrase(&phrase),
-            phrase
-        )
+        (Self::from_phrase(&phrase), phrase)
     }
 
     #[cfg(feature = "mnemonic")]
@@ -52,7 +49,10 @@ impl Simple {
             .as_ref()
             .parse::<mnemonic::Mnemonic>()
             .expect("mnemonic");
-        let entropy = phrase.entropy().try_into().expect("Size should be 32 bytes");
+        let entropy = phrase
+            .entropy()
+            .try_into()
+            .expect("Size should be 32 bytes");
 
         Simple {
             locked: Some(entropy),

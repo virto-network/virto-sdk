@@ -4,13 +4,13 @@ use std::prelude::rust_2021::*;
 #[macro_use]
 extern crate std;
 use futures_util::TryFutureExt;
-use serde_json::json;
 use libwallet::{self, vault};
-use sube::sube;
-use std::env;
 use rand_core::OsRng;
+use serde_json::json;
+use std::env;
+use sube::sube;
 type Wallet = libwallet::Wallet<vault::Simple>;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
@@ -18,9 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (vault, phrase) = if phrase.is_empty() {
                 vault::Simple::generate_with_phrase(&mut rand_core::OsRng)
             } else {
-                let phrase: libwallet::Mnemonic = phrase
-                    .parse()
-                    .expect("Invalid phrase");
+                let phrase: libwallet::Mnemonic = phrase.parse().expect("Invalid phrase");
                 (vault::Simple::from_phrase(&phrase), phrase)
             };
             let mut wallet = Wallet::new(vault);
@@ -36,35 +34,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 builder
                     .with_signer(|message: &[u8]| Ok(wallet.sign(message).into()))
                     .with_sender(public.into())
-                    .with_body(
-                        ::serde_json::Value::Object({
-                            let mut object = ::serde_json::Map::new();
-                            let _ = object
-                                .insert(
-                                    ("dest").into(),
-                                    ::serde_json::Value::Object({
-                                        let mut object = ::serde_json::Map::new();
-                                        let _ = object
-                                            .insert(
-                                                ("Id").into(),
-                                                ::serde_json::to_value(&public.as_ref()).unwrap(),
-                                            );
-                                        object
-                                    }),
+                    .with_body(::serde_json::Value::Object({
+                        let mut object = ::serde_json::Map::new();
+                        let _ = object.insert(
+                            ("dest").into(),
+                            ::serde_json::Value::Object({
+                                let mut object = ::serde_json::Map::new();
+                                let _ = object.insert(
+                                    ("Id").into(),
+                                    ::serde_json::to_value(&public.as_ref()).unwrap(),
                                 );
-                            let _ = object
-                                .insert(
-                                    ("value").into(),
-                                    ::serde_json::to_value(&100000).unwrap(),
-                                );
-                            object
-                        }),
-                    )
+                                object
+                            }),
+                        );
+                        let _ = object
+                            .insert(("value").into(), ::serde_json::to_value(&100000).unwrap());
+                        object
+                    }))
                     .await
             }
-                .map_err(|err| anyhow!(format!("SubeError {:?}", err)))
-                .await?;
-            
+            .map_err(|err| anyhow!(format!("SubeError {:?}", err)))
+            .await?;
+
             Ok(())
         }
     }

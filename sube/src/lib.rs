@@ -70,7 +70,6 @@ extern crate alloc;
 
 pub mod util;
 
-
 pub use codec;
 use codec::Encode;
 pub use frame_metadata::RuntimeMetadataPrefixed;
@@ -84,7 +83,6 @@ pub use scales::{Serializer, Value};
 
 use async_trait::async_trait;
 use codec::Compact;
-use serde_json::json;
 use core::fmt;
 use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
@@ -92,6 +90,7 @@ use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 #[cfg(feature = "builder")]
 pub use paste::paste;
@@ -107,7 +106,7 @@ mod prelude {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtrinicBody<Body> {
     pub nonce: Option<u64>,
-    pub body: Body
+    pub body: Body,
 }
 
 /// Surf based backend
@@ -120,7 +119,6 @@ pub mod ws;
 #[cfg(any(feature = "builder"))]
 pub mod builder;
 
-
 pub mod hasher;
 pub mod meta_ext;
 
@@ -131,8 +129,6 @@ pub type Result<T> = core::result::Result<T, Error>;
 // type Bytes<const N: usize> = [u8; N];
 pub trait SignerFn: Fn(&[u8]) -> Result<[u8; 64]> {}
 impl<T> SignerFn for T where T: Fn(&[u8]) -> Result<[u8; 64]> {}
-
-
 
 // impl From<AsRef<u8>> for [u8; 64] {
 //     fn from(value: AsRef<u8>) -> Self {
@@ -170,7 +166,7 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     }
 }
 
-async fn submit<'m,  V>(
+async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
@@ -193,10 +189,13 @@ where
 
     let mut encoded_call = vec![pallet.index];
 
-    let call_data = scales::to_vec_with_info(&json!( {
-        &item_or_call.to_lowercase(): &tx_data.body
-    }), (reg, ty).into())
-        .map_err(|e| Error::Encode(e.to_string()))?;
+    let call_data = scales::to_vec_with_info(
+        &json!( {
+            &item_or_call.to_lowercase(): &tx_data.body
+        }),
+        (reg, ty).into(),
+    )
+    .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
 

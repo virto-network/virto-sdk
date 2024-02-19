@@ -1,12 +1,12 @@
 use jsonrpc::error;
-use serde_json::json;
 use libwallet::{self, vault, Signature};
-use sube::builder::TxBuilder;
-use std::env;
 use rand_core::OsRng;
+use serde_json::json;
+use std::env;
+use sube::builder::TxBuilder;
 
 type Wallet = libwallet::Wallet<vault::Simple>;
-use anyhow::{ Result, anyhow };
+use anyhow::{anyhow, Result};
 
 #[async_std::main]
 async fn main() -> Result<()> {
@@ -24,10 +24,10 @@ async fn main() -> Result<()> {
     wallet.unlock(None).await?;
 
     let account = wallet.default_account();
-    
+
     let response = TxBuilder::default()
         .with_url("https://kusama.olanod.com/balances/transfer")
-        .with_signer(|message: &[u8]|  Ok(wallet.sign(message).as_bytes()) )
+        .with_signer(|message: &[u8]| Ok(wallet.sign(message).as_bytes()))
         .with_sender(wallet.default_account().public().as_ref())
         .with_body(json!({
             "dest": {
@@ -36,9 +36,7 @@ async fn main() -> Result<()> {
             "value": 100000
         }))
         .await
-        .map_err(|err| {
-            anyhow!(format!("Error {:?}", err))
-        })?;
+        .map_err(|err| anyhow!(format!("Error {:?}", err)))?;
 
     Ok(())
 }
