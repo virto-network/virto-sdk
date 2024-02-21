@@ -10,16 +10,25 @@ repository = "https://github.com/virto-network/virto-dk/"
 
 [dependencies]
 async-trait = "0.1.53"
+async-std = "1.12.0"
 serde_json = { version = "1.0.80" }
 serde = { version = "1.0.137", default-features = false }
+cqrs-es = { path = "../../cqrs", default-features = false }
+futures = "0.3.30"
+
 
 [dependencies.sube]
 path = "../sube"
 default-features = false
 
+[dependencies.libwallet]
+path = "../libwallet"
+features = ["js"]
+
+
 
 [features]
-default = ['sube/default']
+default = ['sube/default', "async-std/attributes"]
 js = ['sube/js']
 
 
@@ -28,3 +37,7 @@ members = [
   "js"
 ]
 
+
+
+[patch.crates-io]
+cookie = { git = "https://github.com/S0c5/cookie-rs.git" }
