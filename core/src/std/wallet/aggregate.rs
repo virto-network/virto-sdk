@@ -29,10 +29,10 @@ impl<S: WalletApi + Sync + Send> Aggregate for Wallet<S> {
 
     fn apply(&mut self, event: Self::Event) {
         match event {
-          WalletEvent::Signed(..) => {},
-          WalletEvent::AddedMessageToSign(message) => {
-            self.pending_messages.push(message);
-          }
+            WalletEvent::Signed(..) => {}
+            WalletEvent::AddedMessageToSign(message) => {
+                self.pending_messages.push(message);
+            }
         }
     }
 
@@ -43,21 +43,22 @@ impl<S: WalletApi + Sync + Send> Aggregate for Wallet<S> {
     ) -> Result<Vec<Self::Event>, Self::Error> {
         match cmd {
             WalletCommand::AddMessageToSign(message) => {
-              Ok(vec![WalletEvent::AddedMessageToSign(message)])
+                Ok(vec![WalletEvent::AddedMessageToSign(message)])
             }
             WalletCommand::Sign() => {
-                let messagess_signatures = future::try_join_all(
-                    self.pending_messages
-                        .iter()
-                        .map(async move |m| {
-                          Ok((svc.services.sign(m).await.map_err(|_| WalletError::Unknown)?, m.to_owned()))
-                        }),
-                )
-                .await?;
+                let messagess_signatures =
+                    future::try_join_all(self.pending_messages.iter().map(async move |m| {
+                        Ok((
+                            svc.services
+                                .sign(m)
+                                .await
+                                .map_err(|_| WalletError::Unknown)?,
+                            m.to_owned(),
+                        ))
+                    }))
+                    .await?;
 
-                Ok(vec![
-                  WalletEvent::Signed(messagess_signatures)
-                ])
+                Ok(vec![WalletEvent::Signed(messagess_signatures)])
             }
         }
     }
@@ -102,7 +103,7 @@ mod wallet_test {
         let validator = executor.when_async(WalletCommand::Sign()).await;
         validator.then_expect_events(vec![WalletEvent::Signed(vec![(
             Message::try_from([1u8].as_slice()).expect("hello world"),
-            message
+            message,
         )])])
     }
 
@@ -113,8 +114,8 @@ mod wallet_test {
     impl WalletApi for MockWalletService {
         type SignedPayload = Message;
         async fn sign<'p>(&self, payload: &'p [u8]) -> WalletResult<Self::SignedPayload> {
-          println!("went here eded");
-          Ok(Message::try_from([1u8].as_slice()).expect("hello world"))
+            println!("went here eded");
+            Ok(Message::try_from([1u8].as_slice()).expect("hello world"))
         }
     }
 }

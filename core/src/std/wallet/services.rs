@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use serde::{de::DeserializeOwned, Serialize};
 use core::fmt::Debug;
+use serde::{de::DeserializeOwned, Serialize};
 
 pub enum SignerError {
     Unknown,
@@ -9,8 +9,9 @@ pub enum SignerError {
 }
 
 pub type WalletResult<T> = Result<T, SignerError>;
-pub trait WalletApiSignedPayloadBounds = Sync + Send + DeserializeOwned + Serialize + PartialEq + Clone + Debug;
-trait WA = WalletApi; 
+pub trait WalletApiSignedPayloadBounds =
+    Sync + Send + DeserializeOwned + Serialize + PartialEq + Clone + Debug;
+trait WA = WalletApi;
 
 pub struct WalletServices<A: WA> {
     pub services: A,

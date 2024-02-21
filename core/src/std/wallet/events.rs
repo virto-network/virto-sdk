@@ -1,5 +1,5 @@
-use super::types::Message;
 use super::services::WalletApiSignedPayloadBounds;
+use super::types::Message;
 
 use cqrs_es::DomainEvent;
 use serde::{Deserialize, Serialize};
