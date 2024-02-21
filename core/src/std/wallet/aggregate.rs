@@ -81,13 +81,13 @@ mod wallet_test {
     use async_trait;
     use cqrs_es::test::TestFramework;
 
-    type AccountService = TestFramework<Wallet<MockWalletService>>;
+    type WalletService = TestFramework<Wallet<MockWalletService>>;
 
     #[test]
     fn add_pending_tx() {
         let message = Message::try_from([0u8, 1u8, 2u8].as_slice()).expect("can not convert");
 
-        AccountService::with(WalletServices::new(MockWalletService::default()))
+        WalletService::with(WalletServices::new(MockWalletService::default()))
             .given_no_previous_events()
             .when(WalletCommand::AddMessageToSign(message.clone()))
             .then_expect_events(vec![WalletEvent::AddedMessageToSign(message)]);
@@ -97,7 +97,7 @@ mod wallet_test {
     async fn sign_tx_queues() {
         let message = Message::try_from([0u8, 1u8, 2u8].as_slice()).expect("can not convert");
 
-        let executor = AccountService::with(WalletServices::new(MockWalletService::default()))
+        let executor = WalletService::with(WalletServices::new(MockWalletService::default()))
             .given(vec![WalletEvent::AddedMessageToSign(message.clone())]);
 
         let validator = executor.when_async(WalletCommand::Sign()).await;
