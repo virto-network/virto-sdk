@@ -50,7 +50,7 @@ impl<S: WalletApi + Sync + Send> Aggregate for Wallet<S> {
                     self.pending_messages
                         .iter()
                         .map(async move |m| {
-                          Ok((m.clone(), svc.services.sign(m).await.map_err(|_| WalletError::Unknown)?))
+                          Ok((svc.services.sign(m).await.map_err(|_| WalletError::Unknown)?, m.to_owned()))
                         }),
                 )
                 .await?;
@@ -101,8 +101,8 @@ mod wallet_test {
 
         let validator = executor.when_async(WalletCommand::Sign()).await;
         validator.then_expect_events(vec![WalletEvent::Signed(vec![(
-            message,
             Message::try_from([1u8].as_slice()).expect("hello world"),
+            message
         )])])
     }
 

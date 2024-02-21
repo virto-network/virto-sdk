@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Deserialize, Serialize, PartialEq, Debug)]
 pub enum WalletEvent<Signature: Sync + Send + Serialize> {
     AddedMessageToSign(Message),
-    Signed(Vec<(Message, Signature)>),
+    Signed(Vec<(Signature, Message)>),
 }
 
 #[derive(Deserialize, Clone, Debug)]
