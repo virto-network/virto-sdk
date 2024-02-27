@@ -1,1 +1,1 @@
-use cqrs_es::mem_store::MemStore;
+use crate::cqrs::MemStore;

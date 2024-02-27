@@ -10,12 +10,19 @@ repository = "https://github.com/virto-network/virto-dk/"
 
 [dependencies]
 async-trait = "0.1.53"
-async-std = "1.12.0"
+async-std = { version = "1.12.0" }
 serde_json = { version = "1.0.80" }
 serde = { version = "1.0.137", default-features = false }
-cqrs-es = { path = "../../cqrs", default-features = false }
+matrix-sdk = { version = "0.7.1", features = ["e2e-encryption"] }
 futures = "0.3.30"
+url = "2.5.0"
+async-once-cell = "0.4.4"
+thiserror = "1.0.57"
+tokio = "1.36.0"
 
+[dev-dependencies]
+tracing-subscriber = "0.3.18"
+ctor = "0.2.6"
 
 [dependencies.sube]
 path = "../sube"
@@ -26,17 +33,15 @@ path = "../libwallet"
 features = ["js"]
 
 
-
 [features]
-default = ['sube/default', "async-std/attributes"]
-js = ['sube/js']
+default = ['sube/default', "async-std/attributes", "async-std/tokio1" ]
+js = ['sube/js', 'matrix-sdk/js']
 
 
 [workspace]
 members = [
   "js"
 ]
-
 
 
 [patch.crates-io]
