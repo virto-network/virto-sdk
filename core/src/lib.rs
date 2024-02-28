@@ -61,7 +61,7 @@ impl SDKCore {
         }
         self.inner.clone()
     }
-    
+
     async fn next_sync(&mut self) -> Result<(), SDKError> {
         let mut settings = SyncSettings::default();
 

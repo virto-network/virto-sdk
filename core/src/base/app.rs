@@ -6,7 +6,7 @@ use crate::{std::wallet::aggregate, utils};
 use futures::executor;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppPermission {
     name: String,
     description: String,
@@ -15,7 +15,7 @@ pub struct AppPermission {
     events: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppInfo {
     pub id: String,
     pub name: String,

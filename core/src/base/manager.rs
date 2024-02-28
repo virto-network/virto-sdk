@@ -4,6 +4,7 @@ use async_trait::async_trait;
 #[derive(Debug)]
 pub enum AppManagerError {
     AlreadyInstalled,
+    Unknown,
     CantInstall(String),
     CantUninstall(String),
 }
