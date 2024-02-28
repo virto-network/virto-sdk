@@ -1,7 +1,12 @@
+use std::default;
+use std::marker::PhantomData;
+
 use async_trait::async_trait;
 
 use super::runner::{VRunner, VRunnerError};
-use crate::cqrs::{Aggregate, AggregateContext, CqrsFramework, EventStore, Query};
+use crate::cqrs::{
+    Aggregate, AggregateContext, CqrsFramework, DomainEvent, EventEnvelope, EventStore, Query,
+};
 use crate::{std::wallet::aggregate, utils};
 use futures::executor;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -88,6 +93,7 @@ impl<A: Aggregate, AC: AggregateContext<A>> VAppBuilder<A, AC> {
 pub struct VApp<A: Aggregate, E: EventStore<A>> {
     app_info: AppInfo,
     cqrs: CqrsFramework<A, E>,
+    is_setup: bool,
 }
 
 impl<A: Aggregate, E: EventStore<A>> VApp<A, E> {
@@ -100,12 +106,74 @@ impl<A: Aggregate, E: EventStore<A>> VApp<A, E> {
         Self {
             app_info,
             cqrs: CqrsFramework::new(event_store, queries, services),
+            is_setup: false,
+        }
+    }
+}
+
+struct QueryBridge<A, E>
+where
+    E: DomainEvent,
+    A: Aggregate,
+{
+    inner: Box<dyn Query<E>>,
+    phantom: PhantomData<A>,
+}
+
+impl<A, E> QueryBridge<A, E>
+where
+    A: Aggregate,
+    E: DomainEvent,
+{
+    fn new(inner: Box<dyn Query<E>>) -> Self {
+        Self {
+            inner,
+            phantom: PhantomData,
         }
     }
 }
 
 #[async_trait]
-impl<A: Aggregate, E: EventStore<A>> VRunner for VApp<A, E> {
+impl<A, E> Query<A::Event> for QueryBridge<A, E>
+where
+    A: Aggregate,
+    E: DomainEvent + From<A::Event>,
+{
+    async fn dispatch(&self, aggregate_id: &str, events: &[EventEnvelope<A::Event>]) {
+        let e: Vec<EventEnvelope<E>> = events
+            .iter()
+            .map(|x| EventEnvelope {
+                aggregate_id: x.aggregate_id.clone(),
+                payload: x.payload.clone().into(),
+                metadata: x.metadata.clone(),
+                sequence: x.sequence.clone(),
+            })
+            .collect();
+
+        self.inner.dispatch(aggregate_id, e.as_slice()).await
+    }
+}
+
+#[async_trait]
+impl<A: Aggregate + 'static, E: EventStore<A>> VRunner<A::Event> for VApp<A, E> {
+    async fn setup<Event: DomainEvent + From<A::Event> + 'static>(
+        mut self,
+        queries: Vec<Box<dyn Query<Event>>>,
+    ) -> Result<(), VRunnerError> {
+        if self.is_setup {
+            return Ok(());
+        }
+
+        for q in queries {
+            self.cqrs = self.cqrs
+                .append_query(Box::new(QueryBridge::<A, Event>::new(q)));
+        }
+
+        self.is_setup = true;
+
+        Ok(())
+    }
+
     async fn exec<'a>(
         &self,
         aggregate_id: &'a str,

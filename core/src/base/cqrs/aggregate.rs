@@ -8,7 +8,7 @@ use super::event::DomainEvent;
 pub trait Aggregate: Default + Serialize + DeserializeOwned + Sync + Send {
     type Command: DeserializeOwned + Sync + Send;
 
-    type Event: DomainEvent;
+    type Event: DomainEvent + Sync + Send;
 
     type Error: std::error::Error;
 
