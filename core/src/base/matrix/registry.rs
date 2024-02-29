@@ -1,4 +1,4 @@
-use crate::utils::HashMap;
+use crate::{utils::HashMap, AppMetadata};
 
 use async_trait::async_trait;
 use matrix_sdk::{
@@ -16,22 +16,11 @@ use crate::base::{AppInfo, AppRegistryError};
 use serde::{Deserialize, Serialize};
 
 use super::super::{AppRegistryResult, VRegistry};
+use super::types::MatrixAppsStateContent;
 
 #[derive(Debug, Clone)]
 pub struct MatrixRegistry {
     client: Box<Client>,
-}
-
-#[derive(Serialize, Clone, Debug, Deserialize)]
-pub struct AppInstallMetadata {
-    app_info: AppInfo,
-    room_id: String,
-}
-
-#[derive(Serialize, Clone, Debug, Default, Deserialize, EventContent)]
-#[ruma_event(type = "m.virto.apps", kind = GlobalAccountData)]
-pub struct VAppAccountContent {
-    apps: HashMap<String, AppInstallMetadata>,
 }
 
 impl MatrixRegistry {
@@ -39,16 +28,16 @@ impl MatrixRegistry {
         Self { client }
     }
 
-    async fn get_state(&self) -> Result<VAppAccountContent, AppRegistryError> {
+    async fn get_state(&self) -> Result<MatrixAppsStateContent, AppRegistryError> {
         let account_data_vapp = self
             .client
             .account()
-            .account_data::<VAppAccountContent>()
+            .account_data::<MatrixAppsStateContent>()
             .await
             .map_err(|_| AppRegistryError::Unknown)?;
 
         let raw_vapp = account_data_vapp.unwrap_or(
-            Raw::new(&VAppAccountContent::default()).map_err(|_| AppRegistryError::Unknown)?,
+            Raw::new(&MatrixAppsStateContent::default()).map_err(|_| AppRegistryError::Unknown)?,
         );
 
         Ok(raw_vapp
@@ -61,9 +50,9 @@ impl MatrixRegistry {
 
         vapps.apps.insert(
             app_info.id.clone().into(),
-            AppInstallMetadata {
+            AppMetadata {
                 app_info: app_info.clone(),
-                room_id: room.room_id().to_string(),
+                channel_id: room.room_id().to_string(),
             },
         );
 

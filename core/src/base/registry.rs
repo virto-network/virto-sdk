@@ -18,7 +18,3 @@ pub trait VRegistry {
     async fn remove(&self, id: &AppInfo) -> AppRegistryResult<()>;
     async fn list_apps(&self) -> AppRegistryResult<Vec<AppInfo>>;
 }
-
-pub trait VAppInfo {
-    fn get_app_info(&self) -> &AppInfo;
-}

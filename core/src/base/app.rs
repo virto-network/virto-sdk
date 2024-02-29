@@ -3,23 +3,22 @@ use std::marker::PhantomData;
 
 use async_trait::async_trait;
 
-use super::runner::{SerializedEvent, VRunnable, VRunnerError};
-use super::VAppInfo;
+use super::supervisor::{SerializedEvent, VRunnable, VRunnerError};
 use crate::cqrs::{
     Aggregate, AggregateContext, CqrsFramework, DomainEvent, EventEnvelope, EventStore, Query,
 };
-use crate::VQuery;
 use crate::{std::wallet::aggregate, utils};
+use crate::{VListener, VQuery};
 use futures::executor;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppPermission {
-    name: String,
-    description: String,
-    app: String, // app
-    cmds: Vec<String>,
-    events: Vec<String>,
+    pub name: String,
+    pub description: String,
+    pub app: String, // app
+    pub cmds: Vec<String>,
+    pub events: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -95,6 +94,7 @@ impl<A: Aggregate, AC: AggregateContext<A>> VAppBuilder<A, AC> {
 pub struct VApp<A: Aggregate, E: EventStore<A>> {
     app_info: AppInfo,
     cqrs: CqrsFramework<A, E>,
+    listeners: Vec<VListener>,
     is_setup: bool,
 }
 
@@ -110,7 +110,15 @@ impl<A: Aggregate, E: EventStore<A>> VApp<A, E> {
             app_info,
             cqrs: CqrsFramework::new(event_store, queries, services),
             is_setup: false,
+            listeners: vec![],
         }
+    }
+
+    pub fn append_listener(self, listener: VListener) -> Self {
+        let mut listeners = self.listeners;
+        listeners.push(listener);
+
+        Self { listeners, ..self }
     }
 }
 
@@ -167,7 +175,7 @@ where
 
 #[async_trait]
 impl<A: Aggregate + 'static, E: EventStore<A>> VRunnable for VApp<A, E> {
-    async fn setup(mut self, queries: Vec<Box<dyn VQuery>>) -> Result<(), VRunnerError> {
+    async fn add_listeners(mut self, queries: Vec<Box<dyn VQuery>>) -> Result<(), VRunnerError> {
         if self.is_setup {
             return Ok(());
         }
@@ -199,8 +207,17 @@ impl<A: Aggregate + 'static, E: EventStore<A>> VRunnable for VApp<A, E> {
     }
 }
 
+pub trait VAppInfo {
+    fn get_app_info(&self) -> &AppInfo;
+    fn get_listeners(&self) -> &Vec<VListener>;
+}
+
 impl<A: Aggregate, E: EventStore<A>> VAppInfo for VApp<A, E> {
     fn get_app_info(&self) -> &AppInfo {
         &self.app_info
+    }
+
+    fn get_listeners(&self) -> &Vec<VListener> {
+        &self.listeners
     }
 }
