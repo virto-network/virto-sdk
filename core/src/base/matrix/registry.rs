@@ -201,6 +201,8 @@ mod manager_test {
     async fn app_registry_lifecycle() {
         let sdkCore = get_sdk().await;
 
+        
+
         let app_info = AppInfo {
             description: "foo".into(),
             name: "wallet".into(),
@@ -213,6 +215,9 @@ mod manager_test {
         sdkCore.next_sync().await;
 
         let manager = MatrixRegistry::new(sdkCore.client());
+
+        manager.remove_app(&app_info).await;
+        let state_d = manager.get_state().await.expect("hello world");
 
         assert_eq!(
             manager

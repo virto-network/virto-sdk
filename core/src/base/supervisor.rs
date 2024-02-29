@@ -69,7 +69,7 @@ impl VListener {
 
 pub enum VSupervisorError {
     Unknown,
-    Forbbiden,
+    Forbidden,
 }
 
 #[async_trait]
@@ -89,7 +89,7 @@ pub trait VSupervisor {
 }
 
 struct SingleThreadSuperVisor {
-    apps_state: VAppsState,
+    pub apps_state: VAppsState,
     runners: HashMap<String, Box<dyn VRunnable>>,
     listeners: HashMap<String, Vec<VListener>>,
 }
@@ -142,19 +142,15 @@ impl VSupervisor for SingleThreadSuperVisor {
         let app_id: String = app_id.into();
 
         if !self.check_permission_to_listen(&app_id, &listener.from_app_id, &listener.event) {
-            return Err(VSupervisorError::Forbbiden);
+            return Err(VSupervisorError::Forbidden);
         }
 
         let mut listeners = &mut self.listeners;
 
-        match listeners.get_mut(&app_id) {
-            Some(vector) => {
-                vector.push(listener);
-            }
-            None => {
-                listeners.insert(app_id.into(), vec![listener]);
-            }
-        };
+        listeners
+            .entry(listener.from_app_id.clone())
+            .or_insert_with(Vec::new)
+            .push(listener);
 
         Ok(())
     }
@@ -168,7 +164,9 @@ impl VSupervisor for SingleThreadSuperVisor {
         Ok(())
     }
 
-    async fn exec(&self, cmd: CommandEvelope) {}
+    async fn exec(&self, cmd: CommandEvelope) -> Result<(), VSupervisorError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -177,10 +175,10 @@ mod supervisor_test {
     use std::collections::HashMap;
 
     use crate::{
-        AppInfo, AppMetadata, AppPermission, SerializedEvent, VAppsState, VListener, VQuery,
-        VSupervisor,
+        utils, AppInfo, AppMetadata, AppPermission, SerializedEvent, VAppsState, VListener, VQuery, VRunnable, VRunnerError, VSupervisor
     };
 
+    use serde_json::Value;
     use super::SingleThreadSuperVisor;
 
     fn get_state() -> VAppsState {
@@ -250,6 +248,26 @@ mod supervisor_test {
         }
     }
 
+    #[derive(Default)]
+    struct MockApp {}
+
+    #[async_trait]
+    impl VRunnable for MockApp {
+        async fn add_listeners(mut self, queries: Vec<Box<dyn VQuery>>) -> Result<(), VRunnerError> {
+            Ok(())
+        }
+
+        async fn exec<'a>(
+            &self,
+            aggregaate_id: &'a str,
+            command: Value,
+            metadata: utils::HashMap<String, String>,
+        ) -> Result<(), VRunnerError> {
+            Ok(())
+        }
+    }
+
+
     #[test]
     fn check_permission_event() {
         let state = get_state();
@@ -267,5 +285,20 @@ mod supervisor_test {
         let is_allowed =
             supervisor.check_permission_to_listen(app, &listener.from_app_id, &listener.event);
         assert_eq!(is_allowed, false);
+    }
+
+    #[test]
+    fn register_listeners() {
+        let state = get_state();
+        let mut supervisor = SingleThreadSuperVisor::new(state);
+        let listener = create_mock_listener("com.app.wallet", "Published");
+        supervisor.register_listener("com.app.account", listener);
+    }
+
+    #[test]
+    fn register_runner() {
+        let state = get_state();
+        let mut supervisor = SingleThreadSuperVisor::new(state);
+        let f = supervisor.register_runner("com.app.account", Box::new(MockApp::default()));
     }
 }
