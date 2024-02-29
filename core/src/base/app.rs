@@ -3,10 +3,12 @@ use std::marker::PhantomData;
 
 use async_trait::async_trait;
 
-use super::runner::{VRunner, VRunnerError};
+use super::runner::{SerializedEvent, VRunnable, VRunnerError};
+use super::VAppInfo;
 use crate::cqrs::{
     Aggregate, AggregateContext, CqrsFramework, DomainEvent, EventEnvelope, EventStore, Query,
 };
+use crate::VQuery;
 use crate::{std::wallet::aggregate, utils};
 use futures::executor;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -27,7 +29,7 @@ pub struct AppInfo {
     pub description: String,
     pub version: String,
     pub author: String,
-    pub permission: Vec<AppPermission>,
+    pub permissions: Vec<AppPermission>,
 }
 enum VIPCError {
     Unknown,
@@ -97,6 +99,7 @@ pub struct VApp<A: Aggregate, E: EventStore<A>> {
 }
 
 impl<A: Aggregate, E: EventStore<A>> VApp<A, E> {
+    // todo create new signature without empty queries
     pub fn new(
         app_info: AppInfo,
         event_store: E,
@@ -111,62 +114,68 @@ impl<A: Aggregate, E: EventStore<A>> VApp<A, E> {
     }
 }
 
-struct QueryBridge<A, E>
-where
-    E: DomainEvent,
-    A: Aggregate,
-{
-    inner: Box<dyn Query<E>>,
-    phantom: PhantomData<A>,
+fn to_serialized_event<Event: DomainEvent>(
+    app_id: impl Into<String>,
+    event: &EventEnvelope<Event>,
+) -> SerializedEvent {
+    SerializedEvent {
+        aggregate_id: event.aggregate_id.clone(),
+        sequence: event.sequence.clone(),
+        payload: serde_json::to_value(event.payload.clone()).expect("Error deserializing Value"),
+        metadata: serde_json::to_value(event.metadata.clone()).expect("Error deserializing Value"),
+        event_type: event.payload.event_type(),
+        event_version: event.payload.event_version(),
+        app_id: app_id.into(),
+    }
 }
 
-impl<A, E> QueryBridge<A, E>
+pub struct QueryBridge<E>
 where
-    A: Aggregate,
     E: DomainEvent,
 {
-    fn new(inner: Box<dyn Query<E>>) -> Self {
+    inner: Box<dyn VQuery>,
+    phantom: PhantomData<E>,
+    app_id: String,
+}
+
+impl<E> QueryBridge<E>
+where
+    E: DomainEvent,
+{
+    fn new(app_id: impl Into<String>, inner: Box<dyn VQuery>) -> Self {
         Self {
             inner,
             phantom: PhantomData,
+            app_id: app_id.into(),
         }
     }
 }
 
 #[async_trait]
-impl<A, E> Query<A::Event> for QueryBridge<A, E>
+impl<E> Query<E> for QueryBridge<E>
 where
-    A: Aggregate,
-    E: DomainEvent + From<A::Event>,
+    E: DomainEvent,
 {
-    async fn dispatch(&self, aggregate_id: &str, events: &[EventEnvelope<A::Event>]) {
-        let e: Vec<EventEnvelope<E>> = events
+    async fn dispatch(&self, aggregate_id: &str, events: &[EventEnvelope<E>]) {
+        let events: Vec<SerializedEvent> = events
             .iter()
-            .map(|x| EventEnvelope {
-                aggregate_id: x.aggregate_id.clone(),
-                payload: x.payload.clone().into(),
-                metadata: x.metadata.clone(),
-                sequence: x.sequence.clone(),
-            })
+            .map(|x| to_serialized_event(&self.app_id, x.into()))
             .collect();
-
-        self.inner.dispatch(aggregate_id, e.as_slice()).await
+        self.inner.dispatch(aggregate_id, &events);
     }
 }
 
 #[async_trait]
-impl<A: Aggregate + 'static, E: EventStore<A>> VRunner<A::Event> for VApp<A, E> {
-    async fn setup<Event: DomainEvent + From<A::Event> + 'static>(
-        mut self,
-        queries: Vec<Box<dyn Query<Event>>>,
-    ) -> Result<(), VRunnerError> {
+impl<A: Aggregate + 'static, E: EventStore<A>> VRunnable for VApp<A, E> {
+    async fn setup(mut self, queries: Vec<Box<dyn VQuery>>) -> Result<(), VRunnerError> {
         if self.is_setup {
             return Ok(());
         }
 
         for q in queries {
-            self.cqrs = self.cqrs
-                .append_query(Box::new(QueryBridge::<A, Event>::new(q)));
+            self.cqrs = self
+                .cqrs
+                .append_query(Box::new(QueryBridge::new(&self.app_info.id, q)));
         }
 
         self.is_setup = true;
@@ -182,9 +191,16 @@ impl<A: Aggregate + 'static, E: EventStore<A>> VRunner<A::Event> for VApp<A, E> 
     ) -> Result<(), VRunnerError> {
         let command: A::Command =
             serde_json::from_value(command).map_err(|_| VRunnerError::Unknown)?;
+
         self.cqrs
-            .execute(aggregate_id, command)
+            .execute_with_metadata(aggregate_id, command, metadata)
             .await
             .map_err(|_| VRunnerError::Unknown)
+    }
+}
+
+impl<A: Aggregate, E: EventStore<A>> VAppInfo for VApp<A, E> {
+    fn get_app_info(&self) -> &AppInfo {
+        &self.app_info
     }
 }

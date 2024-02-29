@@ -12,12 +12,13 @@ use matrix_sdk::{
     Client, Room,
 };
 
-use crate::base::{AppInfo, AppManagerError};
+use crate::base::{AppInfo, AppRegistryError};
 use serde::{Deserialize, Serialize};
 
-use super::super::{AppManager, AppManagerResult};
+use super::super::{AppRegistryResult, VRegistry};
 
-struct MatrixManager {
+#[derive(Debug, Clone)]
+pub struct MatrixRegistry {
     client: Box<Client>,
 }
 
@@ -33,30 +34,30 @@ pub struct VAppAccountContent {
     apps: HashMap<String, AppInstallMetadata>,
 }
 
-impl MatrixManager {
-    fn new(client: Box<Client>) -> Self {
+impl MatrixRegistry {
+    pub fn new(client: Box<Client>) -> Self {
         Self { client }
     }
 
-    async fn reload_state(&self) -> Result<VAppAccountContent, AppManagerError> {
+    async fn get_state(&self) -> Result<VAppAccountContent, AppRegistryError> {
         let account_data_vapp = self
             .client
             .account()
             .account_data::<VAppAccountContent>()
             .await
-            .map_err(|_| AppManagerError::Unknown)?;
+            .map_err(|_| AppRegistryError::Unknown)?;
 
         let raw_vapp = account_data_vapp.unwrap_or(
-            Raw::new(&VAppAccountContent::default()).map_err(|_| AppManagerError::Unknown)?,
+            Raw::new(&VAppAccountContent::default()).map_err(|_| AppRegistryError::Unknown)?,
         );
 
         Ok(raw_vapp
             .deserialize()
-            .map_err(|_| AppManagerError::Unknown)?)
+            .map_err(|_| AppRegistryError::Unknown)?)
     }
 
-    async fn add_app(&self, app_info: &AppInfo, room: Room) -> Result<(), AppManagerError> {
-        let mut vapps = self.reload_state().await?;
+    async fn add_app(&self, app_info: &AppInfo, room: Room) -> Result<(), AppRegistryError> {
+        let mut vapps = self.get_state().await?;
 
         vapps.apps.insert(
             app_info.id.clone().into(),
@@ -70,20 +71,20 @@ impl MatrixManager {
             .account()
             .set_account_data(vapps)
             .await
-            .map_err(|_| AppManagerError::Unknown)?;
+            .map_err(|_| AppRegistryError::Unknown)?;
 
         Ok(())
     }
 
-    async fn remove_app(&self, app_info: &AppInfo) -> Result<(), AppManagerError> {
-        let mut vapps = self.reload_state().await?;
+    async fn remove_app(&self, app_info: &AppInfo) -> Result<(), AppRegistryError> {
+        let mut vapps = self.get_state().await?;
         vapps.apps.remove(&app_info.id);
 
         self.client
             .account()
             .set_account_data(vapps)
             .await
-            .map_err(|_| AppManagerError::Unknown)?;
+            .map_err(|_| AppRegistryError::Unknown)?;
 
         Ok(())
     }
@@ -102,10 +103,10 @@ impl MatrixManager {
 }
 
 #[async_trait]
-impl AppManager for MatrixManager {
-    async fn install(&self, info: &AppInfo) -> AppManagerResult<()> {
-        if self.is_installed(info).await? {
-            return Err(AppManagerError::AlreadyInstalled);
+impl VRegistry for MatrixRegistry {
+    async fn add(&self, info: &AppInfo) -> AppRegistryResult<()> {
+        if self.is_registered(info).await? {
+            return Err(AppRegistryError::AlreadyInstalled);
         }
         let mut room = CreateRoomRequest::new();
 
@@ -121,35 +122,42 @@ impl AppManager for MatrixManager {
             .client
             .create_room(room)
             .await
-            .map_err(|_| AppManagerError::CantInstall("Erro Creating the Room".to_string()))?;
+            .map_err(|e| AppRegistryError::CantAddApp(e.to_string()))?;
 
         self.add_app(info, room).await?;
         Ok(())
     }
 
-    async fn uninstall(&self, info: &AppInfo) -> AppManagerResult<()> {
-        let room = self.get_room(info).ok_or(AppManagerError::CantUninstall(
+    async fn remove(&self, info: &AppInfo) -> AppRegistryResult<()> {
+        let room = self.get_room(info).ok_or(AppRegistryError::CantUninstall(
             "Can't get installed room".to_string(),
         ))?;
 
         room.leave()
             .await
-            .map_err(|_| AppManagerError::CantUninstall("Can't leave the room".to_string()))?;
+            .map_err(|_| AppRegistryError::CantUninstall("Can't leave the room".to_string()))?;
 
         room.forget()
             .await
-            .map_err(|_| AppManagerError::CantUninstall("Can't forget the room".to_string()))?;
+            .map_err(|_| AppRegistryError::CantUninstall("Can't forget the room".to_string()))?;
 
         self.remove_app(info).await?;
         Ok(())
     }
 
-    async fn is_installed(&self, info: &AppInfo) -> AppManagerResult<bool> {
-        Ok(self.get_room(info).is_some())
+    async fn is_registered(&self, info: &AppInfo) -> AppRegistryResult<bool> {
+        let state = self.get_state().await?;
+        Ok(state.apps.get(&info.id).is_some())
     }
 
-    async fn list_apps(&self) -> AppManagerResult<Vec<AppInfo>> {
-        Ok(vec![])
+    async fn list_apps(&self) -> AppRegistryResult<Vec<AppInfo>> {
+        let state = self.get_state().await?;
+        Ok(state
+            .apps
+            .values()
+            .into_iter()
+            .map(|x| x.app_info.to_owned())
+            .collect())
     }
 }
 
@@ -157,8 +165,8 @@ impl AppManager for MatrixManager {
 mod manager_test {
     use ::std::error::Error;
 
-    use super::MatrixManager;
-    use crate::{base::AppInfo, base::AppManager, SDKBuilder, SDKCore};
+    use super::MatrixRegistry;
+    use crate::{base::AppInfo, base::VRegistry, SDKBuilder, SDKCore};
     use async_once_cell::OnceCell;
     use ctor::ctor;
     use tokio::test;
@@ -176,7 +184,7 @@ mod manager_test {
                         .get_or_try_init(async {
                             let mut core = SDKBuilder::new()
                                 .with_homeserver("https://matrix-client.matrix.org")
-                                .with_credentials("myfooaccoount", "H0l4mund0@123")
+                                .with_credentials("fooaccount2", "H0l4mund0@123")
                                 .with_device_name("iphone-dev")
                                 .build_and_login()
                                 .await
@@ -201,7 +209,7 @@ mod manager_test {
     }
 
     #[tokio::test]
-    async fn app_0_check() {
+    async fn app_registry_lifecycle() {
         let sdkCore = get_sdk().await;
 
         let app_info = AppInfo {
@@ -210,83 +218,40 @@ mod manager_test {
             id: "com.virto.wallet".into(),
             author: "hello@virto.net".into(),
             version: "0.0.1".into(),
-            permission: vec![],
+            permissions: vec![],
         };
 
         sdkCore.next_sync().await;
 
-        let manager = MatrixManager::new(sdkCore.client());
+        let manager = MatrixRegistry::new(sdkCore.client());
+
         assert_eq!(
             manager
-                .is_installed(&app_info)
+                .is_registered(&app_info)
                 .await
                 .expect("error checking installed app"),
             false
-        )
-    }
-
-    #[tokio::test]
-    async fn app_1_install() {
-        let sdkCore = get_sdk().await;
-
-        let app_info = AppInfo {
-            description: "foo".into(),
-            name: "wallet".into(),
-            id: "com.virto.wallet".into(),
-            author: "hello@virto.net".into(),
-            version: "0.0.1".into(),
-            permission: vec![],
-        };
-
-        sdkCore.next_sync().await;
-
-        let manager = MatrixManager::new(sdkCore.client());
-        assert_eq!(manager.install(&app_info).await.expect(""), ());
-    }
-
-    #[tokio::test]
-    async fn app_3_read_state() {
-        let mut sdkCore = get_sdk().await;
-
-        let app_info = AppInfo {
-            description: "foo".into(),
-            name: "wallet".into(),
-            id: "com.virto.wallet".into(),
-            author: "hello@virto.net".into(),
-            version: "0.0.1".into(),
-            permission: vec![],
-        };
-        sdkCore.next_sync().await;
-        let manager = MatrixManager::new(sdkCore.client());
-        let state = manager.reload_state().await.expect("hello");
-        assert_eq!(state.apps.get(&app_info.id).unwrap().app_info, app_info);
-    }
-
-    #[tokio::test]
-    async fn app_99_uninstall() {
-        let mut sdkCore = get_sdk().await;
-
-        let app_info = AppInfo {
-            description: "foo".into(),
-            name: "wallet".into(),
-            id: "com.virto.wallet".into(),
-            author: "hello@virto.net".into(),
-            version: "0.0.1".into(),
-            permission: vec![],
-        };
-
-        sdkCore.next_sync().await;
-
-        let manager = MatrixManager::new(sdkCore.client());
-
-        assert_eq!(
-            manager.uninstall(&app_info).await.expect("cant uninstall"),
-            ()
         );
 
+        assert_eq!(manager.add(&app_info).await.expect(""), ());
+
         sdkCore.next_sync().await;
 
-        let state = manager.reload_state().await.expect("cant get reload event");
+        let state = manager.get_state().await.expect("hello");
+
+        assert_eq!(state.apps.get(&app_info.id).unwrap().app_info, app_info);
+
+        let state = manager.list_apps().await.expect("It must list the apps");
+
+        assert_eq!(state.len(), 1);
+
+        sdkCore.next_sync().await;
+
+        assert_eq!(manager.remove(&app_info).await.expect("cant uninstall"), ());
+
+        sdkCore.next_sync().await;
+
+        let state = manager.get_state().await.expect("cant get reload event");
 
         assert!(state.apps.get(&app_info.id).is_none());
     }

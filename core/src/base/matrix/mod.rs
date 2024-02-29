@@ -1,3 +1,5 @@
-mod manager;
+mod registry;
+mod runner;
 
-pub use manager::*;
+pub use registry::*;
+pub use runner::*;

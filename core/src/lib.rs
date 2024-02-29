@@ -2,13 +2,15 @@
 #![feature(async_closure)]
 #![feature(trait_alias)]
 #![feature(associated_type_defaults)]
+use async_trait::async_trait;
 
 pub mod base;
 pub mod std;
 pub mod utils;
 
-use async_trait::async_trait;
-pub use base::cqrs;
+pub use base::*;
+
+use base::{MatrixRegistry, VRegistry};
 use matrix_sdk::config::SyncSettings;
 pub use matrix_sdk::Client;
 
@@ -44,14 +46,16 @@ pub struct SDKCore {
     inner: Box<Client>,
     inited: bool,
     next_batch_token: Option<String>,
+    manager: Box<MatrixRegistry>,
 }
 
 impl SDKCore {
-    fn new(inner: Box<Client>) -> Self {
+    pub(crate) fn new(inner: Box<Client>) -> Self {
         return Self {
-            inner,
+            inner: inner.clone(),
             inited: false,
             next_batch_token: None,
+            manager: Box::new(MatrixRegistry::new(inner.clone())),
         };
     }
 
@@ -60,6 +64,10 @@ impl SDKCore {
             panic!("accesing client before its initialization");
         }
         self.inner.clone()
+    }
+
+    fn manager(&self) -> Box<MatrixRegistry> {
+        self.manager.clone()
     }
 
     async fn next_sync(&mut self) -> Result<(), SDKError> {
@@ -196,7 +204,7 @@ impl SDKBuilder {
 #[cfg(test)]
 mod client_store_test {
     use crate::base::app::{AppInfo, VAggregate};
-    use crate::base::runner::VRunner;
+    use crate::base::VRunnable;
     use crate::std::wallet::aggregate::Wallet;
     use crate::std::wallet::services::{WalletApi, WalletResult, WalletServices};
 
@@ -223,6 +231,7 @@ mod client_store_test {
     #[tokio::test]
     async fn login_with_credentials() {
         let connector: AuthConnectorMock = AuthConnectorMock::default();
+
         let service = SDKBuilder::new()
             .with_homeserver("https://matrix-client.matrix.org")
             .with_credentials("myfooaccoount", "H0l4mund0@123")
@@ -245,7 +254,7 @@ mod client_store_test {
     type WalletAggregate = Wallet<MockWalletService>;
 
     #[tokio::test]
-    async fn test_wallet() {
+    async fn craft_app() {
         let service = WalletAggregate::default();
 
         let app = VApp::new(
@@ -255,12 +264,22 @@ mod client_store_test {
                 description: "the place where you mangage your creds".into(),
                 version: "0.1.1".into(),
                 author: "team@virto.network".into(),
-                permission: vec![],
+                permissions: vec![],
             },
             MemStore::<WalletAggregate>::default(),
-            vec![],
+            vec![], // self app queries
             WalletServices::new(MockWalletService::default()),
-        );
+        ); //add loader concept
+
+        let sdk = SDKBuilder::new()
+            .with_homeserver("https://matrix-client.matrix.org")
+            .with_credentials("myfooaccoount", "H0l4mund0@123")
+            .build_and_login()
+            .await
+            .expect("error at building");
+
+        // service.manager().install()
+        // sdk.add_app();
     }
 
     #[derive(Default)]
