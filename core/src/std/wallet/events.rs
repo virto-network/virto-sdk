@@ -1,14 +1,13 @@
-use super::services::WalletApiSignedPayloadBounds;
-use super::types::Message;
-
-use crate::cqrs::DomainEvent;
-use serde::{Deserialize, Serialize};
+use super::{Message, WalletApiSignedPayloadBounds};
+use crate::app::DomainEvent;
+use crate::utils::prelude::*;
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Debug)]
-pub enum WalletEvent<Signature: Sync + Send + Serialize> {
+pub enum WalletEvent {
     AddedMessageToSign(Message),
-    Signed(Vec<(Signature, Message)>),
+    Signed(Vec<(Message, Message)>),
 }
+
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub enum WalletError {
@@ -27,7 +26,7 @@ impl core::fmt::Display for WalletError {
 
 impl core::error::Error for WalletError {}
 
-impl<S: WalletApiSignedPayloadBounds> DomainEvent for WalletEvent<S> {
+impl DomainEvent for WalletEvent {
     fn event_type(&self) -> String {
         match self {
             Self::AddedMessageToSign(_) => "AddedMessageToSign".to_string(),

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use libwallet::Message;
 use core::fmt::Debug;
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -25,6 +26,5 @@ impl<A: WA> WalletServices<A> {
 
 #[async_trait]
 pub trait WalletApi {
-    type SignedPayload: WalletApiSignedPayloadBounds;
-    async fn sign<'p>(&self, payload: &'p [u8]) -> WalletResult<Self::SignedPayload>;
+    async fn sign<'p>(&self, payload: &'p [u8]) -> WalletResult<Message>;
 }

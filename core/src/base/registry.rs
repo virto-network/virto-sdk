@@ -1,5 +1,5 @@
-use super::app::AppInfo;
-use async_trait::async_trait;
+use crate::utils::prelude::*;
+use crate::AppInfo;
 
 #[derive(Debug)]
 pub enum AppRegistryError {
@@ -9,12 +9,18 @@ pub enum AppRegistryError {
     CantUninstall(String),
 }
 
-pub type AppRegistryResult<T> = Result<T, AppRegistryError>;
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AppMetadata {
+    pub app_info: AppInfo,
+    pub channel_id: String,
+}
 
-#[async_trait]
-pub trait VRegistry {
-    async fn is_registered(&self, app_info: &AppInfo) -> AppRegistryResult<bool>;
-    async fn add(&self, app_info: &AppInfo) -> AppRegistryResult<()>;
-    async fn remove(&self, id: &AppInfo) -> AppRegistryResult<()>;
-    async fn list_apps(&self) -> AppRegistryResult<Vec<AppInfo>>;
+pub type RegistryResult<T> = Result<T, AppRegistryError>;
+pub type RegistryState = HashMap<String, AppMetadata>;
+
+pub trait Registry {
+    async fn is_registered(&self, app_info: &AppInfo) -> RegistryResult<bool>;
+    async fn add(&self, app_info: &AppInfo) -> RegistryResult<RegistryState>;
+    async fn remove(&self, id: &AppInfo) -> RegistryResult<RegistryState>;
+    async fn list_apps(&self) -> RegistryResult<Vec<AppInfo>>;
 }

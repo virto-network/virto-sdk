@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use super::super::aggregate::Aggregate;
+use super::super::types::Aggregate;
 use super::executor::AggregateTestExecutor;
 
 /// A framework for rigorously testing the aggregate logic, one of the *most important*

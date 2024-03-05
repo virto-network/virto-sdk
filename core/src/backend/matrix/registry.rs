@@ -1,22 +1,7 @@
-use crate::{utils::HashMap, AppMetadata};
+use crate::base::{AppInfo, AppRegistryError, Registry, RegistryResult, RegistryState, AppMetadata };
 
-use async_trait::async_trait;
-use matrix_sdk::{
-    ruma::{
-        api::client::room::{create_room::v3::Request as CreateRoomRequest, Visibility},
-        events::{
-            macros::EventContent, room::encryption::RoomEncryptionEventContent, InitialStateEvent,
-        },
-        serde::Raw,
-    },
-    Client, Room,
-};
-
-use crate::base::{AppInfo, AppRegistryError};
-use serde::{Deserialize, Serialize};
-
-use super::super::{AppRegistryResult, VRegistry};
-use super::types::MatrixAppsStateContent;
+use super::prelude::*;
+use crate::utils::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct MatrixRegistry {
@@ -45,7 +30,11 @@ impl MatrixRegistry {
             .map_err(|_| AppRegistryError::Unknown)?)
     }
 
-    async fn add_app(&self, app_info: &AppInfo, room: Room) -> Result<(), AppRegistryError> {
+    async fn add_app(
+        &self,
+        app_info: &AppInfo,
+        room: Room,
+    ) -> Result<RegistryState, AppRegistryError> {
         let mut vapps = self.get_state().await?;
 
         vapps.apps.insert(
@@ -58,24 +47,24 @@ impl MatrixRegistry {
 
         self.client
             .account()
-            .set_account_data(vapps)
+            .set_account_data(vapps.clone())
             .await
             .map_err(|_| AppRegistryError::Unknown)?;
 
-        Ok(())
+        Ok(vapps.apps.clone())
     }
 
-    async fn remove_app(&self, app_info: &AppInfo) -> Result<(), AppRegistryError> {
+    async fn remove_app(&self, app_info: &AppInfo) -> Result<RegistryState, AppRegistryError> {
         let mut vapps = self.get_state().await?;
         vapps.apps.remove(&app_info.id);
 
         self.client
             .account()
-            .set_account_data(vapps)
+            .set_account_data(vapps.clone())
             .await
             .map_err(|_| AppRegistryError::Unknown)?;
 
-        Ok(())
+        Ok(vapps.apps.clone())
     }
 
     fn get_room_id(&self, app_info: &AppInfo) -> String {
@@ -91,9 +80,9 @@ impl MatrixRegistry {
     }
 }
 
-#[async_trait]
-impl VRegistry for MatrixRegistry {
-    async fn add(&self, info: &AppInfo) -> AppRegistryResult<()> {
+
+impl Registry for MatrixRegistry {
+    async fn add(&self, info: &AppInfo) -> RegistryResult<RegistryState> {
         if self.is_registered(info).await? {
             return Err(AppRegistryError::AlreadyInstalled);
         }
@@ -113,11 +102,10 @@ impl VRegistry for MatrixRegistry {
             .await
             .map_err(|e| AppRegistryError::CantAddApp(e.to_string()))?;
 
-        self.add_app(info, room).await?;
-        Ok(())
+        self.add_app(info, room).await
     }
 
-    async fn remove(&self, info: &AppInfo) -> AppRegistryResult<()> {
+    async fn remove(&self, info: &AppInfo) -> RegistryResult<RegistryState> {
         let room = self.get_room(info).ok_or(AppRegistryError::CantUninstall(
             "Can't get installed room".to_string(),
         ))?;
@@ -130,16 +118,15 @@ impl VRegistry for MatrixRegistry {
             .await
             .map_err(|_| AppRegistryError::CantUninstall("Can't forget the room".to_string()))?;
 
-        self.remove_app(info).await?;
-        Ok(())
+        self.remove_app(info).await
     }
 
-    async fn is_registered(&self, info: &AppInfo) -> AppRegistryResult<bool> {
+    async fn is_registered(&self, info: &AppInfo) -> RegistryResult<bool> {
         let state = self.get_state().await?;
         Ok(state.apps.get(&info.id).is_some())
     }
 
-    async fn list_apps(&self) -> AppRegistryResult<Vec<AppInfo>> {
+    async fn list_apps(&self) -> RegistryResult<Vec<AppInfo>> {
         let state = self.get_state().await?;
         Ok(state
             .apps
@@ -155,7 +142,7 @@ mod manager_test {
     use ::std::error::Error;
 
     use super::MatrixRegistry;
-    use crate::{base::AppInfo, base::VRegistry, SDKBuilder, SDKCore};
+    use crate::{base::AppInfo, base::Registry, SDKBuilder, SDKCore};
     use async_once_cell::OnceCell;
     use ctor::ctor;
     use tokio::test;
@@ -201,8 +188,6 @@ mod manager_test {
     async fn app_registry_lifecycle() {
         let sdkCore = get_sdk().await;
 
-        
-
         let app_info = AppInfo {
             description: "foo".into(),
             name: "wallet".into(),
@@ -227,7 +212,7 @@ mod manager_test {
             false
         );
 
-        assert_eq!(manager.add(&app_info).await.expect(""), ());
+        assert!(manager.add(&app_info).await.is_ok());
 
         sdkCore.next_sync().await;
 
@@ -241,7 +226,7 @@ mod manager_test {
 
         sdkCore.next_sync().await;
 
-        assert_eq!(manager.remove(&app_info).await.expect("cant uninstall"), ());
+        assert!(manager.remove(&app_info).await.is_ok());
 
         sdkCore.next_sync().await;
 

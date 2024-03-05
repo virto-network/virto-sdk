@@ -1,6 +1,6 @@
-use super::super::Aggregate;
+use super::super::types::Aggregate;
 use super::validator::AggregateResultValidator;
-use async_trait::async_trait;
+
 use tokio::main;
 
 pub struct AggregateTestExecutor<A>

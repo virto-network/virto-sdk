@@ -33,18 +33,12 @@ where
         }
     }
 
-    pub fn append_query(self, query: Box<dyn Query<A::Event>>) -> Self
+    pub fn append_query(&mut self, query: Box<dyn Query<A::Event>>)
     where
         A: Aggregate,
         ES: EventStore<A>,
     {
-        let mut queries = self.queries;
-        queries.push(query);
-        Self {
-            store: self.store,
-            queries,
-            service: self.service,
-        }
+        self.queries.push(query);
     }
 
     pub async fn execute(
@@ -64,6 +58,7 @@ where
     ) -> Result<(), AggregateError<A::Error>> {
         let aggregate_context = self.store.load_aggregate(aggregate_id).await?;
         let aggregate = aggregate_context.aggregate();
+        
         let resultant_events = aggregate
             .handle(command, &self.service)
             .await

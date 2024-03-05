@@ -1,7 +1,7 @@
-use super::types::Message;
-use serde::Deserialize;
+use super::Message;
+use crate::prelude::*;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Serialize)]
 pub enum WalletCommand {
     AddMessageToSign(Message),
     Sign(),

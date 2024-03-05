@@ -1,14 +1,8 @@
-use std::marker::PhantomData;
-
-use async_trait::async_trait;
-use futures::future;
-use serde::{Deserialize, Serialize};
-
-use super::commands::WalletCommand;
-use super::events::{WalletError, WalletEvent};
-use super::services::{WalletApi, WalletResult, WalletServices};
-use super::types::Message;
-use crate::cqrs::aggregate::Aggregate;
+use super::{
+    Message, WalletApi, WalletCommand, WalletError, WalletEvent, WalletResult, WalletServices,
+};
+use crate::app::Aggregate;
+use crate::utils::prelude::*;
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Wallet<S> {
@@ -18,16 +12,11 @@ pub struct Wallet<S> {
     phantom: PhantomData<S>,
 }
 
-#[async_trait]
 impl<S: WalletApi + Sync + Send> Aggregate for Wallet<S> {
     type Command = WalletCommand;
-    type Event = WalletEvent<<S as WalletApi>::SignedPayload>;
+    type Event = WalletEvent;
     type Error = WalletError;
     type Services = WalletServices<S>;
-
-    fn aggregate_type() -> String {
-        "wallet_service".to_string()
-    }
 
     fn apply(&mut self, event: Self::Event) {
         match event {
@@ -84,11 +73,9 @@ impl<T> Default for Wallet<T> {
 
 #[cfg(test)]
 mod wallet_test {
-    use super::super::services::*;
     use super::*;
-    use crate::cqrs::test::TestFramework;
-    use async_std;
-    use async_trait;
+    use crate::base::app::test::TestFramework;
+    use crate::utils::prelude::*;
 
     type WalletService = TestFramework<Wallet<MockWalletService>>;
 
@@ -131,8 +118,7 @@ mod wallet_test {
 
     #[async_trait]
     impl WalletApi for MockWalletService {
-        type SignedPayload = Message;
-        async fn sign<'p>(&self, payload: &'p [u8]) -> WalletResult<Self::SignedPayload> {
+        async fn sign<'p>(&self, payload: &'p [u8]) -> WalletResult<Message> {
             Ok(Message::try_from([1u8].as_slice()).expect("hello world"))
         }
     }

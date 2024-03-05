@@ -14,7 +14,7 @@ async-std = { version = "1.12.0" }
 serde_json = { version = "1.0.80" }
 serde = { version = "1.0.137", default-features = false }
 matrix-sdk = { version = "0.7.1", features = ["e2e-encryption"] }
-futures = "0.3.30"
+futures = { version = "0.3.30", default-features = false }
 url = "2.5.0"
 async-once-cell = "0.4.4"
 thiserror = "1.0.57"

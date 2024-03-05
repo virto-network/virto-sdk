@@ -1,4 +1,4 @@
-use super::super::aggregate::Aggregate;
+use super::super::types::Aggregate;
 
 pub struct AggregateResultValidator<A>
 where

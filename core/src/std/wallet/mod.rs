@@ -1,6 +1,12 @@
-pub mod aggregate;
-pub mod commands;
-pub mod events;
-pub mod services;
-pub mod store;
-pub mod types;
+mod aggregate;
+mod commands;
+mod events;
+mod types;
+mod services;
+
+
+pub use aggregate::*;
+pub use commands::*;
+pub use events::*;
+pub use services::*;
+pub use types::*;
