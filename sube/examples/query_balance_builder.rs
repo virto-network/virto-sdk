@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 
+use env_logger;
 use sube::{builder::QueryBuilder, sube, ExtrinicBody, Response, Result, SignerFn};
 
 #[async_std::main]
 async fn main() -> Result<()> {
+    env_logger::init();
     let builder = QueryBuilder::default()
-        .with_url("https://kusama.olanod.com/system/_constants/version")
+        .with_url("wss://rococo-rpc.polkadot.io/system/account/0x3c85f79f28628bee75cdb9eddfeae249f813fad95f84120d068fbc990c4b717d")
         .await?;
 
     println!("{:?}", builder);

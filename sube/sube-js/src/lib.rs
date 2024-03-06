@@ -1,6 +1,8 @@
 mod util;
 
+use core::convert::TryInto;
 use js_sys::Uint8Array;
+use log::Level;
 use parity_scale_codec::Encode;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Error};
@@ -14,8 +16,6 @@ use sube::{
     util::to_camel,
     Backend, Error as SubeError, ExtrinicBody, JsonValue, Response,
 };
-
-use core::convert::TryInto;
 // use sp_core::{crypto::Ss58Codec, hexdisplay::AsBytesRef};
 use util::*;
 use wasm_bindgen::prelude::*;
@@ -71,6 +71,7 @@ pub async fn sube_js(
     params: JsValue,
     signer: Option<js_sys::Function>,
 ) -> Result<JsValue> {
+    console_log::init_with_level(Level::max());
     console_error_panic_hook::set_once();
 
     if params.is_undefined() {
