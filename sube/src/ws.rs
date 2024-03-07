@@ -70,14 +70,13 @@ impl Rpc for Backend {
 
         log::debug!("RPC Request {} ...", &msg[..50]);
 
-        // self.tx.lock().await.send
         self.tx
             .lock()
             .await
             .try_send(Message::Text(msg))
-            .map_err(|x| Error::Platform("error sending message".into()));
+            .map_err(|x| standard_error(StandardError::InternalError, None))?;
 
-        log::info!("sent comomand");
+        log::info!("sent CMD");
         // wait for the matching response to arrive
         let res = recv
             .await
@@ -101,8 +100,6 @@ impl Backend {
     pub async fn new_ws2<'a, U: Into<&'a str>>(url: U) -> core::result::Result<Self, Error> {
         let url = url.into();
         log::trace!("WS connecting to {}", url);
-
-        // let (receiver, d) =  ewebsock::connect(url).;
 
         let (tx, rx) =
             ewebsock::connect(url, ewebsock::Options::default()).map_err(|e| Error::Platform(e))?;
@@ -144,7 +141,6 @@ impl Backend {
         let messages = self.messages.clone();
         spawn(async move {
             while let Some(event) = rx.next().await {
-                info!("gt eveeeeeeen");
                 match event {
                     ewebsock::WsEvent::Message(msg) => {
                         log::trace!("Got WS message {:?}", msg);
@@ -173,7 +169,7 @@ impl Backend {
                         log::warn!("WS error {}", &e);
                     }
                     ewebsock::WsEvent::Closed => {
-                        log::warn!("WS connection closed");
+                        log::info!("WS connection closed");
                     }
                     ewebsock::WsEvent::Opened => {
                         log::info!("Processing tx msg");
@@ -182,10 +178,9 @@ impl Backend {
                     }
                 }
             }
-            // }
 
             log::warn!("WS connection closed");
-            // process_incoming_messages(rx);
+
         });
     }
 }
