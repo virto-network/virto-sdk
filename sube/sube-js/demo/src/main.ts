@@ -7,22 +7,20 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h4> Sube Demo </h4>
         <div class="row">
             <label for="mnonic">Wallet nmonic</label>
-            <input id="mnomic">
+            <input id="mnomic" value="will merry consider pause public abuse truck lonely until enforce hat subject used master few pass useless fiction victory thunder struggle hover mushroom suggest">
         </div>
         <div class="row">
             <label for="uri">URI</label>
-            <input id="uri">
+            <input id="uri" value="wss://rococo-rpc.polkadot.io/balances/transfer_Keep_Alive">
         </div>
         <div class="row">
             <label for="data">Body</label>
             <textarea id="data" name="textarea" rows="10" cols="50">
               {  
-                "transfer": {
-                  "dest": {
-                      "Id": "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b"
-                  },
-                  "value": 100000
-                }
+                "dest": {
+                    "Id": "0x3c85f79f28628bee75cdb9eddfeae249f813fad95f84120d068fbc990c4b717d"
+                },
+                "value": 100000                
               }
             </textarea>
         </div>

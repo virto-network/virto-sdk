@@ -5,13 +5,12 @@
   "type": "module",
   "scripts": {
     "test": "node test/index.js",
-    "build": "rm -rf dist pkg-web pkg-node && npx concurrently \"npm:build:*\" && npm run build:cp",
-    "build:pkg:node": "wasm-pack build --target nodejs --out-dir ./dist/pkg-node",
-    "build:pkg:web": "wasm-pack build --target web --out-dir ./dist/pkg-web",
-    "build:js": "npm run build:esm && npm run build:cjs",
-    "build:esm": "tsc --module es2015 --target esnext --outDir dist/esm",
-    "build:cjs": "tsc --module commonjs --target esnext --outDir dist/cjs",
-    "build:cp": "mv ./pkg-web/ ./dist/pkg-web"
+    "build": "rm -rf dist pkg-web pkg-node && npx concurrently \"npm:build:pkg:*\" && npx concurrently \"npm:build:script:*\" && npm run build:cp",
+    "build:pkg:node": "wasm-pack build --target nodejs --out-dir ./pkg-node",
+    "build:pkg:web": "wasm-pack build --target web --out-dir ./pkg-web",
+    "build:script:esm": "tsc --module es2015 --target esnext --outDir dist/esm",
+    "build:script:cjs": "tsc --module commonjs --target esnext --outDir dist/cjs",
+    "build:cp": "mv ./pkg-web/ ./dist/pkg-web && mv ./pkg-node ./dist/pkg-node"
   },
   "files": [
     "dist/"

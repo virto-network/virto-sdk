@@ -13,6 +13,8 @@ pub use pass::*;
 #[cfg(feature = "vault_simple")]
 pub use simple::*;
 
+use log::info;
+
 use crate::{any, key_pair, Derive};
 
 /// Abstration for storage of private keys that are protected by some credentials.
@@ -55,10 +57,15 @@ impl<'a> Derive for &'a RootAccount {
     where
         Self: Sized,
     {
+
+        info!("deriving path {}", path);
+        if path.len() == 0 { return self.sub.derive(path).into() }; 
+
         match &path[..2] {
             #[cfg(feature = "substrate")]
             "//" => self.sub.derive(path).into(),
             "m/" => unimplemented!(),
+            "" => unimplemented!(),
             #[cfg(feature = "substrate")]
             _ => self.sub.derive("//default").into(),
         }

@@ -139,6 +139,7 @@ impl<T> SignerFn for T where T: Fn(&[u8]) -> Result<[u8; 64]> {}
 
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+    log::info!("{:?}", meta.extrinsic);
 
     let pallet = meta
         .pallet_by_name(&pallet)
@@ -178,17 +179,25 @@ async fn submit<'m, V>(
 where
     V: serde::Serialize + std::fmt::Debug,
 {
+    log::info!("submit to: {:?}", path);
     let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
-    println!("{:?}", item_or_call);
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
 
     let reg = &meta.types;
 
+    log::info!(
+        "ty: {:?}",
+        pallet.calls().expect("pallet does not have calls").ty
+    );
     let ty = pallet.calls().expect("pallet does not have calls").ty.id();
 
     let mut encoded_call = vec![pallet.index];
+
+    log::info!("json {:?} {:?}", item_or_call.to_lowercase(), &tx_data);
+    log::info!("pallets {:#?}", ty);
+    log::info!("reg {:#?}", reg);
 
     let call_data = scales::to_vec_with_info(
         &json!( {
@@ -199,6 +208,9 @@ where
     .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
+    let encoded_hex_call = hex::encode(&encoded_call);
+
+    log::info!("ENOCODED_CALL: {}", encoded_hex_call);
 
     let extra_params = {
         // ImmortalEra
@@ -209,6 +221,8 @@ where
             if let Some(nonce) = tx_data.nonce {
                 Ok(nonce)
             } else {
+                let x = format!("system/account/0x{}", hex::encode(from));
+                log::info!("{:?}", x);
                 let response = query(
                     &chain,
                     meta,
@@ -288,6 +302,10 @@ where
     ]
     .concat();
 
+
+    log::info!("encoded_call 0x{}", hex::encode(&encoded_call));
+    log::info!("signature_payload 0x{}", hex::encode(&signature_payload));
+
     let payload = if signature_payload.len() > 256 {
         hash(&meta::Hasher::Blake2_256, &signature_payload[..])
     } else {
@@ -295,6 +313,9 @@ where
     };
 
     let raw = payload.as_slice();
+
+    let raw_encode = hex::encode(&raw);
+    log::info!("RAW_CALL 0x{}", raw_encode);
 
     let signature = signer(raw)?;
 

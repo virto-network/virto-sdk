@@ -438,8 +438,9 @@ where
             Some(SpecificType::Str) | None => Ok(None),
             // { "foo": "Bar" } => "Bar" might be an enum variant
             Some(ref mut var @ SpecificType::Variant(_, _, None)) => {
+                
                 var.pick_mut(to_vec(val)?, |k| to_vec(k.name()).unwrap())
-                    .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
+                    .ok_or_else(|| Error::BadInput("Invalid ".into()))?;
                 self.out.put_u8(var.variant_id());
                 Ok(Some(()))
             }
@@ -592,8 +593,9 @@ where
                 if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = ser.ty {
                     let key_data = to_vec(key)?;
                     // assume the key is the name of the variant
+                    
                     var.pick_mut(key_data, |v| to_vec(v.name()).unwrap())
-                        .ok_or_else(|| Error::BadInput("Invalid variant".into()))?
+                        .ok_or_else(|| Error::BadInput("Invalid bb".into()))?
                         .variant_id()
                         .serialize(&mut **ser)?;
                 }

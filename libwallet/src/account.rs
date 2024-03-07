@@ -1,3 +1,5 @@
+use core::{fmt::{Display, Write}, str::FromStr};
+
 use crate::{
     any::{self, AnySignature},
     Derive, Network, Pair, Public, RootAccount,
@@ -8,6 +10,7 @@ use arrayvec::ArrayString;
 // use sp_core::crypto::DeriveJunction;
 
 const MAX_PATH_LEN: usize = 16;
+const MAX_NAME_LEN: usize = MAX_PATH_LEN - 2;
 
 /// Account is an abstration around public/private key pairs that are more convenient to use and
 /// can hold extra metadata. Accounts are constructed by the wallet and are used to sign messages.
@@ -16,18 +19,45 @@ pub struct Account {
     pair: Option<any::Pair>,
     network: Network,
     path: ArrayString<MAX_PATH_LEN>,
-    name: ArrayString<{ MAX_PATH_LEN - 2 }>,
+    name: ArrayString<MAX_NAME_LEN>,
+}
+
+pub enum AccountPath {
+    Root,
+    Path(ArrayString<MAX_PATH_LEN>),
+    Default,
+}
+
+
+
+impl Display for AccountPath {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AccountPath::Root => write!(f, "root"),
+            AccountPath::Path(s) => write!(f, "{}", s),
+            AccountPath::Default => write!(f, "//default"),
+        }
+    }
 }
 
 impl Account {
-    pub(crate) fn new<'a>(name: impl Into<Option<&'a str>>) -> Self {
-        let n = name.into().unwrap_or_else(|| "default");
-        let mut path = ArrayString::from("//").unwrap();
-        path.push_str(&n);
+    pub(crate) fn new(account_path: AccountPath) -> Self {
+        let mut path = ArrayString::new();
+        
+
+        match account_path {
+            AccountPath::Root => {}
+            AccountPath::Path(s) => path = s,
+            AccountPath::Default => path.push_str("//default"),
+        }
+        
+        let mut name: ArrayString<MAX_NAME_LEN> = ArrayString::new();
+        write!(&mut name, "{}", account_path);
+        
         Account {
             pair: None,
             network: Network::default(),
-            name: ArrayString::from(&n).expect("short name"),
+            name,
             path,
         }
     }

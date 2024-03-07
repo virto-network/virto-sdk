@@ -103,6 +103,7 @@ impl<'a> Serialize for Value<'a> {
         let ty = self.resolve(self.ty_id);
 
         use SpecificType::*;
+
         match (ty, self.registry).into() {
             Bool => ser.serialize_bool(data.get_u8() != 0),
             U8 => ser.serialize_u8(data.get_u8()),

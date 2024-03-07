@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
 
-use libwallet::{vault::Simple, Signer, Wallet};
+use libwallet::{vault::Simple, AccountPath, Signer, Wallet};
+use log::{info, Level};
+
 
 #[derive(Serialize, Deserialize)]
 pub enum WalletConstructor {
@@ -15,13 +17,15 @@ pub struct JsWallet {
     phrase: String,
     wallet: Wallet<Simple>,
 }
-
+// dejame ver el error de nuevo
 #[wasm_bindgen]
 impl JsWallet {
     #[wasm_bindgen(constructor)]
     pub fn new(constructor: JsValue) -> Self {
+        console_log::init_with_level(Level::max());
+        console_error_panic_hook::set_once();
         let constructor: WalletConstructor = from_value(constructor).unwrap();
-
+        info!("Creating wallet...");
         let (vault, phrase) = match constructor {
             WalletConstructor::Simple(phrase) => match phrase {
                 Some(phrase) => {
@@ -35,9 +39,10 @@ impl JsWallet {
             },
         };
 
+        info!("Returning wallet...");
         JsWallet {
             phrase,
-            wallet: Wallet::new(vault),
+            wallet: Wallet::new(vault, AccountPath::Root),
         }
     }
 

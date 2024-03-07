@@ -17,10 +17,12 @@ export async function sube<T>(url: string, options?: SubeOptions) {
   }
 
   return sube_js(url, options && {
-    nonce: options.nonce,
+    call: {
+      nonce: options.nonce,
+      body: options.body
+    },
     from: options.from,
-    body: options.body,
   }, options ? function (i: Uint8Array) {
     return options.sign(i);
-  } : () => {}) as Promise<T>;
+  } : () => { }) as Promise<T>;
 }

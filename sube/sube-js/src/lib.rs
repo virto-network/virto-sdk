@@ -73,7 +73,7 @@ pub async fn sube_js(
 ) -> Result<JsValue> {
     console_log::init_with_level(Level::max());
     console_error_panic_hook::set_once();
-
+    log::info!("uri on sube_js: {}", url);
     if params.is_undefined() {
         let response = sube!(url)
             .await
@@ -114,7 +114,7 @@ pub async fn sube_js(
             Ok(buffer)
         },
         sender: extrinsic_value.from.as_slice(),
-        body: extrinsic_value.call,
+        body: extrinsic_value.call.body,
     })
     .await
     .map_err(|e| JsError::new(&format!("Error trying: {:?}", e.to_string())))?;
