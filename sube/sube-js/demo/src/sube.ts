@@ -8,14 +8,16 @@ export function setupSign(element: HTMLButtonElement) {
 
     const mnomic = document.querySelector<HTMLInputElement>('#mnomic')?.value ?? '';
     const uri = document.querySelector<HTMLInputElement>('#uri')?.value ?? '';
+    console.log("this is the uri: ", uri);
     const body = JSON.parse(document.querySelector<HTMLInputElement>('#data')?.value ?? '');
-    
+    console.log("wallet before init");
     await Initwallet();
+    console.log("wallet init");
 
     const wallet = new JsWallet({
       Simple: mnomic,
-    });
-    
+    }, "");
+    console.log("after create jswallet");
     await wallet.unlock({});
 
     await sube(uri, {

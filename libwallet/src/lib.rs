@@ -14,6 +14,7 @@ mod key_pair;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
 
+pub use account::AccountPath;
 use arrayvec::ArrayVec;
 use core::{convert::TryInto, fmt};
 use key_pair::any::AnySignature;
@@ -54,10 +55,10 @@ where
     V: Vault,
 {
     /// Create a new Wallet with a default account
-    pub fn new(vault: V) -> Self {
+    pub fn new(vault: V, path: AccountPath) -> Self {
         Wallet {
             vault,
-            default_account: Account::new(None),
+            default_account: Account::new(path),
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
             is_locked: true,

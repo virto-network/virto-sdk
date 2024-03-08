@@ -20,7 +20,7 @@ async-once-cell = "0.4.4"
 
 scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { git = "https://github.com/virto-network/scales.git", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer"] }
+scales = { path = "../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer"] }
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }
@@ -48,7 +48,7 @@ env_logger = "0.11.3"
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
-libwallet = { path = "../libwallet" }
+# libwallet = { path = "../libwallet" }
 
 [features]
 # default = ["json", "std"]

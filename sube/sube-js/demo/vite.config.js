@@ -9,7 +9,7 @@ export default defineConfig({
   ],
   server: {
     fs: {
-      allow: ['../dist', '.', '/Users/davidbarinas/db/virto/libwallet/libwallet-js/pkg']
+      allow: ['../dist', '.', '../../../']
     }
   }
 });

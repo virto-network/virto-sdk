@@ -186,8 +186,10 @@ where
         } = self;
 
         async move {
+            log::info!("before get url {:?}", url);
             let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
             let path = url.path();
+            log::info!("before get path {:?}", path);
             let body = body.ok_or(Error::BadInput)?;
 
             let backend = BACKEND
@@ -202,10 +204,14 @@ where
                     }
                 })
                 .await?;
+            
 
+
+
+            
             Ok(match path {
                 "_meta" => Response::Meta(meta),
-                "_meta/registry" => Response::Registry(&meta.types),
+                "_meta/registry" => Response::Registry(&meta.types), // guardo esto en un archivo? 
                 _ => {
                     let signer = signer.ok_or(Error::BadInput)?;
                     let from = sender.ok_or(Error::BadInput)?;
@@ -329,7 +335,7 @@ macro_rules! sube {
             use $crate::paste;
 
             let mut builder = $crate::builder::TxBuilder::default();
-
+            builder = builder.with_url($url);
             paste!($(
                 builder = builder.[<with_ $key>]($value);
             )*);

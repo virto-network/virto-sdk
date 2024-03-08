@@ -9,11 +9,14 @@ license = "Apache-2.0"
 
 [dependencies]
 bytes = { version = "1.1.0", default-features = false }
-scale-info = { version = "2.1.1", default-features = false, features = ["serde"] }
+scale-info = { version = "2.10.0", default-features = false, features = ["serde"] }
 serde = { version = "1.0.137", default-features = false }
 serde_json = { version = "1.0.80", default-features = false, optional = true }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false, optional = true }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"], optional = true }
+log = "0.4.17"
+
+
 
 [features]
 default = ["std", "codec", "json", "hex", "experimental-serializer"]
