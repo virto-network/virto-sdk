@@ -1,7 +1,7 @@
 use crate::http::Backend as HttpBackend;
 
 #[cfg(feature = "ws")]
-use crate::ws::{Backend as WSBackend, WS2};
+use crate::ws::Backend as WSBackend;
 
 use crate::meta::Meta;
 use crate::prelude::*;
@@ -144,6 +144,7 @@ impl<'a> IntoFuture for QueryBuilder<'a> {
             let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
             let path = url.path();
 
+            log::info!("building the backend for {}", url);
             let backend = BACKEND
                 .get_or_try_init(get_backend_by_url(url.clone()))
                 .await?;
@@ -266,7 +267,7 @@ async fn get_backend_by_url(url: Url) -> SubeResult<AnyBackend> {
 enum AnyBackend {
     Http(HttpBackend),
     #[cfg(feature = "ws")]
-    Ws(WSBackend<WS2>),
+    Ws(WSBackend),
 }
 
 #[async_trait]

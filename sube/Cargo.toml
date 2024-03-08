@@ -42,6 +42,9 @@ once_cell = { version = "1.17.1", optional = true }
 heapless = { version = "0.7.16", optional = true }
 anyhow = { version = "1.0.40", optional = true }
 rand_core = {version = "0.6.3", optional = true }
+ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
+env_logger = "0.11.3"
+
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
@@ -62,10 +65,10 @@ builder = ["paste", "once_cell", "heapless"]
 # v12 = ["frame-metadata/v12"]
 # v13 = ["frame-metadata/v13"]
 v14 = ["scale-info", "frame-metadata/current"]
-ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
-wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
+ws = ["async-std", "async-mutex", "futures-channel", "jsonrpc", "async-std/unstable", "ewebsock", 'futures-util']
+wss = ["ws", "async-tls", "ewebsock/tls", "async-std/unstable"]
 examples = ["anyhow", "rand_core"]
-js = ["http-web", "json", "v14", "builder"]
+js = ["http-web", "json", "v14", "builder", 'async-std/unstable', "ws"]
 
 [package.metadata.docs.rs]
 features = ["http"]

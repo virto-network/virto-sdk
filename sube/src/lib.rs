@@ -448,6 +448,7 @@ pub enum Error {
     Mapping(String),
     AccountNotFound,
     ConstantNotFound(String),
+    Platform(String),
 }
 
 impl fmt::Display for Error {
@@ -456,13 +457,6 @@ impl fmt::Display for Error {
             Self::Node(e) => write!(f, "{:}", e),
             _ => write!(f, "{:?}", self),
         }
-    }
-}
-
-#[cfg(feature = "ws")]
-impl From<async_tungstenite::tungstenite::Error> for Error {
-    fn from(_err: async_tungstenite::tungstenite::Error) -> Self {
-        Error::ChainUnavailable
     }
 }
 
