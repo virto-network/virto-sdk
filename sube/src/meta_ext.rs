@@ -49,6 +49,7 @@ mod v14 {
 /// active metadata version.
 pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
+    
     let meta = match meta.1 {
         #[cfg(feature = "v13")]
         RuntimeMetadata::V13(m) => m,

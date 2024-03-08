@@ -2,8 +2,10 @@ use crate::prelude::*;
 use bytes::BufMut;
 use codec::Encode;
 use core::fmt::{self, Debug};
+
 use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
+
 
 use crate::{EnumVariant, SpecificType, TupleOrArray};
 
@@ -385,6 +387,7 @@ where
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.maybe_some()?;
+
         if matches!(self.ty, None | Some(SpecificType::Map(_, _))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
@@ -588,17 +591,22 @@ where
     where
         T: Serialize,
     {
+
+    
         match self {
             TypedSerializer::Enum(ser) => {
                 if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = ser.ty {
-                    let key_data = to_vec(key)?;
-                    // assume the key is the name of the variant
                     
+                    let key_data = to_vec(key)?;
+
+                    // assume the key is the name of the variant
+ 
                     var.pick_mut(key_data, |v| to_vec(v.name()).unwrap())
                         .ok_or_else(|| Error::BadInput("Invalid bb".into()))?
                         .variant_id()
                         .serialize(&mut **ser)?;
                 }
+                
                 Ok(())
             }
             TypedSerializer::Empty(ser) => key.serialize(&mut **ser),
@@ -610,20 +618,29 @@ where
     where
         T: Serialize,
     {
+        
+        // 
         match self {
             TypedSerializer::Composite(ser, types) => {
+                
+                
+                
                 let mut ty = ser.resolve(types.remove(0));
                 // serde_json unwraps newtypes
                 if let SpecificType::StructNewType(ty_id) = ty {
                     ty = ser.resolve(ty_id)
                 }
+                
+                
                 ser.ty = Some(ty);
             }
             TypedSerializer::Enum(ser) => {
+                
                 if let Some(var @ SpecificType::Variant(_, _, Some(_))) = &ser.ty {
+                    
                     if let EnumVariant::NewType(_, _, ty_id) = var.into() {
                         let ty = ser.resolve(ty_id);
-
+                        
                         ser.ty = Some(if let SpecificType::StructNewType(ty_id) = ty {
                             ser.resolve(ty_id)
                         } else {
@@ -844,7 +861,7 @@ fn type_name_of_val<T: ?Sized>(_val: &T) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codec::Encode;
+    use codec::{Decode, Encode};
     use core::mem::size_of;
     use scale_info::{meta_type, Registry, TypeInfo};
     use serde_json::to_value;
@@ -1282,6 +1299,37 @@ mod tests {
         let expected = foo.encode();
 
         assert_eq!(out, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extrincic_call() -> Result<()> {
+        let mut bytes = include_bytes!("registry.bin");
+        let registry = PortableRegistry::decode(&mut &bytes[..]).expect("hello");
+        
+        let transfer_call = serde_json::json!({
+            "transfer_keep_alive": {
+                "dest": {
+                    "Id": hex::decode("12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b").expect("expected valid address")
+                },
+                "value": 1_000_000_000_000u64
+            }
+        });
+
+
+        let call_data = to_vec_with_info(
+            &transfer_call,
+            (&registry, 106u32).into(),
+        ).expect("call data");
+
+        let encooded = hex::encode(&call_data);
+
+        assert_eq!(
+            "0x04030012840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b070010a5d4e8",
+            format!("0x04{}", encooded)
+        );
+
+
         Ok(())
     }
 }

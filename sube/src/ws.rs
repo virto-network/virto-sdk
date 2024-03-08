@@ -144,7 +144,6 @@ impl Backend {
         let messages = self.messages.clone();
         spawn(async move {
             while let Some(event) = rx.next().await {
-                info!("gt eveeeeeeen");
                 match event {
                     ewebsock::WsEvent::Message(msg) => {
                         log::trace!("Got WS message {:?}", msg);

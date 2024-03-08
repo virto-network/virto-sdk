@@ -204,12 +204,14 @@ where
                     }
                 })
                 .await?;
+            
 
-            println!("here");
 
+
+            
             Ok(match path {
                 "_meta" => Response::Meta(meta),
-                "_meta/registry" => Response::Registry(&meta.types),
+                "_meta/registry" => Response::Registry(&meta.types), // guardo esto en un archivo? 
                 _ => {
                     let signer = signer.ok_or(Error::BadInput)?;
                     let from = sender.ok_or(Error::BadInput)?;

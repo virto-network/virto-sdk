@@ -191,6 +191,7 @@ where
         "ty: {:?}",
         pallet.calls().expect("pallet does not have calls").ty
     );
+
     let ty = pallet.calls().expect("pallet does not have calls").ty.id();
 
     let mut encoded_call = vec![pallet.index];

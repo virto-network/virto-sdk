@@ -58,6 +58,7 @@ impl<R: Rpc> Backend for R {
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
 
+        
         let meta = meta::from_bytes(&mut meta.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
         log::trace!("Metadata {:#?}", meta);
         Ok(meta)
