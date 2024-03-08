@@ -12,13 +12,7 @@
     "src/"
   ],
   "exports": {
-    ".": {
-      "node": {
-        "require": "./src/lib.cjs",
-        "import": "./src/lib.js",
-        "types": "./src/lib.d.ts"
-      }
-    }
+    "import": "./pkg/libwallet_js.js"
   },
   "publishConfig": {
     "access": "public"
