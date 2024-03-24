@@ -25,10 +25,10 @@ wasm-bindgen-test = "0.3.34"
 features = ["js"]
 
 [features]
-default = ["wallet", "js", "hex", "util_pin", "vault_simple"]
+default = ["wallet", "js", "hex", "util_pin"]
 hex = ["dep:hex"]
 js = ["std"]
 std = []
 util_pin = ["libwallet/util_pin"]
-vault_simple = ["libwallet/vault_simple", "libwallet/mnemonic", "libwallet/rand"]
+vault_simple = ["libwallet/mnemonic", "libwallet/rand"]
 wallet = ["libwallet/serde", "libwallet/sr25519", "libwallet/substrate"]
