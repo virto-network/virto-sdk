@@ -18,7 +18,7 @@ pub trait Pair: Signer + Derive {
     fn public(&self) -> Self::Public;
 }
 
-pub trait Public: AsRef<[u8]> + Debug + Clone {}
+pub trait Public: AsRef<[u8]> + Debug {}
 impl<const N: usize> Public for Bytes<N> {}
 
 pub trait Signature: AsRef<[u8]> + Debug + PartialEq  {
@@ -39,7 +39,7 @@ pub mod any {
     use super::{Public, Signature};
     use core::fmt;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     pub enum Pair {
         #[cfg(feature = "sr25519")]
         Sr25519(super::sr25519::Pair),
@@ -105,7 +105,7 @@ pub mod any {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     pub enum AnyPublic {
         #[cfg(feature = "sr25519")]
         Sr25519(super::Bytes<{ super::sr25519::SEED_LEN }>),

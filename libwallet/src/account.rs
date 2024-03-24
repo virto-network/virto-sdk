@@ -10,7 +10,7 @@ const MAX_PATH_LEN: usize = 16;
 
 /// Account is an abstration around public/private key pairs that are more convenient to use and
 /// can hold extra metadata. Accounts are constructed by the wallet and are used to sign messages.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Account {
     pair: Option<any::Pair>,
     network: Network,
