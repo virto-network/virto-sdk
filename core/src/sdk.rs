@@ -1,6 +1,5 @@
 use crate::{backend::matrix::MatrixRegistry, utils::prelude::*};
 
-
 #[derive(Debug)]
 pub enum AuthError {
     WrongCredentials,
@@ -193,10 +192,11 @@ mod client_store_test {
     use super::*;
     use crate::utils::prelude::*;
 
-    use crate::std::wallet;
     use crate::base::app::AppInfo;
     use crate::base::AppRunnable;
-    use crate::std::wallet::{WalletApi, WalletResult, WalletServices, Wallet};
+    use crate::std::wallet;
+    use crate::std::wallet::{Wallet, WalletApi, WalletResult};
+    use crate::ConstructableService;
 
     use libwallet::Message;
     use tokio::test;
@@ -206,7 +206,11 @@ mod client_store_test {
 
     #[async_trait::async_trait]
     impl AuthenticatorBuilder for AuthConnectorMock {
-        async fn auth(&self, _: String, client: Box<MatrixClient>) -> Result<Box<MatrixClient>, AuthError> {
+        async fn auth(
+            &self,
+            _: String,
+            client: Box<MatrixClient>,
+        ) -> Result<Box<MatrixClient>, AuthError> {
             Ok(client)
         }
     }
@@ -234,7 +238,7 @@ mod client_store_test {
             .expect("error at building");
     }
 
-    type WalletAggregate = Wallet<MockWalletService>;
+    type WalletAggregate = Wallet;
 
     #[tokio::test]
     async fn craft_app() {
@@ -268,6 +272,15 @@ mod client_store_test {
 
     #[derive(Default)]
     struct MockWalletService;
+
+    impl ConstructableService for MockWalletService {
+        type Args = ();
+        type Service = MockWalletService;
+
+        fn new(args: Self::Args) -> Self::Service {
+            MockWalletService
+        }
+    }
 
     #[async_trait]
     impl WalletApi for MockWalletService {

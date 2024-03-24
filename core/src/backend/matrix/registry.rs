@@ -1,4 +1,6 @@
-use crate::base::{AppInfo, AppRegistryError, Registry, RegistryResult, RegistryState, AppMetadata };
+use crate::base::{
+    AppInfo, AppMetadata, AppRegistryError, Registry, RegistryResult, RegistryState,
+};
 
 use super::prelude::*;
 use crate::utils::prelude::*;
@@ -79,7 +81,6 @@ impl MatrixRegistry {
             .map(|r| r.to_owned())
     }
 }
-
 
 impl Registry for MatrixRegistry {
     async fn add(&self, info: &AppInfo) -> RegistryResult<RegistryState> {

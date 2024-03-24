@@ -1,4 +1,4 @@
-use super::{Message, WalletApiSignedPayloadBounds};
+use super::Message;
 use crate::app::DomainEvent;
 use crate::utils::prelude::*;
 
@@ -8,18 +8,17 @@ pub enum WalletEvent {
     Signed(Vec<(Message, Message)>),
 }
 
-
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub enum WalletError {
     Unknown,
-    NoMesssagesToSign,
+    NoMessagesToSign,
 }
 
 impl core::fmt::Display for WalletError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unknown => write!(f, "Unknown"),
-            Self::NoMesssagesToSign => write!(f, "NoMesssagesToSign"),
+            Self::NoMessagesToSign => write!(f, "NoMessagesToSign"),
         }
     }
 }

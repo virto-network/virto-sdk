@@ -1,7 +1,9 @@
 use async_trait::async_trait;
-use libwallet::Message;
 use core::fmt::Debug;
+use libwallet::Message;
 use serde::{de::DeserializeOwned, Serialize};
+
+use crate::ConstructableService;
 
 pub enum SignerError {
     Unknown,
@@ -10,21 +12,12 @@ pub enum SignerError {
 }
 
 pub type WalletResult<T> = Result<T, SignerError>;
-pub trait WalletApiSignedPayloadBounds =
-    Sync + Send + DeserializeOwned + Serialize + PartialEq + Clone + Debug;
-trait WA = WalletApi;
-
-pub struct WalletServices<A: WA> {
-    pub services: A,
-}
-
-impl<A: WA> WalletServices<A> {
-    pub fn new(services: A) -> Self {
-        Self { services }
-    }
-}
 
 #[async_trait]
 pub trait WalletApi {
     async fn sign<'p>(&self, payload: &'p [u8]) -> WalletResult<Message>;
+}
+
+pub struct WalletCreation {
+    vault: String,
 }

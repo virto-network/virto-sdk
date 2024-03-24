@@ -1,7 +1,7 @@
 mod app;
 mod query;
-pub mod types;
 pub mod test;
+pub mod types;
 
 pub use app::*;
 pub use query::*;

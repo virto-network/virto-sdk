@@ -1,4 +1,4 @@
-use super::types::{Aggregate, DomainEvent, EventEnvelope};
+use super::types::{DomainEvent, EventEnvelope, StateMachine};
 use crate::utils::prelude::*;
 
 pub trait Query<Event>: Send + Sync
@@ -7,4 +7,3 @@ where
 {
     async fn dispatch(&self, aggregate_id: &str, events: &[EventEnvelope<Event>]);
 }
-

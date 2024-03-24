@@ -1,22 +1,18 @@
-use super::{
-    Message, WalletApi, WalletCommand, WalletError, WalletEvent, WalletResult, WalletServices,
-};
-use crate::app::Aggregate;
+use super::{Message, WalletApi, WalletCommand, WalletError, WalletEvent, WalletResult};
+use crate::app::StateMachine;
 use crate::utils::prelude::*;
 
 #[derive(Deserialize, Serialize, Debug)]
-pub struct Wallet<S> {
+pub struct Wallet {
     device_id: Option<String>,
     pending_messages: Vec<Message>,
-    #[serde(skip_serializing)]
-    phantom: PhantomData<S>,
 }
 
-impl<S: WalletApi + Sync + Send> Aggregate for Wallet<S> {
+impl StateMachine for Wallet {
     type Command = WalletCommand;
     type Event = WalletEvent;
     type Error = WalletError;
-    type Services = WalletServices<S>;
+    type Services = Box<dyn WalletApi>;
 
     fn apply(&mut self, event: Self::Event) {
         match event {
@@ -40,33 +36,29 @@ impl<S: WalletApi + Sync + Send> Aggregate for Wallet<S> {
             }
             WalletCommand::Sign() => {
                 if self.pending_messages.len() == 0 {
-                    return Err(WalletError::NoMesssagesToSign);
+                    return Err(WalletError::NoMessagesToSign);
                 }
 
-                let messagess_signatures =
+                let messages_signatures =
                     future::try_join_all(self.pending_messages.iter().map(|m: &Message| async {
                         Ok((
-                            svc.services
-                                .sign(m)
-                                .await
-                                .map_err(|_| WalletError::Unknown)?,
+                            svc.sign(m).await.map_err(|_| WalletError::Unknown)?,
                             m.to_owned(),
                         ))
                     }))
                     .await?;
 
-                Ok(vec![WalletEvent::Signed(messagess_signatures)])
+                Ok(vec![WalletEvent::Signed(messages_signatures)])
             }
         }
     }
 }
 
-impl<T> Default for Wallet<T> {
+impl Default for Wallet {
     fn default() -> Self {
         Self {
             device_id: None,
             pending_messages: vec![],
-            phantom: PhantomData,
         }
     }
 }
@@ -77,33 +69,37 @@ mod wallet_test {
     use crate::base::app::test::TestFramework;
     use crate::utils::prelude::*;
 
-    type WalletService = TestFramework<Wallet<MockWalletService>>;
+    struct SimpleWalletArgs {
+        pass: String,
+    }
+
+    type WalletService = TestFramework<Wallet>;
 
     #[test]
     fn add_pending_tx() {
         let message = Message::try_from([0u8, 1u8, 2u8].as_slice()).expect("can not convert");
 
-        WalletService::with(WalletServices::new(MockWalletService::default()))
+        WalletService::with(Box::new(MockWalletService::default()))
             .given_no_previous_events()
             .when(WalletCommand::AddMessageToSign(message.clone()))
             .then_expect_events(vec![WalletEvent::AddedMessageToSign(message)]);
     }
 
     #[async_std::test]
-    async fn no_messsages_to_sign() {
+    async fn no_messages_to_sign() {
         let message = Message::try_from([0u8, 1u8, 2u8].as_slice()).expect("can not convert");
 
-        let executor = WalletService::with(WalletServices::new(MockWalletService::default()))
+        let executor = WalletService::with(Box::new(MockWalletService::default()))
             .given_no_previous_events()
             .when(WalletCommand::Sign())
-            .then_expect_error(WalletError::NoMesssagesToSign);
+            .then_expect_error(WalletError::NoMessagesToSign);
     }
 
     #[async_std::test]
     async fn sign_tx_queues() {
         let message = Message::try_from([0u8, 1u8, 2u8].as_slice()).expect("can not convert");
 
-        let executor = WalletService::with(WalletServices::new(MockWalletService::default()))
+        let executor = WalletService::with(Box::new(MockWalletService::default()))
             .given(vec![WalletEvent::AddedMessageToSign(message.clone())]);
 
         let validator = executor.when_async(WalletCommand::Sign()).await;

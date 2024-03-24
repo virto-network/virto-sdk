@@ -1,14 +1,16 @@
-use super::super::types::Aggregate;
+use crate::ConstructableService;
 
-pub struct AggregateResultValidator<A>
+use super::super::types::StateMachine;
+
+pub struct StateMachineResultValidator<S>
 where
-    A: Aggregate,
+    S: StateMachine,
 {
-    result: Result<Vec<A::Event>, A::Error>,
+    result: Result<Vec<S::Event>, S::Error>,
 }
 
-impl<A: Aggregate> AggregateResultValidator<A> {
-    pub fn then_expect_events(self, expected_events: Vec<A::Event>) {
+impl<S: StateMachine> StateMachineResultValidator<S> {
+    pub fn then_expect_events(self, expected_events: Vec<S::Event>) {
         let events = match self.result {
             Ok(expected_events) => expected_events,
             Err(err) => {
@@ -27,17 +29,17 @@ impl<A: Aggregate> AggregateResultValidator<A> {
         };
     }
 
-    pub fn inspect_result(self) -> Result<Vec<A::Event>, A::Error> {
+    pub fn inspect_result(self) -> Result<Vec<S::Event>, S::Error> {
         self.result
     }
 
-    pub(crate) fn new(result: Result<Vec<A::Event>, A::Error>) -> Self {
+    pub(crate) fn new(result: Result<Vec<S::Event>, S::Error>) -> Self {
         Self { result }
     }
 }
-impl<A> AggregateResultValidator<A>
+impl<A> StateMachineResultValidator<A>
 where
-    A: Aggregate,
+    A: StateMachine,
     A::Error: PartialEq,
 {
     pub fn then_expect_error(self, expected_error: A::Error) {

@@ -1,9 +1,8 @@
 mod aggregate;
 mod commands;
 mod events;
-mod types;
 mod services;
-
+mod types;
 
 pub use aggregate::*;
 pub use commands::*;

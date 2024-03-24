@@ -1,14 +1,31 @@
 use crate::utils::prelude::*;
-pub trait DomainEvent:
-    Serialize + DeserializeOwned + Clone + Debug + Send
-{
+pub trait DomainEvent: Serialize + DeserializeOwned + Clone + Debug + Send {
     fn event_type(&self) -> String;
 
     fn event_version(&self) -> String;
 }
 
+pub trait DomainCommand {
+    fn command_name(&self) -> String;
+    fn command_payload(&self) -> Value;
+}
 
-pub trait Aggregate: Default + Serialize + DeserializeOwned + Send {
+pub trait ConstructableService {
+    type Args: DeserializeOwned + Clone;
+    type Service;
+
+    fn new(args: Self::Args) -> Self::Service;
+}
+
+// impl<T, C> ConstructableService for Box<dyn T> where T:  ConstructableService<C>{
+//     type Args = T::Args;
+
+//     fn new(args: Self::Args) -> Self {
+//         Box::new(T::new(args))
+//     }
+// }
+
+pub trait StateMachine: Default + Serialize + DeserializeOwned + Send {
     type Command: DeserializeOwned + Send + Debug + Serialize;
 
     type Event: DomainEvent + Send + PartialEq;
@@ -21,21 +38,19 @@ pub trait Aggregate: Default + Serialize + DeserializeOwned + Send {
         &self,
         command: Self::Command,
         service: &Self::Services,
-    ) -> Result<Vec<Self::Event>, Self::Error>; // chante IntoInter
+    ) -> Result<Vec<Self::Event>, Self::Error>;
 
     fn apply(&mut self, event: Self::Event);
 }
 
-
 #[derive(Serialize, Deserialize)]
-pub struct CommandSerializedEvelope {
+pub struct SerializedCommandEnvelope {
     pub app_id: String, // app-id
     pub aggregate_id: String,
     pub metadata: HashMap<String, String>, // { who, req_id }
     pub cmd_name: String,
     pub cmd_payload: Value,
 }
-
 
 #[derive(Debug)]
 pub struct EventEnvelope<E>
@@ -64,18 +79,7 @@ impl<E: DomainEvent> Clone for EventEnvelope<E> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EventEvelope {
-    pub app_id: String,
-    pub aggregate_id: String,
-    pub event_type: String,
-    pub event_version: String,
-    pub payload: Value,
-    pub metadata: Value,
-}
-
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EventCommitedEvelope {
+pub struct CommittedEventEnvelope {
     pub app_id: String,
     pub aggregate_id: String,
     pub event_type: String,
@@ -85,19 +89,44 @@ pub struct EventCommitedEvelope {
     pub metadata: Value,
 }
 
-pub fn to_serialized_event_evelope<E: DomainEvent>(
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SerializedEventEnvelope {
+    pub app_id: String,
+    pub aggregate_id: String,
+    pub event_type: String,
+    pub event_version: String,
+    pub payload: Value,
+    pub metadata: Value,
+}
+
+pub fn to_serialized_event_envelope<E: DomainEvent>(
     app_id: impl Into<String>,
     aggregate_id: impl Into<String>,
     event: &E,
     metadata: &HashMap<String, String>,
-) -> EventEvelope {
-    EventEvelope {
+) -> SerializedEventEnvelope {
+    SerializedEventEnvelope {
         app_id: app_id.into(),
         aggregate_id: aggregate_id.into(),
-        metadata: serde_json::to_value(metadata).expect("invalid metadata"), // exploted
-        payload: serde_json::to_value(event).expect("invalid metadata"), // exploted
+        metadata: serde_json::to_value(metadata).expect("invalid metadata"),
+        payload: serde_json::to_value(event).expect("invalid metadata"),
         event_type: event.event_type(),
         event_version: event.event_version(),
+    }
+}
+
+pub fn to_serialized_command_envelope<C: DomainCommand>(
+    app_id: impl Into<String>,
+    aggregate_id: impl Into<String>,
+    command: C,
+    metadata: HashMap<String, String>,
+) -> SerializedCommandEnvelope {
+    SerializedCommandEnvelope {
+        aggregate_id: aggregate_id.into(),
+        app_id: app_id.into(),
+        cmd_name: command.command_name(),
+        cmd_payload: command.command_payload(),
+        metadata,
     }
 }
 
@@ -109,7 +138,6 @@ pub struct AppPermission {
     pub cmds: Vec<String>,
     pub events: Vec<String>,
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AppInfo {
@@ -129,9 +157,12 @@ pub enum RunnableError {
 pub trait AppRunnable {
     fn get_app_info(&self) -> &AppInfo;
 
-    async fn apply(&mut self, event: EventCommitedEvelope) -> Result<(), RunnableError>;
+    fn snap_shot(&self) -> Value;
 
-    async fn run_command(&self, command: CommandSerializedEvelope)
-        -> Result<Vec<EventEvelope>, RunnableError>;
+    async fn apply(&mut self, event: CommittedEventEnvelope) -> Result<(), RunnableError>;
+
+    async fn run_command(
+        &self,
+        command: SerializedCommandEnvelope,
+    ) -> Result<Vec<SerializedEventEnvelope>, RunnableError>;
 }
-
