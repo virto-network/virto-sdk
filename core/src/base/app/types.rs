@@ -10,7 +10,7 @@ pub trait DomainCommand {
     fn command_payload(&self) -> Value;
 }
 
-pub trait ConstructableService {
+pub trait ConstructableService: Sync + Send {
     type Args: DeserializeOwned + Clone;
     type Service;
 
@@ -25,6 +25,7 @@ pub trait ConstructableService {
 //     }
 // }
 
+#[async_trait]
 pub trait StateMachine: Default + Serialize + DeserializeOwned + Send {
     type Command: DeserializeOwned + Send + Debug + Serialize;
 
@@ -32,7 +33,7 @@ pub trait StateMachine: Default + Serialize + DeserializeOwned + Send {
 
     type Error: core::error::Error;
 
-    type Services;
+    type Services: Send + Sync;
 
     async fn handle(
         &self,
@@ -43,7 +44,7 @@ pub trait StateMachine: Default + Serialize + DeserializeOwned + Send {
     fn apply(&mut self, event: Self::Event);
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SerializedCommandEnvelope {
     pub app_id: String, // app-id
     pub aggregate_id: String,
@@ -84,7 +85,7 @@ pub struct CommittedEventEnvelope {
     pub aggregate_id: String,
     pub event_type: String,
     pub event_version: String,
-    pub sequence: usize, // after commit we know the squence for that event
+    pub sequence: usize, // after commit we know the sequence for that event
     pub payload: Value,
     pub metadata: Value,
 }
@@ -154,10 +155,11 @@ pub enum RunnableError {
     Unknown,
 }
 
-pub trait AppRunnable {
+#[async_trait]
+pub trait AppRunnable: Send {
     fn get_app_info(&self) -> &AppInfo;
 
-    fn snap_shot(&self) -> Value;
+    fn snapshot(&self) -> Value;
 
     async fn apply(&mut self, event: CommittedEventEnvelope) -> Result<(), RunnableError>;
 

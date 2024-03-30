@@ -5,9 +5,9 @@ use super::types::{
 use crate::{prelude::*, CommittedEventEnvelope, ConstructableService, SerializedEventEnvelope};
 use crate::{to_serialized_event_envelope, RunnableError};
 
-struct AppBuilder<S, Args>
+pub struct AppBuilder<S, Args>
 where
-    S: StateMachine,
+    S: StateMachine + Sync + Send,
     S::Services: ConstructableService<Args = Args, Service = S::Services>,
     Args: Clone,
 {
@@ -16,42 +16,53 @@ where
     state_machine: PhantomData<S>,
 }
 
+pub trait AppLoader: Send + Sync {
+    fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + '_>;
+}
+
 impl<S, Args> AppBuilder<S, Args>
 where
-    S: StateMachine,
+    S: StateMachine + Sync + Send,
     S::Services: ConstructableService<Args = Args, Service = S::Services>,
-    Args: Clone,
+    Args: Clone + Send + Sync,
 {
-    fn new(app_info: AppInfo, args: Args) -> Self {
+    pub fn new(app_info: AppInfo, args: Args) -> Self {
         Self {
             app_info,
             args,
             state_machine: Default::default(),
         }
     }
+}
 
-    fn run(&self, initial_state: Option<Value>) -> impl AppRunnable + '_ {
-        let state_machine: S = match (initial_state) {
+impl<S, Args> AppLoader for AppBuilder<S, Args>
+where
+    S: StateMachine + Sync + Send,
+    S::Services: ConstructableService<Args = Args, Service = S::Services>,
+    Args: Clone + Send + Sync,
+{
+    fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + '_> {
+        let state_machine: S = match state {
             Some(value) => serde_json::from_value(value).expect("Can not serialize State"),
             None => S::default(),
         };
 
         let service = S::Services::new(self.args.clone());
 
-        App::new(&self.app_info, state_machine, service)
+        Box::new(App::new(&self.app_info, state_machine, service))
     }
 }
 
 pub struct App<'a, S>
 where
-    S: StateMachine,
+    S: StateMachine + Send + Sync,
 {
     app_info: &'a AppInfo,
     services: S::Services,
     state_machine: S,
 }
 
-impl<'a, S: StateMachine> App<'a, S> {
+impl<'a, S: StateMachine + Send + Sync> App<'a, S> {
     fn new(app_info: &'a AppInfo, state: S, services: S::Services) -> Self {
         Self {
             app_info,
@@ -61,11 +72,12 @@ impl<'a, S: StateMachine> App<'a, S> {
     }
 }
 
+#[async_trait]
 impl<'a, S> AppRunnable for App<'a, S>
 where
-    S: StateMachine,
+    S: StateMachine + Send + Sync,
 {
-    fn snap_shot(&self) -> Value {
+    fn snapshot(&self) -> Value {
         serde_json::to_value(&self.state_machine).expect("It must be a serializable state_machine")
     }
 
@@ -93,7 +105,7 @@ where
             .state_machine
             .handle(cmd, &self.services)
             .await
-            .map_err(|x| RunnableError::Unknown)?;
+            .map_err(|_| RunnableError::Unknown)?;
 
         Ok(events
             .into_iter()
@@ -168,7 +180,7 @@ mod app_test {
         }
 
         fn command_payload(&self) -> Value {
-            serde_json::to_value(self).expect("Can not Seralize command")
+            serde_json::to_value(self).expect("Can not Serialize command")
         }
     }
 
@@ -183,7 +195,7 @@ mod app_test {
         }
     }
 
-    trait TestService {
+    trait TestService: Sync + Send {
         fn sign(&self) -> usize;
     }
 
@@ -218,15 +230,16 @@ mod app_test {
         type Service = Box<dyn TestService>;
 
         fn new(args: Self::Args) -> Self::Service {
-            Box::new(Service { url: args.url })
+            Box::new(Service::new(args))
         }
     }
 
+    #[async_trait]
     impl StateMachine for TestAggregate {
         type Command = TestCmd;
         type Event = TestEvent;
         type Error = TestError;
-        type Services = Box<dyn TestService>;
+        type Services = Box<dyn TestService + 'static>;
 
         async fn handle(
             &self,
@@ -278,16 +291,18 @@ mod app_test {
     }
 
     #[async_std::test]
-    async fn setup_app() {
+    async fn run_command_and_take_snapshot() {
         let info = mock_app_info();
+
         let appSpawner = AppBuilder::<TestAggregate, ServiceConfig>::new(
             info,
-            ServiceConfig { url: "http".into() },
+            ServiceConfig { url: "http".into() }, // container reference
         );
+
         let mut app = appSpawner.run(None);
 
         let events = app
-            .run_command(to_envelop_cmd(TestCmd::A))
+            .run_command(to_envelop_cmd(TestCmd::B))
             .await
             .expect("hello");
 
@@ -295,6 +310,8 @@ mod app_test {
             app.apply(to_committed_event(seq, e)).await;
         }
 
-        println!("{:?}", app.snap_shot());
+        let snapshot = app.snapshot();
+        let state: TestAggregate = serde_json::from_value(snapshot).expect("It must increase");
+        assert!(state.sum == 11);
     }
 }

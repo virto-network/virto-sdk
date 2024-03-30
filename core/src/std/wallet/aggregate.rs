@@ -8,11 +8,12 @@ pub struct Wallet {
     pending_messages: Vec<Message>,
 }
 
+#[async_trait]
 impl StateMachine for Wallet {
     type Command = WalletCommand;
     type Event = WalletEvent;
     type Error = WalletError;
-    type Services = Box<dyn WalletApi>;
+    type Services = Box<dyn WalletApi + Send + Sync>;
 
     fn apply(&mut self, event: Self::Event) {
         match event {

@@ -34,9 +34,9 @@ features = ["js"]
 
 
 [features]
-default = ['sube/default', "async-std/attributes", "async-std/tokio1" ]
+default = ['sube/default', "async-std/attributes", "async-std/tokio1", "single_thread"]
 js = ['sube/js', 'matrix-sdk/js']
-
+single_thread = []
 
 [workspace]
 members = [
