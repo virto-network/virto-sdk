@@ -7,11 +7,11 @@ use crate::utils::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct MatrixRegistry {
-    client: Box<Client>,
+    client: Client,
 }
 
 impl MatrixRegistry {
-    pub fn new(client: Box<Client>) -> Self {
+    pub fn new(client: Client) -> Self {
         Self { client }
     }
 

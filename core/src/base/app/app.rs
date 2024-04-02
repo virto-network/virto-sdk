@@ -5,7 +5,7 @@ use super::types::{
 use crate::{prelude::*, CommittedEventEnvelope, ConstructableService, SerializedEventEnvelope};
 use crate::{to_serialized_event_envelope, RunnableError};
 
-pub struct AppBuilder<S, Args>
+pub struct AppFactory<S, Args>
 where
     S: StateMachine + Sync + Send,
     S::Services: ConstructableService<Args = Args, Service = S::Services>,
@@ -16,13 +16,13 @@ where
     state_machine: PhantomData<S>,
 }
 
-pub trait AppLoader: Send + Sync {
-    fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + '_>;
+pub trait AppLoader<'r>: Send + Sync {
+    fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + 'r>;
 }
 
-impl<S, Args> AppBuilder<S, Args>
+impl<S, Args> AppFactory<S, Args>
 where
-    S: StateMachine + Sync + Send,
+    S: StateMachine + Sync + Send ,
     S::Services: ConstructableService<Args = Args, Service = S::Services>,
     Args: Clone + Send + Sync,
 {
@@ -35,13 +35,13 @@ where
     }
 }
 
-impl<S, Args> AppLoader for AppBuilder<S, Args>
+impl<'r, S, Args> AppLoader<'r> for AppFactory<S, Args>
 where
-    S: StateMachine + Sync + Send,
+    S: StateMachine + Sync + Send + 'r,
     S::Services: ConstructableService<Args = Args, Service = S::Services>,
     Args: Clone + Send + Sync,
 {
-    fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + '_> {
+    fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + 'r> {
         let state_machine: S = match state {
             Some(value) => serde_json::from_value(value).expect("Can not serialize State"),
             None => S::default(),
@@ -49,21 +49,21 @@ where
 
         let service = S::Services::new(self.args.clone());
 
-        Box::new(App::new(&self.app_info, state_machine, service))
+        Box::new(App::new(self.app_info.clone(), state_machine, service))
     }
 }
 
-pub struct App<'a, S>
+pub struct App<S>
 where
     S: StateMachine + Send + Sync,
 {
-    app_info: &'a AppInfo,
+    app_info: AppInfo,
     services: S::Services,
     state_machine: S,
 }
 
-impl<'a, S: StateMachine + Send + Sync> App<'a, S> {
-    fn new(app_info: &'a AppInfo, state: S, services: S::Services) -> Self {
+impl<S> App<S> where S:  StateMachine + Send + Sync {
+    fn new(app_info: AppInfo, state: S, services: S::Services) -> Self {
         Self {
             app_info,
             services,
@@ -73,7 +73,7 @@ impl<'a, S: StateMachine + Send + Sync> App<'a, S> {
 }
 
 #[async_trait]
-impl<'a, S> AppRunnable for App<'a, S>
+impl<S> AppRunnable for App<S>
 where
     S: StateMachine + Send + Sync,
 {
@@ -294,7 +294,7 @@ mod app_test {
     async fn run_command_and_take_snapshot() {
         let info = mock_app_info();
 
-        let appSpawner = AppBuilder::<TestAggregate, ServiceConfig>::new(
+        let appSpawner = AppFactory::<TestAggregate, ServiceConfig>::new(
             info,
             ServiceConfig { url: "http".into() }, // container reference
         );

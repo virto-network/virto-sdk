@@ -13,19 +13,19 @@ pub trait AuthenticatorBuilder {
     async fn auth(
         &self,
         device_name: String,
-        client: Box<MatrixClient>,
-    ) -> Result<Box<MatrixClient>, AuthError>;
+        client: MatrixClient,
+    ) -> Result<MatrixClient, AuthError>;
 }
 
 pub enum SDKError {
     Unknown,
     CantSync,
-    AlreadyInited,
+    AlreadyInit,
 }
 
 pub struct SDKCore {
-    inner: Box<MatrixClient>,
-    inited: bool,
+    inner: MatrixClient,
+    is_init: bool,
     next_batch_token: Option<String>,
     manager: MatrixRegistry,
     // supervisor: SimpleSuperVisor<'app>,
@@ -33,20 +33,18 @@ pub struct SDKCore {
 }
 
 impl SDKCore {
-    pub(crate) fn new(inner: Box<MatrixClient>) -> Self {
+    pub(crate) fn new(inner: MatrixClient) -> Self {
         return Self {
             inner: inner.clone(),
-            inited: false,
+            is_init: false,
             next_batch_token: None,
             manager: MatrixRegistry::new(inner.clone()),
-            // supervisor: SimpleSuperVisor::new(),
-            // apps: vec![],
         };
     }
 
-    pub fn client(&self) -> Box<MatrixClient> {
-        if !self.inited {
-            panic!("accesing client before its initialization");
+    pub fn client(&self) -> MatrixClient {
+        if !self.is_init {
+            panic!("accessing client before its initialization");
         }
         self.inner.clone()
     }
@@ -69,10 +67,10 @@ impl SDKCore {
     }
 
     pub async fn init(&mut self) -> Result<(), SDKError> {
-        if self.inited {
-            return Err(SDKError::AlreadyInited);
+        if self.is_init {
+            return Err(SDKError::AlreadyInit);
         }
-        self.inited = true;
+        self.is_init = true;
         self.next_sync();
         Ok(())
     }
@@ -158,11 +156,9 @@ impl SDKBuilder {
         } = self;
 
         let homeserver_url = homeserver_url.ok_or(AuthError::MissingHomeServer)?;
-        let mut client = Box::new(
-            MatrixClient::new(Url::parse(&homeserver_url).expect("Wrong Url"))
-                .await
-                .map_err(|_| AuthError::Unknown)?,
-        );
+        let mut client = MatrixClient::new(Url::parse(&homeserver_url).expect("Wrong Url"))
+            .await
+            .map_err(|_| AuthError::Unknown)?;
 
         if let Some(authenticator) = custom_authenticator {
             client = authenticator
@@ -209,8 +205,8 @@ mod client_store_test {
         async fn auth(
             &self,
             _: String,
-            client: Box<MatrixClient>,
-        ) -> Result<Box<MatrixClient>, AuthError> {
+            client: MatrixClient,
+        ) -> Result<MatrixClient, AuthError> {
             Ok(client)
         }
     }

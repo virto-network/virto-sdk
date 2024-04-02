@@ -1,5 +1,10 @@
 use core::marker::PhantomData;
-use std::sync::Arc;
+
+#[cfg(feature = "no_std")]
+use alloc::sync::Arc;
+
+#[cfg(not(feature = "no_std"))]
+use std::rc::Rc;
 
 use crate::{
     AppInfo, AppLoader, AppRunnable, CommittedEventEnvelope, SerializedCommandEnvelope,
@@ -7,6 +12,7 @@ use crate::{
 };
 use async_std::stream::StreamExt;
 use async_std::task::spawn;
+
 use async_trait::async_trait;
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use futures::stream::Next;
@@ -23,19 +29,21 @@ pub type ProcessResult<A> = Result<A, ProcessError>;
 #[derive(Debug)]
 enum Instruction {
     Cmd(SerializedCommandEnvelope),
-    CommittedEvent(CommittedEventEnvelope),
+    CommitEvent(CommittedEventEnvelope),
     Snapshot,
+    Kill,
 }
 
 #[derive(Debug)]
 enum Response {
     Event(SerializedEventEnvelope),
     Snapshot((String, Value)), // id , state
+    Exit
 }
 
 #[async_trait]
 pub trait Process {
-    fn spawn(state: Option<Value>, loader: Arc<Box<dyn AppLoader>>) -> Self;
+    fn spawn<'r: 'static>(state: Option<Value>, loader: &Box<dyn AppLoader<'r>>) -> Self;
 
     async fn write(&mut self, instruction: Instruction) -> ProcessResult<()>;
     async fn next(&mut self) -> Option<Response>;
@@ -43,47 +51,35 @@ pub trait Process {
 
 #[cfg(feature = "single_thread")]
 struct AppProcess {
+    pub tx: Sender<Instruction>,
     rx_response: Receiver<Response>,
-    tx: Sender<Instruction>,
-}
-
-#[cfg(feature = "multi_thread")]
-struct Actor<AppLoader> {
-    app: Box<dyn AppRunnable>,
-    phantom_data: PhantomData<AppLoader>,
 }
 
 #[async_trait]
 impl Process for AppProcess {
-    fn spawn(state: Option<Value>, loader: Arc<Box<dyn AppLoader>>) -> Self {
-        let (tx, mut rx) = channel::<Instruction>(10);
-        let (mut tx_response, rx_response) = channel::<Response>(10);
-        let bind = loader.clone();
+    fn spawn<'r: 'static>(state: Option<Value>, loader: &Box<dyn AppLoader<'r>>) -> Self {
+        let (tx, mut rx) = channel::<Instruction>(100);
+        let (mut tx_response, rx_response) = channel::<Response>(100);
+        let mut app = loader.run(state);
+
         spawn(async move {
-            let mut app = bind.run(state);
-            println!("it started");
             while let Some(instruction) = rx.next().await {
                 match instruction {
                     Instruction::Cmd(command) => {
                         let events = app
                             .run_command(command)
                             .await
-                            .map_err(|_| ProcessError::Unknown)
-                            .expect("MapErr");
+                            .map_err(|_| ProcessError::Unknown)?;
 
                         for i in events {
                             tx_response
                                 .send(Response::Event(i))
                                 .await
-                                .map_err(|_| ProcessError::Unknown)
-                                .expect("cant send");
+                                .map_err(|_| ProcessError::Unknown)?;
                         }
                     }
-                    Instruction::CommittedEvent(event) => {
-                        app.apply(event)
-                            .await
-                            .map_err(|_| ProcessError::Unknown)
-                            .expect("Apply error");
+                    Instruction::CommitEvent(event) => {
+                        app.apply(event).await.map_err(|_| ProcessError::Unknown)?;
                     }
                     Instruction::Snapshot => {
                         let snapshot = app.snapshot();
@@ -94,13 +90,17 @@ impl Process for AppProcess {
                                 snapshot,
                             )))
                             .await
-                            .map_err(|_| ProcessError::Unknown)
-                            .expect("snapshot");
+                            .map_err(|_| ProcessError::Unknown)?;
+                    }
+                    Instruction::Kill => {
+                        drop(app);
+                        tx_response.send(Response::Exit);
+                        return Err(ProcessError::Unknown);
                     }
                 }
             }
 
-            println!("it finished");
+            Ok::<(), ProcessError>(())
         });
 
         Self { tx, rx_response }
@@ -297,13 +297,17 @@ mod process_test {
     async fn spawn_process() {
         let info = mock_app_info();
 
-        let appSpawner: Arc<Box<dyn AppLoader>> =
-            Arc::new(Box::new(AppBuilder::<TestAggregate, ServiceConfig>::new(
+        let appLoader: Box<dyn AppLoader> =
+            Box::new(AppFactory::<TestAggregate, ServiceConfig>::new(
                 info,
-                ServiceConfig { url: "http".into() }, // container reference
-            )));
+                ServiceConfig { url: "http".into() },
+            ));
 
-        let mut process = AppProcess::spawn(None, appSpawner.clone());
+        let mut process = AppProcess::spawn(None, &appLoader);
+
+        process
+            .write(Instruction::Cmd(to_envelop_cmd(TestCmd::A)))
+            .await;
 
         process
             .write(Instruction::Cmd(to_envelop_cmd(TestCmd::A)))
@@ -315,10 +319,15 @@ mod process_test {
 
         process.write(Instruction::Snapshot).await;
 
-        // let snapshot = process.snapshot().await.expect("process");
-        // println!("sent command {:?}", snapshot);
+        process.write(Instruction::Kill).await;
+
+        process.write(Instruction::Snapshot).await;
+        process
+            .write(Instruction::Cmd(to_envelop_cmd(TestCmd::A)))
+            .await;
+
         while let Some(event) = process.next().await {
-            println!("event {:?}", event);
+            println!("Response={:?}", event);
         }
     }
 }
