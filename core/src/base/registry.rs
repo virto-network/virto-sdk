@@ -19,7 +19,7 @@ pub type RegistryResult<T> = Result<T, AppRegistryError>;
 pub type RegistryState = HashMap<String, AppMetadata>;
 
 pub trait Registry {
-    async fn is_registered(&self, app_info: &AppInfo) -> RegistryResult<bool>;
+    async fn is_registered(&self, id: &str) -> RegistryResult<bool>;
     async fn add(&self, app_info: &AppInfo) -> RegistryResult<RegistryState>;
     async fn remove(&self, id: &AppInfo) -> RegistryResult<RegistryState>;
     async fn list_apps(&self) -> RegistryResult<Vec<AppInfo>>;

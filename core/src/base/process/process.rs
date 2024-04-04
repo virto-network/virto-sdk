@@ -20,14 +20,14 @@ use futures::{Future, SinkExt, Stream};
 use serde_json::Value;
 
 #[derive(Debug)]
-enum ProcessError {
+pub enum ProcessError {
     Unknown,
 }
 
 pub type ProcessResult<A> = Result<A, ProcessError>;
 
 #[derive(Debug)]
-enum Instruction {
+pub enum Instruction {
     Cmd(SerializedCommandEnvelope),
     CommitEvent(CommittedEventEnvelope),
     Snapshot,
@@ -35,32 +35,32 @@ enum Instruction {
 }
 
 #[derive(Debug)]
-enum Response {
+pub enum Response {
     Event(SerializedEventEnvelope),
     Snapshot((String, Value)), // id , state
-    Exit
-}
-
-#[async_trait]
-pub trait Process {
-    fn spawn<'r: 'static>(state: Option<Value>, loader: &Box<dyn AppLoader<'r>>) -> Self;
-
-    async fn write(&mut self, instruction: Instruction) -> ProcessResult<()>;
-    async fn next(&mut self) -> Option<Response>;
+    Exit,
 }
 
 #[cfg(feature = "single_thread")]
-struct AppProcess {
+pub struct AppProcess {
     pub tx: Sender<Instruction>,
-    rx_response: Receiver<Response>,
 }
 
 #[async_trait]
-impl Process for AppProcess {
-    fn spawn<'r: 'static>(state: Option<Value>, loader: &Box<dyn AppLoader<'r>>) -> Self {
+pub trait  Process {
+    async fn write(&mut self, inst: Instruction) -> ProcessResult<()>;
+}
+
+impl AppProcess {
+    pub fn spawn<'r: 'static>(
+        sender: Sender<Response>,
+        state: Option<Value>,
+        loader: &Box<dyn AppLoader<'r>>,
+    ) -> Self {
         let (tx, mut rx) = channel::<Instruction>(100);
-        let (mut tx_response, rx_response) = channel::<Response>(100);
         let mut app = loader.run(state);
+
+        let mut tx_response = sender.clone();
 
         spawn(async move {
             while let Some(instruction) = rx.next().await {
@@ -103,9 +103,12 @@ impl Process for AppProcess {
             Ok::<(), ProcessError>(())
         });
 
-        Self { tx, rx_response }
+        Self { tx }
     }
+}
 
+#[async_trait]
+impl Process for AppProcess {
     async fn write(&mut self, inst: Instruction) -> ProcessResult<()> {
         println!("send it {:?}", &inst);
         self.tx
@@ -113,10 +116,6 @@ impl Process for AppProcess {
             .await
             .map_err(|_| ProcessError::Unknown)?;
         Ok(())
-    }
-
-    async fn next(&mut self) -> Option<Response> {
-        self.rx_response.next().await
     }
 }
 
@@ -302,8 +301,8 @@ mod process_test {
                 info,
                 ServiceConfig { url: "http".into() },
             ));
-
-        let mut process = AppProcess::spawn(None, &appLoader);
+        let (sender, mut res) = channel::<Response>(10);
+        let mut process = AppProcess::spawn(sender, None, &appLoader);
 
         process
             .write(Instruction::Cmd(to_envelop_cmd(TestCmd::A)))
@@ -326,7 +325,7 @@ mod process_test {
             .write(Instruction::Cmd(to_envelop_cmd(TestCmd::A)))
             .await;
 
-        while let Some(event) = process.next().await {
+        while let Some(event) = res.next().await {
             println!("Response={:?}", event);
         }
     }

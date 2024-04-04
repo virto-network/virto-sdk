@@ -84,7 +84,7 @@ impl MatrixRegistry {
 
 impl Registry for MatrixRegistry {
     async fn add(&self, info: &AppInfo) -> RegistryResult<RegistryState> {
-        if self.is_registered(info).await? {
+        if self.is_registered(&info.id).await? {
             return Err(AppRegistryError::AlreadyInstalled);
         }
         let mut room = CreateRoomRequest::new();
@@ -103,6 +103,7 @@ impl Registry for MatrixRegistry {
             .await
             .map_err(|e| AppRegistryError::CantAddApp(e.to_string()))?;
 
+        println!("Doneeee");
         self.add_app(info, room).await
     }
 
@@ -122,9 +123,10 @@ impl Registry for MatrixRegistry {
         self.remove_app(info).await
     }
 
-    async fn is_registered(&self, info: &AppInfo) -> RegistryResult<bool> {
+    async fn is_registered(&self, id: &str) -> RegistryResult<bool> {
         let state = self.get_state().await?;
-        Ok(state.apps.get(&info.id).is_some())
+
+        Ok(state.apps.get(id).is_some())
     }
 
     async fn list_apps(&self) -> RegistryResult<Vec<AppInfo>> {
@@ -207,7 +209,7 @@ mod manager_test {
 
         assert_eq!(
             manager
-                .is_registered(&app_info)
+                .is_registered(&app_info.id)
                 .await
                 .expect("error checking installed app"),
             false
@@ -220,13 +222,13 @@ mod manager_test {
         let state = manager.get_state().await.expect("hello");
 
         assert_eq!(state.apps.get(&app_info.id).unwrap().app_info, app_info);
-
+        
         let state = manager.list_apps().await.expect("It must list the apps");
-
+        
         assert_eq!(state.len(), 1);
-
+        
         sdkCore.next_sync().await;
-
+        
         assert!(manager.remove(&app_info).await.is_ok());
 
         sdkCore.next_sync().await;

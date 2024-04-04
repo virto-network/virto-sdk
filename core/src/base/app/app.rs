@@ -17,6 +17,7 @@ where
 }
 
 pub trait AppLoader<'r>: Send + Sync {
+    fn app_info(&self) -> &AppInfo;
     fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + 'r>;
 }
 
@@ -41,6 +42,10 @@ where
     S::Services: ConstructableService<Args = Args, Service = S::Services>,
     Args: Clone + Send + Sync,
 {
+    fn app_info(&self) -> &AppInfo {
+        &self.app_info
+    }
+
     fn run(&self, state: Option<Value>) -> Box<dyn AppRunnable + 'r> {
         let state_machine: S = match state {
             Some(value) => serde_json::from_value(value).expect("Can not serialize State"),
@@ -122,8 +127,6 @@ where
 }
 
 mod app_test {
-    use std::process::Command;
-
     use crate::{to_serialized_command_envelope, AppPermission, DomainCommand};
     use async_std::test;
 
