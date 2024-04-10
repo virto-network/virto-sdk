@@ -1,5 +1,5 @@
 use super::{Message, WalletApi, WalletCommand, WalletError, WalletEvent, WalletResult};
-use crate::app::StateMachine;
+use crate::StateMachine;
 use crate::utils::prelude::*;
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -67,7 +67,7 @@ impl Default for Wallet {
 #[cfg(test)]
 mod wallet_test {
     use super::*;
-    use crate::base::app::test::TestFramework;
+    use crate::test::TestFramework;
     use crate::utils::prelude::*;
 
     struct SimpleWalletArgs {

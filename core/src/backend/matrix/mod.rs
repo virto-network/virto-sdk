@@ -1,7 +1,7 @@
-mod registry;
+mod app_store;
 mod types;
 
-pub use registry::*;
+pub use app_store::*;
 
 pub mod prelude {
     pub use super::types::*;

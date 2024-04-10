@@ -1,10 +1,11 @@
 mod registry;
 mod supervisor;
-mod types;
+mod state_manager;
+mod pool;
+mod app;
 
-pub mod app;
-pub mod process;
 pub use app::*;
+pub use pool::*;
 pub use registry::*;
 pub use supervisor::*;
-pub use types::*;
+pub use state_manager::*;

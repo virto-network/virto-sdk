@@ -17,14 +17,6 @@ pub trait ConstructableService: Sync + Send {
     fn new(args: Self::Args) -> Self::Service;
 }
 
-// impl<T, C> ConstructableService for Box<dyn T> where T:  ConstructableService<C>{
-//     type Args = T::Args;
-
-//     fn new(args: Self::Args) -> Self {
-//         Box::new(T::new(args))
-//     }
-// }
-
 #[async_trait]
 pub trait StateMachine: Default + Serialize + DeserializeOwned + Send {
     type Command: DeserializeOwned + Send + Debug + Serialize;
@@ -44,7 +36,7 @@ pub trait StateMachine: Default + Serialize + DeserializeOwned + Send {
     fn apply(&mut self, event: Self::Event);
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SerializedCommandEnvelope {
     pub app_id: String, // app-id
     pub aggregate_id: String,

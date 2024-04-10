@@ -1,5 +1,5 @@
 use super::Message;
-use crate::app::DomainEvent;
+use crate::DomainEvent;
 use crate::utils::prelude::*;
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Debug)]

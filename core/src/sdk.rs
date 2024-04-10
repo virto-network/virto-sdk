@@ -1,4 +1,4 @@
-use crate::{backend::matrix::MatrixRegistry, utils::prelude::*};
+use crate::{backend::matrix::MatrixAppStore, utils::prelude::*};
 
 #[derive(Debug)]
 pub enum AuthError {
@@ -27,7 +27,7 @@ pub struct SDKCore {
     inner: MatrixClient,
     is_init: bool,
     next_batch_token: Option<String>,
-    manager: MatrixRegistry,
+    manager: MatrixAppStore,
     // supervisor: SimpleSuperVisor<'app>,
     // apps: Vec<&'app dyn VRunnableApp>,
 }
@@ -38,7 +38,7 @@ impl SDKCore {
             inner: inner.clone(),
             is_init: false,
             next_batch_token: None,
-            manager: MatrixRegistry::new(inner.clone()),
+            manager: MatrixAppStore::new(inner.clone()),
         };
     }
 
@@ -179,109 +179,5 @@ impl SDKBuilder {
         }
 
         Ok(SDKCore::new(client))
-    }
-}
-
-#[cfg(test)]
-mod client_store_test {
-
-    use super::*;
-    use crate::utils::prelude::*;
-
-    use crate::base::app::AppInfo;
-    use crate::base::AppRunnable;
-    use crate::std::wallet;
-    use crate::std::wallet::{Wallet, WalletApi, WalletResult};
-    use crate::ConstructableService;
-
-    use libwallet::Message;
-    use tokio::test;
-
-    #[derive(Default)]
-    struct AuthConnectorMock;
-
-    #[async_trait::async_trait]
-    impl AuthenticatorBuilder for AuthConnectorMock {
-        async fn auth(
-            &self,
-            _: String,
-            client: MatrixClient,
-        ) -> Result<MatrixClient, AuthError> {
-            Ok(client)
-        }
-    }
-
-    #[tokio::test]
-    async fn login_with_credentials() {
-        let connector: AuthConnectorMock = AuthConnectorMock::default();
-
-        let service = SDKBuilder::new()
-            .with_homeserver("https://matrix-client.matrix.org")
-            .with_credentials("myfooaccoount", "H0l4mund0@123")
-            .build_and_login()
-            .await
-            .expect("error at building");
-    }
-
-    #[tokio::test]
-    async fn login_with_authenticator() {
-        let connector: AuthConnectorMock = AuthConnectorMock::default();
-        let service = SDKBuilder::new()
-            .with_homeserver("https://matrix-client.matrix.org")
-            .with_authenticator(Box::new(AuthConnectorMock::default()))
-            .build_and_login()
-            .await
-            .expect("error at building");
-    }
-
-    type WalletAggregate = Wallet;
-
-    #[tokio::test]
-    async fn craft_app() {
-        let service = WalletAggregate::default();
-
-        // let app = VApp::new(
-        //     AppInfo {
-        //         id: "com.virto.wallet".into(),
-        //         name: "Wallet".into(),
-        //         description: "the place where you mangage your creds".into(),
-        //         version: "0.1.1".into(),
-        //         author: "team@virto.network".into(),
-        //         permissions: vec![],
-        //     },
-        //     MemStore::<WalletAggregate>::default(),
-        //     vec![],
-        //     WalletServices::new(MockWalletService::default()),
-        // );
-
-        let mut sdk = SDKBuilder::new()
-            .with_homeserver("https://matrix-client.matrix.org")
-            .with_credentials("myfooaccoount", "H0l4mund0@123")
-            .build_and_login()
-            .await
-            .expect("error at building");
-
-        // sdk.install(app).await.expect("hello world");
-
-        // sdk.supervisor().exec(state, cmd)
-    }
-
-    #[derive(Default)]
-    struct MockWalletService;
-
-    impl ConstructableService for MockWalletService {
-        type Args = ();
-        type Service = MockWalletService;
-
-        fn new(args: Self::Args) -> Self::Service {
-            MockWalletService
-        }
-    }
-
-    #[async_trait]
-    impl WalletApi for MockWalletService {
-        async fn sign<'p>(&self, payload: &'p [u8]) -> WalletResult<Message> {
-            Ok(Message::try_from([1u8].as_slice()).expect("hello world"))
-        }
     }
 }
