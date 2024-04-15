@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PJS extension from Rust</title>
+  <style>
+    html,
+    body {
+      all: initial;
+      height: 100%;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    form,
+    output {
+      margin: 0.8rem auto;
+      width: 90%;
+      max-width: 600px;
+      display: flex;
+      gap: 5px
+    }
+
+    input,
+    output {
+      height: 2.5rem;
+      padding: 0 1rem;
+      box-sizing: border-box;
+      border-radius: 3px;
+    }
+
+    input {
+      flex: 1;
+      border: 1px solid whitesmoke;
+    }
+
+    output {
+      background: whitesmoke;
+      color: gray;
+      font-family: monospace;
+      line-height: 2.5rem;
+      overflow-x: auto;
+      padding: 0 0.5rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    button {
+      padding: 0 1rem;
+    }
+
+    form {
+      position: relative;
+    }
+
+    #connect,
+    #account {
+      width: 20%;
+      height: 100%;
+    }
+
+    .hidden {
+      opacity: 0;
+      pointer-events: none;
+      position: absolute;
+      left: 0;
+    }
+  </style>
+</head>
+
+<body>
+  <form name="sign">
+    <button id="connect" type="button">Connect</button>
+    <select id="account" name="account" class="hidden" required
+      oninvalid="this.setCustomValidity('First connect to the extension')"></select>
+    <input name="payload" type="text" placeholder="0x hex encoded payload" pattern="0x[a-fA-F0-9]{2,}" required>
+    <button>Sign</button>
+  </form>
+  <output title="Result" name="out">~</output>
+</body>
+
+<script type="module">
+  import init, {PjsExtension} from './dist/pjs.js'
+  init().then(() => console.info('wasm ready'))
+
+  const connect = document.querySelector('#connect')
+  const account = document.querySelector('#account')
+  const output = document.querySelector('output')
+  const form = document.sign
+  let pjs = null
+
+  connect.addEventListener('click', async e => {
+    pjs = await PjsExtension.connect("test")
+    await pjs.fetchAccounts()
+    for (let a of pjs.accounts) {
+      let opt = document.createElement('option')
+      opt.textContent = `${a.name} (${a.address.substr(0, 5)}...)`
+      opt.value = a.address
+      account.append(opt)
+    }
+    account.setCustomValidity('')
+    account.classList.toggle('hidden')
+    connect.classList.toggle('hidden')
+  })
+  form.addEventListener('submit', async e => {
+    e.preventDefault()
+    pjs.selectAccount(form.account.value)
+    let sig = await pjs.sign(form.payload.value, s => s)
+    output.value = sig
+  })
+</script>
+
+</html>
