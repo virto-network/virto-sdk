@@ -98,10 +98,11 @@
   connect.addEventListener('click', async e => {
     pjs = await PjsExtension.connect("test")
     await pjs.fetchAccounts()
-    for (let a of pjs.accounts) {
+    for (let [i, a] of Object.entries(pjs.accounts)) {
       let opt = document.createElement('option')
       opt.textContent = `${a.name} (${a.address.substr(0, 5)}...)`
-      opt.value = a.address
+      opt.value = i
+      opt.dataset.address = a.address
       account.append(opt)
     }
     account.setCustomValidity('')
