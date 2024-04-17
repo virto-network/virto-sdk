@@ -13,7 +13,7 @@
     "vite": "^4.0.0"
   },
   "dependencies": {
-    "@virtonetwork/libwallet": "file:/Users/davidbarinas/db/virto/libwallet/libwallet-js/pkg",
+    "@virtonetwork/libwallet": "file:../../../libwallet/js",
     "sube-js": "file:../",
     "ts-node": "^10.9.1",
     "vite-plugin-top-level-await": "^1.2.2",

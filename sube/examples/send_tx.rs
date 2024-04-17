@@ -1,13 +1,13 @@
 use futures_util::TryFutureExt;
-use serde_json::json;
 use libwallet::{self, vault};
-use sube::sube;
-use std::env;
 use rand_core::OsRng;
+use serde_json::json;
+use std::env;
+use sube::sube;
 
 type Wallet = libwallet::Wallet<vault::Simple>;
 
-use anyhow::{ Result, anyhow };
+use anyhow::{anyhow, Result};
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -38,7 +38,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .map_err(|err| anyhow!(format!("SubeError {:?}", err)))
     .await?;
-
 
     println!("Secret phrase: \"{phrase}\"");
     println!("Default Account: 0x{account}");
