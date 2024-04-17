@@ -1,6 +1,7 @@
 import { sube } from 'sube-js';
 import  { default as Initwallet, JsWallet } from '@virtonetwork/libwallet';
 
+window.sube = sube;
 export function setupSign(element: HTMLButtonElement) {
   let counter = 0
   const setCounter = async (count: number) => {
