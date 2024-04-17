@@ -11,9 +11,10 @@ use sube::{
     meta_ext::Pallet,
     rpc, sube,
     util::to_camel,
-    Backend, Error as SubeError, ExtrinicBody, JsonValue, Response,
+    Backend, Error as SubeError, ExtrinsicBody, JsonValue, Response,
 };
 
+use core::convert::TryInto;
 // use sp_core::{crypto::Ss58Codec, hexdisplay::AsBytesRef};
 use util::*;
 use wasm_bindgen::prelude::*;
@@ -63,18 +64,10 @@ pub async fn sube_js(
     params: JsValue,
     signer: Option<js_sys::Function>,
 ) -> Result<JsValue> {
-    let url = chain_string_to_url(url)?;
-
-    let backend = sube::http::Backend::new(url.clone());
     console_error_panic_hook::set_once();
 
-    let meta = backend
-        .metadata()
-        .await
-        .map_err(|e| JsError::new("Error fetching metadata"))?;
-
     if params.is_undefined() {
-        let response = sube::<()>(backend, &meta, url.path(), None, move |_, _| Ok(()))
+        let response = sube!(url)
             .await
             .map_err(|e| JsError::new(&format!("Error querying: {:?}", &e.to_string())))?;
 
@@ -90,17 +83,14 @@ pub async fn sube_js(
         return Ok(value);
     }
 
-    let mut extrinsic_value: ExtrinicBody<JsonValue> = serde_wasm_bindgen::from_value(params)?;
+    let mut extrinsic_value: ExtrinsicBody<JsonValue> = serde_wasm_bindgen::from_value(params)?;
 
     extrinsic_value.body = decode_addresses(&extrinsic_value.body);
 
-    let value = sube::<JsonValue>(
-        backend,
-        &meta,
-        url.path(),
-        Some(extrinsic_value),
-        |message, out: &mut [u8; 64]| unsafe {
+    let value = sube!(url => {
+        signer: move |message: &[u8]| unsafe {
             let response: JsValue = signer
+                .clone()
                 .ok_or(SubeError::BadInput)?
                 .call1(
                     &JsValue::null(),
@@ -108,14 +98,16 @@ pub async fn sube_js(
                 )
                 .map_err(|_| SubeError::Signing)?;
 
-            let mut vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
+            let vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
                 .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;
 
-            out.copy_from_slice(&vec);
+            let buffer: [u8; 64] = vec.try_into().expect("slice with incorrect length");
 
-            Ok(())
+            Ok(buffer)
         },
-    )
+        sender: extrinsic_value.from,
+        body: extrinsic_value.body,
+    })
     .await
     .map_err(|e| JsError::new(&format!("Error trying: {:?}", e.to_string())))?;
 
