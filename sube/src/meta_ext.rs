@@ -5,11 +5,9 @@ use codec::Decode;
 #[cfg(any(feature = "v13"))]
 use frame_metadata::decode_different::DecodeDifferent;
 
-use frame_metadata::{ RuntimeMetadata, RuntimeMetadataPrefixed};
 #[cfg(any(feature = "v14"))]
 use frame_metadata::v14::PalletCallMetadata;
-
-
+use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 
 #[cfg(feature = "v13")]
 pub use v13::*;

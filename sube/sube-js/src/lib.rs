@@ -1,5 +1,8 @@
 mod util;
 
+use core::convert::TryInto;
+use js_sys::Uint8Array;
+use log::Level;
 use parity_scale_codec::Encode;
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Error};
@@ -13,8 +16,6 @@ use sube::{
     util::to_camel,
     Backend, Error as SubeError, ExtrinsicBody, JsonValue, Response,
 };
-
-use core::convert::TryInto;
 // use sp_core::{crypto::Ss58Codec, hexdisplay::AsBytesRef};
 use util::*;
 use wasm_bindgen::prelude::*;
@@ -58,12 +59,19 @@ fn chain_string_to_url(chain: &str) -> Result<Url> {
     Ok(url)
 }
 
+#[derive(Serialize, Deserialize)]
+struct ExtrinsicBodyWithFrom {
+    from: Vec<u8>,
+    call: ExtrinsicBody<JsonValue>,
+}
+
 #[wasm_bindgen]
 pub async fn sube_js(
     url: &str,
     params: JsValue,
     signer: Option<js_sys::Function>,
 ) -> Result<JsValue> {
+    console_log::init_with_level(Level::max());
     console_error_panic_hook::set_once();
 
     if params.is_undefined() {
@@ -83,9 +91,9 @@ pub async fn sube_js(
         return Ok(value);
     }
 
-    let mut extrinsic_value: ExtrinsicBody<JsonValue> = serde_wasm_bindgen::from_value(params)?;
+    let mut extrinsic_value: ExtrinsicBodyWithFrom = serde_wasm_bindgen::from_value(params)?;
 
-    extrinsic_value.body = decode_addresses(&extrinsic_value.body);
+    extrinsic_value.call.body = decode_addresses(&extrinsic_value.call.body);
 
     let value = sube!(url => {
         signer: move |message: &[u8]| unsafe {
@@ -105,8 +113,8 @@ pub async fn sube_js(
 
             Ok(buffer)
         },
-        sender: extrinsic_value.from,
-        body: extrinsic_value.body,
+        sender: extrinsic_value.from.as_slice(),
+        body: extrinsic_value.call,
     })
     .await
     .map_err(|e| JsError::new(&format!("Error trying: {:?}", e.to_string())))?;
