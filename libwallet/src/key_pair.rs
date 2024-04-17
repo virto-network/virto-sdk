@@ -1,8 +1,6 @@
 use core::{convert::TryInto, fmt::Debug};
 pub use derive::Derive;
 
-use self::any::AnySignature;
-
 type Bytes<const N: usize> = [u8; N];
 
 /// A key pair with a public key

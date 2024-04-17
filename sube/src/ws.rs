@@ -180,7 +180,6 @@ impl Backend {
             }
 
             log::warn!("WS connection closed");
-
         });
     }
 }

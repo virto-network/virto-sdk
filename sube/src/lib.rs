@@ -124,11 +124,12 @@ pub mod meta_ext;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
+use core::future::Future;
 
 pub type Result<T> = core::result::Result<T, Error>;
 // type Bytes<const N: usize> = [u8; N];
-pub trait SignerFn: Fn(&[u8]) -> Result<[u8; 64]> {}
-impl<T> SignerFn for T where T: Fn(&[u8]) -> Result<[u8; 64]> {}
+pub trait SignerFn: Fn(&[u8]) -> dyn Future<Output = Result<[u8; 64]>> {}
+impl<T> SignerFn for T where T: Fn(&[u8]) -> dyn Future<Output = Result<[u8; 64]>> {}
 
 // impl From<AsRef<u8>> for [u8; 64] {
 //     fn from(value: AsRef<u8>) -> Self {
@@ -295,7 +296,7 @@ where
 
     let raw = payload.as_slice();
 
-    let signature = signer(raw)?;
+    let signature = signer(raw).await?;
 
     let extrinsic_call = {
         let encoded_inner = [
