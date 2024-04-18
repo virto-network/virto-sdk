@@ -21,7 +21,10 @@ async fn main() -> Result<()> {
     };
 
     let mut wallet = Wallet::new(vault);
-    wallet.unlock(None).await.map_err(|e| anyhow!("Error unlocking the wallet"))?;
+    wallet
+        .unlock(None)
+        .await
+        .map_err(|e| anyhow!("Error unlocking the wallet"))?;
 
     let account = wallet.default_account();
     let public = account.public();

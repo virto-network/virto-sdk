@@ -1,6 +1,5 @@
-pub use derive::Derive;
 use core::{convert::TryInto, fmt::Debug};
-
+pub use derive::Derive;
 
 type Bytes<const N: usize> = [u8; N];
 

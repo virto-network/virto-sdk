@@ -21,7 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut wallet = Wallet::new(vault);
-    wallet.unlock(None).await.map_err(|_| anyhow!("error wallet"))?;
+    wallet
+        .unlock(None)
+        .await
+        .map_err(|_| anyhow!("error wallet"))?;
 
     let account = wallet.default_account();
     let public = account.public();
