@@ -385,7 +385,6 @@ where
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.maybe_some()?;
-
         if matches!(self.ty, None | Some(SpecificType::Map(_, _))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
@@ -592,14 +591,12 @@ where
             TypedSerializer::Enum(ser) => {
                 if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = ser.ty {
                     let key_data = to_vec(key)?;
-
                     // assume the key is the name of the variant
                     var.pick_mut(key_data, |v| to_vec(&v.name).unwrap())
                         .ok_or_else(|| Error::BadInput("Invalid variant".into()))?
                         .variant_id()
                         .serialize(&mut **ser)?;
                 }
-
                 Ok(())
             }
             TypedSerializer::Empty(ser) => key.serialize(&mut **ser),
@@ -611,7 +608,6 @@ where
     where
         T: Serialize,
     {
-        //
         match self {
             TypedSerializer::Composite(ser, types) => {
                 let mut ty = ser.resolve(types.remove(0));
@@ -619,7 +615,6 @@ where
                 if let SpecificType::StructNewType(ty_id) = ty {
                     ty = ser.resolve(ty_id)
                 }
-
                 ser.ty = Some(ty);
             }
             TypedSerializer::Enum(ser) => {
