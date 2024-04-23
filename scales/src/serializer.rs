@@ -59,14 +59,13 @@ where
 }
 
 #[cfg(feature = "json")]
-pub fn to_bytes_from_iter<B, I, K, V>(
+pub fn to_bytes_from_iter<B, K, V>(
     bytes: B,
-    iter: I,
+    iter: impl IntoIterator<Item = (K, V)>,
     registry_type: (&PortableRegistry, TypeId),
 ) -> Result<()>
 where
     B: BufMut + Debug,
-    I: IntoIterator<Item = (K, V)>,
     K: Into<String>,
     V: Into<crate::JsonValue>,
 {
@@ -75,11 +74,11 @@ where
         .resolve(registry_type.1)
         .ok_or_else(|| Error::BadInput("Type not in registry".into()))?;
     let obj = iter.into_iter().collect::<crate::JsonValue>();
-    let val: crate::JsonValue = if let scale_info::TypeDef::Composite(ty) = ty.type_def() {
-        ty.fields()
+    let val: crate::JsonValue = if let scale_info::TypeDef::Composite(ref ty) = ty.type_def {
+        ty.fields
             .iter()
             .map(|f| {
-                let name = f.name().expect("named field");
+                let name = f.name.as_ref().expect("named field");
                 Ok((
                     name.deref(),
                     obj.get(name)
@@ -418,7 +417,7 @@ where
     fn maybe_some(&mut self) -> Result<()> {
         match &self.ty {
             Some(SpecificType::Variant(ref name, v, _)) if name == "Option" => {
-                self.ty = v[1].fields().first().map(|f| self.resolve(f.ty().id()));
+                self.ty = v[1].fields.first().map(|f| self.resolve(f.ty.id));
                 self.out.put_u8(0x01);
             }
             _ => (),
@@ -438,7 +437,7 @@ where
             Some(SpecificType::Str) | None => Ok(None),
             // { "foo": "Bar" } => "Bar" might be an enum variant
             Some(ref mut var @ SpecificType::Variant(_, _, None)) => {
-                var.pick_mut(to_vec(val)?, |k| to_vec(k.name()).unwrap())
+                var.pick_mut(to_vec(val)?, |k| to_vec(&k.name).unwrap())
                     .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
                 self.out.put_u8(var.variant_id());
                 Ok(Some(()))
@@ -592,7 +591,7 @@ where
                 if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = ser.ty {
                     let key_data = to_vec(key)?;
                     // assume the key is the name of the variant
-                    var.pick_mut(key_data, |v| to_vec(v.name()).unwrap())
+                    var.pick_mut(key_data, |v| to_vec(&v.name).unwrap())
                         .ok_or_else(|| Error::BadInput("Invalid variant".into()))?
                         .variant_id()
                         .serialize(&mut **ser)?;
@@ -787,7 +786,7 @@ impl fmt::Display for Error {
             Error::Type(ty) => write!(
                 f,
                 "Unexpected type: {}",
-                ty.path().ident().unwrap_or_else(|| "Unknown".into())
+                ty.path.ident().unwrap_or_else(|| "Unknown".into())
             ),
             Error::NotSupported(from, to) => {
                 write!(f, "Serializing {} as {} is not supported", from, to)
@@ -842,6 +841,7 @@ fn type_name_of_val<T: ?Sized>(_val: &T) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::collections::BTreeMap;
     use codec::Encode;
     use core::mem::size_of;
     use scale_info::{meta_type, Registry, TypeInfo};
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn primitive_u64() -> Result<()> {
-        const INPUT: u64 = 0xFF_EE_DD_CC__BB_AA_99_88;
+        const INPUT: u64 = 0xFFEE_DDCC_BBAA_9988;
         let mut out = [0u8; size_of::<u64>()];
         let expected = INPUT.encode();
 
@@ -896,7 +896,7 @@ mod tests {
 
     #[test]
     fn primitive_u128() -> Result<()> {
-        const INPUT: u128 = 0xFF_EE_DD_CC__BB_AA_99_88__77_66_55_44__33_22_11_00;
+        const INPUT: u128 = 0xFFEE_DDCC_BBAA_9988_7766_5544_3322_1100;
         let mut out = [0u8; size_of::<u128>()];
         let expected = INPUT.encode();
 
@@ -1109,7 +1109,7 @@ mod tests {
     {
         let mut reg = Registry::new();
         let sym = reg.register_type(&meta_type::<T>());
-        (sym.id(), reg.into())
+        (sym.id, reg.into())
     }
 
     #[test]
