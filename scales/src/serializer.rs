@@ -2,6 +2,7 @@ use crate::prelude::*;
 use bytes::BufMut;
 use codec::Encode;
 use core::fmt::{self, Debug};
+
 use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
 
@@ -842,7 +843,7 @@ fn type_name_of_val<T: ?Sized>(_val: &T) -> &'static str {
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
-    use codec::Encode;
+    use codec::{Decode, Encode};
     use core::mem::size_of;
     use scale_info::{meta_type, Registry, TypeInfo};
     use serde_json::to_value;
@@ -1280,6 +1281,33 @@ mod tests {
         let expected = foo.encode();
 
         assert_eq!(out, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_extrincic_call() -> Result<()> {
+        let bytes = include_bytes!("registry.bin");
+        let registry = PortableRegistry::decode(&mut &bytes[..]).expect("hello");
+
+        let transfer_call = serde_json::json!({
+            "transfer_keep_alive": {
+                "dest": {
+                    "Id": hex::decode("12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b").expect("expected valid address")
+                },
+                "value": 1_000_000_000_000u64
+            }
+        });
+
+        let call_data =
+            to_vec_with_info(&transfer_call, (&registry, 106u32).into()).expect("call data");
+
+        let encooded = hex::encode(call_data);
+
+        assert_eq!(
+            "0x04030012840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b070010a5d4e8",
+            format!("0x04{}", encooded)
+        );
+
         Ok(())
     }
 }

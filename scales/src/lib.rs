@@ -171,12 +171,14 @@ impl SpecificType {
         match self {
             SpecificType::Variant(_, _, Some(_)) => Some(self),
             SpecificType::Variant(_, ref mut variants, idx @ None) => {
-                let i = variants
+                let (vf, _) = variants
                     .iter()
-                    .map(get_field)
-                    .position(|f| f.as_ref() == selection.as_ref())? as u8;
-                variants.retain(|v| v.index == i);
-                *idx = Some(i);
+                    .map(|v| (v.index, get_field(v)))
+                    .find(|(_, f)| f.as_ref() == selection.as_ref())?;
+
+                variants.retain(|v| v.index == vf);
+                *idx = Some(vf);
+
                 Some(self)
             }
             _ => panic!("Only for enum variants"),
