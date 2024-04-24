@@ -1,8 +1,10 @@
 use crate::{
     mnemonic::{Language, Mnemonic},
     util::{seed_from_entropy, Pin},
-    RootAccount, Vault, Account
+    Vault,
+    vault::utils::{ RootAccount,  AccountSigner }
 };
+use arrayvec::ArrayVec;
 use keyring;
 
 const SERVICE: &str = "libwallet_account";
@@ -97,14 +99,14 @@ impl std::error::Error for Error {}
 impl Vault for OSKeyring {
     type Credentials = Pin;
     type Error = Error;
-    type Account<'a> = Option<&'a str>;
-    type Signer = Account;
+    type Id = Option<ArrayVec<u8, 10>>;
+    type Account = AccountSigner;
 
-    async fn unlock<'a>(
+    async fn unlock(
         &mut self,
-        account: Self::Account<'a>,
+        account: Self::Id,
         cred: impl Into<Self::Credentials>,
-    ) -> Result<Self::Signer, Self::Error> {
+    ) -> Result<Self::Account, Self::Error> {
         let pin = cred.into();
         self.get_key(pin)
             .or_else(|err| {
@@ -112,10 +114,12 @@ impl Vault for OSKeyring {
                     .ok_or(err)
                     .and_then(|l| self.generate(pin, l))
             })
-            .and_then(|r| {
-                let acc = Account::new(account).unlock(&r);
+            .map(|r| {
+                let acc = AccountSigner::new(account.as_ref().map(|x| {
+                    core::str::from_utf8(x.as_slice()).expect("it must be a valid utf8 string")
+                })).unlock(&r);
                 self.root = Some(r);
-                Ok(acc)
+                acc
             })
     }
 }

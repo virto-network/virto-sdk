@@ -1,7 +1,12 @@
 use core::convert::TryInto;
 
+use arrayvec::ArrayVec;
+
 use crate::util::{seed_from_entropy, Pin};
-use crate::{Account, Derive, RootAccount, Vault};
+use crate::{
+    vault::utils::{AccountSigner, RootAccount},
+    Derive, Vault,
+};
 
 /// A vault that holds secrets in memory
 pub struct Simple {
@@ -84,17 +89,22 @@ impl std::error::Error for Error {}
 impl Vault for Simple {
     type Credentials = Option<Pin>;
     type Error = Error;
-    type Signer = Account;
-    type Account<'r> = Option<&'r str>;
+    type Id = Option<ArrayVec<u8, 10>>;
+    type Account = AccountSigner;
 
-    async fn unlock<'a>(
+    async fn unlock(
         &mut self,
-        account: Self::Account<'a>,
+        path: Self::Id,
         creds: impl Into<Self::Credentials>,
-    ) -> Result<Self::Signer, Self::Error> {
+    ) -> Result<Self::Account, Self::Error> {
         self.unlocked = self.locked.take();
         let pin = creds.into();
         let root_account = self.get_key(pin.unwrap_or_default())?;
-        Ok(Account::new(account).unlock(&root_account))
+        let path = path.as_ref().map(|r| {
+            core::str::from_utf8(r.as_slice())
+                .expect("it must be a valid utf8 string")
+        });
+
+        Ok(AccountSigner::new(path).unlock(&root_account))
     }
 }

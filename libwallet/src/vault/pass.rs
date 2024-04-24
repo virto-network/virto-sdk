@@ -1,3 +1,4 @@
+use arrayvec::ArrayVec;
 use mnemonic::Language;
 use prs_lib::{
     crypto::{self, IsContext, Proto},
@@ -6,8 +7,10 @@ use prs_lib::{
 };
 
 use crate::{
+    account,
     util::{seed_from_entropy, Pin},
-    Account, RootAccount, Vault,
+    vault::utils::{AccountSigner, RootAccount},
+    Vault,
 };
 
 /// A vault that stores secrets in a `pass` compatible repository
@@ -133,16 +136,16 @@ impl From<String> for PassCreds {
 }
 
 impl Vault for Pass {
-    type Account<'a> = Option<&'a str>;
+    type Id = Option<ArrayVec<u8, 20>>;
     type Credentials = PassCreds;
-    type Signer = Account;
+    type Account = AccountSigner;
     type Error = Error;
 
-    async fn unlock<'a>(
+    async fn unlock(
         &mut self,
-        account: Self::Account<'a>,
+        path: Self::Id,
         creds: impl Into<Self::Credentials>,
-    ) -> Result<Self::Signer, Self::Error> {
+    ) -> Result<Self::Account, Self::Error> {
         let credentials = creds.into();
 
         self.get_key(&credentials)
@@ -151,10 +154,13 @@ impl Vault for Pass {
                     .ok_or(err)
                     .and_then(|l| self.generate(&credentials, l))
             })
-            .and_then(|r| {
-                let acc = Account::new(account).unlock(&r);
+            .map(|r| {
+                let acc = AccountSigner::new(path.as_ref().map(|x| {
+                    core::str::from_utf8(x.as_slice()).expect("it must be a valid utf8 string")
+                }))
+                .unlock(&r);
                 self.root = Some(r);
-                Ok(acc)
+                acc
             })
     }
 }
