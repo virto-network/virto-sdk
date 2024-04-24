@@ -1,7 +1,7 @@
 //! Collection of supported Vault backends
 #[cfg(feature = "vault_os")]
 mod os;
-#[cfg(feature = "vault_pass")]
+// #[cfg(feature = "vault_pass")]
 mod pass;
 mod simple;
 
@@ -11,21 +11,22 @@ pub use os::*;
 pub use pass::*;
 pub use simple::*;
 
-use crate::{any, Derive};
+use crate::{any, key_pair, Derive, Public, Signer};
 
-/// Abstration for storage of private keys that are protected by some credentials.
+
+
+/// Abstraction for storage of private keys that are protected by some credentials.
 pub trait Vault {
     type Credentials;
     type Error;
+    type Account<'a>;
+    type Signer: Signer;
 
-    /// Use a set of credentials to make the guarded keys available to the user.
-    /// It returns a `Future` to allow for vaults that might take an arbitrary amount
-    /// of time getting the secret ready like waiting for some user physical interaction.
-    async fn unlock<T>(
+    async fn unlock<'a>(
         &mut self,
+        account: Self::Account<'a>,
         cred: impl Into<Self::Credentials>,
-        cb: impl FnMut(&RootAccount) -> T,
-    ) -> Result<T, Self::Error>;
+    ) -> Result<Self::Signer, Self::Error>;
 }
 
 /// The root account is a container of the key pairs stored in the vault and cannot be
@@ -67,14 +68,3 @@ impl<'a> Derive for &'a RootAccount {
     }
 }
 
-macro_rules! seed_from_entropy {
-    ($seed: ident, $pin: expr) => {
-        #[cfg(feature = "util_pin")]
-        let protected_seed = $pin.protect::<64>($seed);
-        #[cfg(feature = "util_pin")]
-        let $seed = &protected_seed;
-        #[cfg(not(feature = "util_pin"))]
-        let _ = &$pin; // use the variable to avoid warning
-    };
-}
-pub(crate) use seed_from_entropy;

@@ -1,7 +1,7 @@
 use crate::{
     mnemonic::{Language, Mnemonic},
     util::{seed_from_entropy, Pin},
-    RootAccount, Vault,
+    RootAccount, Vault, Account
 };
 use keyring;
 
@@ -97,12 +97,14 @@ impl std::error::Error for Error {}
 impl Vault for OSKeyring {
     type Credentials = Pin;
     type Error = Error;
+    type Account<'a> = Option<&'a str>;
+    type Signer = Account;
 
-    async fn unlock<T>(
+    async fn unlock<'a>(
         &mut self,
+        account: Self::Account<'a>,
         cred: impl Into<Self::Credentials>,
-        mut cb: impl FnMut(&RootAccount) -> T,
-    ) -> Result<T, Self::Error> {
+    ) -> Result<Self::Signer, Self::Error> {
         let pin = cred.into();
         self.get_key(pin)
             .or_else(|err| {
@@ -111,8 +113,9 @@ impl Vault for OSKeyring {
                     .and_then(|l| self.generate(pin, l))
             })
             .and_then(|r| {
+                let acc = Account::new(account).unlock(&r);
                 self.root = Some(r);
-                Ok(cb(self.root.as_ref().unwrap()))
+                Ok(acc)
             })
     }
 }

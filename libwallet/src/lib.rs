@@ -13,7 +13,7 @@ mod key_pair;
 mod substrate_ext;
 
 use arrayvec::ArrayVec;
-use core::{convert::TryInto, fmt};
+use core::{cell::RefCell, convert::TryInto, fmt};
 use key_pair::any::AnySignature;
 
 #[cfg(feature = "mnemonic")]
@@ -42,8 +42,8 @@ type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
 pub struct Wallet<V: Vault, const A: usize = 5, const M: usize = A> {
     vault: V,
     is_locked: bool,
-    default_account: Account,
-    accounts: ArrayVec<Account, A>,
+    default_signer: Option<u8>,
+    signers: ArrayVec<V::Signer, A>,
     pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
 }
 
@@ -55,16 +55,16 @@ where
     pub fn new(vault: V) -> Self {
         Wallet {
             vault,
-            default_account: Account::new(None),
-            accounts: ArrayVec::new_const(),
+            default_signer: None,
+            signers: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
             is_locked: true,
         }
     }
 
     /// Get the account currently set as default
-    pub fn default_account(&self) -> &Account {
-        &self.default_account
+    pub fn default_signer(&self) -> Option<&V::Signer> {
+        self.default_signer.map(|x| &self.signers[x as usize])
     }
 
     /// Use credentials to unlock the vault.
@@ -77,24 +77,32 @@ where
     /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
-    ///     wallet.unlock(None).await?;
+    ///     wallet.unlock(None, None).await?;
     /// }
     ///
     /// assert!(!wallet.is_locked());
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(&mut self, cred: impl Into<V::Credentials>) -> Result<(), Error<V::Error>> {
+    pub async fn unlock<'f>(
+        &mut self,
+        account: V::Account<'f>,
+        cred: impl Into<V::Credentials>,
+    ) -> Result<(), Error<V::Error>> {
         if self.is_locked() {
             let vault = &mut self.vault;
-            let def = &mut self.default_account;
 
-            vault
-                .unlock(cred, |root| {
-                    def.unlock(root);
-                })
+            let signer = vault
+                .unlock(account, cred)
                 .await
-                .map_err(Error::Vault)?;
+                .map_err(|e| Error::Vault(e))?;
+
+            if self.default_signer.is_none() {
+                self.default_signer = Some(0);
+            }
+
+            self.signers.push(signer);
+
             self.is_locked = false;
         }
         Ok(())
@@ -114,17 +122,22 @@ where
     /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(None).await?;
+    /// wallet.unlock(None, None).await?;
     ///
     /// let msg = &[0x12, 0x34, 0x56];
-    /// let signature = wallet.sign(msg);
+    /// let signature = wallet.sign(msg).await.expect("it must sign");
     ///
-    /// assert!(wallet.default_account().verify(msg, signature.as_ref()));
+    /// assert!(wallet.default_signer().expect("it must have a default signer").verify(msg, signature.as_ref()).await);
     /// # Ok(()) }
     /// ```
-    pub fn sign(&self, message: &[u8]) -> impl Signature {
+    pub async fn sign(&self, message: &[u8]) -> Result<impl Signature, ()> {
         assert!(!self.is_locked());
-        self.default_account().sign_msg(message)
+
+        let Some(signer) = self.default_signer() else {
+            return Err(());
+        };
+
+        signer.sign_msg(message).await
     }
 
     /// Save data to be signed some time later.
@@ -159,25 +172,29 @@ where
     /// # #[async_std::main] async fn main() -> Result {
     /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(None).await?;
+    /// wallet.unlock(None, None).await?;
     ///
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     /// wallet.sign_later(&[0x04, 0x05, 0x06]);
-    /// let signatures = wallet.sign_pending();
+    /// let signatures = wallet.sign_pending().await.expect("it must sign");
     ///
     /// assert_eq!(signatures.len(), 2);
     /// assert_eq!(wallet.pending().count(), 0);
     /// # Ok(()) }
     /// ```
-    pub fn sign_pending(&mut self) -> ArrayVec<AnySignature, M> {
+    pub async fn sign_pending(&mut self) -> Result<ArrayVec<AnySignature, M>, ()> {
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
-            let account = a
-                .map(|idx| self.account(idx))
-                .unwrap_or_else(|| self.default_account());
-            signatures.push(account.sign_msg(&msg));
+            let signer = a
+                .map(|idx| self.signer(idx))
+                .unwrap_or_else(|| self.default_signer().expect("Signer not set"));
+
+            let message = signer.sign_msg(&msg).await?.into();
+
+            signatures.push(message);
         }
-        signatures
+
+        Ok(signatures)
     }
 
     /// Iteratate over the messages pending for signature for all the accounts.
@@ -199,18 +216,8 @@ where
         self.pending_sign.iter().map(|(msg, _)| msg.as_ref())
     }
 
-    #[cfg(feature = "subaccounts")]
-    pub fn new_account(&mut self, name: &str, derivation_path: &str) -> Result<&Account<V::Pair>> {
-        let root = self.root_account()?;
-        let subaccount = root
-            .derive_subaccount(name, derivation_path)
-            .ok_or(Error::DeriveError)?;
-        self.subaccounts.insert(name.to_string(), subaccount);
-        Ok(self.subaccounts.get(name).unwrap())
-    }
-
-    fn account(&self, idx: u8) -> &Account {
-        &self.accounts[idx as usize]
+    fn signer(&self, idx: u8) -> &V::Signer {
+        &self.signers[idx as usize]
     }
 }
 
@@ -308,6 +315,19 @@ mod util {
     #[derive(Default, Copy, Clone)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct Pin(u16);
+
+    macro_rules! seed_from_entropy {
+        ($seed: ident, $pin: expr) => {
+            #[cfg(feature = "util_pin")]
+            let protected_seed = $pin.protect::<64>($seed);
+            #[cfg(feature = "util_pin")]
+            let $seed = &protected_seed;
+            #[cfg(not(feature = "util_pin"))]
+            let _ = &$pin; // use the variable to avoid warning
+        };
+    }
+
+    pub(crate) use seed_from_entropy;
 
     impl Pin {
         const LEN: usize = 4;

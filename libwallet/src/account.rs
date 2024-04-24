@@ -1,6 +1,7 @@
 use crate::{
     any::{self, AnySignature},
     Derive, Network, Pair, Public, RootAccount,
+    Signer,
 };
 use arrayvec::ArrayString;
 // use regex::Regex;
@@ -54,7 +55,7 @@ impl Account {
         self.pair.is_none()
     }
 
-    pub(crate) fn unlock(&mut self, root: &RootAccount) -> &Self {
+    pub(crate) fn unlock(mut self, root: &RootAccount) -> Self {
         if self.is_locked() {
             self.pair = Some(root.derive(&self.path));
         }
@@ -65,15 +66,16 @@ impl Account {
 impl crate::Signer for Account {
     type Signature = AnySignature;
 
-    fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
-        self.pair.as_ref().expect("account unlocked").sign_msg(msg)
+    async fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Result<Self::Signature, ()>{
+        Ok(self.pair.as_ref().expect("account unlocked").sign_msg(msg).await?)
     }
 
-    fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
+    async fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
         self.pair
             .as_ref()
             .expect("account unlocked")
             .verify(msg, sig)
+            .await
     }
 }
 

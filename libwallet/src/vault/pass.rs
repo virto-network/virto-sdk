@@ -7,7 +7,7 @@ use prs_lib::{
 
 use crate::{
     util::{seed_from_entropy, Pin},
-    RootAccount, Vault,
+    Account, RootAccount, Vault,
 };
 
 /// A vault that stores secrets in a `pass` compatible repository
@@ -133,14 +133,16 @@ impl From<String> for PassCreds {
 }
 
 impl Vault for Pass {
+    type Account<'a> = Option<&'a str>;
     type Credentials = PassCreds;
+    type Signer = Account;
     type Error = Error;
 
-    async fn unlock<T>(
+    async fn unlock<'a>(
         &mut self,
+        account: Self::Account<'a>,
         creds: impl Into<Self::Credentials>,
-        mut cb: impl FnMut(&RootAccount) -> T,
-    ) -> Result<T, Self::Error> {
+    ) -> Result<Self::Signer, Self::Error> {
         let credentials = creds.into();
 
         self.get_key(&credentials)
@@ -150,8 +152,9 @@ impl Vault for Pass {
                     .and_then(|l| self.generate(&credentials, l))
             })
             .and_then(|r| {
+                let acc = Account::new(account).unlock(&r);
                 self.root = Some(r);
-                Ok(cb(self.root.as_ref().unwrap()))
+                Ok(acc)
             })
     }
 }

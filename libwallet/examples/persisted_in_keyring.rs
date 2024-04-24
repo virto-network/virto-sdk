@@ -12,11 +12,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pin = pin.as_ref().map(String::as_str);
 
     let vault = vault::OSKeyring::new(TEST_USER, Language::default());
-    let mut wallet = Wallet::new(vault);
-    wallet.unlock(pin).await?;
 
-    let account = wallet.default_account();
-    println!("Default account: {}", account);
+    let mut wallet = Wallet::new(vault);
+    
+
+    wallet.unlock(None, pin).await?;
+
+    let account = wallet.default_signer();
+    // println!("Default account: {}", account);
 
     Ok(())
 }
