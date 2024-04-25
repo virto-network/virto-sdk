@@ -1,4 +1,5 @@
 use core::convert::TryInto;
+use core::marker::PhantomData;
 
 use arrayvec::ArrayVec;
 
@@ -9,19 +10,21 @@ use crate::{
 };
 
 /// A vault that holds secrets in memory
-pub struct Simple {
+pub struct Simple<S> {
     locked: Option<[u8; 32]>,
     unlocked: Option<[u8; 32]>,
+    _phantom: PhantomData<S>
 }
 
-impl Simple {
+impl<S> Simple<S> {
     /// A vault with a random seed, once dropped the the vault can't be restored
     ///
     /// ```
     /// # use libwallet::{vault, Error, Derive, Pair, Vault};
-    /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), <SimpleVault as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// let mut vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let root = vault.unlock(None, None).await?;
     /// # Ok(())
     /// }
@@ -34,6 +37,7 @@ impl Simple {
         Simple {
             locked: Some(crate::util::random_bytes::<_, 32>(rng)),
             unlocked: None,
+            _phantom: Default::default()
         }
     }
 
@@ -62,6 +66,7 @@ impl Simple {
         Simple {
             locked: Some(entropy),
             unlocked: None,
+            _phantom: Default::default(),
         }
     }
 
@@ -86,10 +91,10 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-impl Vault for Simple {
+impl<S: AsRef<str>> Vault for Simple<S> {
     type Credentials = Option<Pin>;
     type Error = Error;
-    type Id = Option<ArrayVec<u8, 10>>;
+    type Id = Option<S>;
     type Account = AccountSigner;
 
     async fn unlock(
@@ -100,11 +105,11 @@ impl Vault for Simple {
         self.unlocked = self.locked.take();
         let pin = creds.into();
         let root_account = self.get_key(pin.unwrap_or_default())?;
-        let path = path.as_ref().map(|r| {
-            core::str::from_utf8(r.as_slice())
-                .expect("it must be a valid utf8 string")
-        });
-
+        // let path = path.as_ref().map(|r| {
+        //     core::str::from_utf8(r.as_slice())
+        //         .expect("it must be a valid utf8 string")
+        // });
+        let path = path.as_ref().map(|x| x.as_ref());
         Ok(AccountSigner::new(path).unlock(&root_account))
     }
 }

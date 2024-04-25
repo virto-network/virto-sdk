@@ -14,6 +14,7 @@ pub mod util;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
 
+use account::Account;
 use arrayvec::ArrayVec;
 use core::{cell::RefCell, convert::TryInto, fmt};
 use key_pair::any::AnySignature;
@@ -26,6 +27,7 @@ pub use key_pair::*;
 pub use mnemonic::{Language, Mnemonic};
 pub use vault::Vault;
 pub mod vault;
+
 
 const MSG_MAX_SIZE: usize = u8::MAX as usize;
 type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
@@ -73,9 +75,10 @@ where
     /// ```
     /// # use libwallet::{Wallet, Error, vault, Vault};
     /// # use std::convert::TryInto;
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
     ///     wallet.unlock(None, None).await?;
@@ -119,9 +122,10 @@ where
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Signer, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(None, None).await?;
     ///
@@ -145,9 +149,10 @@ where
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     ///
@@ -169,9 +174,10 @@ where
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.unlock(None, None).await?;
     ///
@@ -183,18 +189,16 @@ where
     /// assert_eq!(wallet.pending().count(), 0);
     /// # Ok(()) }
     /// ```
-    pub async fn sign_pending(&mut self) -> Result<ArrayVec<AnySignature, M>, ()> {
+    pub async fn sign_pending(&mut self) -> Result<ArrayVec<impl AsRef<[u8]>, M>, ()> {
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
             let signer = a
                 .map(|idx| self.account(idx))
                 .unwrap_or_else(|| self.default_signer().expect("Signer not set"));
 
-            let message = signer.sign_msg(&msg).await?.into();
-
+            let message = signer.sign_msg(&msg).await?;
             signatures.push(message);
         }
-
         Ok(signatures)
     }
 
@@ -202,9 +206,10 @@ where
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01]);
     /// wallet.sign_later(&[0x02]);

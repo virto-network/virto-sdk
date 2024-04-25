@@ -1,7 +1,7 @@
 use libwallet::{self, vault};
 use std::env;
 
-type Wallet = libwallet::Wallet<vault::Simple>;
+type Wallet = libwallet::Wallet<vault::Simple<String>>;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,4 +1,4 @@
-use core::fmt::Debug;
+use core::{convert::TryFrom, fmt::Debug};
 
 pub use derive::Derive;
 
@@ -25,13 +25,14 @@ impl<const N: usize> Signature for Bytes<N> {}
 
 /// Something that can sign messages
 pub trait Signer {
-    type Signature: Signature + Into<AnySignature>;
+    type Signature: Signature;
     async fn sign_msg<M: AsRef<[u8]>>(&self, data: M) -> Result<Self::Signature, ()>;
     async fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool;
 }
-
 /// Wrappers to represent any supported key pair.
 pub mod any {
+    use crate::Signer;
+
     use super::{Public, Signature};
     use core::fmt;
 
@@ -145,6 +146,7 @@ pub mod any {
         #[cfg(not(feature = "sr25519"))]
         _None,
     }
+
     impl AsRef<[u8]> for AnySignature {
         fn as_ref(&self) -> &[u8] {
             match self {
