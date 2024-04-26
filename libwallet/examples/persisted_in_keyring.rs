@@ -18,8 +18,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     wallet.unlock(None, pin).await?;
 
-    let account = wallet.default_signer();
-    // println!("Default account: {}", account);
+    let account = wallet.default_account();
+    println!("Default account: {}", account.unwrap());
 
     Ok(())
 }

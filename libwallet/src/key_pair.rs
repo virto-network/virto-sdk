@@ -26,8 +26,8 @@ impl<const N: usize> Signature for Bytes<N> {}
 /// Something that can sign messages
 pub trait Signer {
     type Signature: Signature;
-    async fn sign_msg<M: AsRef<[u8]>>(&self, data: M) -> Result<Self::Signature, ()>;
-    async fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool;
+    async fn sign_msg(&self, data: impl AsRef<[u8]>) -> Result<Self::Signature, ()>;
+    async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool;
 }
 /// Wrappers to represent any supported key pair.
 pub mod any {
@@ -94,14 +94,14 @@ pub mod any {
     impl super::Signer for Pair {
         type Signature = AnySignature;
 
-        async fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Result<Self::Signature, ()> {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
             match self {
                 #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => Ok(p.sign_msg(msg).await?.into()),
             }
         }
 
-        async fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
+        async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
             match self {
                 #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => super::Signer::verify(p, msg, sig).await,
@@ -200,13 +200,13 @@ pub mod sr25519 {
     impl Signer for Pair {
         type Signature = Signature;
 
-        async fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Result<Self::Signature, ()> {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
             let context = signing_context(SIGNING_CTX);
             Ok(self.sign(context.bytes(msg.as_ref())).to_bytes())
         }
 
-        async fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
-            let sig = match schnorrkel::Signature::from_bytes(sig) {
+        async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
+            let sig = match schnorrkel::Signature::from_bytes(sig.as_ref()) {
                 Ok(s) => s,
                 Err(_) => return false,
             };

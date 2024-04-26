@@ -1,10 +1,9 @@
+use core::fmt::{Debug, Display};
+
 use crate::{
-    any::{self, AnySignature},
-    Derive, Network, Pair, Public,
-    Signer,
+    Public, Signer,
 };
 
-
-pub trait Account: Signer {
+pub trait Account: Signer + Display {
     fn public(&self) -> impl Public;
 }

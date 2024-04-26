@@ -105,10 +105,6 @@ impl<S: AsRef<str>> Vault for Simple<S> {
         self.unlocked = self.locked.take();
         let pin = creds.into();
         let root_account = self.get_key(pin.unwrap_or_default())?;
-        // let path = path.as_ref().map(|r| {
-        //     core::str::from_utf8(r.as_slice())
-        //         .expect("it must be a valid utf8 string")
-        // });
         let path = path.as_ref().map(|x| x.as_ref());
         Ok(AccountSigner::new(path).unlock(&root_account))
     }

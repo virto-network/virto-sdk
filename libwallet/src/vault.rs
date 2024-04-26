@@ -1,7 +1,7 @@
 //! Collection of supported Vault backends
 #[cfg(feature = "vault_os")]
 mod os;
-// #[cfg(feature = "vault_pass")]
+#[cfg(feature = "vault_pass")]
 mod pass;
 mod simple;
 
@@ -132,7 +132,7 @@ mod utils {
     impl crate::Signer for AccountSigner {
         type Signature = AnySignature;
 
-        async fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Result<Self::Signature, ()> {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
             Ok(self
                 .pair
                 .as_ref()
@@ -141,7 +141,7 @@ mod utils {
                 .await?)
         }
 
-        async fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
+        async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
             self.pair
                 .as_ref()
                 .expect("account unlocked")
