@@ -1,15 +1,23 @@
 //! Collection of supported Vault backends
 #[cfg(feature = "vault_os")]
 mod os;
-// #[cfg(feature = "vault_pass")]
-mod pass;
-mod simple;
 
 #[cfg(feature = "vault_os")]
 pub use os::*;
+#[cfg(feature = "vault_pjs")]
+pub mod pjs;
+#[cfg(feature = "vault_pass")]
+mod pass;
+mod simple;
+
 #[cfg(feature = "vault_pass")]
 pub use pass::*;
 pub use simple::*;
+
+
+#[cfg(feature = "vault_pjs")]
+pub use pjs::*;
+
 
 use crate::account::Account;
 
