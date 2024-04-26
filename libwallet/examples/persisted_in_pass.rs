@@ -1,7 +1,8 @@
 use dirs::home_dir;
 use libwallet::{self, vault::Pass, Language};
 use std::error::Error;
-type Wallet = libwallet::Wallet<Pass>;
+type PassVault = Pass<String>;
+type Wallet = libwallet::Wallet<PassVault>;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -15,8 +16,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     wallet.unlock(None, account).await?;
 
-    let account = wallet.default_signer();
-    // println!("Default account: {}", account);
+    let account = wallet.default_account();
+    println!("Default account: {}", account.unwrap());
 
     Ok(())
 }

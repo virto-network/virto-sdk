@@ -1,3 +1,5 @@
+use core::marker::PhantomData;
+
 use arrayvec::ArrayVec;
 use mnemonic::Language;
 use prs_lib::{
@@ -14,15 +16,16 @@ use crate::{
 };
 
 /// A vault that stores secrets in a `pass` compatible repository
-pub struct Pass {
+pub struct Pass<Id> {
     store: Store,
     root: Option<RootAccount>,
     auto_generate: Option<Language>,
+    _phantom_data: PhantomData<Id>,
 }
 
 const DEFAULT_DIR: &str = "libwallet_accounts/";
 
-impl Pass {
+impl<Id> Pass<Id> {
     /// Create a new `Pass` vault in the given location.
     /// The optional `lang` instructs the vault to generarte a backup phrase
     /// in the given language in case one does not exist.
@@ -33,6 +36,7 @@ impl Pass {
             store,
             root: None,
             auto_generate: lang.into(),
+            _phantom_data: Default::default(),
         }
     }
 
@@ -135,8 +139,8 @@ impl From<String> for PassCreds {
     }
 }
 
-impl Vault for Pass {
-    type Id = Option<ArrayVec<u8, 20>>;
+impl<Id: AsRef<str>> Vault for Pass<Id> {
+    type Id = Option<Id>;
     type Credentials = PassCreds;
     type Account = AccountSigner;
     type Error = Error;
@@ -155,10 +159,7 @@ impl Vault for Pass {
                     .and_then(|l| self.generate(&credentials, l))
             })
             .map(|r| {
-                let acc = AccountSigner::new(path.as_ref().map(|x| {
-                    core::str::from_utf8(x.as_slice()).expect("it must be a valid utf8 string")
-                }))
-                .unlock(&r);
+                let acc = AccountSigner::new(path.as_ref().map(|x| x.as_ref())).unlock(&r);
                 self.root = Some(r);
                 acc
             })

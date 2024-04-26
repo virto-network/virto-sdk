@@ -14,7 +14,7 @@ pub mod util;
 #[cfg(feature = "substrate")]
 mod substrate_ext;
 
-use account::Account;
+pub use account::Account;
 use arrayvec::ArrayVec;
 use core::{cell::RefCell, convert::TryInto, fmt};
 use key_pair::any::AnySignature;
@@ -66,7 +66,7 @@ where
     }
 
     /// Get the account currently set as default
-    pub fn default_signer(&self) -> Option<&V::Account> {
+    pub fn default_account(&self) -> Option<&V::Account> {
         self.default_account.map(|x| &self.accounts[x as usize])
     }
 
@@ -132,13 +132,13 @@ where
     /// let msg = &[0x12, 0x34, 0x56];
     /// let signature = wallet.sign(msg).await.expect("it must sign");
     ///
-    /// assert!(wallet.default_signer().expect("it must have a default signer").verify(msg, signature.as_ref()).await);
+    /// assert!(wallet.default_account().expect("it must have a default signer").verify(msg, signature.as_ref()).await);
     /// # Ok(()) }
     /// ```
     pub async fn sign(&self, message: &[u8]) -> Result<impl Signature, ()> {
         assert!(!self.is_locked());
 
-        let Some(signer) = self.default_signer() else {
+        let Some(signer) = self.default_account() else {
             return Err(());
         };
 
@@ -194,7 +194,7 @@ where
         for (msg, a) in self.pending_sign.take() {
             let signer = a
                 .map(|idx| self.account(idx))
-                .unwrap_or_else(|| self.default_signer().expect("Signer not set"));
+                .unwrap_or_else(|| self.default_account().expect("Signer not set"));
 
             let message = signer.sign_msg(&msg).await?;
             signatures.push(message);

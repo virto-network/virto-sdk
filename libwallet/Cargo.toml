@@ -15,7 +15,7 @@ serde = {version = "1.0", default-features = false, features = ["derive"], optio
 hmac = {version = "0.12.1", default-features = false, optional = true}
 pbkdf2 = {version = "0.11.0", default-features = false, optional = true}
 sha2 = {version = "0.10.2", default-features = false, optional = true}
-pjs = { git= "https://github.com/S0c5/pjs-rs.git", branch = "feat/get-current-account", optional = true }
+pjs = { path = "../pjs-rs", optional = true }
 mnemonic = { package = "bip0039", version = "0.10.1", default-features = false, optional = true}
 
 rand_core = {version = "0.6.3", optional = true}
