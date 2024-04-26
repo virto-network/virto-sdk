@@ -112,6 +112,7 @@
   form.addEventListener('submit', async e => {
     e.preventDefault()
     pjs.selectAccount(form.account.value)
+    console.log(`signing with ${pjs.selectedAccount.name}: ${pjs.selectedAccount.address}`)
     let sig = await pjs.sign(form.payload.value, s => s)
     output.value = sig
   })

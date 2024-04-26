@@ -100,12 +100,22 @@ impl PjsExtension {
                 Account { name, address, net }
             })
             .collect();
+        if !self.accounts.is_empty() {
+            self.selected = Some(0);
+        }
         Ok(())
     }
 
     #[wasm_bindgen(getter)]
     pub fn accounts(&self) -> Vec<Account> {
         self.accounts.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = selectedAccount)]
+    pub fn get_selected(&self) -> Option<Account> {
+        self.selected
+            .and_then(|a| self.accounts.get(a as usize))
+            .cloned()
     }
 }
 
