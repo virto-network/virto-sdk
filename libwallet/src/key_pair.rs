@@ -1,6 +1,8 @@
-use core::fmt::Debug;
+use core::{convert::TryFrom, fmt::Debug};
 
 pub use derive::Derive;
+
+use self::any::AnySignature;
 
 type Bytes<const N: usize> = [u8; N];
 
@@ -24,12 +26,13 @@ impl<const N: usize> Signature for Bytes<N> {}
 /// Something that can sign messages
 pub trait Signer {
     type Signature: Signature;
-    fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature;
-    fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool;
+    async fn sign_msg(&self, data: impl AsRef<[u8]>) -> Result<Self::Signature, ()>;
+    async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool;
 }
-
 /// Wrappers to represent any supported key pair.
 pub mod any {
+    use crate::Signer;
+
     use super::{Public, Signature};
     use core::fmt;
 
@@ -91,19 +94,17 @@ pub mod any {
     impl super::Signer for Pair {
         type Signature = AnySignature;
 
-        fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
             match self {
                 #[cfg(feature = "sr25519")]
-                Pair::Sr25519(p) => p.sign_msg(msg).into(),
+                Pair::Sr25519(p) => Ok(p.sign_msg(msg).await?.into()),
             }
         }
 
-        fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
+        async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
             match self {
                 #[cfg(feature = "sr25519")]
-                Pair::Sr25519(p) => super::Signer::verify(p, msg, sig),
-                #[cfg(not(feature = "sr25519"))]
-                Pair::_None => unreachable!(),
+                Pair::Sr25519(p) => super::Signer::verify(p, msg, sig).await,
             }
         }
     }
@@ -145,6 +146,7 @@ pub mod any {
         #[cfg(not(feature = "sr25519"))]
         _None,
     }
+
     impl AsRef<[u8]> for AnySignature {
         fn as_ref(&self) -> &[u8] {
             match self {
@@ -198,13 +200,13 @@ pub mod sr25519 {
     impl Signer for Pair {
         type Signature = Signature;
 
-        fn sign_msg<M: AsRef<[u8]>>(&self, msg: M) -> Self::Signature {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
             let context = signing_context(SIGNING_CTX);
-            self.sign(context.bytes(msg.as_ref())).to_bytes()
+            Ok(self.sign(context.bytes(msg.as_ref())).to_bytes())
         }
 
-        fn verify<M: AsRef<[u8]>>(&self, msg: M, sig: &[u8]) -> bool {
-            let sig = match schnorrkel::Signature::from_bytes(sig) {
+        async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
+            let sig = match schnorrkel::Signature::from_bytes(sig.as_ref()) {
                 Ok(s) => s,
                 Err(_) => return false,
             };
@@ -310,6 +312,7 @@ pub mod sr25519 {
             ] {
                 let phrase = Mnemonic::from_phrase(phrase).unwrap();
                 let seed = Pin::from("").protect::<64>(&phrase.entropy());
+
                 let root: super::Pair = Pair::from_bytes(&seed);
                 let derived = root.derive(path);
                 assert_eq!(&derived.public(), pubkey);
