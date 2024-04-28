@@ -14,4 +14,4 @@ features = [
 ]
 
 [lib]
-crate-type = ["cdylib", "lib"]
+crate-type = ["cdylib"]
