@@ -1,23 +1,22 @@
-
-use pjs::{Error, PjsExtension, Account as PjsAccount};
-use crate::{any::AnySignature, Account, Signature, Signer, Vault};
-use core::{fmt::Display, marker::PhantomData};
-
+extern crate alloc;
+use crate::{any::AnySignature, Account, Signer, Vault};
+use pjs::{Account as PjsAccount, Error, PjsExtension};
+use alloc::vec::Vec;
 #[derive(Clone)]
-struct Pjs {
+pub struct Pjs {
     inner: PjsExtension,
 }
 
 impl Pjs {
     pub async fn connect(name: &str) -> Result<Self, Error> {
-        Pjs {
+        Ok(Pjs {
             inner: PjsExtension::connect(name).await?,
-        }
+        })
     }
 
     pub async fn list_accounts(&mut self) -> Result<Vec<PjsAccount>, Error> {
         self.inner.fetch_accounts().await?;
-        self.inner.accounts()
+        Ok(self.inner.accounts())
     }
 
     pub fn select_account(&mut self, idx: u8) {
@@ -29,7 +28,8 @@ impl Signer for Pjs {
     type Signature = AnySignature;
 
     async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
-        self.inner.sign(msg).await.map_err(|_| Err(()))
+        let sig = self.inner.sign(msg.as_ref()).await.map_err(|_| ())?;
+        Ok(AnySignature::from(sig))
     }
 
     async fn verify(&self, _: impl AsRef<[u8]>, _: impl AsRef<[u8]>) -> bool {
@@ -39,10 +39,15 @@ impl Signer for Pjs {
 
 impl Account for Pjs {
     fn public(&self) -> impl crate::Public {
-        self.inner
+        let mut key = [0u8; 32];
+
+        let pub_key = self.inner
             .get_selected()
             .expect("an account must be defined")
-            .address()
+            .address();
+
+        key.copy_from_slice(pub_key.as_bytes());
+        key
     }
 }
 
@@ -57,14 +62,14 @@ impl core::fmt::Display for Pjs {
 
 impl Vault for Pjs {
     type Id = u8;
-    type Credentials = String;
+    type Credentials = ();
     type Account = Pjs;
     type Error = Error;
 
     async fn unlock(
         &mut self,
         account: Self::Id,
-        cred: impl Into<Self::Credentials>,
+        _: impl Into<Self::Credentials>,
     ) -> Result<Self::Account, Self::Error> {
         let mut pjs_signer = self.clone();
         pjs_signer.select_account(account);

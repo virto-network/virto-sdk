@@ -20,6 +20,7 @@ macro_rules! get {
 const NULL: JsValue = JsValue::null();
 
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct PjsExtension {
     pjs: JsValue,
     accounts: Vec<Account>,
@@ -183,10 +184,12 @@ impl Account {
     pub fn name(&self) -> String {
         self.name.clone()
     }
+
     #[wasm_bindgen(getter)]
     pub fn address(&self) -> String {
         self.address.clone()
     }
+
     #[wasm_bindgen(getter)]
     pub fn network(&self) -> Network {
         self.net
