@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wasm-bindgen = { version = "0.2.92", default-features = false }
+wasm-bindgen = { version = "0.2.91", default-features = false }
 wasm-bindgen-futures = "0.4.42"
 
 [dependencies.web-sys]
