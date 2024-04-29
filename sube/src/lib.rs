@@ -74,6 +74,7 @@ pub use codec;
 use codec::Encode;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 
+
 pub use meta::Metadata;
 pub use meta_ext as meta;
 #[cfg(feature = "json")]
@@ -121,14 +122,15 @@ pub mod builder;
 
 pub mod hasher;
 pub mod meta_ext;
+use core::future::Future;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
 
 pub type Result<T> = core::result::Result<T, Error>;
 // type Bytes<const N: usize> = [u8; N];
-pub trait SignerFn: Fn(&[u8]) -> Result<[u8; 64]> {}
-impl<T> SignerFn for T where T: Fn(&[u8]) -> Result<[u8; 64]> {}
+pub trait SignerFn: Fn(&[u8]) -> Future<Output = Result<[u8; 64]>>  {}
+impl<T> SignerFn for T where T: Fn(&[u8]) -> (dyn Future<Output = Result<[u8; 64]>> + Sized) {}
 
 // impl From<AsRef<u8>> for [u8; 64] {
 //     fn from(value: AsRef<u8>) -> Self {
@@ -295,7 +297,7 @@ where
 
     let raw = payload.as_slice();
 
-    let signature = signer(raw)?;
+    let signature = signer(raw).await?;
 
     let extrinsic_call = {
         let encoded_inner = [

@@ -20,7 +20,7 @@ async-once-cell = "0.4.4"
 
 scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { path="../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer"] }
+scales = { path="../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer", "std"] }
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }

@@ -1,20 +1,25 @@
+use core::marker::PhantomData;
+
 use crate::{
     mnemonic::{Language, Mnemonic},
     util::{seed_from_entropy, Pin},
-    RootAccount, Vault,
+    Vault,
+    vault::utils::{ RootAccount,  AccountSigner }
 };
+use arrayvec::ArrayVec;
 use keyring;
 
 const SERVICE: &str = "libwallet_account";
 
 /// A vault that stores keys in the default OS secure store
-pub struct OSKeyring {
+pub struct OSKeyring<S> {
     entry: keyring::Entry,
     root: Option<RootAccount>,
     auto_generate: Option<Language>,
+    _phantom: PhantomData<S>
 }
 
-impl OSKeyring {
+impl<S> OSKeyring<S> {
     /// Create a new OSKeyring vault for the given user.
     /// The optional `lang` instructs the vault to generarte a backup phrase
     /// in the given language in case one does not exist.
@@ -23,6 +28,7 @@ impl OSKeyring {
             entry: keyring::Entry::new(SERVICE, &uname),
             root: None,
             auto_generate: lang.into(),
+            _phantom: PhantomData::default()
         }
     }
 
@@ -94,15 +100,17 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-impl Vault for OSKeyring {
+impl<S: AsRef<str>> Vault for OSKeyring<S> {
     type Credentials = Pin;
     type Error = Error;
+    type Id = Option<S>;
+    type Account = AccountSigner;
 
-    async fn unlock<T>(
+    async fn unlock(
         &mut self,
+        account: Self::Id,
         cred: impl Into<Self::Credentials>,
-        mut cb: impl FnMut(&RootAccount) -> T,
-    ) -> Result<T, Self::Error> {
+    ) -> Result<Self::Account, Self::Error> {
         let pin = cred.into();
         self.get_key(pin)
             .or_else(|err| {
@@ -110,9 +118,10 @@ impl Vault for OSKeyring {
                     .ok_or(err)
                     .and_then(|l| self.generate(pin, l))
             })
-            .and_then(|r| {
+            .map(|r| {
+                let acc = AccountSigner::new(account.as_ref().map(|x|  x.as_ref())).unlock(&r);
                 self.root = Some(r);
-                Ok(cb(self.root.as_ref().unwrap()))
+                acc
             })
     }
 }

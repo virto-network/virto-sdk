@@ -1,25 +1,33 @@
-use super::seed_from_entropy;
-use crate::util::Pin;
-use crate::{RootAccount, Vault};
+use core::convert::TryInto;
+use core::marker::PhantomData;
+
+use arrayvec::ArrayVec;
+
+use crate::util::{seed_from_entropy, Pin};
+use crate::{
+    vault::utils::{AccountSigner, RootAccount},
+    Derive, Vault,
+};
 
 /// A vault that holds secrets in memory
-pub struct Simple {
+pub struct Simple<S> {
     locked: Option<[u8; 32]>,
     unlocked: Option<[u8; 32]>,
+    _phantom: PhantomData<S>
 }
 
-impl Simple {
+impl<S> Simple<S> {
     /// A vault with a random seed, once dropped the the vault can't be restored
     ///
     /// ```
     /// # use libwallet::{vault, Error, Derive, Pair, Vault};
-    /// # type Result = std::result::Result<(), <vault::Simple as Vault>::Error>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), <SimpleVault as Vault>::Error>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// let mut vault = vault::Simple::generate(&mut rand_core::OsRng);
-    /// let root = vault.unlock(None, |root| {
-    ///     println!("{}", root.derive("//default").public());
-    /// }).await?;
-    /// # Ok(()) }
+    /// let mut vault = SimpleVault::generate(&mut rand_core::OsRng);
+    /// let root = vault.unlock(None, None).await?;
+    /// # Ok(())
+    /// }
     /// ```
     #[cfg(feature = "rand")]
     pub fn generate<R>(rng: &mut R) -> Self
@@ -29,6 +37,7 @@ impl Simple {
         Simple {
             locked: Some(crate::util::random_bytes::<_, 32>(rng)),
             unlocked: None,
+            _phantom: Default::default()
         }
     }
 
@@ -57,6 +66,7 @@ impl Simple {
         Simple {
             locked: Some(entropy),
             unlocked: None,
+            _phantom: Default::default(),
         }
     }
 
@@ -81,18 +91,21 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-impl Vault for Simple {
+impl<S: AsRef<str>> Vault for Simple<S> {
     type Credentials = Option<Pin>;
     type Error = Error;
+    type Id = Option<S>;
+    type Account = AccountSigner;
 
-    async fn unlock<T>(
+    async fn unlock(
         &mut self,
-        credentials: impl Into<Self::Credentials>,
-        mut cb: impl FnMut(&RootAccount) -> T,
-    ) -> Result<T, Self::Error> {
+        path: Self::Id,
+        creds: impl Into<Self::Credentials>,
+    ) -> Result<Self::Account, Self::Error> {
         self.unlocked = self.locked.take();
-        let pin = credentials.into();
-        let root_account = &self.get_key(pin.unwrap_or_default())?;
-        Ok(cb(root_account))
+        let pin = creds.into();
+        let root_account = self.get_key(pin.unwrap_or_default())?;
+        let path = path.as_ref().map(|x| x.as_ref());
+        Ok(AccountSigner::new(path).unlock(&root_account))
     }
 }

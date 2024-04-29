@@ -1,3 +1,6 @@
+use core::marker::PhantomData;
+
+use arrayvec::ArrayVec;
 use mnemonic::Language;
 use prs_lib::{
     crypto::{self, IsContext, Proto},
@@ -6,20 +9,23 @@ use prs_lib::{
 };
 
 use crate::{
+    account,
     util::{seed_from_entropy, Pin},
-    RootAccount, Vault,
+    vault::utils::{AccountSigner, RootAccount},
+    Vault,
 };
 
 /// A vault that stores secrets in a `pass` compatible repository
-pub struct Pass {
+pub struct Pass<Id> {
     store: Store,
     root: Option<RootAccount>,
     auto_generate: Option<Language>,
+    _phantom_data: PhantomData<Id>,
 }
 
 const DEFAULT_DIR: &str = "libwallet_accounts/";
 
-impl Pass {
+impl<Id> Pass<Id> {
     /// Create a new `Pass` vault in the given location.
     /// The optional `lang` instructs the vault to generarte a backup phrase
     /// in the given language in case one does not exist.
@@ -30,6 +36,7 @@ impl Pass {
             store,
             root: None,
             auto_generate: lang.into(),
+            _phantom_data: Default::default(),
         }
     }
 
@@ -132,15 +139,17 @@ impl From<String> for PassCreds {
     }
 }
 
-impl Vault for Pass {
+impl<Id: AsRef<str>> Vault for Pass<Id> {
+    type Id = Option<Id>;
     type Credentials = PassCreds;
+    type Account = AccountSigner;
     type Error = Error;
 
-    async fn unlock<T>(
+    async fn unlock(
         &mut self,
+        path: Self::Id,
         creds: impl Into<Self::Credentials>,
-        mut cb: impl FnMut(&RootAccount) -> T,
-    ) -> Result<T, Self::Error> {
+    ) -> Result<Self::Account, Self::Error> {
         let credentials = creds.into();
 
         self.get_key(&credentials)
@@ -149,9 +158,10 @@ impl Vault for Pass {
                     .ok_or(err)
                     .and_then(|l| self.generate(&credentials, l))
             })
-            .and_then(|r| {
+            .map(|r| {
+                let acc = AccountSigner::new(path.as_ref().map(|x| x.as_ref())).unlock(&r);
                 self.root = Some(r);
-                Ok(cb(self.root.as_ref().unwrap()))
+                acc
             })
     }
 }

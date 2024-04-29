@@ -35,8 +35,7 @@ serde_json = {version = "1.0", default-features = false, features = ["alloc"]}
 dirs = "4.0"
 
 [features]
-# The library has no default features but this can be uncommented during development
-# default = [ "std",  "substrate",  "vault_simple",  "vault_os",  "vault_pass",  "mnemonic",  "util_pin", "rand", ]
+# default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os", "util_pin"]
 rand = ["rand_core", "schnorrkel?/getrandom"]
 sr25519 = ["dep:schnorrkel"]
 std = [
@@ -46,6 +45,7 @@ substrate = ["sr25519"]
 util_pin = ["pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
+vault_simple = []
 
 [workspace]
 members = [

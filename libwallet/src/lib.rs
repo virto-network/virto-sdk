@@ -9,22 +9,25 @@ compile_error!("Enable at least one type of signature algorithm");
 
 mod account;
 mod key_pair;
+pub mod util;
+
 #[cfg(feature = "substrate")]
 mod substrate_ext;
 
+pub use account::Account;
 use arrayvec::ArrayVec;
-use core::{convert::TryInto, fmt};
+use core::{cell::RefCell, convert::TryInto, fmt};
 use key_pair::any::AnySignature;
 
 #[cfg(feature = "mnemonic")]
 use mnemonic;
 
-pub use account::Account;
 pub use key_pair::*;
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{Language, Mnemonic};
-pub use vault::{RootAccount, Vault};
+pub use vault::Vault;
 pub mod vault;
+
 
 const MSG_MAX_SIZE: usize = u8::MAX as usize;
 type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
@@ -42,8 +45,8 @@ type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
 pub struct Wallet<V: Vault, const A: usize = 5, const M: usize = A> {
     vault: V,
     is_locked: bool,
-    default_account: Account,
-    accounts: ArrayVec<Account, A>,
+    default_account: Option<u8>,
+    accounts: ArrayVec<V::Account, A>,
     pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
 }
 
@@ -55,7 +58,7 @@ where
     pub fn new(vault: V) -> Self {
         Wallet {
             vault,
-            default_account: Account::new(None),
+            default_account: None,
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
             is_locked: true,
@@ -63,8 +66,8 @@ where
     }
 
     /// Get the account currently set as default
-    pub fn default_account(&self) -> &Account {
-        &self.default_account
+    pub fn default_account(&self) -> Option<&V::Account> {
+        self.default_account.map(|x| &self.accounts[x as usize])
     }
 
     /// Use credentials to unlock the vault.
@@ -72,29 +75,38 @@ where
     /// ```
     /// # use libwallet::{Wallet, Error, vault, Vault};
     /// # use std::convert::TryInto;
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// if wallet.is_locked() {
-    ///     wallet.unlock(None).await?;
+    ///     wallet.unlock(None, None).await?;
     /// }
     ///
     /// assert!(!wallet.is_locked());
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unlock(&mut self, cred: impl Into<V::Credentials>) -> Result<(), Error<V::Error>> {
+    pub async fn unlock(
+        &mut self,
+        account: V::Id,
+        cred: impl Into<V::Credentials>,
+    ) -> Result<(), Error<V::Error>> {
         if self.is_locked() {
             let vault = &mut self.vault;
-            let def = &mut self.default_account;
 
-            vault
-                .unlock(cred, |root| {
-                    def.unlock(root);
-                })
+            let signer = vault
+                .unlock(account, cred)
                 .await
-                .map_err(Error::Vault)?;
+                .map_err(|e| Error::Vault(e))?;
+
+            if self.default_account.is_none() {
+                self.default_account = Some(0);
+            }
+
+            self.accounts.push(signer);
+
             self.is_locked = false;
         }
         Ok(())
@@ -110,30 +122,37 @@ where
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Signer, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(None).await?;
+    /// wallet.unlock(None, None).await?;
     ///
     /// let msg = &[0x12, 0x34, 0x56];
-    /// let signature = wallet.sign(msg);
+    /// let signature = wallet.sign(msg).await.expect("it must sign");
     ///
-    /// assert!(wallet.default_account().verify(msg, signature.as_ref()));
+    /// assert!(wallet.default_account().expect("it must have a default signer").verify(msg, signature.as_ref()).await);
     /// # Ok(()) }
     /// ```
-    pub fn sign(&self, message: &[u8]) -> impl Signature {
+    pub async fn sign(&self, message: &[u8]) -> Result<impl Signature, ()> {
         assert!(!self.is_locked());
-        self.default_account().sign_msg(message)
+
+        let Some(signer) = self.default_account() else {
+            return Err(());
+        };
+
+        signer.sign_msg(message).await
     }
 
     /// Save data to be signed some time later.
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     ///
@@ -155,38 +174,42 @@ where
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(None).await?;
+    /// wallet.unlock(None, None).await?;
     ///
     /// wallet.sign_later(&[0x01, 0x02, 0x03]);
     /// wallet.sign_later(&[0x04, 0x05, 0x06]);
-    /// let signatures = wallet.sign_pending();
+    /// let signatures = wallet.sign_pending().await.expect("it must sign");
     ///
     /// assert_eq!(signatures.len(), 2);
     /// assert_eq!(wallet.pending().count(), 0);
     /// # Ok(()) }
     /// ```
-    pub fn sign_pending(&mut self) -> ArrayVec<AnySignature, M> {
+    pub async fn sign_pending(&mut self) -> Result<ArrayVec<impl AsRef<[u8]>, M>, ()> {
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
-            let account = a
+            let signer = a
                 .map(|idx| self.account(idx))
-                .unwrap_or_else(|| self.default_account());
-            signatures.push(account.sign_msg(&msg));
+                .unwrap_or_else(|| self.default_account().expect("Signer not set"));
+
+            let message = signer.sign_msg(&msg).await?;
+            signatures.push(message);
         }
-        signatures
+        Ok(signatures)
     }
 
     /// Iteratate over the messages pending for signature for all the accounts.
     ///
     /// ```
     /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type Result = std::result::Result<(), Error<<vault::Simple as Vault>::Error>>;
+    /// # type SimpleVault = vault::Simple<String>;
+    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
     /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = vault::Simple::generate(&mut rand_core::OsRng);
+    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
     /// let mut wallet: Wallet<_> = Wallet::new(vault);
     /// wallet.sign_later(&[0x01]);
     /// wallet.sign_later(&[0x02]);
@@ -199,17 +222,7 @@ where
         self.pending_sign.iter().map(|(msg, _)| msg.as_ref())
     }
 
-    #[cfg(feature = "subaccounts")]
-    pub fn new_account(&mut self, name: &str, derivation_path: &str) -> Result<&Account<V::Pair>> {
-        let root = self.root_account()?;
-        let subaccount = root
-            .derive_subaccount(name, derivation_path)
-            .ok_or(Error::DeriveError)?;
-        self.subaccounts.insert(name.to_string(), subaccount);
-        Ok(self.subaccounts.get(name).unwrap())
-    }
-
-    fn account(&self, idx: u8) -> &Account {
+    fn account(&self, idx: u8) -> &V::Account {
         &self.accounts[idx as usize]
     }
 }
@@ -280,123 +293,3 @@ impl<V> From<mnemonic::Error> for Error<V> {
     }
 }
 
-mod util {
-    use core::{iter, ops};
-
-    #[cfg(feature = "rand")]
-    pub fn random_bytes<R, const S: usize>(rng: &mut R) -> [u8; S]
-    where
-        R: rand_core::CryptoRng + rand_core::RngCore,
-    {
-        let mut bytes = [0u8; S];
-        rng.fill_bytes(&mut bytes);
-        bytes
-    }
-
-    #[cfg(feature = "rand")]
-    pub fn gen_phrase<R>(rng: &mut R, lang: mnemonic::Language) -> mnemonic::Mnemonic
-    where
-        R: rand_core::CryptoRng + rand_core::RngCore,
-    {
-        let seed = random_bytes::<_, 32>(rng);
-        let phrase = mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid");
-        phrase
-    }
-
-    /// A simple pin credential that can be used to add some
-    /// extra level of protection to seeds stored in vaults
-    #[derive(Default, Copy, Clone)]
-    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-    pub struct Pin(u16);
-
-    impl Pin {
-        const LEN: usize = 4;
-
-        #[cfg(feature = "util_pin")]
-        pub fn protect<const S: usize>(&self, data: &[u8]) -> [u8; S] {
-            use hmac::Hmac;
-            use pbkdf2::pbkdf2;
-            use sha2::Sha512;
-
-            let salt = {
-                let mut s = [0; 10];
-                s.copy_from_slice(b"mnemonic\0\0");
-                let [b1, b2] = self.to_le_bytes();
-                s[8] = b1;
-                s[9] = b2;
-                s
-            };
-            let mut seed = [0; S];
-            // using same hashing strategy as Substrate to have some compatibility
-            // when pin is 0(no pin) we produce the same addresses
-            let len = self.eq(&0).then_some(salt.len() - 2).unwrap_or(salt.len());
-            pbkdf2::<Hmac<Sha512>>(data, &salt[..len], 2048, &mut seed);
-            seed
-        }
-    }
-
-    // Use 4 chars long hex string as pin. i.e. "ABCD", "1234"
-    impl<'a> From<&'a str> for Pin {
-        fn from(s: &str) -> Self {
-            let l = s.len().min(Pin::LEN);
-            let chars = s
-                .chars()
-                .take(l)
-                .chain(iter::repeat('0').take(Pin::LEN - l));
-            Pin(chars
-                .map(|c| c.to_digit(16).unwrap_or(0))
-                .enumerate()
-                .fold(0, |pin, (i, d)| {
-                    pin | ((d as u16) << (Pin::LEN - 1 - i) * Pin::LEN)
-                }))
-        }
-    }
-
-    impl<'a> From<Option<&'a str>> for Pin {
-        fn from(p: Option<&'a str>) -> Self {
-            p.unwrap_or("").into()
-        }
-    }
-
-    impl From<()> for Pin {
-        fn from(_: ()) -> Self {
-            Self(0)
-        }
-    }
-
-    impl From<u16> for Pin {
-        fn from(n: u16) -> Self {
-            Self(n)
-        }
-    }
-
-    impl ops::Deref for Pin {
-        type Target = u16;
-
-        fn deref(&self) -> &Self::Target {
-            &self.0
-        }
-    }
-
-    #[test]
-    fn pin_parsing() {
-        for (s, expected) in [
-            ("0000", 0),
-            // we only take the first 4 characters and ignore the rest
-            ("0000001", 0),
-            // non hex chars are ignored and defaulted to 0, here a,d are kept
-            ("zasdasjgkadg", 0x0A0D),
-            ("ABCD", 0xABCD),
-            ("1000", 0x1000),
-            ("000F", 0x000F),
-            ("FFFF", 0xFFFF),
-        ] {
-            let pin = Pin::from(s);
-            assert_eq!(
-                *pin, expected,
-                "(input:\"{}\", l:{:X} == r:{:X})",
-                s, *pin, expected
-            );
-        }
-    }
-}

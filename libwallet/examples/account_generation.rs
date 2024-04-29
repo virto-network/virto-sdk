@@ -1,7 +1,7 @@
-use libwallet::{self, vault};
+use libwallet::{self, vault, Account};
 use std::env;
 
-type Wallet = libwallet::Wallet<vault::Simple>;
+type Wallet = libwallet::Wallet<vault::Simple<String>>;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,10 +15,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut wallet = Wallet::new(vault);
-    wallet.unlock(None).await?;
+    wallet.unlock(None, None).await?;
     let account = wallet.default_account();
 
     println!("Secret phrase: \"{phrase}\"");
-    println!("Default Account: 0x{account}");
+    println!("Default Account: 0x{:?}", account.unwrap());
     Ok(())
 }
