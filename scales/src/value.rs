@@ -39,8 +39,8 @@ impl<'a> Value<'a> {
     }
 
     fn ty_len(&self, data: &[u8], ty: TypeId) -> usize {
-        match self.resolve(ty).type_def() {
-            TypeDef::Primitive(p) => match p {
+        match &self.resolve(ty).type_def {
+            TypeDef::Primitive(ref p) => match p {
                 Primitive::U8 => mem::size_of::<u8>(),
                 Primitive::U16 => mem::size_of::<u16>(),
                 Primitive::U32 => mem::size_of::<u32>(),
@@ -60,34 +60,34 @@ impl<'a> Value<'a> {
                 _ => unimplemented!(),
             },
             TypeDef::Composite(c) => c
-                .fields()
+                .fields
                 .iter()
-                .fold(0, |c, f| c + self.ty_len(&data[c..], f.ty().id())),
+                .fold(0, |c, f| c + self.ty_len(&data[c..], f.ty.id)),
             TypeDef::Variant(e) => {
                 let var = e
-                    .variants()
+                    .variants
                     .iter()
-                    .find(|v| v.index() == data[0])
+                    .find(|v| v.index == data[0])
                     .expect("variant");
 
-                if var.fields().is_empty() {
+                if var.fields.is_empty() {
                     1 // unit variant
                 } else {
-                    var.fields()
+                    var.fields
                         .iter()
-                        .fold(1, |c, f| c + self.ty_len(&data[c..], f.ty().id()))
+                        .fold(1, |c, f| c + self.ty_len(&data[c..], f.ty.id))
                 }
             }
             TypeDef::Sequence(s) => {
                 let (len, prefix_size) = sequence_len(data);
-                let ty_id = s.type_param().id();
+                let ty_id = s.type_param.id;
                 (0..len).fold(prefix_size, |c, _| c + self.ty_len(&data[c..], ty_id))
             }
-            TypeDef::Array(a) => a.len().try_into().unwrap(),
+            TypeDef::Array(a) => a.len.try_into().unwrap(),
             TypeDef::Tuple(t) => t
-                .fields()
+                .fields
                 .iter()
-                .fold(0, |c, f| c + self.ty_len(&data[c..], f.id())),
+                .fold(0, |c, f| c + self.ty_len(&data[c..], f.id)),
             TypeDef::Compact(_) => compact_len(data),
             TypeDef::BitSequence(_) => unimplemented!(),
         }
@@ -116,11 +116,11 @@ impl<'a> Serialize for Value<'a> {
             I64 => ser.serialize_i64(data.get_i64_le()),
             I128 => ser.serialize_i128(data.get_i128_le()),
             Compact(ty) => {
-                let type_def = self
+                let type_def = &self
                     .registry
                     .resolve(ty)
                     .expect("not found in registry")
-                    .type_def();
+                    .type_def;
 
                 use codec::Compact;
                 match type_def {
@@ -289,7 +289,7 @@ impl<'reg> core::fmt::Debug for Value<'reg> {
             "Value {{ data: {:?}, type({}): {:?} }}",
             self.data,
             self.ty_id,
-            self.registry.resolve(self.ty_id).unwrap().type_def()
+            self.registry.resolve(self.ty_id).unwrap().type_def
         )
     }
 }
@@ -332,7 +332,7 @@ mod tests {
     {
         let mut reg = Registry::new();
         let sym = reg.register_type(&meta_type::<T>());
-        (sym.id(), reg.into())
+        (sym.id, reg.into())
     }
 
     #[cfg(feature = "json")]

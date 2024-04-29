@@ -1,8 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-///!
-///! # Scales
-///!
-///! Dynamic SCALE Serialization using `scale-info` type information.
+//!
+//! # Scales
+//!
+//! Dynamic SCALE Serialization using `scale-info` type information.
+
 #[macro_use]
 extern crate alloc;
 
@@ -23,22 +24,16 @@ use prelude::*;
 use scale_info::{form::PortableForm as Portable, PortableRegistry};
 
 mod prelude {
-    pub use alloc::{
-        collections::BTreeMap,
-        string::{String, ToString},
-        vec::Vec,
-    };
     pub use core::ops::Deref;
 }
 
 type Type = scale_info::Type<Portable>;
-type Field = scale_info::Field<Portable>;
 type Variant = scale_info::Variant<Portable>;
 type TypeId = u32;
 
 macro_rules! is_tuple {
     ($it:ident) => {
-        $it.fields().first().and_then(Field::name).is_none()
+        $it.fields.first().and_then(|f| f.name.as_ref()).is_none()
     };
 }
 
@@ -69,18 +64,18 @@ impl From<(&Type, &PortableRegistry)> for SpecificType {
 
         macro_rules! resolve {
             ($ty:expr) => {
-                registry.resolve($ty.id()).unwrap()
+                registry.resolve($ty.id).unwrap()
             };
         }
-        let is_map = |ty: &Type| -> bool { ty.path().segments() == ["BTreeMap"] };
+        let is_map = |ty: &Type| -> bool { ty.path.segments == ["BTreeMap"] };
         let map_types = |ty: &TypeDefComposite<Portable>| -> (TypeId, TypeId) {
-            let field = ty.fields().first().expect("map");
+            let field = ty.fields.first().expect("map");
             // Type information of BTreeMap is weirdly packed
-            if let Def::Sequence(s) = resolve!(field.ty()).type_def() {
-                if let Def::Tuple(t) = resolve!(s.type_param()).type_def() {
-                    assert_eq!(t.fields().len(), 2);
-                    let key_ty = t.fields().first().expect("key").id();
-                    let val_ty = t.fields().last().expect("val").id();
+            if let Def::Sequence(s) = &resolve!(field.ty).type_def {
+                if let Def::Tuple(t) = &resolve!(s.type_param).type_def {
+                    assert_eq!(t.fields.len(), 2);
+                    let key_ty = t.fields.first().expect("key").id;
+                    let val_ty = t.fields.last().expect("val").id;
                     return (key_ty, val_ty);
                 }
             }
@@ -88,50 +83,47 @@ impl From<(&Type, &PortableRegistry)> for SpecificType {
         };
 
         let name = ty
-            .path()
-            .segments()
+            .path
+            .segments
             .last()
             .cloned()
             .unwrap_or_else(|| "".into());
 
-        match ty.type_def() {
-            Def::Composite(c) => {
-                let fields = c.fields();
+        match ty.type_def {
+            Def::Composite(ref c) => {
+                let fields = &c.fields;
                 if fields.is_empty() {
                     Self::StructUnit
                 } else if is_map(ty) {
                     let (k, v) = map_types(c);
                     Self::Map(k, v)
-                } else if fields.len() == 1 && fields.first().unwrap().name().is_none() {
-                    Self::StructNewType(fields.first().unwrap().ty().id())
+                } else if fields.len() == 1 && fields.first().unwrap().name.is_none() {
+                    Self::StructNewType(fields.first().unwrap().ty.id)
                 } else if is_tuple!(c) {
-                    Self::StructTuple(fields.iter().map(|f| f.ty().id()).collect())
+                    Self::StructTuple(fields.iter().map(|f| f.ty.id).collect())
                 } else {
                     Self::Struct(
                         fields
                             .iter()
-                            .map(|f| (f.name().unwrap().deref().into(), f.ty().id()))
+                            .map(|f| (f.name.as_ref().unwrap().deref().into(), f.ty.id))
                             .collect(),
                     )
                 }
             }
-            Def::Variant(v) => Self::Variant(name, v.variants().into(), None),
-            Def::Sequence(s) => {
-                let ty = s.type_param();
-                if matches!(
-                    resolve!(ty).type_def(),
-                    Def::Primitive(TypeDefPrimitive::U8)
-                ) {
-                    Self::Bytes(ty.id())
+            Def::Variant(ref v) => Self::Variant(name, v.variants.clone(), None),
+            Def::Sequence(ref s) => {
+                let ty = s.type_param;
+                if matches!(resolve!(ty).type_def, Def::Primitive(TypeDefPrimitive::U8)) {
+                    Self::Bytes(ty.id)
                 } else {
-                    Self::Sequence(ty.id())
+                    Self::Sequence(ty.id)
                 }
             }
-            Def::Array(a) => Self::Tuple(TupleOrArray::Array(a.type_param().id(), a.len())),
-            Def::Tuple(t) => Self::Tuple(TupleOrArray::Tuple(
-                t.fields().iter().map(|ty| ty.id()).collect(),
+            Def::Array(ref a) => Self::Tuple(TupleOrArray::Array(a.type_param.id, a.len)),
+            Def::Tuple(ref t) => Self::Tuple(TupleOrArray::Tuple(
+                t.fields.iter().map(|ty| ty.id).collect(),
             )),
-            Def::Primitive(p) => match p {
+            Def::Primitive(ref p) => match p {
                 TypeDefPrimitive::U8 => Self::U8,
                 TypeDefPrimitive::U16 => Self::U16,
                 TypeDefPrimitive::U32 => Self::U32,
@@ -148,8 +140,8 @@ impl From<(&Type, &PortableRegistry)> for SpecificType {
                 TypeDefPrimitive::U256 => unimplemented!(),
                 TypeDefPrimitive::I256 => unimplemented!(),
             },
-            Def::Compact(c) => Self::Compact(c.type_param().id()),
-            Def::BitSequence(_b) => todo!(),
+            Def::Compact(ref c) => Self::Compact(c.type_param.id),
+            Def::BitSequence(ref _b) => todo!(),
         }
     }
 }
@@ -162,7 +154,7 @@ impl SpecificType {
                 Self::Variant(name.to_string(), variant.to_vec(), Some(index))
             }
             SpecificType::Variant(name, variants, None) => {
-                let v = variants.iter().find(|v| v.index() == index).unwrap();
+                let v = variants.iter().find(|v| v.index == index).unwrap();
                 Self::Variant(name.clone(), vec![v.clone()], Some(index))
             }
             _ => panic!("Only for enum variants"),
@@ -179,12 +171,14 @@ impl SpecificType {
         match self {
             SpecificType::Variant(_, _, Some(_)) => Some(self),
             SpecificType::Variant(_, ref mut variants, idx @ None) => {
-                let i = variants
+                let (vf, _) = variants
                     .iter()
-                    .map(get_field)
-                    .position(|f| f.as_ref() == selection.as_ref())? as u8;
-                variants.retain(|v| v.index() == i);
-                *idx = Some(i);
+                    .map(|v| (v.index, get_field(v)))
+                    .find(|(_, f)| f.as_ref() == selection.as_ref())?;
+
+                variants.retain(|v| v.index == vf);
+                *idx = Some(vf);
+
                 Some(self)
             }
             _ => panic!("Only for enum variants"),
@@ -215,8 +209,8 @@ impl<'a> From<&'a SpecificType> for EnumVariant<'a> {
         match ty {
             SpecificType::Variant(name, variants, Some(idx)) => {
                 let variant = variants.first().expect("single variant");
-                let fields = variant.fields();
-                let vname = variant.name().as_ref();
+                let fields = &variant.fields;
+                let vname = variant.name.as_ref();
 
                 if fields.is_empty() {
                     if name == "Option" && vname == "None" {
@@ -226,20 +220,20 @@ impl<'a> From<&'a SpecificType> for EnumVariant<'a> {
                     }
                 } else if is_tuple!(variant) {
                     if fields.len() == 1 {
-                        let ty = fields.first().map(|f| f.ty().id()).unwrap();
-                        return if name == "Option" && variant.name() == "Some" {
+                        let ty = fields.first().map(|f| f.ty.id).unwrap();
+                        return if name == "Option" && variant.name == "Some" {
                             Self::OptionSome(ty)
                         } else {
                             Self::NewType(*idx, vname, ty)
                         };
                     } else {
-                        let fields = fields.iter().map(|f| f.ty().id()).collect();
+                        let fields = fields.iter().map(|f| f.ty.id).collect();
                         Self::Tuple(*idx, vname, fields)
                     }
                 } else {
                     let fields = fields
                         .iter()
-                        .map(|f| (f.name().unwrap().deref(), f.ty().id()))
+                        .map(|f| (f.name.as_deref().unwrap(), f.ty.id))
                         .collect();
                     Self::Struct(*idx, vname, fields)
                 }
