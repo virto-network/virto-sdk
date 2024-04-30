@@ -154,7 +154,7 @@ impl PjsExtension {
     }
     fn from_hex(input: &str, buf: &mut [u8]) {
         for (i, b) in buf.iter_mut().enumerate() {
-            let Some(s) = input.get(i * 2..i * 2 + 2) else {
+            let Some(s) = input.get((i * 2 + 2)..(i * 2 + 4)) else {
                 return;
             };
             log::info!("s({:?})", s);
