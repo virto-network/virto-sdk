@@ -3,7 +3,7 @@ use crate::http::Backend as HttpBackend;
 #[cfg(feature = "ws")]
 use crate::ws::Backend as WSBackend;
 
-use crate::meta::Meta;
+
 use crate::prelude::*;
 use crate::{
     meta::BlockInfo, Backend, Error, ExtrinsicBody, Metadata, Response, Result as SubeResult,
@@ -12,11 +12,9 @@ use crate::{
 
 use async_trait::async_trait;
 use core::future::{Future, IntoFuture};
-use core::pin::Pin;
 use heapless::Vec as HVec;
 use once_cell::sync::OnceCell;
-use scale_info::build;
-use serde::Serializer;
+
 use url::Url;
 
 type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
@@ -76,7 +74,7 @@ impl<'a, B> SubeBuilder<'a, B, ()> {
 impl<'a, B, S> SubeBuilder<'a, B, S>
 where
     B: serde::Serialize,
-    S: SignerFn,
+    S: SignerFn
 {
     pub fn with_body(self, body: B) -> Self {
         Self {
@@ -153,6 +151,7 @@ where
             sender,
             signer,
             metadata,
+            ..
         } = self;
 
         async move {
@@ -313,11 +312,11 @@ macro_rules! sube {
         async {
             let mut builder = $crate::builder::SubeBuilder::default();
 
-            let public = $wallet.default_account().public();
+            let public = $wallet.default_account().expect("to have a default account").public();
 
             builder
                 .with_url($url)
-                .with_signer(|message: &[u8]| Ok($wallet.sign(message).as_bytes()))
+                .with_signer(async |message: &[u8]| Ok($wallet.sign(message).await.expect("hello").as_bytes()))
                 .with_sender(&public.as_ref())
                 .with_body($body)
                 .await?;

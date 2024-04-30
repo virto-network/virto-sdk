@@ -1,3 +1,5 @@
+#![feature(async_closure)]
+
 use futures_util::TryFutureExt;
 use libwallet::{self, vault, Account, Signature};
 use rand_core::OsRng;
@@ -30,9 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let public = account.unwrap().public();
 
     let response = sube!("wss://rococo-rpc.polkadot.io/balances/transfer" => {
-        signer: async |message: &[u8]| Ok(wallet.sign(message).await.expect("hello").as_bytes()),
+        signer: async |message: &[u8]| Ok(wallet.sign(message).await.expect("hello").as_bytes()) ,
         sender: public.as_ref(),
-        body:  json!({
+        body:  json!({      
             "dest": {
                 "Id": public.as_ref()
             },

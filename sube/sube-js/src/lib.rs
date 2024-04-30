@@ -1,3 +1,4 @@
+#![feature(async_closure)]
 mod util;
 
 use core::convert::TryInto;
@@ -96,22 +97,22 @@ pub async fn sube_js(
     extrinsic_value.call.body = decode_addresses(&extrinsic_value.call.body);
 
     let value = sube!(url => {
-        signer: move |message: &[u8]| unsafe {
-            let response: JsValue = signer
-                .clone()
-                .ok_or(SubeError::BadInput)?
-                .call1(
-                    &JsValue::null(),
-                    &JsValue::from(js_sys::Uint8Array::from(message)),
-                )
-                .map_err(|_| SubeError::Signing)?;
+        signer: async |message: &[u8]| {
+                let response: JsValue = signer
+                    .clone()
+                    .ok_or(SubeError::BadInput)?
+                    .call1(
+                        &JsValue::null(),
+                        &JsValue::from(js_sys::Uint8Array::from(message)),
+                    )
+                    .map_err(|_| SubeError::Signing)?;
 
-            let vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
-                .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;
+                let vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
+                    .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;
 
-            let buffer: [u8; 64] = vec.try_into().expect("slice with incorrect length");
+                let buffer: [u8; 64] = vec.try_into().expect("slice with incorrect length");
 
-            Ok(buffer)
+                Ok(buffer)
         },
         sender: extrinsic_value.from.as_slice(),
         body: extrinsic_value.call,
