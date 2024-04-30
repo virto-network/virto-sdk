@@ -31,8 +31,7 @@ mod utils {
     const MAX_PATH_LEN: usize = 16;
     use arrayvec::ArrayString;
 
-    use crate::{account::Account, any::AnySignature, any, Derive, Network, Pair, Public};
-    
+    use crate::{account::Account, any, any::AnySignature, Derive, Network, Pair, Public};
 
     /// The root account is a container of the key pairs stored in the vault and cannot be
     /// used to sign messages directly, we always derive new key pairs from it to create
@@ -82,7 +81,7 @@ mod utils {
         path: ArrayString<MAX_PATH_LEN>,
         name: ArrayString<{ MAX_PATH_LEN - 2 }>,
     }
- 
+
     impl Account for AccountSigner {
         fn public(&self) -> impl Public {
             self.pair.as_ref().expect("account unlocked").public()
@@ -91,13 +90,22 @@ mod utils {
 
     impl AccountSigner {
         pub(crate) fn new<'a>(name: impl Into<Option<&'a str>>) -> Self {
-            let n = name.into().unwrap_or_else(|| "default");
-            let mut path = ArrayString::from("//").unwrap();
-            path.push_str(&n);
+            let n = name.into().unwrap_or_else(|| "");
+            let mut path = ArrayString::new();
+
+            if n == "default" {
+                path.push_str(n);
+            }
+
+            if n != "default" && !n.is_empty() {
+                path.push_str("//");
+                path.push_str(n);
+            }
+
             AccountSigner {
                 pair: None,
                 network: Network::default(),
-                name: ArrayString::from(&n).expect("short name"),
+                name: ArrayString::from(n).expect("short name"),
                 path,
             }
         }
