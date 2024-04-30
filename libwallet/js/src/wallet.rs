@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
 
-use libwallet::{vault::Simple, Signer, Wallet};
+use libwallet::{vault::Simple, Account, Signer, Wallet};
 
 #[derive(Serialize, Deserialize)]
 pub enum WalletConstructor {
@@ -13,7 +13,7 @@ pub enum WalletConstructor {
 #[wasm_bindgen(inspectable)]
 pub struct JsWallet {
     phrase: String,
-    wallet: Wallet<Simple>,
+    wallet: Wallet<Simple<String>>,
 }
 
 #[wasm_bindgen]
@@ -48,7 +48,7 @@ impl JsWallet {
 
     #[wasm_bindgen]
     pub async fn unlock(&mut self, credentials: JsValue) -> Result<(), JsValue> {
-        let credentials: <Simple as libwallet::Vault>::Credentials =
+        let credentials: <Simple<String> as libwallet::Vault>::Credentials =
             if credentials.is_null() || credentials.is_undefined() {
                 None
             } else {
@@ -56,7 +56,7 @@ impl JsWallet {
             };
 
         self.wallet
-            .unlock(credentials)
+            .unlock(None, credentials)
             .await
             .map_err(|e| JsError::new(&e.to_string()))?;
 
@@ -64,58 +64,50 @@ impl JsWallet {
     }
 
     #[wasm_bindgen(js_name = getAddress)]
-    pub fn get_address(&self) -> Result<JsPublicAddress, JsError> {
+    pub fn get_address(&self) -> Result<JsBytes, JsError> {
         if self.wallet.is_locked() {
             return Err(JsError::new(
                 "The wallet is locked. You should unlock it first by using the .unlock() method",
             ));
         }
 
-        Ok(JsPublicAddress::new(
-            self.wallet.default_account().public().as_ref().to_vec(),
+        Ok(JsBytes::new(
+            self.wallet.default_account().unwrap().public().as_ref().to_vec(),
         ))
     }
 
     #[wasm_bindgen]
-    pub fn sign(&self, message: &[u8]) -> Result<Box<[u8]>, JsError> {
+    pub async fn sign(&self, message: &[u8]) -> Result<JsBytes, JsError> {
         if self.wallet.is_locked() {
             return Err(JsError::new(
                 "The wallet is locked. You should unlock it first by using the .unlock() method",
             ));
         }
 
-        let sig = self.wallet.sign(message);
-
-        if !self
-            .wallet
-            .default_account()
-            .verify(&message, &sig.as_ref())
-        {
-            return Err(JsError::new("Message could not be verified"));
-        }
-
-        Ok(sig.as_ref().to_vec().into_boxed_slice())
+        let sig = self.wallet.sign(message).await.map_err(|_| JsError::new("Error while signing"))?;
+        let f = sig.as_ref().to_vec();
+        Ok(JsBytes::new(f))
     }
 
     #[wasm_bindgen]
-    pub fn verify(&self, msg: &[u8], sig: &[u8]) -> Result<bool, JsError> {
+    pub async fn verify(&self, msg: &[u8], sig: &[u8]) -> Result<bool, JsError> {
         if self.wallet.is_locked() {
             return Err(JsError::new(
                 "The wallet is locked. You should unlock it first by using the .unlock() method",
             ));
         }
 
-        Ok(self.wallet.default_account().verify(msg, sig))
+        Ok(self.wallet.default_account().unwrap().verify(msg, sig).await)
     }
 }
 
 #[wasm_bindgen(inspectable)]
-pub struct JsPublicAddress {
+pub struct JsBytes {
     repr: Vec<u8>,
 }
 
 #[wasm_bindgen]
-impl JsPublicAddress {
+impl JsBytes {
     #[wasm_bindgen(constructor)]
     pub fn new(repr: Vec<u8>) -> Self {
         Self { repr }

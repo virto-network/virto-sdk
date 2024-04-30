@@ -1,7 +1,10 @@
 extern crate alloc;
 use crate::{any::AnySignature, Account, Signer, Vault};
-use pjs::{Account as PjsAccount, Error, PjsExtension};
 use alloc::vec::Vec;
+use pjs::{Account as PjsAccount, Error, PjsExtension};
+
+use sp_core::crypto::{AccountId32, Ss58Codec};
+
 #[derive(Clone)]
 pub struct Pjs {
     inner: PjsExtension,
@@ -41,12 +44,15 @@ impl Account for Pjs {
     fn public(&self) -> impl crate::Public {
         let mut key = [0u8; 32];
 
-        let pub_key = self.inner
+        let pub_key = self
+            .inner
             .get_selected()
             .expect("an account must be defined")
             .address();
 
-        key.copy_from_slice(pub_key.as_bytes());
+        let address = <AccountId32 as Ss58Codec>::from_string(&address)
+            .expect("it must be a valid ss58 address");
+        key.copy_from_slice(address.as_ref());
         key
     }
 }

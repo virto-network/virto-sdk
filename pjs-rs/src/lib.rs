@@ -19,15 +19,16 @@ macro_rules! get {
 
 const NULL: JsValue = JsValue::null();
 
-#[wasm_bindgen]
+
 #[derive(Clone)]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 pub struct PjsExtension {
     pjs: JsValue,
     accounts: Vec<Account>,
     selected: Option<u8>,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 impl PjsExtension {
     pub async fn connect(app_name: &str) -> Result<PjsExtension, Error> {
         let Some(web3) = web_sys::window().expect("browser").get("injectedWeb3") else {
@@ -50,7 +51,7 @@ impl PjsExtension {
         })
     }
 
-    #[wasm_bindgen(js_name = selectAccount)]
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = selectAccount))]
     pub fn select_account(&mut self, idx: u8) {
         self.selected = self
             .accounts
@@ -59,8 +60,7 @@ impl PjsExtension {
             .map(|i| idx.min(i.min(u8::MAX as usize) as u8));
     }
 
-    ///
-    #[wasm_bindgen(js_name = sign)]
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = sign))]
     pub async fn js_sign(&self, payload: &str, cb: &Function) -> Result<JsValue, Error> {
         let sign: Function = get!(^ &self.pjs, "signer", "signRaw");
         let account = self
@@ -84,8 +84,7 @@ impl PjsExtension {
         Ok(get!(&res, "signature"))
     }
 
-    ///
-    #[wasm_bindgen(js_name = fetchAccounts)]
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = fetchAccounts))]
     pub async fn fetch_accounts(&mut self) -> Result<(), Error> {
         let accounts: Function = get!(^ &self.pjs, "accounts", "get");
         let p = accounts.call0(&NULL).unwrap().unchecked_into::<Promise>();
@@ -107,12 +106,12 @@ impl PjsExtension {
         Ok(())
     }
 
-    #[wasm_bindgen(getter)]
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn accounts(&self) -> Vec<Account> {
         self.accounts.clone()
     }
 
-    #[wasm_bindgen(getter, js_name = selectedAccount)]
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = selectedAccount))]
     pub fn get_selected(&self) -> Option<Account> {
         self.selected
             .and_then(|a| self.accounts.get(a as usize))
@@ -170,9 +169,9 @@ pub struct Account {
     net: Network,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 impl Account {
-    #[wasm_bindgen(constructor)]
+    #[cfg_attr(feature = "js", wasm_bindgen(constructor))]
     pub fn new(name: &str, address: &str, net: Network) -> Self {
         Account {
             name: name.to_string(),
@@ -180,17 +179,18 @@ impl Account {
             net,
         }
     }
-    #[wasm_bindgen(getter)]
+
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn name(&self) -> String {
         self.name.clone()
     }
 
-    #[wasm_bindgen(getter)]
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn address(&self) -> String {
         self.address.clone()
     }
 
-    #[wasm_bindgen(getter)]
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn network(&self) -> Network {
         self.net
     }

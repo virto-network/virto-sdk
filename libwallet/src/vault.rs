@@ -16,10 +16,6 @@ pub use pass::*;
 
 mod simple;
 pub use simple::*;
-
-
-
-
 use crate::account::Account;
 
 /// Abstraction for storage of private keys that are protected by some credentials.

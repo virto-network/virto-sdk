@@ -15,9 +15,9 @@ serde = {version = "1.0", default-features = false, features = ["derive"], optio
 hmac = {version = "0.12.1", default-features = false, optional = true}
 pbkdf2 = {version = "0.11.0", default-features = false, optional = true}
 sha2 = {version = "0.10.2", default-features = false, optional = true}
-pjs = { path = "../pjs-rs", optional = true }
+pjs = { path = "../pjs-rs", optional = true, default-feature = true }
 mnemonic = { package = "bip0039", version = "0.10.1", default-features = false, optional = true}
-
+sp-core = { version = "32.0.0", optional = true }
 rand_core = {version = "0.6.3", optional = true}
 # substrate related
 schnorrkel = {version = "0.11.4", default-features = false, optional = true}# soft derivation in no_std
@@ -46,7 +46,7 @@ util_pin = ["pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = []
-vault_pjs = ["pjs"]
+vault_pjs = ["pjs", "sp-core"]
 
 [workspace]
 members = [
