@@ -186,7 +186,7 @@ where
 
     let reg = &meta.types;
 
-    let ty = pallet.calls().expect("pallet does not have calls").ty.id();
+    let ty = pallet.calls().expect("pallet does not have calls").ty.id;
 
     let mut encoded_call = vec![pallet.index];
 
@@ -228,6 +228,10 @@ where
         }?;
 
         let tip: u128 = 0;
+
+        log::info!("era {:?}", &era);
+        log::info!("nonce {:?}", &nonce);
+        log::info!("tip {:?}", &tip);
 
         [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
     };
@@ -272,6 +276,9 @@ where
 
         let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
 
+        log::info!("spec {:?}", &spec_version);
+        log::info!("transaction_version {:?}", &transaction_version);
+        log::info!("genesis_block {:?}", &genesis_block);
         [
             spec_version.to_le_bytes().to_vec(),
             transaction_version.to_le_bytes().to_vec(),
@@ -280,6 +287,8 @@ where
         ]
         .concat()
     };
+
+    
     log::info!("encoded call {:?}", hex::encode(&encoded_call));
 
     let signature_payload = [
@@ -297,7 +306,7 @@ where
 
 
     let signature = signer(payload.as_slice()).await?;
-
+    log::info!("signature {:?}", hex::encode(&signature));
     let extrinsic_call = {
         let encoded_inner = [
             // header: "is signed" (1 byte) + transaction protocol version (7 bytes)
