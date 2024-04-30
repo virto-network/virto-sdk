@@ -127,11 +127,13 @@ impl PjsExtension {
     pub async fn sign(&self, payload: &[u8]) -> Result<[u8; 64], Error> {
         let payload = Self::to_hex(payload);
         let mut signature = [0u8; 64];
-        let cb = Closure::wrap(Box::new(move |s: JsValue| {
+        let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
             Self::from_hex(s.as_string().unwrap_or_default().as_str(), &mut signature)
         }) as Box<dyn FnMut(JsValue)>);
+        
         self.js_sign(payload.as_str(), cb.as_ref().unchecked_ref())
             .await?;
+        log::info!("after sign in extension {:?}", hex::encode(&signature));
         Ok(signature)
     }
 

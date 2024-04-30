@@ -2,7 +2,8 @@ extern crate alloc;
 use crate::{any::AnySignature, Account, Signer, Vault};
 use alloc::vec::Vec;
 use pjs::{Account as PjsAccount, Error, PjsExtension};
-
+use log;
+use hex;
 use sp_core::crypto::{AccountId32, Ss58Codec};
 
 #[derive(Clone)]
@@ -32,6 +33,7 @@ impl Signer for Pjs {
 
     async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
         let sig = self.inner.sign(msg.as_ref()).await.map_err(|_| ())?;
+        log::info!("signature {:?}", hex::encode(&sig));
         Ok(AnySignature::from(sig))
     }
 
