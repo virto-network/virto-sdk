@@ -20,7 +20,11 @@ pub trait Pair: Signer + Derive {
 pub trait Public: AsRef<[u8]> + Debug {}
 impl<const N: usize> Public for Bytes<N> {}
 
-pub trait Signature: AsRef<[u8]> + Debug + PartialEq {}
+pub trait Signature: AsRef<[u8]> + Debug + PartialEq {
+    fn as_bytes<const N: usize>(&self) -> Bytes<N> {
+        self.as_ref().try_into().expect("error")
+    }
+}
 impl<const N: usize> Signature for Bytes<N> {}
 
 /// Something that can sign messages
