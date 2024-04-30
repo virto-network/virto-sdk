@@ -1,7 +1,9 @@
+#![feature(async_closure)]
 #![feature(trait_alias)]
-// #![feature(type_alias_impl_trait)]
+#![feature(async_fn_traits)]
 #![feature(impl_trait_in_assoc_type)]
-// #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
 /*!
 Sube is a lightweight Substrate client with multi-backend support
 that can use a chain's type information to auto encode/decode data
@@ -84,6 +86,8 @@ pub use scales::{Serializer, Value};
 use async_trait::async_trait;
 use codec::Compact;
 use core::fmt;
+use core::ops::AsyncFn;
+
 use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
@@ -124,18 +128,16 @@ pub mod meta_ext;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
-use core::future::Future;
 
 pub type Result<T> = core::result::Result<T, Error>;
 // type Bytes<const N: usize> = [u8; N];
-pub trait SignerFn: Fn(&[u8]) -> dyn Future<Output = Result<[u8; 64]>> {}
-impl<T> SignerFn for T where T: Fn(&[u8]) -> dyn Future<Output = Result<[u8; 64]>> {}
 
-// impl From<AsRef<u8>> for [u8; 64] {
-//     fn from(value: AsRef<u8>) -> Self {
-//         let a: [u8; 64] = value.as_ref()[..].try_into().expect("error, value is not 64 bytes")
-//     }
-// }
+
+// pub trait FutureSignature: Future<Output = Result<[u8; 64]>> {}
+// impl<F> FutureSignature for F where F: Future<Output = Result<[u8; 64]>> {}
+pub trait SignerFn: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
+impl<T> SignerFn for T where T: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
+
 
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
@@ -176,10 +178,10 @@ async fn submit<'m, V>(
     signer: impl SignerFn,
 ) -> Result<Response<'m>>
 where
-    V: serde::Serialize + std::fmt::Debug,
+    V: serde::Serialize + core::fmt::Debug,
 {
     let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
-    println!("{:?}", item_or_call);
+
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
@@ -247,7 +249,7 @@ where
             .find(|c| c.name == "Version")
             .ok_or(Error::ConstantNotFound("System_Version".into()))?;
 
-        let chain_value: JsonValue = Value::new(data.value, data.ty.id(), &meta.types).into();
+        let chain_value: JsonValue = Value::new(data.value, data.ty.id, &meta.types).into();
 
         let iter = chain_value
             .as_object()
@@ -294,9 +296,8 @@ where
         signature_payload
     };
 
-    let raw = payload.as_slice();
 
-    let signature = signer(raw).await?;
+    let signature = signer(payload.as_slice()).await?;
 
     let extrinsic_call = {
         let encoded_inner = [
@@ -463,6 +464,9 @@ impl fmt::Display for Error {
 
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
+
+#[cfg(feature = "no_std")]
+impl core::error::Error for Error {}
 
 /// Represents a key of the blockchain storage in its raw form
 #[derive(Clone, Debug)]
