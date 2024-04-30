@@ -82,6 +82,7 @@ impl PjsExtension {
             .expect("promise")
             .unchecked_into::<Promise>();
         let signature = JsFuture::from(p).await.map_err(|_| Error::Sign)?;
+        log::info!("Signature: {:?}", &signature);
         let res = cb.call1(&NULL, &signature).map_err(|_| Error::Sign)?;
         log::info!("{:?}", &res);
         Ok(get!(&res, "signature"))
