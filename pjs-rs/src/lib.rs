@@ -157,10 +157,10 @@ impl PjsExtension {
                 return;
             };
             log::info!("s({:?})", s);
-            // *b = u8::from_str_radix(s, 16).unwrap_or_default();
-            *b = 1;
+            *b = u8::from_str_radix(s, 16).unwrap_or_default();
             log::info!("b({:?})", &b);
         }
+        log::info!("buf({:?})", &buf);
     }
 }
 
