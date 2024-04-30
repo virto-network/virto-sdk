@@ -156,7 +156,9 @@ impl PjsExtension {
             let Some(s) = input.get(i * 2..i * 2 + 2) else {
                 return;
             };
+            log::info!("s({:?})", s);
             *b = u8::from_str_radix(s, 16).unwrap_or_default();
+            log::info!("b({:?})", &b);
         }
     }
 }
