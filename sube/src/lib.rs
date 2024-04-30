@@ -95,6 +95,8 @@ use prelude::*;
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use log;
+
 
 #[cfg(feature = "builder")]
 pub use paste::paste;
@@ -278,6 +280,7 @@ where
         ]
         .concat()
     };
+    log::info!("encoded call {:?}", hex::encode(&encoded_call));
 
     let signature_payload = [
         encoded_call.clone(),
