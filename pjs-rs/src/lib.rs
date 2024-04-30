@@ -150,7 +150,7 @@ impl PjsExtension {
     }
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 #[derive(Debug)]
 pub enum Error {
     ExtensionUnavailable,
@@ -161,7 +161,7 @@ pub enum Error {
     Sign,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 #[derive(Debug, Clone)]
 pub struct Account {
     name: String,
@@ -196,7 +196,7 @@ impl Account {
     }
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 #[derive(Debug, Clone, Copy)]
 pub enum Network {
     Generic,
