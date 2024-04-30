@@ -130,11 +130,7 @@ pub mod meta_ext;
 pub mod rpc;
 
 pub type Result<T> = core::result::Result<T, Error>;
-// type Bytes<const N: usize> = [u8; N];
 
-
-// pub trait FutureSignature: Future<Output = Result<[u8; 64]>> {}
-// impl<F> FutureSignature for F where F: Future<Output = Result<[u8; 64]>> {}
 pub trait SignerFn: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
 impl<T> SignerFn for T where T: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
 
