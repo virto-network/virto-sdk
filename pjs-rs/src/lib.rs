@@ -1,7 +1,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::js_sys::{Array, Function, Object, Promise, Reflect};
-
+use log;
 macro_rules! get {
     (^ $obj:expr, $($prop:expr),+ $(,)?) => {{
         let val = get!($obj, $($prop),+);
@@ -81,6 +81,7 @@ impl PjsExtension {
             .unchecked_into::<Promise>();
         let signature = JsFuture::from(p).await.map_err(|_| Error::Sign)?;
         let res = cb.call1(&NULL, &signature).map_err(|_| Error::Sign)?;
+        log::info!("{:?}", &res);
         Ok(get!(&res, "signature"))
     }
 
