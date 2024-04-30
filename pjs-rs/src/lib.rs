@@ -85,7 +85,7 @@ impl PjsExtension {
         log::info!("Signature: {:?}", &signature);
         let res = cb.call1(&NULL, &signature).map_err(|_| Error::Sign)?;
         log::info!("{:?}", &res);
-        Ok(get!(&res, "signature"))
+        Ok(get!(&signature, "signature"))
     }
 
     #[cfg_attr(feature = "js", wasm_bindgen(js_name = fetchAccounts))]
