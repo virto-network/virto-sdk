@@ -44,7 +44,7 @@ impl Account for Pjs {
     fn public(&self) -> impl crate::Public {
         let mut key = [0u8; 32];
 
-        let pub_key = self
+        let address = self
             .inner
             .get_selected()
             .expect("an account must be defined")
