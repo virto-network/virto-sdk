@@ -13,5 +13,11 @@ features = [
   "Window",
 ]
 
+[features]
+default = ["js"]
+js = []
+
 [lib]
 crate-type = ["cdylib"]
+
+
