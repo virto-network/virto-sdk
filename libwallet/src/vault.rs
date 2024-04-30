@@ -60,6 +60,10 @@ mod utils {
         where
             Self: Sized,
         {
+            if path.is_empty() {
+                return self.sub.derive("").into();
+            }
+
             match &path[..2] {
                 #[cfg(feature = "substrate")]
                 "//" => self.sub.derive(path).into(),
