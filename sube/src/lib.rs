@@ -331,6 +331,8 @@ where
         [len, encoded_inner].concat()
     };
 
+    log::info!("EXTRICIC_CALL {:?}", hex::encode(&extrinsic_call));
+    
     chain.submit(&extrinsic_call).await?;
 
     Ok(Response::Void)
