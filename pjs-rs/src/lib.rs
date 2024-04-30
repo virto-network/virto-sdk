@@ -157,7 +157,8 @@ impl PjsExtension {
                 return;
             };
             log::info!("s({:?})", s);
-            *b = u8::from_str_radix(s, 16).unwrap_or_default();
+            // *b = u8::from_str_radix(s, 16).unwrap_or_default();
+            *b = 1;
             log::info!("b({:?})", &b);
         }
     }
