@@ -1,7 +1,7 @@
+use log;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::js_sys::{Array, Function, Object, Promise, Reflect};
-use log;
 macro_rules! get {
     (^ $obj:expr, $($prop:expr),+ $(,)?) => {{
         let val = get!($obj, $($prop),+);
@@ -18,7 +18,6 @@ macro_rules! get {
 }
 
 const NULL: JsValue = JsValue::null();
-
 
 #[derive(Clone)]
 #[cfg_attr(feature = "js", wasm_bindgen)]
@@ -61,13 +60,13 @@ impl PjsExtension {
     }
 
     #[cfg_attr(feature = "js", wasm_bindgen(js_name = sign))]
-    pub async fn js_sign(&self, payload: &str, cb: &Function) -> Result<JsValue, Error> {
+    pub async fn js_sign(&self, payload: &str) -> Result<JsValue, Error> {
         let sign: Function = get!(^ &self.pjs, "signer", "signRaw");
         let account = self
             .accounts
             .get(self.selected.ok_or(Error::NoAccountSelected)? as usize)
             .ok_or(Error::NoAccounts)?;
-        
+
         let data = {
             let o = Object::new();
             Reflect::set(&o, &"address".into(), &account.address.as_str().into()).unwrap();
@@ -83,8 +82,8 @@ impl PjsExtension {
             .unchecked_into::<Promise>();
         let signature = JsFuture::from(p).await.map_err(|_| Error::Sign)?;
         log::info!("Signature: {:?}", &signature);
-        let res = cb.call1(&NULL, &signature).map_err(|_| Error::Sign)?;
-        log::info!("{:?}", &res);
+        // let res = cb.call1(&NULL, &signature).map_err(|_| Error::Sign)?;
+        // log::info!("{:?}", &res);
         Ok(get!(&signature, "signature"))
     }
 
@@ -127,17 +126,19 @@ impl PjsExtension {
     pub async fn sign(&self, payload: &[u8]) -> Result<[u8; 64], Error> {
         let payload = Self::to_hex(payload);
         let mut signature = [0u8; 64];
-        let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
-            log::info!("Signature received {:?}", &s);
-            let s = get!(&s, "signature");
-            let s = s.as_string();
-            let f = s.unwrap_or_default();
-            log::info!("final {:?}", &f);
-            Self::from_hex(f.as_str(), &mut signature)
-        }) as Box<dyn FnMut(JsValue)>);
-        
-        self.js_sign(payload.as_str(), cb.as_ref().unchecked_ref())
-            .await?;
+        // let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
+        //     log::info!("Signature received {:?}", &s);
+        //     let s = get!(&s, "signature");
+        //     let s = s.as_string();
+        //     let f = s.unwrap_or_default();
+        //     log::info!("final {:?}", &f);
+        // }) as Box<dyn FnMut(JsValue)>);
+
+        let sig = self.js_sign(payload.as_str()).await?;
+        log::info!("returned from pjs {:?}", &sig);
+        let s = sig.as_string();
+        let f = s.unwrap_or_default();
+        Self::from_hex(f.as_str(), &mut signature);
         log::info!("after sign in extension {:?}", hex::encode(&signature));
         Ok(signature)
     }
