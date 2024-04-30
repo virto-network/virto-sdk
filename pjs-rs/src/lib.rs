@@ -129,8 +129,10 @@ impl PjsExtension {
         let mut signature = [0u8; 64];
         let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
             log::info!("Signature received {:?}", &s);
+            let s = get!(&s, "signature");
             let s = s.as_string();
             let f = s.unwrap_or_default();
+            log::info!("final {:?}", &f);
             Self::from_hex(f.as_str(), &mut signature)
         }) as Box<dyn FnMut(JsValue)>);
         
