@@ -67,6 +67,7 @@ impl PjsExtension {
             .accounts
             .get(self.selected.ok_or(Error::NoAccountSelected)? as usize)
             .ok_or(Error::NoAccounts)?;
+        
         let data = {
             let o = Object::new();
             Reflect::set(&o, &"address".into(), &account.address.as_str().into()).unwrap();
@@ -74,6 +75,7 @@ impl PjsExtension {
             Reflect::set(&o, &"type".into(), &"bytes".into()).unwrap();
             o
         };
+        log::info!("{:?}", data);
 
         let p = sign
             .call1(&NULL, &data.into())
