@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await
     .map_err(|err| anyhow!(format!("SubeError {:?}", err)))?;
 
+    println!("response: {:?}", response);
     println!("Secret phrase: \"{phrase}\"");
     println!("Default Account: 0x{}", account.unwrap());
 

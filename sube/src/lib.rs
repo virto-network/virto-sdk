@@ -362,6 +362,8 @@ where
 
     log::info!("encoded call {:?}", hex::encode(&encoded_call));
 
+    log::info!("additional_params {:?}", hex::encode(&additional_params));
+
     let signature_payload = [
         encoded_call.clone(),
         extra_params.clone(),
@@ -369,11 +371,14 @@ where
     ]
     .concat();
 
+    log::info!("signature_payload {:?}", hex::encode(&signature_payload));
     let payload = if signature_payload.len() > 256 {
         hash(&meta::Hasher::Blake2_256, &signature_payload[..])
     } else {
         signature_payload
     };
+
+    log::info!("payload {:?}", hex::encode(&payload));
 
     let signature = signer(payload.as_slice()).await?;
 
