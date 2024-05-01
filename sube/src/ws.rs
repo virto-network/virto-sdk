@@ -52,7 +52,7 @@ unsafe impl Sync for Backend {}
 impl Rpc for Backend {
     async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult {
         let id = self.next_id().await;
-        info!("RPC `{}` (ID={})", method, id);
+        info!("RPC `{}`({:?}) (ID={})", method, params, id);
 
         // Store a sender that will notify our receiver when a matching message arrives
         let (sender, recv) = oneshot::channel::<rpc::Response>();
@@ -68,7 +68,7 @@ impl Rpc for Backend {
         })
         .expect("Request is serializable");
 
-        log::debug!("RPC Request {} ...", &msg[..50]);
+        log::debug!("RPC Request {} ...", &msg);
 
         self.tx
             .lock()

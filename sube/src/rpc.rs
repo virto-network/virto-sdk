@@ -16,9 +16,18 @@ pub trait Rpc: Backend + Send + Sync {
     async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult;
 
     fn convert_params(params: &[&str]) -> Vec<Box<RawValue>> {
+
+        let params_debug = params
+            .iter()
+            .map(|p| format!("{}", p))
+            .map(RawValue::from_string)
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+        
+        log::info!("rpc_debug {:?}", &params_debug);
         params
             .iter()
-            .map(|p| format!("\"{}\"", p))
+            .map(|p| format!("{}", p))
             .map(RawValue::from_string)
             .map(Result::unwrap)
             .collect::<Vec<_>>()
@@ -30,7 +39,7 @@ impl<R: Rpc> Backend for R {
     async fn query_storage(&self, key: &StorageKey) -> crate::Result<Vec<u8>> {
         let key = key.to_string();
         log::debug!("StorageKey encoded: {}", key);
-        self.rpc("state_getStorage", &[&key]).await.map_err(|e| {
+        self.rpc("state_getStorage", &[&format!("\"{}\"", &key)]).await.map_err(|e| {
             log::debug!("RPC failure: {}", e);
             // NOTE it could fail for more reasons
             crate::Error::StorageKeyNotFound
@@ -45,7 +54,7 @@ impl<R: Rpc> Backend for R {
         log::debug!("Extrinsic: {}", extrinsic);
 
         let res = self
-            .rpc("author_submitExtrinsic", &[&extrinsic])
+            .rpc("author_submitExtrinsic", &[&format!("\"{}\"", &extrinsic)])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
         log::debug!("Extrinsic {:x?}", res);
@@ -75,6 +84,7 @@ impl<R: Rpc> Backend for R {
 
         let block_hash = if let Some(block_number) = at {
             let block_number = block_number.to_string();
+            
             block_info(self, &[&block_number]).await?
         } else {
             block_info(self, &[]).await?
