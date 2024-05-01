@@ -71,7 +71,7 @@ impl PjsExtension {
             let o = Object::new();
             Reflect::set(&o, &"address".into(), &account.address.as_str().into()).unwrap();
             Reflect::set(&o, &"data".into(), &payload.into()).unwrap();
-            Reflect::set(&o, &"type".into(), &"payload".into()).unwrap();
+            Reflect::set(&o, &"type".into(), &"bytes".into()).unwrap();
             o
         };
         log::info!("{:?}", data);
