@@ -124,7 +124,7 @@ impl PjsExtension {
 
 impl PjsExtension {
     pub async fn sign(&self, payload: &[u8]) -> Result<[u8; 64], Error> {
-        let payload = hex::encode(payload);
+        let payload = format!("0x{}", hex::encode(payload));
         let mut signature = [0u8; 64];
         // let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
         //     log::info!("Signature received {:?}", &s);
