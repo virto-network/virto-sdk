@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let public_hex = public.as_ref();
     println!("hex: {}", hex::encode(public_hex));
 
-    let response = sube!("ws://127.0.0.1:8000/balances/transfer_keep_alive" => {
+    let response = sube!("wss://kreivo.io/balances/transfer_keep_alive" => {
         signer: async |message: &[u8]| Ok(wallet.sign(message).await.expect("hello").as_bytes()) ,
         sender: public.as_ref(),
         body:  json!({      
