@@ -219,6 +219,8 @@ where
                 )
                 .await?;
 
+                log::info!("{:?}", response);
+
                 match response {
                     Response::Value(value) => {
                         let bytes: [u8; 8] = value.as_ref()[..8].try_into().expect("fits");
