@@ -71,7 +71,7 @@ impl PjsExtension {
             let o = Object::new();
             Reflect::set(&o, &"address".into(), &account.address.as_str().into()).unwrap();
             Reflect::set(&o, &"data".into(), &payload.into()).unwrap();
-            Reflect::set(&o, &"type".into(), &"bytes".into()).unwrap();
+            Reflect::set(&o, &"type".into(), &"payload".into()).unwrap();
             o
         };
         log::info!("{:?}", data);
@@ -124,7 +124,7 @@ impl PjsExtension {
 
 impl PjsExtension {
     pub async fn sign(&self, payload: &[u8]) -> Result<[u8; 64], Error> {
-        let payload = format!("0x{}", hex::encode(payload));
+        let payload = format!("{}", hex::encode(payload));
         let mut signature = [0u8; 64];
         // let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
         //     log::info!("Signature received {:?}", &s);
