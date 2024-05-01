@@ -1,16 +1,21 @@
 //! Collection of supported Vault backends
 #[cfg(feature = "vault_os")]
 mod os;
+
+#[cfg(feature = "vault_pjs")]
+pub mod pjs;
+
+#[cfg(feature = "vault_pjs")]
+pub use pjs::*;
+
 #[cfg(feature = "vault_pass")]
 mod pass;
-mod simple;
 
-#[cfg(feature = "vault_os")]
-pub use os::*;
 #[cfg(feature = "vault_pass")]
 pub use pass::*;
-pub use simple::*;
 
+mod simple;
+pub use simple::*;
 use crate::account::Account;
 
 /// Abstraction for storage of private keys that are protected by some credentials.
