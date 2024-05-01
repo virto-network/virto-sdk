@@ -263,7 +263,7 @@ where
         log::info!("tip_hex: {}", hex::encode(Compact(tip.clone()).encode()));
 
         let extra_params_hex =
-            hex::encode([vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat());
+            hex::encode([Compact(era).encode(), Compact(nonce).encode(), Compact(tip).encode()].concat());
 
         log::info!("extra_params_hex: {}", extra_params_hex);
 
