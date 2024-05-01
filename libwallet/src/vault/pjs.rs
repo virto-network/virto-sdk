@@ -32,6 +32,7 @@ impl Signer for Pjs {
     type Signature = AnySignature;
 
     async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
+        log::info!("signing: {}", hex::encode(&msg.as_ref()));
         let sig = self.inner.sign(msg.as_ref()).await.map_err(|_| ())?;
         log::info!("signature {:?}", hex::encode(&sig));
         Ok(AnySignature::from(sig))
