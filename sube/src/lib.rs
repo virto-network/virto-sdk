@@ -100,7 +100,7 @@ use serde_json::json;
 #[cfg(feature = "builder")]
 pub use paste::paste;
 
-use crate::util::to_camel;
+use crate::{meta::Registry, util::to_camel};
 
 mod prelude {
     pub use alloc::boxed::Box;
@@ -208,7 +208,7 @@ where
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
 
     let reg = &meta.types;
-
+    
     let ty = pallet.calls().expect("pallet does not have calls").ty.id;
 
     let mut encoded_call = vec![pallet.index];
@@ -266,9 +266,25 @@ where
             hex::encode([Compact(era).encode(), Compact(nonce).encode(), Compact(tip).encode()].concat());
 
         log::info!("extra_params_hex: {}", extra_params_hex);
+        let extensions = ();
+        
 
-        [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
+        // vec![0x00u8] sign extensions
+        // TODO: implement signed extensions 
+        // meta.extrinsic.signed_extensions.iter().for_each(|ext| {
+        //     log::info!("signed extension: {:?}", ext);
+        //     let type_resolved = meta.types.resolve(ext.ty.id);
+        //     log::info!("type_resolved: {:?}", type_resolved);
+        //     log::info!("========================");
+        // });
+
+        [
+            vec![era], Compact(nonce).encode(), Compact(tip).encode(), vec![0x00u8]
+        ].concat()
     };
+
+
+    log::info!("Hex {:?}", hex::encode(&extra_params));
 
     let additional_params = {
         let metadata = meta;

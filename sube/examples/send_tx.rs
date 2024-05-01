@@ -13,6 +13,7 @@ use anyhow::{anyhow, Result};
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init(); 
     let phrase = env::args().skip(1).collect::<Vec<_>>().join(" ");
 
     let (vault, phrase) = if phrase.is_empty() {
@@ -30,15 +31,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let account = wallet.default_account();
     let public = account.unwrap().public();
+    let public_hex = public.as_ref();
+    println!("hex: {}", hex::encode(public_hex));
 
-    let response = sube!("wss://rococo-rpc.polkadot.io/balances/transfer" => {
+    let response = sube!("wss://kreivo.io/balances/transfer_keep_alive" => {
         signer: async |message: &[u8]| Ok(wallet.sign(message).await.expect("hello").as_bytes()) ,
         sender: public.as_ref(),
         body:  json!({      
             "dest": {
-                "Id": public.as_ref()
+                "Id": hex::decode("e25b1e3758a5fbedb956b36113252f9e866d3ece688364cc9d34eb01f4b2125d").unwrap()
             },
-            "value": 100000
+            "value": 1000000000
         }),
     })
     .await
