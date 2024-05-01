@@ -124,7 +124,7 @@ impl PjsExtension {
 
 impl PjsExtension {
     pub async fn sign(&self, payload: &[u8]) -> Result<[u8; 64], Error> {
-        let payload = Self::to_hex(payload);
+        let payload = hex::encode(payload);
         let mut signature = [0u8; 64];
         // let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
         //     log::info!("Signature received {:?}", &s);
@@ -143,15 +143,8 @@ impl PjsExtension {
         Ok(signature)
     }
 
-    fn to_hex(bytes: &[u8]) -> String {
-        use std::fmt::Write;
-        let mut s = String::with_capacity(2 + bytes.len());
-        let _ = write!(s, "0x");
-        for b in bytes {
-            let _ = write!(s, "{b:x}");
-        }
-        s
-    }
+
+
     fn from_hex(input: &str, buf: &mut [u8]) {
         for (i, b) in buf.iter_mut().enumerate() {
             let Some(s) = input.get((i * 2 + 2)..(i * 2 + 4)) else {
