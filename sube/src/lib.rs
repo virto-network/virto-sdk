@@ -170,6 +170,26 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     }
 }
 
+
+
+#[derive(Deserialize, Debug)]
+pub struct AccountInfo {
+    nonce: u64,
+    consumers: u64,
+    providers: u64,
+    sufficients: u64,
+    data: Data,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Data {
+    free: u128,
+    reserved: u128,
+    frozen: u128,
+    flags: u128,
+}
+
+
 async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
@@ -223,9 +243,11 @@ where
             match response {
                 Response::Value(value) => {
                         log::info!("{:?}", serde_json::to_string(&value));
-                        let bytes: [u8; 8] = value.as_ref()[..8].try_into().expect("fits");
-                        let nonce = u64::from_le_bytes(bytes);
-                        Ok(nonce)
+                        let str = serde_json::to_string(&value).expect("wrong account info");
+                        let value: AccountInfo = serde_json::from_str(&str).expect("it must serialize");
+                        // let account_info: AccountInfo = serde_json::).unwrap();
+                        log::info!("{}", &value.nonce);
+                        Ok(value.nonce)
                     }
                     _ => Err(Error::AccountNotFound),
                 }
