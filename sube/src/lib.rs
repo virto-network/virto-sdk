@@ -197,6 +197,7 @@ async fn submit<'m, V>(
     from: &'m [u8],
     tx_data: ExtrinsicBody<V>,
     signer: impl SignerFn,
+    // add chain extensions
 ) -> Result<Response<'m>>
 where
     V: serde::Serialize + core::fmt::Debug,
@@ -263,7 +264,7 @@ where
         log::info!("tip_hex: {}", hex::encode(Compact(tip.clone()).encode()));
 
         let extra_params_hex =
-            hex::encode([Compact(era).encode(), Compact(nonce).encode(), Compact(tip).encode()].concat());
+            hex::encode([Compact(era).encode(), Compact(nonce).encode(), Compact(tip).encode(), vec![0x00u8]].concat());
 
         log::info!("extra_params_hex: {}", extra_params_hex);
         let extensions = ();
@@ -277,7 +278,7 @@ where
         //     log::info!("type_resolved: {:?}", type_resolved);
         //     log::info!("========================");
         // });
-
+        
         [
             vec![era], Compact(nonce).encode(), Compact(tip).encode(), vec![0x00u8]
         ].concat()
