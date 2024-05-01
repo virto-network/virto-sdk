@@ -89,14 +89,13 @@ use core::fmt;
 use core::ops::AsyncFn;
 
 use hasher::hash;
+use log;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use log;
-
 
 #[cfg(feature = "builder")]
 pub use paste::paste;
@@ -136,7 +135,11 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub trait SignerFn: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
 impl<T> SignerFn for T where T: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
 
-
+macro_rules! print_hex {
+    ($e:expr) => {
+        log::info!("$e hex {:?}", hex::encode(compact(&$e).encode()));
+    };
+}
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
 
@@ -233,11 +236,17 @@ where
         log::info!("nonce {:?}", &nonce);
         log::info!("tip {:?}", &tip);
 
+        log::info!("tip_hex: {}", hex::encode(Compact(tip.clone()).encode()));
+
+        let extra_params_hex =
+            hex::encode([vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat());
+
+        log::info!("extra_params_hex: {}", extra_params_hex);
+
         [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
     };
 
     let additional_params = {
-        // Error: Still failing to deserialize the const
         let metadata = meta;
 
         let mut constants = metadata
@@ -279,6 +288,7 @@ where
         log::info!("spec {:?}", &spec_version);
         log::info!("transaction_version {:?}", &transaction_version);
         log::info!("genesis_block {:?}", &genesis_block);
+
         [
             spec_version.to_le_bytes().to_vec(),
             transaction_version.to_le_bytes().to_vec(),
@@ -288,7 +298,6 @@ where
         .concat()
     };
 
-    
     log::info!("encoded call {:?}", hex::encode(&encoded_call));
 
     let signature_payload = [
@@ -304,15 +313,15 @@ where
         signature_payload
     };
 
-
     let signature = signer(payload.as_slice()).await?;
+
     log::info!("signature {:?}", hex::encode(&signature));
     let extrinsic_call = {
         let encoded_inner = [
-            // header: "is signed" (1 byte) + transaction protocol version (7 bytes)
-            vec![0b10000000 + 4u8],
+            // header: "is signed" (1 bites) + transaction protocol version (7 bites)
+            vec![0b10000000 + 4u8], // x
             // signer
-            vec![0x00],
+            vec![0x00], // x
             from.to_vec(),
             // signature
             [vec![0x01], signature.to_vec()].concat(),
@@ -332,7 +341,7 @@ where
     };
 
     log::info!("EXTRICIC_CALL {:?}", hex::encode(&extrinsic_call));
-    
+
     chain.submit(&extrinsic_call).await?;
 
     Ok(Response::Void)
