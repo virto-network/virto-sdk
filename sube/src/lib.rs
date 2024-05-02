@@ -1,6 +1,9 @@
+#![feature(async_closure)]
 #![feature(trait_alias)]
-#![feature(type_alias_impl_trait)]
+#![feature(async_fn_traits)]
+#![feature(impl_trait_in_assoc_type)]
 #![cfg_attr(not(feature = "std"), no_std)]
+
 /*!
 Sube is a lightweight Substrate client with multi-backend support
 that can use a chain's type information to auto encode/decode data
@@ -69,9 +72,8 @@ extern crate alloc;
 
 pub mod util;
 
-use builder::SignerFn;
 pub use codec;
-use codec::{Decode, Encode};
+use codec::Encode;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 
 pub use meta::Metadata;
@@ -84,12 +86,20 @@ pub use scales::{Serializer, Value};
 use async_trait::async_trait;
 use codec::Compact;
 use core::fmt;
+use core::ops::AsyncFn;
+
 use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use log;
+
+
+#[cfg(feature = "builder")]
+pub use paste::paste;
 
 use crate::util::to_camel;
 
@@ -99,14 +109,11 @@ mod prelude {
     pub use alloc::vec::Vec;
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ExtrinicBody<Body> {
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ExtrinsicBody<Body> {
     pub nonce: Option<u64>,
     pub body: Body,
-    pub from: Vec<u8>,
 }
-
-pub type Result<T> = core::result::Result<T, Error>;
 
 /// Surf based backend
 #[cfg(any(feature = "http", feature = "http-web", feature = "js"))]
@@ -117,32 +124,18 @@ pub mod ws;
 
 #[cfg(any(feature = "builder"))]
 pub mod builder;
+
 pub mod hasher;
 pub mod meta_ext;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
 
-#[derive(Deserialize, Decode)]
-struct ChainVersion {
-    spec_version: u64,
-    transaction_version: u64,
-}
+pub type Result<T> = core::result::Result<T, Error>;
 
-#[derive(Deserialize, Serialize, Decode)]
-struct AccountInfo {
-    nonce: u64,
-}
+pub trait SignerFn: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
+impl<T> SignerFn for T where T: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
 
-use wasm_bindgen::prelude::*;
-
-#[wasm_bindgen]
-extern "C" {
-    // Use `js_namespace` here to bind `console.log(..)` instead of just
-    // `log(..)`
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
 
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
@@ -178,11 +171,12 @@ async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
-    tx_data: ExtrinicBody<V>,
+    from: &'m [u8],
+    tx_data: ExtrinsicBody<V>,
     signer: impl SignerFn,
 ) -> Result<Response<'m>>
 where
-    V: serde::Serialize,
+    V: serde::Serialize + core::fmt::Debug,
 {
     let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
 
@@ -192,12 +186,17 @@ where
 
     let reg = &meta.types;
 
-    let ty = pallet.calls().expect("pallet does not have calls").ty.id();
+    let ty = pallet.calls().expect("pallet does not have calls").ty.id;
 
     let mut encoded_call = vec![pallet.index];
 
-    let call_data = scales::to_vec_with_info(&tx_data.body, (reg, ty).into())
-        .map_err(|e| Error::Encode(e.to_string()))?;
+    let call_data = scales::to_vec_with_info(
+        &json!( {
+            &item_or_call.to_lowercase(): &tx_data.body
+        }),
+        (reg, ty).into(),
+    )
+    .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
 
@@ -213,7 +212,7 @@ where
                 let response = query(
                     &chain,
                     meta,
-                    &format!("system/account/0x{}", hex::encode(&tx_data.from)),
+                    &format!("system/account/0x{}", hex::encode(from)),
                 )
                 .await?;
 
@@ -229,6 +228,10 @@ where
         }?;
 
         let tip: u128 = 0;
+
+        log::info!("era {:?}", &era);
+        log::info!("nonce {:?}", &nonce);
+        log::info!("tip {:?}", &tip);
 
         [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
     };
@@ -248,7 +251,7 @@ where
             .find(|c| c.name == "Version")
             .ok_or(Error::ConstantNotFound("System_Version".into()))?;
 
-        let chain_value: JsonValue = Value::new(data.value, data.ty.id(), &meta.types).into();
+        let chain_value: JsonValue = Value::new(data.value, data.ty.id, &meta.types).into();
 
         let iter = chain_value
             .as_object()
@@ -273,6 +276,9 @@ where
 
         let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
 
+        log::info!("spec {:?}", &spec_version);
+        log::info!("transaction_version {:?}", &transaction_version);
+        log::info!("genesis_block {:?}", &genesis_block);
         [
             spec_version.to_le_bytes().to_vec(),
             transaction_version.to_le_bytes().to_vec(),
@@ -281,6 +287,9 @@ where
         ]
         .concat()
     };
+
+    
+    log::info!("encoded call {:?}", hex::encode(&encoded_call));
 
     let signature_payload = [
         encoded_call.clone(),
@@ -295,18 +304,16 @@ where
         signature_payload
     };
 
-    let raw = payload.as_slice();
-    let mut signature: [u8; 64] = [0u8; 64];
 
-    signer(raw, &mut signature)?;
-
+    let signature = signer(payload.as_slice()).await?;
+    log::info!("signature {:?}", hex::encode(&signature));
     let extrinsic_call = {
         let encoded_inner = [
             // header: "is signed" (1 byte) + transaction protocol version (7 bytes)
             vec![0b10000000 + 4u8],
             // signer
             vec![0x00],
-            tx_data.from.to_vec(),
+            from.to_vec(),
             // signature
             [vec![0x01], signature.to_vec()].concat(),
             // extra
@@ -451,6 +458,7 @@ pub enum Error {
     Mapping(String),
     AccountNotFound,
     ConstantNotFound(String),
+    Platform(String),
 }
 
 impl fmt::Display for Error {
@@ -462,15 +470,11 @@ impl fmt::Display for Error {
     }
 }
 
-#[cfg(feature = "ws")]
-impl From<async_tungstenite::tungstenite::Error> for Error {
-    fn from(_err: async_tungstenite::tungstenite::Error) -> Self {
-        Error::ChainUnavailable
-    }
-}
-
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
+
+#[cfg(feature = "no_std")]
+impl core::error::Error for Error {}
 
 /// Represents a key of the blockchain storage in its raw form
 #[derive(Clone, Debug)]

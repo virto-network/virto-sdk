@@ -5,14 +5,14 @@ license = "Apache-2.0"
 version = "1.0.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2021"
-repository = "https://github.com/valibre-org/sube"
+repository = "https://github.com/valibre-org/virto-dk/sube"
 
 [dependencies]
 log = "0.4.17"
 async-trait = "0.1.53"
 blake2 = { version = "0.10.5", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
-frame-metadata = { version = "15.0.0", git = "https://github.com/paritytech/frame-metadata.git", default-features = false, features = ["serde_full", "decode"] }
+frame-metadata = { version = "16.0.0", default-features = false, features = ["serde_full", "decode"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 twox-hash = { version = "1.6.2", default-features = false }
 serde = { version = "1.0.137", default-features = false }
@@ -20,7 +20,7 @@ async-once-cell = "0.4.4"
 
 scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { path = "../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer"] }
+scales = { path="../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer", "std"] }
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }
@@ -36,30 +36,39 @@ async-tls = { version = "0.11.0", default-features = false, optional = true }
 async-std = { version = "1.11.0", default_features = false, optional = true }
 serde_json = { version = "1.0.80", default-features = false, optional = true }
 url = { version = "2.2.2", optional = true }
-
-wasm-bindgen = "0.2.63"
+paste = { version = "1.0", optional = true }
+wasm-bindgen = { version = "0.2.91", optional = true }
+once_cell = { version = "1.17.1", optional = true }
+heapless = { version = "0.7.16", optional = true }
+anyhow = { version = "1.0.40", optional = true }
+rand_core = {version = "0.6.3", optional = true }
+ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
+env_logger = "0.11.3"
 
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
+libwallet = { path = "../libwallet", default_features=false, features=["substrate", "mnemonic", "sr25519",  "util_pin", "rand", ] }
 
 [features]
 # default = ["json", "std"]
-default = ["async-std", "builder", "v14", "url", "wss", "ws", "http", "json"]
+default = ["async-std", "builder", "url", "wss", "ws", "http", "json", "v14", "serde_json"]
 #default = ["v14", "ws", "decode", "json", "std"]
 # decode = ["v14", "serde", "scales/codec"]
 # encode = ["v14", ]
 http = ["jsonrpc", "surf/h1-client-rustls"]
-http-web = ["jsonrpc", "surf/wasm-client"]
-json = ["v14", "scales/json"]
+http-web = ["jsonrpc", "surf/wasm-client", "wasm-bindgen", "url", "serde_json"]
+json = [ "scales/json"]
 std = []
-builder = []
-v12 = ["frame-metadata/v12"]
-v13 = ["frame-metadata/v13"]
-v14 = ["frame-metadata/v14", "scale-info"]
-ws = ["async-std", "async-tungstenite", "async-mutex", "futures-util", "futures-channel", "jsonrpc"]
-wss = ["ws", "async-tls", "async-tungstenite/async-tls"]
 
+builder = ["paste", "once_cell", "heapless"]
+# v12 = ["frame-metadata/v12"]
+# v13 = ["frame-metadata/v13"]
+v14 = ["scale-info", "frame-metadata/current"]
+ws = ["async-std", "async-mutex", "futures-channel", "jsonrpc", "async-std/unstable", "ewebsock", 'futures-util']
+wss = ["ws", "async-tls", "ewebsock/tls", "async-std/unstable"]
+examples = ["anyhow", "rand_core"]
+js = ["http-web", "json", "v14", "builder", 'async-std/unstable', "ws"]
 
 [package.metadata.docs.rs]
 features = ["http"]
@@ -69,3 +78,6 @@ members = [
 	"sube-js",
 	"cli"
 ]
+
+[patch.crates-io]
+cookie = { git = "https://github.com/S0c5/cookie-rs.git" }

@@ -1,7 +1,5 @@
 use core::{convert::{TryFrom, TryInto}, fmt::Debug};
-
 pub use derive::Derive;
-
 use self::any::AnySignature;
 
 type Bytes<const N: usize> = [u8; N];
