@@ -8,19 +8,21 @@ edition = "2021"
 repository = "https://github.com/valibre-org/virto-dk/sube"
 
 [dependencies]
-log = "0.4.17"
+async-once-cell = "0.4.4"
 async-trait = "0.1.53"
 blake2 = { version = "0.10.5", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
 frame-metadata = { version = "16.0.0", default-features = false, features = ["serde_full", "decode"] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
-twox-hash = { version = "1.6.2", default-features = false }
-serde = { version = "1.0.137", default-features = false }
-async-once-cell = "0.4.4"
-
-scale-info = { version = "2.1.1", default-features = false, optional = true }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-scales = { path="../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer", "std"] }
+log = "0.4.17"
+scale-info = { version = "2.1.1", default-features = false, optional = true }
+scales = { path="../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer", "json", "std"] }
+serde = { version = "1.0.137", default-features = false }
+# TODO: shouldn't be a base dependeny. remove after: https://github.com/virto-network/virto-sdk/issues/53
+serde_json = { version = "1.0.80", default-features = false, features = ["alloc"] }
+twox-hash = { version = "1.6.2", default-features = false }
+url = "2.5.0"
 
 # http backend
 surf = { version = "2.3.2", default_features = false, optional = true }
@@ -34,8 +36,6 @@ async-tls = { version = "0.11.0", default-features = false, optional = true }
 
 # bin target
 async-std = { version = "1.11.0", default_features = false, optional = true }
-serde_json = { version = "1.0.80", default-features = false, optional = true }
-url = { version = "2.2.2", optional = true }
 paste = { version = "1.0", optional = true }
 wasm-bindgen = { version = "0.2.91", optional = true }
 once_cell = { version = "1.17.1", optional = true }
@@ -48,27 +48,22 @@ env_logger = "0.11.3"
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
-libwallet = { path = "../libwallet", default_features=false, features=["substrate", "mnemonic", "sr25519",  "util_pin", "rand", ] }
+libwallet = { path = "../libwallet", default_features=false, features=["substrate", "mnemonic", "sr25519",  "util_pin", "rand", "std" ] }
+rand_core = "0.6.3"
 
 [features]
-# default = ["json", "std"]
-default = ["async-std", "builder", "url", "wss", "ws", "http", "json", "v14", "serde_json"]
-#default = ["v14", "ws", "decode", "json", "std"]
-# decode = ["v14", "serde", "scales/codec"]
-# encode = ["v14", ]
-http = ["jsonrpc", "surf/h1-client-rustls"]
-http-web = ["jsonrpc", "surf/wasm-client", "wasm-bindgen", "url", "serde_json"]
-json = [ "scales/json"]
+default = ["v14"]
+test = ["std", "wss", "ws", "http", "json", "v14", "dep:async-std"]
+http = ["dep:jsonrpc", "surf/h1-client-rustls"]
+http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "surf/wasm-client"]
+json = ["scales/json"]
 std = []
 
-builder = ["paste", "once_cell", "heapless"]
-# v12 = ["frame-metadata/v12"]
-# v13 = ["frame-metadata/v13"]
-v14 = ["scale-info", "frame-metadata/current"]
-ws = ["async-std", "async-mutex", "futures-channel", "jsonrpc", "async-std/unstable", "ewebsock", 'futures-util']
-wss = ["ws", "async-tls", "ewebsock/tls", "async-std/unstable"]
-examples = ["anyhow", "rand_core"]
-js = ["http-web", "json", "v14", "builder", 'async-std/unstable', "ws"]
+v14 = ["dep:scale-info", "frame-metadata/current"]
+ws = ["dep:async-mutex", "dep:async-std", "dep:ewebsock", "dep:futures-channel", "dep:futures-util", "dep:jsonrpc", "async-std/unstable"]
+wss = ["dep:async-tls", "ws", "ewebsock/tls", "async-std/unstable"]
+examples = ["dep:rand_core"]
+js = ["http-web", "json", "v14", 'async-std/unstable', "ws"]
 
 [package.metadata.docs.rs]
 features = ["http"]

@@ -1,65 +1,16 @@
-#![feature(async_closure)]
-#![feature(trait_alias)]
-#![feature(async_fn_traits)]
-#![feature(impl_trait_in_assoc_type)]
+// #![feature(async_closure)]
+// #![feature(trait_alias)]
+// #![feature(async_fn_traits)]
+// #![feature(impl_trait_in_assoc_type)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 /*!
-Sube is a lightweight Substrate client with multi-backend support
-that can use a chain's type information to auto encode/decode data
-into human-readable formats like JSON.
+Sube is a lightweight blockchain client to query and submit extrinsics
+to Substrate based blockchains.
+It supports multiple backends and uses the chain's type information
+to automatically encode/decode data into human-readable formats like JSON.
 
-## Usage
-
-Sube requires one of the metadata versions to be enabled(default: `v14`).
-You can change it activating the relevant feature.
-You will also likely want to activate a backend(default: `ws`).
-
-```toml
-[dependencies]
-sube = { version = "0.4", default_features = false, features = ["v13", "http"] }
-```
-
-Creating a client is as simple as instantiating a backend and converting it to a `Sube` instance.
-
-```
-# use sube::{Sube, ws, JsonValue, Error, meta::*, Backend};
-# #[async_std::main] async fn main() -> Result<(), Error> {
-# const CHAIN_URL: &str = "ws://localhost:24680";
-// Create an instance of Sube from any of the available backends
-let client: Sube<_> = ws::Backend::new_ws2(CHAIN_URL).await?.into();
-
-// With the client you can:
-// - Inspect its metadata
-let meta = client.metadata().await?;
-let system = meta.pallet_by_name("System").unwrap();
-assert_eq!(system.index, 0);
-
-// - Query the chain storage with a path-like syntax
-let latest_block: JsonValue = client.query("system/number").await?.into();
-assert!(
-    latest_block.as_u64().unwrap() > 0,
-    "block {} is greater than 0",
-    latest_block
-);
-
-// - Submit a signed extrinsic
-# // const SIGNED_EXTRINSIC: [u8; 6] = hex_literal::hex!("ff");
-// client.submit(SIGNED_EXTRINSIC).await?;
-# Ok(()) }
-```
-
-### Backend features
-
-* **http** -
-  Enables a surf based http backend.
-* **http-web** -
-  Enables surf with its web compatible backend that uses `fetch` under the hood(target `wasm32-unknown-unknown`)
-* **ws** -
-  Enables the websocket backend based on tungstenite
-* **wss** -
-  Same as `ws` and activates the TLS functionality of tungstenite
-
+TODO: rewrite docs for sube 1.0
 */
 
 #[cfg(not(any(feature = "v13", feature = "v14")))]
@@ -70,34 +21,30 @@ compile_error!("Only one metadata version can be enabled at the moment");
 #[macro_use]
 extern crate alloc;
 
-pub mod util;
+pub use builder::SubeBuilder;
+pub use signer::SignerFn;
 
 pub use codec;
 use codec::Encode;
 pub use frame_metadata::RuntimeMetadataPrefixed;
+pub use signer::Signer;
 
+use core::future::Future;
 pub use meta::Metadata;
-pub use meta_ext as meta;
-#[cfg(feature = "json")]
-pub use scales::JsonValue;
 #[cfg(feature = "v14")]
 pub use scales::{Serializer, Value};
 
 use async_trait::async_trait;
 use codec::Compact;
-use core::fmt;
-use core::ops::AsyncFn;
-
+use core::{fmt, marker::PhantomData};
 use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
+use meta_ext as meta;
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-
-#[cfg(feature = "builder")]
-pub use paste::paste;
+use serde_json::{json, Value as JsonValue};
 
 use crate::util::to_camel;
 
@@ -107,12 +54,6 @@ mod prelude {
     pub use alloc::vec::Vec;
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ExtrinsicBody<Body> {
-    pub nonce: Option<u64>,
-    pub body: Body,
-}
-
 /// Surf based backend
 #[cfg(any(feature = "http", feature = "http-web", feature = "js"))]
 pub mod http;
@@ -120,21 +61,23 @@ pub mod http;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-#[cfg(any(feature = "builder"))]
-pub mod builder;
-
-pub mod hasher;
-pub mod meta_ext;
+mod builder;
+mod hasher;
+mod meta_ext;
+mod signer;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
+pub mod util;
+
+/// The batteries included way to query or submit extrinsics to a Substrate based blockchain
+///
+/// Returns a builder that implments `IntoFuture` so it can be `.await`ed on.
+pub async fn sube(url: &str) -> SubeBuilder<(), ()> {
+    SubeBuilder::default().with_url(url)
+}
 
 pub type Result<T> = core::result::Result<T, Error>;
-
-pub trait SignerFn: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
-impl<T> SignerFn for T where T: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
-
-
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
 
@@ -165,38 +108,42 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     }
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ExtrinsicBody<Body> {
+    pub nonce: Option<u64>,
+    pub body: Body,
+}
+
 async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
-    from: &'m [u8],
     tx_data: ExtrinsicBody<V>,
-    signer: impl SignerFn,
+    signer: impl Signer,
 ) -> Result<Response<'m>>
 where
     V: serde::Serialize + core::fmt::Debug,
 {
     let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
-
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
-
-    let reg = &meta.types;
-
-    let ty = pallet.calls().expect("pallet does not have calls").ty.id();
+    let calls_ty = pallet.calls().ok_or(Error::CallNotFound)?.ty.id();
+    let type_registry = &meta.types;
 
     let mut encoded_call = vec![pallet.index];
 
     let call_data = scales::to_vec_with_info(
-        &json!( {
+        &json!({
             &item_or_call.to_lowercase(): &tx_data.body
         }),
-        (reg, ty).into(),
+        (type_registry, calls_ty).into(),
     )
     .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
+
+    let from_account = signer.account();
 
     let extra_params = {
         // ImmortalEra
@@ -210,7 +157,7 @@ where
                 let response = query(
                     &chain,
                     meta,
-                    &format!("system/account/0x{}", hex::encode(from)),
+                    &format!("system/account/0x{}", hex::encode(from_account.as_ref())),
                 )
                 .await?;
 
@@ -292,8 +239,7 @@ where
         signature_payload
     };
 
-
-    let signature = signer(payload.as_slice()).await?;
+    let signature = signer.sign(payload).await?;
 
     let extrinsic_call = {
         let encoded_inner = [
@@ -301,9 +247,9 @@ where
             vec![0b10000000 + 4u8],
             // signer
             vec![0x00],
-            from.to_vec(),
+            from_account.as_ref().to_vec(),
             // signature
-            [vec![0x01], signature.to_vec()].concat(),
+            [vec![0x01], signature.as_ref().to_vec()].concat(),
             // extra
             extra_params,
             // call data
