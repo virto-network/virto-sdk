@@ -86,6 +86,59 @@
 </body>
 
 <script type="module">
+  import { web3Enable, web3Accounts, web3FromSource } from "https://esm.sh/@polkadot/extension-dapp"
+  import { stringToHex } from "https://esm.sh/@polkadot/util";
+
+  const extensions = await web3Enable('david');
+  console.log({ extensions })
+
+  const accounts = await web3Accounts();
+  console.log({ accounts });
+
+  const connect = document.querySelector('#connect')
+  const account = document.querySelector('#account')
+  const output = document.querySelector('output')
+  const form = document.sign
+
+  console.log('accounts loaded')
+  for (let [i, a] of Object.entries(accounts)) {
+      let opt = document.createElement('option')
+      opt.textContent = `${a.meta.name} (${a.address.substr(0, 5)}...)`
+      opt.value = i
+      opt.dataset.address = a.address
+      opt.dataset.source = a.meta.source
+
+      account.append(opt)
+      console.log('loaded')
+    }
+  account.setCustomValidity('')
+  account.classList.toggle('hidden')
+  connect.classList.toggle('hidden')
+  console.log('finished')
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault()
+    // pjs.selectAccount(form.account.value)
+    // console.log(`signing with ${pjs.selectedAccount.name}: ${pjs.selectedAccount.address}`)
+    // let sig = await pjs.sign(, s => s)
+    // output.value = sig
+    const account = accounts[form.account.value].meta.source;
+    const injector = await web3FromSource();
+
+    const { signature } =  await injector.signer.signRaw({
+      address: account.address,
+      data: form.payload.value,
+      type: 'bytes'
+    })
+
+    console.log({ signature })
+    // form.payload.value;
+
+    output.value = signature
+  });
+</script>
+
+<!-- <script type="module">
   import init, {PjsExtension} from './dist/pjs.js'
   init().then(() => console.info('wasm ready'))
 
@@ -93,6 +146,7 @@
   const account = document.querySelector('#account')
   const output = document.querySelector('output')
   const form = document.sign
+
   let pjs = null
 
   connect.addEventListener('click', async e => {
@@ -116,6 +170,6 @@
     let sig = await pjs.sign(form.payload.value, s => s)
     output.value = sig
   })
-</script>
+</script> -->
 
 </html>

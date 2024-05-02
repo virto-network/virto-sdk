@@ -89,19 +89,18 @@ use core::fmt;
 use core::ops::AsyncFn;
 
 use hasher::hash;
+use log;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use log;
-
 
 #[cfg(feature = "builder")]
 pub use paste::paste;
 
-use crate::util::to_camel;
+use crate::{meta::Registry, util::to_camel};
 
 mod prelude {
     pub use alloc::boxed::Box;
@@ -136,7 +135,11 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub trait SignerFn: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
 impl<T> SignerFn for T where T: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
 
-
+macro_rules! print_hex {
+    ($e:expr) => {
+        log::info!("$e hex {:?}", hex::encode(compact(&$e).encode()));
+    };
+}
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
 
@@ -160,11 +163,30 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     }
 
     if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {
+        log::info!("key_res {:?}", &key_res);
         let res = chain.query_storage(&key_res).await?;
         Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)))
     } else {
+        log::info!("hello here the chain is not available {:?}", &keys);
         Err(Error::ChainUnavailable)
     }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AccountInfo {
+    nonce: u64,
+    consumers: u64,
+    providers: u64,
+    sufficients: u64,
+    data: Data,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Data {
+    free: u128,
+    reserved: u128,
+    frozen: u128,
+    flags: u128,
 }
 
 async fn submit<'m, V>(
@@ -174,6 +196,7 @@ async fn submit<'m, V>(
     from: &'m [u8],
     tx_data: ExtrinsicBody<V>,
     signer: impl SignerFn,
+    // add chain extensions
 ) -> Result<Response<'m>>
 where
     V: serde::Serialize + core::fmt::Debug,
@@ -218,9 +241,13 @@ where
 
                 match response {
                     Response::Value(value) => {
-                        let bytes: [u8; 8] = value.as_ref()[..8].try_into().expect("fits");
-                        let nonce = u64::from_le_bytes(bytes);
-                        Ok(nonce)
+                        log::info!("{:?}", serde_json::to_string(&value));
+                        let str = serde_json::to_string(&value).expect("wrong account info");
+                        let value: AccountInfo =
+                            serde_json::from_str(&str).expect("it must serialize");
+                        // let account_info: AccountInfo = serde_json::).unwrap();
+                        log::info!("{}", &value.nonce);
+                        Ok(value.nonce)
                     }
                     _ => Err(Error::AccountNotFound),
                 }
@@ -233,11 +260,42 @@ where
         log::info!("nonce {:?}", &nonce);
         log::info!("tip {:?}", &tip);
 
-        [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
+        log::info!("tip_hex: {}", hex::encode(Compact(tip.clone()).encode()));
+
+        let extra_params_hex = hex::encode(
+            [
+                Compact(era).encode(),
+                Compact(nonce).encode(),
+                Compact(tip).encode(),
+                vec![0x00u8],
+            ]
+            .concat(),
+        );
+
+        log::info!("extra_params_hex: {}", extra_params_hex);
+        let extensions = ();
+
+        // vec![0x00u8] sign extensions
+        // TODO: implement signed extensions
+        // meta.extrinsic.signed_extensions.iter().for_each(|ext| {
+        //     log::info!("signed extension: {:?}", ext);
+        //     let type_resolved = meta.types.resolve(ext.ty.id);
+        //     log::info!("type_resolved: {:?}", type_resolved);
+        //     log::info!("========================");
+        // });
+
+        [
+            vec![era],
+            Compact(nonce).encode(),
+            Compact(tip).encode(),
+            vec![0x00u8],
+        ]
+        .concat()
     };
 
+    log::info!("Hex {:?}", hex::encode(&extra_params));
+
     let additional_params = {
-        // Error: Still failing to deserialize the const
         let metadata = meta;
 
         let mut constants = metadata
@@ -274,11 +332,25 @@ where
             "System_Version.transaction_version is not a number".into(),
         ))? as u32;
 
+        let genesis_info = chain.block_info(Some(0u32)).await?;
+        log::info!("genesis_info {:?}", &genesis_info.number);
         let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
 
         log::info!("spec {:?}", &spec_version);
         log::info!("transaction_version {:?}", &transaction_version);
-        log::info!("genesis_block {:?}", &genesis_block);
+        log::info!("genesis_block {:?}", hex::encode(&genesis_block));
+        log::info!("genesis_block_hash {:?}", hex::encode(&genesis_info.hash));
+
+        // let response = query(&chain, meta, "system/BlockHash/0").await?;
+        // TODO: check why this params were not converted to 0x
+        // match response {
+        //     Response::Value(value) => {
+        //         let str = serde_json::to_string(&value).expect("helo");
+        //         log::info!("storage blockhash {:?}", str);
+        //     }
+        //     _ => return Err(Error::BadInput),
+        // };
+
         [
             spec_version.to_le_bytes().to_vec(),
             transaction_version.to_le_bytes().to_vec(),
@@ -288,8 +360,9 @@ where
         .concat()
     };
 
-    
     log::info!("encoded call {:?}", hex::encode(&encoded_call));
+
+    log::info!("additional_params {:?}", hex::encode(&additional_params));
 
     let signature_payload = [
         encoded_call.clone(),
@@ -298,21 +371,24 @@ where
     ]
     .concat();
 
+    log::info!("signature_payload {:?}", hex::encode(&signature_payload));
     let payload = if signature_payload.len() > 256 {
         hash(&meta::Hasher::Blake2_256, &signature_payload[..])
     } else {
         signature_payload
     };
 
+    log::info!("payload {:?}", hex::encode(&payload));
 
     let signature = signer(payload.as_slice()).await?;
+
     log::info!("signature {:?}", hex::encode(&signature));
     let extrinsic_call = {
         let encoded_inner = [
-            // header: "is signed" (1 byte) + transaction protocol version (7 bytes)
-            vec![0b10000000 + 4u8],
+            // header: "is signed" (1 bites) + transaction protocol version (7 bites)
+            vec![0b10000000 + 4u8], // x
             // signer
-            vec![0x00],
+            vec![0x00], // x
             from.to_vec(),
             // signature
             [vec![0x01], signature.to_vec()].concat(),
@@ -330,6 +406,8 @@ where
 
         [len, encoded_inner].concat()
     };
+
+    log::info!("EXTRICIC_CALL {:?}", hex::encode(&extrinsic_call));
 
     chain.submit(&extrinsic_call).await?;
 
@@ -485,15 +563,25 @@ pub struct StorageKey {
 
 impl StorageKey {
     pub fn new<T: AsRef<str>>(meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
+        log::info!("item {:?}", item);
+
         let entry = meta
             .storage()
-            .map(|s| s.entries().find(|e| e.name() == item))
+            .map(|s| s.entries().find(|e| {
+                log::info!("e.name {:?}", e.name());
+                e.name() == item
+            }))
             .flatten()
             .ok_or(Error::StorageKeyNotFound)?;
+
+        log::info!("entry {:?}", &entry);
+        log::info!("meta.name {:?}", &meta.name());
 
         let key = entry
             .key(meta.name(), map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
+
+        log::info!("key {:?}", key);
 
         Ok(StorageKey {
             key,

@@ -26,7 +26,8 @@ impl Backend {
 impl Rpc for Backend {
     /// HTTP based JSONRpc request expecting an hex encoded result
     async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult {
-        log::info!("RPC `{}` to {}", method, &self.0);
+        log::info!("RPC `{}`({:?}) to {}", method, params, &self.0);
+
         let req = surf::post(&self.0).content_type("application/json").body(
             to_string(&rpc::Request {
                 id: 1.into(),
