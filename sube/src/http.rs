@@ -37,13 +37,16 @@ impl Rpc for Backend {
             })
             .unwrap(),
         );
+        log::info!("hello world {:?}", &req);
         let client = surf::client().with(surf::middleware::Redirect::new(2));
+        log::info!("here after the client");
         let mut res = client
             .send(req)
             .await
             .map_err(|err| rpc::Error::Transport(err.into_inner().into()))?;
-
+        log::info!("here after the send");
         let status = res.status();
+        log::info!("here after the status");
         let res = if status.is_success() {
             res.body_json::<rpc::Response>()
                 .await

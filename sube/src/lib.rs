@@ -378,6 +378,7 @@ where
         signature_payload
     };
 
+    log::info!("payload.len {}", payload.len());
     log::info!("payload {:?}", hex::encode(&payload));
 
     let signature = signer(payload.as_slice()).await?;

@@ -111,8 +111,9 @@ impl<'a> IntoFuture for SubeBuilder<'a, (), ()> {
         async move {
             let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
             let path = url.path();
-
+            
             log::info!("building the backend for {}", url);
+
             let backend = BACKEND
                 .get_or_try_init(get_backend_by_url(url.clone()))
                 .await?;
@@ -167,7 +168,7 @@ where
                 .get_or_try_init(async {
                     match metadata {
                         Some(m) => Ok(m),
-                        None => backend.metadata().await.map_err(|err| Error::BadMetadata),
+                        None => backend.metadata().await.map_err(|_| Error::BadMetadata),
                     }
                 })
                 .await?;
@@ -222,6 +223,8 @@ fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
 }
 
 async fn get_backend_by_url(url: Url) -> SubeResult<AnyBackend> {
+    let mut url = url.clone();
+    url.set_path("/");
     match url.scheme() {
         #[cfg(feature = "ws")]
         "ws" | "wss" => Ok(AnyBackend::Ws(

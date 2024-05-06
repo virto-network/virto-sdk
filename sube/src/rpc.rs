@@ -65,10 +65,12 @@ impl<R: Rpc> Backend for R {
         let meta = self
             .rpc("state_getMetadata", &[])
             .await
-            .map_err(|e| crate::Error::Node(e.to_string()))?;
-
+            .map_err(|e| {
+                log::info!("error getting the metadata {:?}", e);
+                crate::Error::Node(e.to_string())
+            })?;
+        
         let meta = meta::from_bytes(&mut meta.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
-        log::trace!("Metadata {:#?}", meta);
         Ok(meta)
     }
 

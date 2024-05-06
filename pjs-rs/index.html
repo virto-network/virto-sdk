@@ -79,7 +79,7 @@
     <button id="connect" type="button">Connect</button>
     <select id="account" name="account" class="hidden" required
       oninvalid="this.setCustomValidity('First connect to the extension')"></select>
-    <input name="payload" type="text" placeholder="0x hex encoded payload" pattern="0x[a-fA-F0-9]{2,}" required>
+    <input name="payload" type="text" placeholder="0x hex encoded payload" pattern="[a-fA-F0-9]{2,}" required>
     <button>Sign</button>
   </form>
   <output title="Result" name="out">~</output>
@@ -87,7 +87,9 @@
 
 <script type="module">
   import { web3Enable, web3Accounts, web3FromSource } from "https://esm.sh/@polkadot/extension-dapp"
-  import { stringToHex } from "https://esm.sh/@polkadot/util";
+  import { stringToHex, u8aWrapBytes, u8aToHex, u8aToU8a } from "https://esm.sh/@polkadot/util";
+  import { signatureVerify } from "https://esm.sh/@polkadot/util-crypto";
+
 
   const extensions = await web3Enable('david');
   console.log({ extensions })
@@ -122,19 +124,33 @@
     // console.log(`signing with ${pjs.selectedAccount.name}: ${pjs.selectedAccount.address}`)
     // let sig = await pjs.sign(, s => s)
     // output.value = sig
-    const account = accounts[form.account.value].meta.source;
-    const injector = await web3FromSource();
+    const account = accounts[form.account.value];
+    const injector = await web3FromSource(account.meta.source);
+    console.log({ account });
+    console.log({ value: form.payload.value })
+    console.log({ injector });
+    console.log({ signer: injector.signer });
 
+    let bytes = `0x${form.payload.value}`;
+    console.log('bytes', bytes);
+    const f = u8aWrapBytes(bytes);
+
+    const raw_bytes = u8aToU8a(bytes)
+    console.log({ raw_bytes: raw_bytes })
+    console.log({ parsed_bytes: u8aToHex(f) })
+    console.log({ parsed: f });
     const { signature } =  await injector.signer.signRaw({
       address: account.address,
-      data: form.payload.value,
+      data: bytes,
       type: 'bytes'
     })
-
+    
     console.log({ signature })
     // form.payload.value;
 
     output.value = signature
+    let its_verified = signatureVerify(form.payload.value, signature, account.address);
+    console.log({ 'verified': its_verified });
   });
 </script>
 
@@ -173,3 +189,7 @@
 </script> -->
 
 </html>
+
+
+// 0x3c42797465733e0a0300e25b1e3758a5fbedb956b36113252f9e866d3ece688364cc9d34eb01f4b2125d02286bee001800006c00000006000000c710a5f16adc17bcd212cff0aedcbf1c1212a043cdc0fb2dcba861efe5305b01c710a5f16adc17bcd212cff0aedcbf1c1212a043cdc0fb2dcba861efe5305b013c2f42797465733e
+// 
