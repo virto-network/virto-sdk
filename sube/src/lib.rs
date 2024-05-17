@@ -81,7 +81,7 @@ pub use meta_ext as meta;
 #[cfg(feature = "json")]
 pub use scales::JsonValue;
 #[cfg(feature = "v14")]
-pub use scales::{Serializer, Value};
+pub use scales::{Serializer, Value, to_bytes_with_info};
 
 use async_trait::async_trait;
 use codec::Compact;
@@ -141,7 +141,10 @@ macro_rules! print_hex {
     };
 }
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
+    log::info!("url: {:?}", path);
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+    log::info!("item_or_call: {:?}", item_or_call);
+    log::info!("keys: {:?}", keys);
 
     let pallet = meta
         .pallet_by_name(&pallet)
@@ -161,8 +164,12 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
             &meta.types,
         )));
     }
+    // let hello = to_bytes_with_info(&mut out, &key, Some((&meta.types, 38)));
+    
+    // log::info!("hello_encoded {:?}", hex::encode(out));
 
-    if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {
+    log::info!("key {:?}", &keys);
+    if let Ok(key_res) = StorageKey::new(&meta.types, pallet, &item_or_call, &keys) {
         log::info!("key_res {:?}", &key_res);
         let res = chain.query_storage(&key_res).await?;
         Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)))
@@ -563,9 +570,7 @@ pub struct StorageKey {
 }
 
 impl StorageKey {
-    pub fn new<T: AsRef<str>>(meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
-        log::info!("item {:?}", item);
-
+    pub fn new<T: AsRef<str>>(registry: &PortableRegistry, meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
         let entry = meta
             .storage()
             .map(|s| s.entries().find(|e| {
@@ -575,14 +580,10 @@ impl StorageKey {
             .flatten()
             .ok_or(Error::StorageKeyNotFound)?;
 
-        log::info!("entry {:?}", &entry);
-        log::info!("meta.name {:?}", &meta.name());
 
         let key = entry
-            .key(meta.name(), map_keys)
+            .key(&registry, meta.name(), map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
-
-        log::info!("key {:?}", key);
 
         Ok(StorageKey {
             key,
