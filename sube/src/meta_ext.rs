@@ -9,6 +9,7 @@ use frame_metadata::decode_different::DecodeDifferent;
 use frame_metadata::v14::PalletCallMetadata;
 use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 
+use scales::to_bytes_with_info;
 #[cfg(feature = "v13")]
 pub use v13::*;
 #[cfg(feature = "v14")]
@@ -121,16 +122,17 @@ pub trait Entry {
     fn ty(&self) -> &Self::Type;
     fn ty_id(&self) -> u32;
 
-    fn key<T: AsRef<str>>(&self, pallet: &str, map_keys: &[T]) -> Option<Vec<u8>> {
-        self.ty().key(pallet, self.name(), map_keys)
+    fn key<T: AsRef<str>>(&self, registry: &PortableRegistry, pallet: &str, map_keys: &[T]) -> Option<Vec<u8>> {
+        self.ty().key(&registry, pallet, self.name(), map_keys)
     }
 }
 
 pub trait EntryTy {
-    fn key<T: AsRef<str>>(&self, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>>;
+    fn key<T: AsRef<str>>(&self, registry: &PortableRegistry, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>>;
 
     fn build_key<H, T>(
         &self,
+        registry: Option<(&PortableRegistry, u32)>,
         pallet: &str,
         item: &str,
         map_keys: &[T],
@@ -150,10 +152,19 @@ pub trait EntryTy {
         for (i, h) in hashers.iter().enumerate() {
             let hasher = h.borrow();
             let k = map_keys[i].as_ref();
+        
             if k.is_empty() {
                 return None;
             }
-            key.append(&mut hash(hasher, k))
+
+            if registry.is_none() {
+                key.append(&mut hash(hasher, k));
+            } else {
+                let mut out = vec![];
+                to_bytes_with_info(&mut out, &k, registry);
+                key.append(&mut hash(hasher, out));
+            }
+
         }
         Some(key)
     }
@@ -277,18 +288,18 @@ impl<'a> Entry for EntryMeta {
 }
 
 impl EntryTy for EntryType {
-    fn key<T: AsRef<str>>(&self, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>> {
+    fn key<T: AsRef<str>>(&self, registry: &PortableRegistry, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>> {
         match self {
             Self::Plain(ty) => {
                 log::debug!("Item Type: {:?}", ty);
-                self.build_key::<Hasher, &str>(pallet, item, &[], &[])
+                self.build_key::<Hasher, &str>(Some((registry, ty.id)), pallet, item, &[], &[])
             }
             #[cfg(any(feature = "v13"))]
             Self::Map {
                 hasher, key, value, ..
             } => {
                 log::debug!("Item Type: {:?} => {:?}", key, value);
-                self.build_key(pallet, item, map_keys, &[hasher])
+                self.build_key(None, pallet, item, map_keys, &[hasher])
             }
             #[cfg(any(feature = "v13"))]
             Self::DoubleMap {
@@ -299,7 +310,7 @@ impl EntryTy for EntryType {
                 value,
             } => {
                 log::debug!("Item Type: ({:?}, {:?}) => {:?}", key1, key2, value);
-                self.build_key(pallet, item, map_keys, &[hasher, key2_hasher])
+                self.build_key(None, pallet, item, map_keys, &[hasher, key2_hasher])
             }
             #[cfg(feature = "v13")]
             Self::NMap {
@@ -308,7 +319,7 @@ impl EntryTy for EntryType {
                 value,
             } => {
                 log::debug!("Item Type: {:?} => {:?}", keys, value);
-                self.build_key(pallet, item, map_keys, hashers.decoded())
+                self.build_key(None, pallet, item, map_keys, hashers.decoded())
             }
             #[cfg(feature = "v14")]
             Self::Map {
@@ -317,7 +328,7 @@ impl EntryTy for EntryType {
                 value,
             } => {
                 log::debug!("Item Type: {:?} => {:?}", key, value);
-                self.build_key(pallet, item, map_keys, hashers)
+                self.build_key(Some((&registry, key.id)), pallet, item, map_keys, hashers)
             }
         }
     }

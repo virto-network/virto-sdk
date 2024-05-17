@@ -100,7 +100,7 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
         )));
     }
 
-    if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {
+    if let Ok(key_res) = StorageKey::new(&meta.types, pallet, &item_or_call, &keys) {
         let res = chain.query_storage(&key_res).await?;
         Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)))
     } else {
@@ -418,7 +418,7 @@ pub struct StorageKey {
 }
 
 impl StorageKey {
-    pub fn new<T: AsRef<str>>(meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
+    pub fn new<T: AsRef<str>>(registry: &PortableRegistry, meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
         let entry = meta
             .storage()
             .map(|s| s.entries().find(|e| e.name() == item))
@@ -426,7 +426,7 @@ impl StorageKey {
             .ok_or(Error::StorageKeyNotFound)?;
 
         let key = entry
-            .key(meta.name(), map_keys)
+            .key(&registry, meta.name(), map_keys)
             .ok_or(Error::StorageKeyNotFound)?;
 
         Ok(StorageKey {
