@@ -14,5 +14,6 @@ async fn main() -> Result<()> {
         let data = serde_json::to_value(&value).expect("it must be a serialized object");
         println!("Account info: {}", serde_json::to_string_pretty(&data).expect("it must return an str"));
     }
+
     Ok(())
 }

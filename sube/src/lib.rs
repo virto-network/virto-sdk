@@ -114,6 +114,24 @@ pub struct ExtrinsicBody<Body> {
     pub body: Body,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct AccountInfo {
+    nonce: u64,
+    consumers: u64,
+    providers: u64,
+    sufficients: u64,
+    data: Data,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Data {
+    free: u128,
+    reserved: u128,
+    frozen: u128,
+    flags: u128,
+}
+
+
 async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
@@ -163,9 +181,12 @@ where
 
                 match response {
                     Response::Value(value) => {
-                        let bytes: [u8; 8] = value.as_ref()[..8].try_into().expect("fits");
-                        let nonce = u64::from_le_bytes(bytes);
-                        Ok(nonce)
+                        log::info!("{:?}", serde_json::to_string(&value));
+                        let str = serde_json::to_string(&value).expect("wrong account info");
+                        let account_info: AccountInfo =
+                            serde_json::from_str(&str).expect("it must serialize");
+                        log::info!("{}", &account_info.nonce);
+                        Ok(account_info.nonce)
                     }
                     _ => Err(Error::AccountNotFound),
                 }
@@ -174,7 +195,13 @@ where
 
         let tip: u128 = 0;
 
-        [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
+        [
+            vec![era],
+            Compact(nonce).encode(),
+            Compact(tip).encode(),
+            vec![0x00u8], // chain extension for kreivo
+        ]
+        .concat()
     };
 
     let additional_params = {

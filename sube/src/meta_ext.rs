@@ -146,7 +146,7 @@ pub trait EntryTy {
         key.append(&mut hash(&Hasher::Twox128, &item));
 
         if map_keys.len() != hashers.len() {
-            return None;
+            return Some(key);
         }
 
         for (i, h) in hashers.iter().enumerate() {

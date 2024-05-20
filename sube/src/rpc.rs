@@ -18,7 +18,7 @@ pub trait Rpc: Backend + Send + Sync {
     fn convert_params(params: &[&str]) -> Vec<Box<RawValue>> {
         params
             .iter()
-            .map(|p| format!("\"{}\"", p))
+            .map(|p| format!("{}", p))
             .map(RawValue::from_string)
             .map(Result::unwrap)
             .collect::<Vec<_>>()
@@ -30,7 +30,7 @@ impl<R: Rpc> Backend for R {
     async fn query_storage(&self, key: &StorageKey) -> crate::Result<Vec<u8>> {
         let key = key.to_string();
         log::debug!("StorageKey encoded: {}", key);
-        self.rpc("state_getStorage", &[&key]).await.map_err(|e| {
+        self.rpc("state_getStorage", &[&format!("\"{}\"", &key)]).await.map_err(|e| {
             log::debug!("RPC failure: {}", e);
             // NOTE it could fail for more reasons
             crate::Error::StorageKeyNotFound
@@ -45,7 +45,7 @@ impl<R: Rpc> Backend for R {
         log::debug!("Extrinsic: {}", extrinsic);
 
         let res = self
-            .rpc("author_submitExtrinsic", &[&extrinsic])
+            .rpc("author_submitExtrinsic", &[&format!("\"{}\"", &extrinsic)])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
         log::debug!("Extrinsic {:x?}", res);
@@ -79,14 +79,6 @@ impl<R: Rpc> Backend for R {
         } else {
             block_info(self, &[]).await?
         };
-
-        // TODO: Make sure to complete this in a future
-        // Hint: RPC should not deserialize the JSON-RPC result
-        // This produces a deserialization error
-        // let block = self
-        //     .rpc("chain_getBlock", &[&hex::encode(&block_hash)])
-        //     .await
-        //     .map_err(|e| crate::Error::Node(e.to_string()))?;
 
         Ok(meta::BlockInfo {
             number: at.unwrap_or(0) as u64,
