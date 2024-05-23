@@ -195,8 +195,7 @@ fn extract_touple_type(key_id: u32, type_info: &Type<PortableForm>) -> Vec<TypeI
             let types = touple.fields.iter().map(|x| x.id).collect();
             return types;
         }
-        scale_info::TypeDef::Primitive(t) => vec![key_id],
-        _ => vec![],
+        _ => vec![key_id],
     }
 }
 
