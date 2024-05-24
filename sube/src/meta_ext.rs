@@ -211,7 +211,7 @@ pub trait EntryTy {
     fn build_call<H, T>(
         &self,
         portable_reg: &PortableRegistry,
-        key_ty_id: u32,
+        key_ty_id: Option<u32>,
         value_ty_id: u32,
         pallet: &str,
         item: &str,
@@ -222,10 +222,15 @@ pub trait EntryTy {
         H: Borrow<Hasher>,
         T: AsRef<str>,
     {
-        let key_type_info = portable_reg
-            .resolve(key_ty_id)
-            .ok_or(crate::Error::BadInput)?;
-        let type_call_ids = extract_touple_type(key_ty_id, key_type_info);
+        let type_call_ids = if let Some(key_ty_id) = key_ty_id {
+            let key_type_info = portable_reg
+                .resolve(key_ty_id)
+                .ok_or(crate::Error::BadInput)?;
+            extract_touple_type(key_ty_id, key_type_info)
+        } else {
+            vec![]
+        };
+
         let storage_key = StorageKey::new(
             value_ty_id,
             hash(&Hasher::Twox128, &pallet),
@@ -245,6 +250,7 @@ pub trait EntryTy {
 
                     let hasher = hasher.borrow();
                     let mut out = vec![];
+
                     let key_type = portable_reg
                         .resolve(type_id)
                         .expect("type can not be resolved");
@@ -369,7 +375,7 @@ impl EntryTy for EntryType {
     ) -> crate::Result<StorageKey> {
         match self {
             Self::Plain(ty) => {
-                self.build_call::<Hasher, &str>(registry, 0, ty.id, pallet, item, &[], &[])
+                self.build_call::<Hasher, &str>(registry, None, ty.id, pallet, item, &[], &[])
             }
             #[cfg(feature = "v14")]
             Self::Map {
@@ -377,8 +383,15 @@ impl EntryTy for EntryType {
                 key,
                 value,
             } => {
-                log::debug!("Item Type[{}]: {:?} => {:?}", key.id, key, value);
-                self.build_call(&registry, key.id, value.id, pallet, item, map_keys, hashers)
+                self.build_call(
+                    &registry,
+                    Some(key.id),
+                    value.id,
+                    pallet,
+                    item,
+                    map_keys,
+                    hashers,
+                )
             }
         }
     }
