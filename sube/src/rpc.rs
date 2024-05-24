@@ -154,6 +154,3 @@ impl<R: Rpc> Backend for R {
         })
     }
 }
-// blake_128(concat)
-// hash:encocoded
-// hash:? 
