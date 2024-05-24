@@ -6,7 +6,7 @@ use crate::{
     meta::BlockInfo, Backend, Error, ExtrinsicBody, Metadata, Response, Result as SubeResult,
     Signer, StorageKey,
 };
-use crate::{prelude::*, Offline};
+use crate::{prelude::*, Offline, StorageChangeSet};
 
 use async_trait::async_trait;
 use core::{
@@ -233,6 +233,35 @@ enum AnyBackend {
 
 #[async_trait]
 impl Backend for &AnyBackend {
+    async fn query_storage_at(
+        &self,
+        keys: Vec<String>,
+        block: Option<String>
+    ) -> crate::Result<Vec<StorageChangeSet>> {
+        match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            AnyBackend::Http(b) => b.query_storage_at(keys, block).await,
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => b.query_storage_at(keys, block).await,
+            AnyBackend::Offline(b) => b.query_storage_at(keys, block).await,
+        }
+    }
+
+    async fn get_keys_paged(
+        &self,
+        from: &StorageKey,
+        size: u16,
+        to: Option<&StorageKey>,
+    ) -> crate::Result<Vec<String>> {
+        match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            AnyBackend::Http(b) => b.get_keys_paged(&from, size, to).await,
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => b.get_keys_paged(&from, size, to).await,
+            AnyBackend::Offline(b) => b.get_keys_paged(&from, size, to).await,
+        }
+    }
+
     async fn metadata(&self) -> SubeResult<Metadata> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
@@ -262,6 +291,7 @@ impl Backend for &AnyBackend {
             AnyBackend::Offline(b) => b.block_info(at).await,
         }
     }
+
     async fn query_storage(&self, key: &StorageKey) -> SubeResult<Vec<u8>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]

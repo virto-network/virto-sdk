@@ -8,10 +8,17 @@ use sube::{sube, ExtrinsicBody, Response, Result, SubeBuilder};
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let response = sube!("ws://127.0.0.1:8000/communityTracks/tracks/1").await?;
+    let response = sube!("ws://127.0.0.1:12281/communityMemberships/collection").await?;
 
-     if let Response::Value(value) = response {
-        let data = serde_json::to_value(&value).expect("it must be a serialized object");
+    if let Response::ValueSet(value) = result {
+        let data = serde_json::to_value(&value).expect("to be serializable");
+        println!("Collection {}", serde_json::to_string_pretty(&data).expect("it must return an str"));
+    }
+
+    let result = sube!("ws://127.0.0.1:12281/system/account/0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b").await?;
+
+    if let Response::Value(value) = result {
+        let data = serde_json::to_value(&value).expect("to be serializable");
         println!("Account info: {}", serde_json::to_string_pretty(&data).expect("it must return an str"));
     }
 

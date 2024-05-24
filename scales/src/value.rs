@@ -38,6 +38,10 @@ impl<'a> Value<'a> {
         self.registry.resolve(ty).expect("in registry")
     }
 
+    pub fn len(&self) -> usize {
+        self.ty_len(&self.data, self.ty_id)
+    }
+
     fn ty_len(&self, data: &[u8], ty: TypeId) -> usize {
         match &self.resolve(ty).type_def {
             TypeDef::Primitive(ref p) => match p {

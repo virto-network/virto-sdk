@@ -13,10 +13,8 @@ to automatically encode/decode data into human-readable formats like JSON.
 TODO: rewrite docs for sube 1.0
 */
 
-#[cfg(not(any(feature = "v13", feature = "v14")))]
+#[cfg(not(any(feature = "v14")))]
 compile_error!("Enable one of the metadata versions");
-#[cfg(all(feature = "v13", feature = "v14"))]
-compile_error!("Only one metadata version can be enabled at the moment");
 
 #[macro_use]
 extern crate alloc;
@@ -26,6 +24,7 @@ pub use signer::SignerFn;
 
 pub use codec;
 use codec::Encode;
+pub use core::fmt::Display;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use signer::Signer;
 
@@ -40,6 +39,7 @@ use core::{fmt, marker::PhantomData};
 use hasher::hash;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
 use meta_ext as meta;
+use meta_ext::{KeyValue, StorageKey};
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
@@ -100,9 +100,55 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
         )));
     }
 
-    if let Ok(key_res) = StorageKey::new(&meta.types, pallet, &item_or_call, &keys) {
-        let res = chain.query_storage(&key_res).await?;
-        Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)))
+    if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
+    {
+        let storage_key_encoded = format!("{}", &key_res);
+
+        if !key_res.is_partial() {
+            let res = chain.query_storage(&key_res).await?;
+            return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
+        }
+
+        let res = chain.get_keys_paged(&key_res, 1000, None).await?;
+        let result = chain.query_storage_at(res, None).await?;
+
+        if let [storage_change, ..] = &result[..] {
+            let value = storage_change.changes
+                .iter()
+                .map(|[key, data]| {
+                    let key = key.replace(&hex::encode(&key_res.pallet), "");
+                    let key = key.replace(&hex::encode(&key_res.call), "");
+                    let mut pointer = 2 + 32; // + 0x
+                    let keys = key_res
+                        .args
+                        .iter()
+                        .map(|arg| match arg {
+                            KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
+                                let hashed = &key[pointer..];
+                                let value = Value::new(
+                                    hex::decode(&hashed).expect("hello world"),
+                                    *type_id,
+                                    &meta.types,
+                                );
+                                pointer += (value.len() * 2) + 32;
+                                value
+                            }
+                        })
+                        .collect::<Vec<Value<'m>>>();
+
+                    let value = Value::new(
+                        hex::decode(&data[2..]).expect("it to be a byte str"),
+                        key_res.ty,
+                        &meta.types,
+                    );
+                    (keys, value)
+                })
+                .collect::<Vec<_>>();
+
+            Ok(Response::ValueSet(value))
+        } else {
+            Ok(Response::Void)
+        }
     } else {
         Err(Error::ChainUnavailable)
     }
@@ -130,7 +176,6 @@ pub struct Data {
     frozen: u128,
     flags: u128,
 }
-
 
 async fn submit<'m, V>(
     chain: impl Backend,
@@ -302,6 +347,7 @@ where
 pub enum Response<'m> {
     Void,
     Value(scales::Value<'m>),
+    ValueSet(Vec<(Vec<scales::Value<'m>>, scales::Value<'m>)>),
     Meta(&'m Metadata),
     Registry(&'m PortableRegistry),
 }
@@ -312,6 +358,7 @@ impl From<Response<'_>> for Vec<u8> {
             Response::Value(v) => v.as_ref().into(),
             Response::Meta(m) => m.encode(),
             Response::Registry(r) => r.encode(),
+            Response::ValueSet(r) => r.encode(),
             Response::Void => vec![0],
         }
     }
@@ -345,6 +392,12 @@ impl PalletCall {
     }
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+struct StorageChangeSet {
+    block: String,
+    changes: Vec<[String; 2]>,
+}
+
 /// Generic definition of a blockchain backend
 ///
 /// ```rust,ignore
@@ -361,6 +414,18 @@ impl PalletCall {
 /// ```
 #[async_trait]
 pub trait Backend {
+    async fn query_storage_at(
+        &self,
+        keys: Vec<String>,
+        block: Option<String>,
+    ) -> crate::Result<Vec<StorageChangeSet>>;
+
+    async fn get_keys_paged(
+        &self,
+        from: &StorageKey,
+        size: u16,
+        to: Option<&StorageKey>,
+    ) -> crate::Result<Vec<String>>;
     /// Get raw storage items form the blockchain
     async fn query_storage(&self, key: &StorageKey) -> Result<Vec<u8>>;
 
@@ -379,6 +444,23 @@ pub struct Offline(pub Metadata);
 
 #[async_trait]
 impl Backend for Offline {
+    async fn query_storage_at(
+        &self,
+        keys: Vec<String>,
+        block: Option<String>,
+    ) -> crate::Result<Vec<StorageChangeSet>> {
+        Err(Error::ChainUnavailable)
+    }
+
+    async fn get_keys_paged(
+        &self,
+        from: &StorageKey,
+        size: u16,
+        to: Option<&StorageKey>,
+    ) -> crate::Result<Vec<String>> {
+        Err(Error::ChainUnavailable)
+    }
+
     async fn query_storage(&self, _key: &StorageKey) -> Result<Vec<u8>> {
         Err(Error::ChainUnavailable)
     }
@@ -436,41 +518,3 @@ impl std::error::Error for Error {}
 
 #[cfg(feature = "no_std")]
 impl core::error::Error for Error {}
-
-/// Represents a key of the blockchain storage in its raw form
-#[derive(Clone, Debug)]
-pub struct StorageKey {
-    key: Vec<u8>,
-    pub ty: u32,
-}
-
-impl StorageKey {
-    pub fn new<T: AsRef<str>>(registry: &PortableRegistry, meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
-        let entry = meta
-            .storage()
-            .map(|s| s.entries().find(|e| e.name() == item))
-            .flatten()
-            .ok_or(Error::StorageKeyNotFound)?;
-
-        let key = entry
-            .key(&registry, meta.name(), map_keys)
-            .ok_or(Error::StorageKeyNotFound)?;
-
-        Ok(StorageKey {
-            key,
-            ty: entry.ty_id(),
-        })
-    }
-}
-
-impl fmt::Display for StorageKey {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "0x{}", hex::encode(&self.key))
-    }
-}
-
-impl AsRef<[u8]> for StorageKey {
-    fn as_ref(&self) -> &[u8] {
-        self.key.as_ref()
-    }
-}

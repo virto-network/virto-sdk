@@ -20,7 +20,7 @@ scale-info = { version = "2.1.1", default-features = false, optional = true }
 scales = { path="../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer", "json", "std"] }
 serde = { version = "1.0.137", default-features = false }
 # TODO: shouldn't be a base dependeny. remove after: https://github.com/virto-network/virto-sdk/issues/53
-serde_json = { version = "1.0.80", default-features = false, features = ["alloc"] }
+serde_json = { version = "1.0.80", default-features = false, features = ["alloc", "arbitrary_precision"] }
 twox-hash = { version = "1.6.2", default-features = false }
 url = "2.5.0"
 
