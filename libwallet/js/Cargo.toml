@@ -21,8 +21,8 @@ wasm-bindgen-futures = "0.4.34"
 [dev-dependencies]
 wasm-bindgen-test = "0.3.34"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
-features = ["js"]
+# [target.'cfg(target_arch = "wasm32")'.dependencies.getrandom]
+# features = ["js"]
 
 [features]
 default = ["wallet", "js", "hex", "util_pin"]

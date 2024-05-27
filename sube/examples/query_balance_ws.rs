@@ -1,6 +1,6 @@
 use env_logger;
 use serde::Deserialize;
-use sube::{builder::SubeBuilder, sube, Error, ExtrinsicBody, Response, Result, SignerFn};
+use sube::{sube, Error, ExtrinsicBody, Response, Result, SubeBuilder};
 
 #[derive(Debug, Deserialize)]
 pub struct AccountInfo {

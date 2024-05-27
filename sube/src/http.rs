@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use async_trait::async_trait;
+use serde::Deserialize;
 use core::{convert::TryInto, fmt};
 use jsonrpc::{
     error::{standard_error, StandardError},
@@ -25,7 +26,7 @@ impl Backend {
 #[async_trait]
 impl Rpc for Backend {
     /// HTTP based JSONRpc request expecting an hex encoded result
-    async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult {
+    async fn rpc<T: for<'a> Deserialize<'a>>(&self, method: &str, params: &[&str]) -> RpcResult<T> {
         log::info!("RPC `{}` to {}", method, &self.0);
         let req = surf::post(&self.0).content_type("application/json").body(
             to_string(&rpc::Request {
@@ -36,13 +37,16 @@ impl Rpc for Backend {
             })
             .unwrap(),
         );
+        log::info!("hello world {:?}", &req);
         let client = surf::client().with(surf::middleware::Redirect::new(2));
+        log::info!("here after the client");
         let mut res = client
             .send(req)
             .await
             .map_err(|err| rpc::Error::Transport(err.into_inner().into()))?;
-
+        log::info!("here after the send");
         let status = res.status();
+        log::info!("here after the status");
         let res = if status.is_success() {
             res.body_json::<rpc::Response>()
                 .await
@@ -52,7 +56,7 @@ impl Rpc for Backend {
                         Some(to_raw_value(&err.to_string()).unwrap()),
                     )
                 })?
-                .result::<String>()?
+                .result::<T>()?
         } else {
             log::debug!("RPC HTTP status: {}", res.status());
             let err = res
@@ -68,10 +72,6 @@ impl Rpc for Backend {
             });
         };
 
-        log::debug!("RPC Response: {}...", &res[..res.len().min(20)]);
-        // assume the response is a hex encoded string starting with "0x"
-        let response = hex::decode(&res[2..])
-            .map_err(|_err| standard_error(StandardError::InternalError, None))?;
-        Ok(response)
+        Ok(res)
     }
 }

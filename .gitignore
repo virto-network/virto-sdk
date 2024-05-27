@@ -2,3 +2,5 @@ target/
 Cargo.lock
 .vscode/
 **/*.rs.bk
+.DS_Store
+

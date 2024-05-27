@@ -15,14 +15,15 @@ serde = {version = "1.0", default-features = false, features = ["derive"], optio
 hmac = {version = "0.12.1", default-features = false, optional = true}
 pbkdf2 = {version = "0.11.0", default-features = false, optional = true}
 sha2 = {version = "0.10.2", default-features = false, optional = true}
-
-mnemonic = {package = "bip0039", version = "0.10.1", default-features = false, optional = true}
-
+pjs = { path = "../pjs-rs", optional = true, default-features = false }
+mnemonic = { package = "bip0039", version = "0.10.1", default-features = false, optional = true}
+sp-core = { version = "32.0.0", optional = true }
 rand_core = {version = "0.6.3", optional = true}
 # substrate related
 schnorrkel = {version = "0.11.4", default-features = false, optional = true}# soft derivation in no_std
 rand_chacha = {version = "0.3.1", default-features = false, optional = true}
-
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
+log = "0.4.17"
 # vault os
 keyring = {version = "1.1.2", optional = true}
 # vault pass
@@ -35,7 +36,7 @@ serde_json = {version = "1.0", default-features = false, features = ["alloc"]}
 dirs = "4.0"
 
 [features]
-# default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os", "util_pin"]
+default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os", "util_pin", "vault_pjs"]
 rand = ["rand_core", "schnorrkel?/getrandom"]
 sr25519 = ["dep:schnorrkel"]
 std = [
@@ -46,6 +47,7 @@ util_pin = ["pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = []
+vault_pjs = ["pjs", "sp-core"]
 
 [workspace]
 members = [

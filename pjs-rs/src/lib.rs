@@ -1,7 +1,7 @@
+use log;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::js_sys::{Array, Function, Object, Promise, Reflect};
-
 macro_rules! get {
     (^ $obj:expr, $($prop:expr),+ $(,)?) => {{
         let val = get!($obj, $($prop),+);
@@ -19,14 +19,15 @@ macro_rules! get {
 
 const NULL: JsValue = JsValue::null();
 
-#[wasm_bindgen]
+#[derive(Clone)]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 pub struct PjsExtension {
     pjs: JsValue,
     accounts: Vec<Account>,
     selected: Option<u8>,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 impl PjsExtension {
     pub async fn connect(app_name: &str) -> Result<PjsExtension, Error> {
         let Some(web3) = web_sys::window().expect("browser").get("injectedWeb3") else {
@@ -49,7 +50,7 @@ impl PjsExtension {
         })
     }
 
-    #[wasm_bindgen(js_name = selectAccount)]
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = selectAccount))]
     pub fn select_account(&mut self, idx: u8) {
         self.selected = self
             .accounts
@@ -58,14 +59,14 @@ impl PjsExtension {
             .map(|i| idx.min(i.min(u8::MAX as usize) as u8));
     }
 
-    ///
-    #[wasm_bindgen(js_name = sign)]
-    pub async fn js_sign(&self, payload: &str, cb: &Function) -> Result<JsValue, Error> {
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = sign))]
+    pub async fn js_sign(&self, payload: &str) -> Result<JsValue, Error> {
         let sign: Function = get!(^ &self.pjs, "signer", "signRaw");
         let account = self
             .accounts
             .get(self.selected.ok_or(Error::NoAccountSelected)? as usize)
             .ok_or(Error::NoAccounts)?;
+
         let data = {
             let o = Object::new();
             Reflect::set(&o, &"address".into(), &account.address.as_str().into()).unwrap();
@@ -73,18 +74,20 @@ impl PjsExtension {
             Reflect::set(&o, &"type".into(), &"bytes".into()).unwrap();
             o
         };
+        log::info!("{:?}", data);
 
         let p = sign
             .call1(&NULL, &data.into())
             .expect("promise")
             .unchecked_into::<Promise>();
         let signature = JsFuture::from(p).await.map_err(|_| Error::Sign)?;
-        let res = cb.call1(&NULL, &signature).map_err(|_| Error::Sign)?;
-        Ok(get!(&res, "signature"))
+        log::info!("Signature: {:?}", &signature);
+        // let res = cb.call1(&NULL, &signature).map_err(|_| Error::Sign)?;
+        // log::info!("{:?}", &res);
+        Ok(get!(&signature, "signature"))
     }
 
-    ///
-    #[wasm_bindgen(js_name = fetchAccounts)]
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = fetchAccounts))]
     pub async fn fetch_accounts(&mut self) -> Result<(), Error> {
         let accounts: Function = get!(^ &self.pjs, "accounts", "get");
         let p = accounts.call0(&NULL).unwrap().unchecked_into::<Promise>();
@@ -106,12 +109,12 @@ impl PjsExtension {
         Ok(())
     }
 
-    #[wasm_bindgen(getter)]
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn accounts(&self) -> Vec<Account> {
         self.accounts.clone()
     }
 
-    #[wasm_bindgen(getter, js_name = selectedAccount)]
+    #[cfg_attr(feature = "js", wasm_bindgen(js_name = selectedAccount))]
     pub fn get_selected(&self) -> Option<Account> {
         self.selected
             .and_then(|a| self.accounts.get(a as usize))
@@ -121,36 +124,41 @@ impl PjsExtension {
 
 impl PjsExtension {
     pub async fn sign(&self, payload: &[u8]) -> Result<[u8; 64], Error> {
-        let payload = Self::to_hex(payload);
+        let payload = format!("{}", hex::encode(payload));
         let mut signature = [0u8; 64];
-        let cb = Closure::wrap(Box::new(move |s: JsValue| {
-            Self::from_hex(s.as_string().unwrap_or_default().as_str(), &mut signature)
-        }) as Box<dyn FnMut(JsValue)>);
-        self.js_sign(payload.as_str(), cb.as_ref().unchecked_ref())
-            .await?;
+        // let cb: Closure<dyn FnMut(JsValue)> = Closure::wrap(Box::new(move |s: JsValue| {
+        //     log::info!("Signature received {:?}", &s);
+        //     let s = get!(&s, "signature");
+        //     let s = s.as_string();
+        //     let f = s.unwrap_or_default();
+        //     log::info!("final {:?}", &f);
+        // }) as Box<dyn FnMut(JsValue)>);
+
+        let sig = self.js_sign(payload.as_str()).await?;
+        log::info!("returned from pjs {:?}", &sig);
+        let s = sig.as_string();
+        let f = s.unwrap_or_default();
+        Self::from_hex(f.as_str(), &mut signature);
+        log::info!("after sign in extension {:?}", hex::encode(&signature));
         Ok(signature)
     }
 
-    fn to_hex(bytes: &[u8]) -> String {
-        use std::fmt::Write;
-        let mut s = String::with_capacity(2 + bytes.len());
-        let _ = write!(s, "0x");
-        for b in bytes {
-            let _ = write!(s, "{b:x}");
-        }
-        s
-    }
+
+
     fn from_hex(input: &str, buf: &mut [u8]) {
         for (i, b) in buf.iter_mut().enumerate() {
-            let Some(s) = input.get(i * 2..i * 2 + 2) else {
+            let Some(s) = input.get((i * 2 + 2)..(i * 2 + 4)) else {
                 return;
             };
+            log::info!("s({:?})", s);
             *b = u8::from_str_radix(s, 16).unwrap_or_default();
+            log::info!("b({:?})", &b);
         }
+        log::info!("buf({:?})", &buf);
     }
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 #[derive(Debug)]
 pub enum Error {
     ExtensionUnavailable,
@@ -161,7 +169,7 @@ pub enum Error {
     Sign,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 #[derive(Debug, Clone)]
 pub struct Account {
     name: String,
@@ -169,9 +177,9 @@ pub struct Account {
     net: Network,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 impl Account {
-    #[wasm_bindgen(constructor)]
+    #[cfg_attr(feature = "js", wasm_bindgen(constructor))]
     pub fn new(name: &str, address: &str, net: Network) -> Self {
         Account {
             name: name.to_string(),
@@ -179,21 +187,24 @@ impl Account {
             net,
         }
     }
-    #[wasm_bindgen(getter)]
+
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn name(&self) -> String {
         self.name.clone()
     }
-    #[wasm_bindgen(getter)]
+
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn address(&self) -> String {
         self.address.clone()
     }
-    #[wasm_bindgen(getter)]
+
+    #[cfg_attr(feature = "js", wasm_bindgen(getter))]
     pub fn network(&self) -> Network {
         self.net
     }
 }
 
-#[wasm_bindgen]
+#[cfg_attr(feature = "js", wasm_bindgen)]
 #[derive(Debug, Clone, Copy)]
 pub enum Network {
     Generic,

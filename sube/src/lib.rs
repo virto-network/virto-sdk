@@ -1,118 +1,61 @@
-#![feature(async_closure)]
-#![feature(trait_alias)]
-#![feature(async_fn_traits)]
-#![feature(impl_trait_in_assoc_type)]
+// #![feature(async_closure)]
+// #![feature(trait_alias)]
+// #![feature(async_fn_traits)]
+// #![feature(impl_trait_in_assoc_type)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 /*!
-Sube is a lightweight Substrate client with multi-backend support
-that can use a chain's type information to auto encode/decode data
-into human-readable formats like JSON.
+Sube is a lightweight blockchain client to query and submit extrinsics
+to Substrate based blockchains.
+It supports multiple backends and uses the chain's type information
+to automatically encode/decode data into human-readable formats like JSON.
 
-## Usage
-
-Sube requires one of the metadata versions to be enabled(default: `v14`).
-You can change it activating the relevant feature.
-You will also likely want to activate a backend(default: `ws`).
-
-```toml
-[dependencies]
-sube = { version = "0.4", default_features = false, features = ["v13", "http"] }
-```
-
-Creating a client is as simple as instantiating a backend and converting it to a `Sube` instance.
-
-```
-# use sube::{Sube, ws, JsonValue, Error, meta::*, Backend};
-# #[async_std::main] async fn main() -> Result<(), Error> {
-# const CHAIN_URL: &str = "ws://localhost:24680";
-// Create an instance of Sube from any of the available backends
-let client: Sube<_> = ws::Backend::new_ws2(CHAIN_URL).await?.into();
-
-// With the client you can:
-// - Inspect its metadata
-let meta = client.metadata().await?;
-let system = meta.pallet_by_name("System").unwrap();
-assert_eq!(system.index, 0);
-
-// - Query the chain storage with a path-like syntax
-let latest_block: JsonValue = client.query("system/number").await?.into();
-assert!(
-    latest_block.as_u64().unwrap() > 0,
-    "block {} is greater than 0",
-    latest_block
-);
-
-// - Submit a signed extrinsic
-# // const SIGNED_EXTRINSIC: [u8; 6] = hex_literal::hex!("ff");
-// client.submit(SIGNED_EXTRINSIC).await?;
-# Ok(()) }
-```
-
-### Backend features
-
-* **http** -
-  Enables a surf based http backend.
-* **http-web** -
-  Enables surf with its web compatible backend that uses `fetch` under the hood(target `wasm32-unknown-unknown`)
-* **ws** -
-  Enables the websocket backend based on tungstenite
-* **wss** -
-  Same as `ws` and activates the TLS functionality of tungstenite
-
+TODO: rewrite docs for sube 1.0
 */
 
-#[cfg(not(any(feature = "v13", feature = "v14")))]
+#[cfg(not(any(feature = "v14")))]
 compile_error!("Enable one of the metadata versions");
-#[cfg(all(feature = "v13", feature = "v14"))]
-compile_error!("Only one metadata version can be enabled at the moment");
 
 #[macro_use]
 extern crate alloc;
 
-pub mod util;
+pub use builder::SubeBuilder;
+pub use signer::SignerFn;
 
 pub use codec;
 use codec::Encode;
+pub use core::fmt::Display;
 pub use frame_metadata::RuntimeMetadataPrefixed;
+pub use signer::Signer;
 
+use core::future::Future;
 pub use meta::Metadata;
-pub use meta_ext as meta;
-#[cfg(feature = "json")]
-pub use scales::JsonValue;
 #[cfg(feature = "v14")]
-pub use scales::{Serializer, Value};
+pub use scales::{Serializer, Value, to_bytes_with_info};
 
 use async_trait::async_trait;
 use codec::Compact;
-use core::fmt;
-use core::ops::AsyncFn;
-
+use core::{fmt, marker::PhantomData};
 use hasher::hash;
+use log;
 use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
+use meta_ext as meta;
+use meta_ext::{KeyValue, StorageKey};
 use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use log;
-
+use serde_json::{json, Value as JsonValue};
 
 #[cfg(feature = "builder")]
 pub use paste::paste;
 
-use crate::util::to_camel;
+use crate::{meta::Registry, util::to_camel};
 
 mod prelude {
     pub use alloc::boxed::Box;
     pub use alloc::string::{String, ToString};
     pub use alloc::vec::Vec;
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ExtrinsicBody<Body> {
-    pub nonce: Option<u64>,
-    pub body: Body,
 }
 
 /// Surf based backend
@@ -122,23 +65,28 @@ pub mod http;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-#[cfg(any(feature = "builder"))]
-pub mod builder;
-
-pub mod hasher;
-pub mod meta_ext;
+mod builder;
+mod hasher;
+mod meta_ext;
+mod signer;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
 pub mod rpc;
+pub mod util;
+
+/// The batteries included way to query or submit extrinsics to a Substrate based blockchain
+///
+/// Returns a builder that implments `IntoFuture` so it can be `.await`ed on.
+pub async fn sube(url: &str) -> SubeBuilder<(), ()> {
+    SubeBuilder::default().with_url(url)
+}
 
 pub type Result<T> = core::result::Result<T, Error>;
-
-pub trait SignerFn: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
-impl<T> SignerFn for T where T: AsyncFn(&[u8]) -> Result<[u8; 64]> {}
-
-
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
+    log::info!("url: {:?}", path);
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+    log::info!("item_or_call: {:?}", item_or_call);
+    log::info!("keys: {:?}", keys);
 
     let pallet = meta
         .pallet_by_name(&pallet)
@@ -158,47 +106,118 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
             &meta.types,
         )));
     }
+    // let hello = to_bytes_with_info(&mut out, &key, Some((&meta.types, 38)));
+    
+    // log::info!("hello_encoded {:?}", hex::encode(out));
 
-    if let Ok(key_res) = StorageKey::new(pallet, &item_or_call, &keys) {
-        let res = chain.query_storage(&key_res).await?;
-        Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)))
+    if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
+    {
+        let storage_key_encoded = format!("{}", &key_res);
+
+        if !key_res.is_partial() {
+            let res = chain.query_storage(&key_res).await?;
+            return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
+        }
+
+        let res = chain.get_keys_paged(&key_res, 1000, None).await?;
+        let result = chain.query_storage_at(res, None).await?;
+
+        if let [storage_change, ..] = &result[..] {
+            let value = storage_change.changes
+                .iter()
+                .map(|[key, data]| {
+                    let key = key.replace(&hex::encode(&key_res.pallet), "");
+                    let key = key.replace(&hex::encode(&key_res.call), "");
+                    let mut pointer = 2 + 32; // + 0x
+                    let keys = key_res
+                        .args
+                        .iter()
+                        .map(|arg| match arg {
+                            KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
+                                let hashed = &key[pointer..];
+                                let value = Value::new(
+                                    hex::decode(&hashed).expect("hello world"),
+                                    *type_id,
+                                    &meta.types,
+                                );
+                                pointer += (value.len() * 2) + 32;
+                                value
+                            }
+                        })
+                        .collect::<Vec<Value<'m>>>();
+
+                    let value = Value::new(
+                        hex::decode(&data[2..]).expect("it to be a byte str"),
+                        key_res.ty,
+                        &meta.types,
+                    );
+                    (keys, value)
+                })
+                .collect::<Vec<_>>();
+
+            Ok(Response::ValueSet(value))
+        } else {
+            Ok(Response::Void)
+        }
     } else {
+        log::info!("hello here the chain is not available {:?}", &keys);
         Err(Error::ChainUnavailable)
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ExtrinsicBody<Body> {
+    pub nonce: Option<u64>,
+    pub body: Body,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AccountInfo {
+    nonce: u64,
+    consumers: u64,
+    providers: u64,
+    sufficients: u64,
+    data: Data,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Data {
+    free: u128,
+    reserved: u128,
+    frozen: u128,
+    flags: u128,
 }
 
 async fn submit<'m, V>(
     chain: impl Backend,
     meta: &'m Metadata,
     path: &str,
-    from: &'m [u8],
     tx_data: ExtrinsicBody<V>,
-    signer: impl SignerFn,
+    signer: impl Signer,
 ) -> Result<Response<'m>>
 where
     V: serde::Serialize + core::fmt::Debug,
 {
     let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
-
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
-
-    let reg = &meta.types;
-
-    let ty = pallet.calls().expect("pallet does not have calls").ty.id;
+    let calls_ty = pallet.calls().ok_or(Error::CallNotFound)?.ty.id();
+    let type_registry = &meta.types;
 
     let mut encoded_call = vec![pallet.index];
 
     let call_data = scales::to_vec_with_info(
-        &json!( {
+        &json!({
             &item_or_call.to_lowercase(): &tx_data.body
         }),
-        (reg, ty).into(),
+        (type_registry, calls_ty).into(),
     )
     .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
+
+    let from_account = signer.account();
 
     let extra_params = {
         // ImmortalEra
@@ -212,15 +231,18 @@ where
                 let response = query(
                     &chain,
                     meta,
-                    &format!("system/account/0x{}", hex::encode(from)),
+                    &format!("system/account/0x{}", hex::encode(from_account.as_ref())),
                 )
                 .await?;
 
                 match response {
                     Response::Value(value) => {
-                        let bytes: [u8; 8] = value.as_ref()[..8].try_into().expect("fits");
-                        let nonce = u64::from_le_bytes(bytes);
-                        Ok(nonce)
+                        log::info!("{:?}", serde_json::to_string(&value));
+                        let str = serde_json::to_string(&value).expect("wrong account info");
+                        let account_info: AccountInfo =
+                            serde_json::from_str(&str).expect("it must serialize");
+                        log::info!("{}", &account_info.nonce);
+                        Ok(account_info.nonce)
                     }
                     _ => Err(Error::AccountNotFound),
                 }
@@ -229,15 +251,18 @@ where
 
         let tip: u128 = 0;
 
-        log::info!("era {:?}", &era);
-        log::info!("nonce {:?}", &nonce);
-        log::info!("tip {:?}", &tip);
-
-        [vec![era], Compact(nonce).encode(), Compact(tip).encode()].concat()
+        [
+            vec![era],
+            Compact(nonce).encode(),
+            Compact(tip).encode(),
+            vec![0x00u8], // chain extension for kreivo
+        ]
+        .concat()
     };
 
+    log::info!("Hex {:?}", hex::encode(&extra_params));
+
     let additional_params = {
-        // Error: Still failing to deserialize the const
         let metadata = meta;
 
         let mut constants = metadata
@@ -274,11 +299,25 @@ where
             "System_Version.transaction_version is not a number".into(),
         ))? as u32;
 
+        let genesis_info = chain.block_info(Some(0u32)).await?;
+        log::info!("genesis_info {:?}", &genesis_info.number);
         let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
 
         log::info!("spec {:?}", &spec_version);
         log::info!("transaction_version {:?}", &transaction_version);
-        log::info!("genesis_block {:?}", &genesis_block);
+        log::info!("genesis_block {:?}", hex::encode(&genesis_block));
+        log::info!("genesis_block_hash {:?}", hex::encode(&genesis_info.hash));
+
+        // let response = query(&chain, meta, "system/BlockHash/0").await?;
+        // TODO: check why this params were not converted to 0x
+        // match response {
+        //     Response::Value(value) => {
+        //         let str = serde_json::to_string(&value).expect("helo");
+        //         log::info!("storage blockhash {:?}", str);
+        //     }
+        //     _ => return Err(Error::BadInput),
+        // };
+
         [
             spec_version.to_le_bytes().to_vec(),
             transaction_version.to_le_bytes().to_vec(),
@@ -288,8 +327,9 @@ where
         .concat()
     };
 
-    
     log::info!("encoded call {:?}", hex::encode(&encoded_call));
+
+    log::info!("additional_params {:?}", hex::encode(&additional_params));
 
     let signature_payload = [
         encoded_call.clone(),
@@ -298,24 +338,25 @@ where
     ]
     .concat();
 
+    log::info!("signature_payload {:?}", hex::encode(&signature_payload));
     let payload = if signature_payload.len() > 256 {
         hash(&meta::Hasher::Blake2_256, &signature_payload[..])
     } else {
         signature_payload
     };
 
+    let signature = signer.sign(payload).await?;
 
-    let signature = signer(payload.as_slice()).await?;
     log::info!("signature {:?}", hex::encode(&signature));
     let extrinsic_call = {
         let encoded_inner = [
-            // header: "is signed" (1 byte) + transaction protocol version (7 bytes)
-            vec![0b10000000 + 4u8],
+            // header: "is signed" (1 bites) + transaction protocol version (7 bites)
+            vec![0b10000000 + 4u8], // x
             // signer
             vec![0x00],
-            from.to_vec(),
+            from_account.as_ref().to_vec(),
             // signature
-            [vec![0x01], signature.to_vec()].concat(),
+            [vec![0x01], signature.as_ref().to_vec()].concat(),
             // extra
             extra_params,
             // call data
@@ -331,6 +372,8 @@ where
         [len, encoded_inner].concat()
     };
 
+    log::info!("EXTRICIC_CALL {:?}", hex::encode(&extrinsic_call));
+
     chain.submit(&extrinsic_call).await?;
 
     Ok(Response::Void)
@@ -341,6 +384,7 @@ where
 pub enum Response<'m> {
     Void,
     Value(scales::Value<'m>),
+    ValueSet(Vec<(Vec<scales::Value<'m>>, scales::Value<'m>)>),
     Meta(&'m Metadata),
     Registry(&'m PortableRegistry),
 }
@@ -351,6 +395,7 @@ impl From<Response<'_>> for Vec<u8> {
             Response::Value(v) => v.as_ref().into(),
             Response::Meta(m) => m.encode(),
             Response::Registry(r) => r.encode(),
+            Response::ValueSet(r) => r.encode(),
             Response::Void => vec![0],
         }
     }
@@ -384,6 +429,12 @@ impl PalletCall {
     }
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+struct StorageChangeSet {
+    block: String,
+    changes: Vec<[String; 2]>,
+}
+
 /// Generic definition of a blockchain backend
 ///
 /// ```rust,ignore
@@ -400,6 +451,18 @@ impl PalletCall {
 /// ```
 #[async_trait]
 pub trait Backend {
+    async fn query_storage_at(
+        &self,
+        keys: Vec<String>,
+        block: Option<String>,
+    ) -> crate::Result<Vec<StorageChangeSet>>;
+
+    async fn get_keys_paged(
+        &self,
+        from: &StorageKey,
+        size: u16,
+        to: Option<&StorageKey>,
+    ) -> crate::Result<Vec<String>>;
     /// Get raw storage items form the blockchain
     async fn query_storage(&self, key: &StorageKey) -> Result<Vec<u8>>;
 
@@ -418,6 +481,23 @@ pub struct Offline(pub Metadata);
 
 #[async_trait]
 impl Backend for Offline {
+    async fn query_storage_at(
+        &self,
+        keys: Vec<String>,
+        block: Option<String>,
+    ) -> crate::Result<Vec<StorageChangeSet>> {
+        Err(Error::ChainUnavailable)
+    }
+
+    async fn get_keys_paged(
+        &self,
+        from: &StorageKey,
+        size: u16,
+        to: Option<&StorageKey>,
+    ) -> crate::Result<Vec<String>> {
+        Err(Error::ChainUnavailable)
+    }
+
     async fn query_storage(&self, _key: &StorageKey) -> Result<Vec<u8>> {
         Err(Error::ChainUnavailable)
     }
@@ -475,41 +555,3 @@ impl std::error::Error for Error {}
 
 #[cfg(feature = "no_std")]
 impl core::error::Error for Error {}
-
-/// Represents a key of the blockchain storage in its raw form
-#[derive(Clone, Debug)]
-pub struct StorageKey {
-    key: Vec<u8>,
-    pub ty: u32,
-}
-
-impl StorageKey {
-    pub fn new<T: AsRef<str>>(meta: &PalletMeta, item: &str, map_keys: &[T]) -> Result<Self> {
-        let entry = meta
-            .storage()
-            .map(|s| s.entries().find(|e| e.name() == item))
-            .flatten()
-            .ok_or(Error::StorageKeyNotFound)?;
-
-        let key = entry
-            .key(meta.name(), map_keys)
-            .ok_or(Error::StorageKeyNotFound)?;
-
-        Ok(StorageKey {
-            key,
-            ty: entry.ty_id(),
-        })
-    }
-}
-
-impl fmt::Display for StorageKey {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "0x{}", hex::encode(&self.key))
-    }
-}
-
-impl AsRef<[u8]> for StorageKey {
-    fn as_ref(&self) -> &[u8] {
-        self.key.as_ref()
-    }
-}

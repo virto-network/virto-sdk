@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use env_logger;
-use sube::{builder::SubeBuilder, sube, ExtrinsicBody, Response, Result, SignerFn};
+use sube::{sube, ExtrinsicBody, Response, Result, SubeBuilder};
 
 #[async_std::main]
 async fn main() -> Result<()> {
