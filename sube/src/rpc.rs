@@ -1,19 +1,22 @@
 use core::convert::TryInto;
 
 use async_trait::async_trait;
+use jsonrpc::error::standard_error;
 use jsonrpc::serde_json::value::RawValue;
 pub use jsonrpc::{error, Error, Request, Response};
+use rand_core::block;
+use serde::Deserialize;
 
 use crate::meta::{self, Metadata};
-use crate::prelude::*;
+use crate::{prelude::*, StorageChangeSet};
 use crate::{Backend, StorageKey};
 
-pub type RpcResult = Result<Vec<u8>, error::Error>;
+pub type RpcResult<T> = Result<T, error::Error>;
 
 /// Rpc defines types of backends that are remote and talk JSONRpc
 #[async_trait]
 pub trait Rpc: Backend + Send + Sync {
-    async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult;
+    async fn rpc<T: for<'a> Deserialize<'a>>(&self, method: &str, params: &[&str]) -> RpcResult<T>;
 
     fn convert_params(params: &[&str]) -> Vec<Box<RawValue>> {
 
@@ -36,14 +39,73 @@ pub trait Rpc: Backend + Send + Sync {
 
 #[async_trait]
 impl<R: Rpc> Backend for R {
+    async fn query_storage_at(
+        &self,
+        keys: Vec<String>,
+        block: Option<String>,
+    ) -> crate::Result<Vec<StorageChangeSet>> {
+        let keys = serde_json::to_string(&keys).expect("it to be a valid json");
+        let params: Vec<String> = if let Some(block_hash) = block {
+            vec![keys, block_hash]
+        } else {
+            vec![keys]
+        };
+
+        self.rpc(
+            "state_queryStorageAt",
+            params
+                .iter()
+                .map(|s| s.as_ref())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
+        .await
+        .map_err(|err| {
+            log::info!("error {:?}", err);
+            crate::Error::StorageKeyNotFound
+        })
+    }
+
+    async fn get_keys_paged(
+        &self,
+        from: &StorageKey,
+        size: u16,
+        to: Option<&StorageKey>,
+    ) -> crate::Result<Vec<String>> {
+        let r: Vec<String> = self
+            .rpc(
+                "state_getKeysPaged",
+                &[
+                    &format!("\"{}\"", &from),
+                    &size.to_string(),
+                    &to.or(Some(&from)).map(|f| format!("\"{}\"", &f)).unwrap(),
+                ],
+            )
+            .await
+            .map_err(|err| {
+                log::info!("error {:?}", err);
+                crate::Error::StorageKeyNotFound
+            })?;
+        log::info!("rpc call {:?}", r);
+        Ok(r)
+    }
+
     async fn query_storage(&self, key: &StorageKey) -> crate::Result<Vec<u8>> {
         let key = key.to_string();
         log::debug!("StorageKey encoded: {}", key);
-        self.rpc("state_getStorage", &[&format!("\"{}\"", &key)]).await.map_err(|e| {
-            log::debug!("RPC failure: {}", e);
-            // NOTE it could fail for more reasons
-            crate::Error::StorageKeyNotFound
-        })
+
+        let res: String = self
+            .rpc("state_getStorage", &[&format!("\"{}\"", &key)])
+            .await
+            .map_err(|e| {
+                log::debug!("RPC failure: {}", e);
+                // NOTE it could fail for more reasons
+                crate::Error::StorageKeyNotFound
+            })?;
+
+        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::StorageKeyNotFound)?;
+
+        Ok(response)
     }
 
     async fn submit<T>(&self, ext: T) -> crate::Result<()>
@@ -62,15 +124,14 @@ impl<R: Rpc> Backend for R {
     }
 
     async fn metadata(&self) -> crate::Result<Metadata> {
-        let meta = self
+        let res: String = self
             .rpc("state_getMetadata", &[])
             .await
-            .map_err(|e| {
-                log::info!("error getting the metadata {:?}", e);
-                crate::Error::Node(e.to_string())
-            })?;
-        
-        let meta = meta::from_bytes(&mut meta.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
+            .map_err(|e| crate::Error::Node(e.to_string()))?;
+        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::StorageKeyNotFound)?;
+        let meta =
+            meta::from_bytes(&mut response.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
+        log::trace!("Metadata {:#?}", meta);
         Ok(meta)
     }
 
@@ -91,14 +152,6 @@ impl<R: Rpc> Backend for R {
         } else {
             block_info(self, &[]).await?
         };
-
-        // TODO: Make sure to complete this in a future
-        // Hint: RPC should not deserialize the JSON-RPC result
-        // This produces a deserialization error
-        // let block = self
-        //     .rpc("chain_getBlock", &[&hex::encode(&block_hash)])
-        //     .await
-        //     .map_err(|e| crate::Error::Node(e.to_string()))?;
 
         Ok(meta::BlockInfo {
             number: at.unwrap_or(0) as u64,

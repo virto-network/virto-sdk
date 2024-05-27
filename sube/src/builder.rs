@@ -1,48 +1,46 @@
+#[cfg(any(feature = "http", feature = "http-web"))]
 use crate::http::Backend as HttpBackend;
-
 #[cfg(feature = "ws")]
 use crate::ws::Backend as WSBackend;
-
-
-use crate::prelude::*;
 use crate::{
     meta::BlockInfo, Backend, Error, ExtrinsicBody, Metadata, Response, Result as SubeResult,
-    SignerFn, StorageKey,
+    Signer, StorageKey,
 };
+use crate::{prelude::*, Offline, StorageChangeSet};
 
 use async_trait::async_trait;
-use core::future::{Future, IntoFuture};
-use heapless::Vec as HVec;
-use once_cell::sync::OnceCell;
-
+use core::{
+    cell::OnceCell,
+    future::{Future, IntoFuture},
+    marker::PhantomData,
+};
+// use heapless::Vec as HVec;
 use url::Url;
 
-type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
-static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
+// type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
+// static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
 
 pub struct SubeBuilder<'a, Body, Signer> {
     url: Option<&'a str>,
     nonce: Option<u64>,
     body: Option<Body>,
-    sender: Option<&'a [u8]>,
     signer: Option<Signer>,
     metadata: Option<Metadata>,
 }
 
-impl<'a, B> Default for SubeBuilder<'a, B, ()> {
+impl<'a> Default for SubeBuilder<'a, (), ()> {
     fn default() -> Self {
         SubeBuilder {
             url: None,
             nonce: None,
             body: None,
-            sender: None,
             signer: None,
             metadata: None,
         }
     }
 }
 
-impl<'a, B> SubeBuilder<'a, B, ()> {
+impl<'a> SubeBuilder<'a, (), ()> {
     pub fn with_url(self, url: &'a str) -> Self {
         Self {
             url: Some(url),
@@ -56,16 +54,52 @@ impl<'a, B> SubeBuilder<'a, B, ()> {
             ..self
         }
     }
+
+    pub fn with_body<B>(self, body: B) -> SubeBuilder<'a, B, ()> {
+        SubeBuilder {
+            body: Some(body),
+            url: self.url,
+            nonce: self.nonce,
+            signer: self.signer,
+            metadata: self.metadata,
+        }
+    }
+
+    async fn build_query(self) -> SubeResult<Response<'a>> {
+        let Self { url, metadata, .. } = self;
+
+        let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
+        let path = url.path();
+
+        log::info!("building the backend for {}", url);
+        let backend = BACKEND
+            .get_or_try_init(get_backend_by_url(url.clone()))
+            .await?;
+
+        let meta = META
+            .get_or_try_init(async {
+                match metadata {
+                    Some(m) => Ok(m),
+                    None => backend.metadata().await.map_err(|_| Error::BadMetadata),
+                }
+            })
+            .await?;
+
+        Ok(match path {
+            "_meta" => Response::Meta(meta),
+            "_meta/registry" => Response::Registry(&meta.types),
+            _ => crate::query(&backend, meta, path).await?,
+        })
+    }
 }
 
 impl<'a, B> SubeBuilder<'a, B, ()> {
-    pub fn with_signer<Signer: SignerFn>(self, signer: Signer) -> SubeBuilder<'a, B, Signer> {
+    pub fn with_signer<S: Signer>(self, signer: impl Into<S>) -> SubeBuilder<'a, B, S> {
         SubeBuilder {
-            signer: Some(signer),
+            signer: Some(signer.into()),
             body: self.body,
             metadata: self.metadata,
             nonce: self.nonce,
-            sender: self.sender,
             url: self.url,
         }
     }
@@ -73,16 +107,9 @@ impl<'a, B> SubeBuilder<'a, B, ()> {
 
 impl<'a, B, S> SubeBuilder<'a, B, S>
 where
-    B: serde::Serialize,
-    S: SignerFn
+    B: serde::Serialize + core::fmt::Debug,
+    S: Signer,
 {
-    pub fn with_body(self, body: B) -> Self {
-        Self {
-            body: Some(body),
-            ..self
-        }
-    }
-
     pub fn with_nonce(self, nonce: u64) -> Self {
         Self {
             nonce: Some(nonce),
@@ -90,108 +117,69 @@ where
         }
     }
 
-    pub fn with_sender(self, sender: &'a [u8]) -> Self {
-        Self {
-            sender: Some(sender),
-            ..self
-        }
+    async fn build_extrinsic(self) -> SubeResult<Response<'a>> {
+        let Self {
+            url,
+            nonce,
+            body,
+            signer,
+            metadata,
+            ..
+        } = self;
+
+        let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
+        let path = url.path();
+        let body = body.ok_or(Error::BadInput)?;
+
+        let backend = BACKEND
+            .get_or_try_init(get_backend_by_url(url.clone()))
+            .await?;
+
+        let meta = META
+            .get_or_try_init(async {
+                match metadata {
+                    Some(m) => Ok(m),
+                    None => backend.metadata().await.map_err(|err| Error::BadMetadata),
+                }
+            })
+            .await?;
+
+        Ok(match path {
+            "_meta" => Response::Meta(meta),
+            "_meta/registry" => Response::Registry(&meta.types),
+            _ => {
+                let signer = signer.ok_or(Error::BadInput)?;
+
+                crate::submit(backend, meta, path, ExtrinsicBody { nonce, body }, signer).await?
+            }
+        })
     }
 }
 
 static BACKEND: async_once_cell::OnceCell<AnyBackend> = async_once_cell::OnceCell::new();
 static META: async_once_cell::OnceCell<Metadata> = async_once_cell::OnceCell::new();
 
+pub type BoxFuture<'a, T> = core::pin::Pin<Box<dyn Future<Output = T> + 'a>>;
+
 impl<'a> IntoFuture for SubeBuilder<'a, (), ()> {
     type Output = SubeResult<Response<'a>>;
-    type IntoFuture = impl Future<Output = Self::Output>;
+    type IntoFuture = BoxFuture<'a, SubeResult<Response<'a>>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let Self { url, metadata, .. } = self;
-
-        async move {
-            let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
-            let path = url.path();
-            
-            log::info!("building the backend for {}", url);
-
-            let backend = BACKEND
-                .get_or_try_init(get_backend_by_url(url.clone()))
-                .await?;
-
-            let meta = META
-                .get_or_try_init(async {
-                    match metadata {
-                        Some(m) => Ok(m),
-                        None => backend.metadata().await.map_err(|_| Error::BadMetadata),
-                    }
-                })
-                .await?;
-
-            Ok(match path {
-                "_meta" => Response::Meta(meta),
-                "_meta/registry" => Response::Registry(&meta.types),
-                _ => crate::query(&backend, meta, path).await?,
-            })
-        }
+        Box::pin(self.build_query())
     }
 }
 
-impl<'a, Body, Signer> IntoFuture for SubeBuilder<'a, Body, Signer>
+impl<'a, B, S> IntoFuture for SubeBuilder<'a, B, S>
 where
-    Body: serde::Serialize + core::fmt::Debug,
-    Signer: SignerFn,
+    B: serde::Serialize + core::fmt::Debug + 'a,
+    S: Signer + 'a,
 {
     type Output = SubeResult<Response<'a>>;
-    type IntoFuture = impl Future<Output = Self::Output>;
+    type IntoFuture = BoxFuture<'a, SubeResult<Response<'a>>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let Self {
-            url,
-            nonce,
-            body,
-            sender,
-            signer,
-            metadata,
-            ..
-        } = self;
-
-        async move {
-            let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
-            let path = url.path();
-            let body = body.ok_or(Error::BadInput)?;
-
-            let backend = BACKEND
-                .get_or_try_init(get_backend_by_url(url.clone()))
-                .await?;
-
-            let meta = META
-                .get_or_try_init(async {
-                    match metadata {
-                        Some(m) => Ok(m),
-                        None => backend.metadata().await.map_err(|_| Error::BadMetadata),
-                    }
-                })
-                .await?;
-
-            Ok(match path {
-                "_meta" => Response::Meta(meta),
-                "_meta/registry" => Response::Registry(&meta.types),
-                _ => {
-                    let signer = signer.ok_or(Error::BadInput)?;
-                    let from = sender.ok_or(Error::BadInput)?;
-
-                    crate::submit(
-                        backend,
-                        meta,
-                        path,
-                        from,
-                        ExtrinsicBody { nonce, body },
-                        signer,
-                    )
-                    .await?
-                }
-            })
-        }
+        Box::pin(self.build_extrinsic())
     }
 }
 
@@ -231,47 +219,88 @@ async fn get_backend_by_url(url: Url) -> SubeResult<AnyBackend> {
             #[cfg(feature = "ws")]
             WSBackend::new_ws2(url.to_string().as_str()).await?,
         )),
+        #[cfg(any(feature = "http", feature = "http-web"))]
         "http" | "https" => Ok(AnyBackend::Http(HttpBackend::new(url))),
         _ => Err(Error::BadInput),
     }
 }
 
 enum AnyBackend {
+    #[cfg(any(feature = "http", feature = "http-web"))]
     Http(HttpBackend),
     #[cfg(feature = "ws")]
     Ws(WSBackend),
+    Offline(Offline),
 }
 
 #[async_trait]
 impl Backend for &AnyBackend {
+    async fn query_storage_at(
+        &self,
+        keys: Vec<String>,
+        block: Option<String>
+    ) -> crate::Result<Vec<StorageChangeSet>> {
+        match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            AnyBackend::Http(b) => b.query_storage_at(keys, block).await,
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => b.query_storage_at(keys, block).await,
+            AnyBackend::Offline(b) => b.query_storage_at(keys, block).await,
+        }
+    }
+
+    async fn get_keys_paged(
+        &self,
+        from: &StorageKey,
+        size: u16,
+        to: Option<&StorageKey>,
+    ) -> crate::Result<Vec<String>> {
+        match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            AnyBackend::Http(b) => b.get_keys_paged(&from, size, to).await,
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => b.get_keys_paged(&from, size, to).await,
+            AnyBackend::Offline(b) => b.get_keys_paged(&from, size, to).await,
+        }
+    }
+
     async fn metadata(&self) -> SubeResult<Metadata> {
         match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.metadata().await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.metadata().await,
+            AnyBackend::Offline(b) => b.metadata().await,
         }
     }
 
     async fn submit<U: AsRef<[u8]> + Send>(&self, ext: U) -> SubeResult<()> {
         match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.submit(ext).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.submit(ext).await,
+            AnyBackend::Offline(b) => b.submit(ext).await,
         }
     }
 
     async fn block_info(&self, at: Option<u32>) -> SubeResult<BlockInfo> {
         match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.block_info(at).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.block_info(at).await,
+            AnyBackend::Offline(b) => b.block_info(at).await,
         }
     }
+
     async fn query_storage(&self, key: &StorageKey) -> SubeResult<Vec<u8>> {
         match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.query_storage(key).await,
             #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.query_storage(&key).await,
+            AnyBackend::Ws(b) => b.query_storage(key).await,
+            AnyBackend::Offline(b) => b.query_storage(key).await,
         }
     }
 }
@@ -289,7 +318,7 @@ macro_rules! sube {
 
     ($url:expr) => {
         async {
-            $crate::builder::SubeBuilder::default().with_url($url).await
+            $crate::SubeBuilder::default().with_url($url).await
         }
     };
 
@@ -300,7 +329,7 @@ macro_rules! sube {
         async {
             use $crate::paste;
 
-            let mut builder = $crate::builder::SubeBuilder::default()
+            let mut builder = $crate::SubeBuilder::default()
                 .with_url($url);
 
             paste!($(
@@ -313,15 +342,14 @@ macro_rules! sube {
 
     ($url:expr => ($wallet:expr, $body:expr)) => {
         async {
-            let mut builder = $crate::builder::SubeBuilder::default();
+            let mut builder = $crate::SubeBuilder::default();
 
             let public = $wallet.default_account().expect("to have a default account").public();
 
             builder
                 .with_url($url)
-                .with_signer(async |message: &[u8]| Ok($wallet.sign(message).await.expect("hello").as_bytes()))
-                .with_sender(&public.as_ref())
                 .with_body($body)
+                .with_signer($crate::SignerFn::from((public, |message: &[u8]| async { Ok($wallet.sign(message).await?) })))
                 .await?;
 
             $crate::Result::Ok($crate::Response::Void)

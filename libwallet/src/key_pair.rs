@@ -1,6 +1,5 @@
-use core::{convert::{TryFrom, TryInto}, fmt::Debug};
+use core::{convert::TryInto, fmt::Debug};
 pub use derive::Derive;
-use self::any::AnySignature;
 
 type Bytes<const N: usize> = [u8; N];
 
@@ -20,7 +19,7 @@ impl<const N: usize> Public for Bytes<N> {}
 
 pub trait Signature: AsRef<[u8]> + Debug + PartialEq {
     fn as_bytes<const N: usize>(&self) -> Bytes<N> {
-        self.as_ref().try_into().expect("error getting the bytes")
+        self.as_ref().try_into().expect("error")
     }
 }
 impl<const N: usize> Signature for Bytes<N> {}

@@ -32,6 +32,7 @@ use jsonrpc::{
     serde_json,
 };
 use log::info;
+use serde::Deserialize;
 
 use crate::{
     rpc::{self, Rpc, RpcResult},
@@ -50,9 +51,9 @@ unsafe impl Sync for Backend {}
 
 #[async_trait]
 impl Rpc for Backend {
-    async fn rpc(&self, method: &str, params: &[&str]) -> RpcResult {
+    async fn rpc<T: for<'a> Deserialize<'a>>(&self, method: &str, params: &[&str]) -> RpcResult<T> {
         let id = self.next_id().await;
-        info!("RPC `{}`({:?}) (ID={})", method, params, id);
+        info!("RPC `{}` (ID={})", method, id);
 
         // Store a sender that will notify our receiver when a matching message arrives
         let (sender, recv) = oneshot::channel::<rpc::Response>();
@@ -81,12 +82,9 @@ impl Rpc for Backend {
         let res = recv
             .await
             .map_err(|_| standard_error(StandardError::InternalError, None))?
-            .result::<String>()?;
+            .result()?;
 
-        log::debug!("RPC Response: {}...", &res[..res.len().min(20)]);
-
-        let res = hex::decode(&res[2..])
-            .map_err(|_| standard_error(StandardError::InternalError, None))?;
+        // log::debug!("RPC Response: {}...", &res[..20]);
 
         Ok(res)
     }
@@ -153,14 +151,14 @@ impl Backend {
                                         ().into(),
                                     )
                                 });
-
+                            // log::info!("res {:?}", res);
                             if res.id.is_u64() {
                                 let id = res.id.as_u64().unwrap() as Id;
                                 log::trace!("Answering request {}", id);
                                 let mut messages = messages.lock().await;
                                 if let Some(channel) = messages.remove(&id) {
-                                    channel.send(res).expect("receiver waiting");
                                     log::debug!("Answered request id: {}", id);
+                                    channel.send(res).expect("receiver waiting");
                                 }
                             }
                         }

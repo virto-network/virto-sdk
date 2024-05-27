@@ -1,32 +1,21 @@
 use crate::prelude::*;
-use core::{borrow::Borrow, slice};
+use core::{any::Any, borrow::Borrow, slice};
 
-use codec::Decode;
-#[cfg(any(feature = "v13"))]
-use frame_metadata::decode_different::DecodeDifferent;
+use codec::{Decode, Encode};
 
 #[cfg(any(feature = "v14"))]
 use frame_metadata::v14::PalletCallMetadata;
 use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 
-#[cfg(feature = "v13")]
-pub use v13::*;
+use scale_info::{form::PortableForm, Type, TypeInfo};
+use scales::to_bytes_with_info;
+
 #[cfg(feature = "v14")]
 pub use v14::*;
 
 use crate::hasher::hash;
+type TypeId = u32;
 
-#[cfg(feature = "v13")]
-mod v13 {
-    use frame_metadata::v13::*;
-    pub type Metadata = RuntimeMetadataV13;
-    pub type ExtrinsicMeta = ExtrinsicMetadata;
-    pub type PalletMeta = ModuleMetadata;
-    pub type StorageMeta = StorageMetadata;
-    pub type EntryMeta = StorageEntryMetadata;
-    pub type EntryType = StorageEntryType;
-    pub type Hasher = StorageHasher;
-}
 #[cfg(feature = "v14")]
 mod v14 {
     use frame_metadata::v14::*;
@@ -50,8 +39,6 @@ mod v14 {
 pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
     let meta = match meta.1 {
-        #[cfg(feature = "v13")]
-        RuntimeMetadata::V13(m) => m,
         #[cfg(feature = "v14")]
         RuntimeMetadata::V14(m) => m,
         _ => unreachable!("Metadata version not supported"),
@@ -114,6 +101,77 @@ pub trait Storage<'a> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum KeyValue {
+    Empty(TypeId),
+    /*
+     * // type id, hash, encoded_value
+     */
+    Value((TypeId, Vec<u8>, Vec<u8>, Hasher)),
+}
+/// Represents a key of the blockchain storage in its raw form
+
+#[derive(Clone, Debug)]
+pub struct StorageKey {
+    pub pallet: Vec<u8>,
+    pub call: Vec<u8>,
+    pub args: Vec<KeyValue>,
+    pub ty: u32,
+}
+
+impl StorageKey {
+    pub fn new(ty: u32, pallet: Vec<u8>, call: Vec<u8>, args: Vec<KeyValue>) -> Self {
+        Self {
+            ty,
+            pallet,
+            call,
+            args,
+        }
+    }
+
+    pub fn key(&self) -> Vec<u8> {
+        let args = self
+            .args
+            .iter()
+            .map(|e| match e {
+                KeyValue::Empty(_) => &[],
+                KeyValue::Value((_, hash, _, _)) => &hash[..],
+            })
+            .collect::<Vec<&[u8]>>()
+            .concat();
+
+        [&self.pallet[..], &self.call[..], &args[..]].concat()
+    }
+
+    pub fn is_partial(&self) -> bool {
+        !self
+            .args
+            .iter()
+            .fold(true, |p, n| p && matches!(n, KeyValue::Value(_)))
+    }
+
+    pub fn build_with_registry<T: AsRef<str>>(
+        registry: &PortableRegistry,
+        meta: &PalletMeta,
+        item: &str,
+        map_keys: &[T],
+    ) -> crate::Result<Self> {
+        let entry = meta
+            .storage()
+            .map(|s| s.entries().find(|e| e.name() == item))
+            .flatten()
+            .ok_or(crate::Error::StorageKeyNotFound)?;
+
+        Ok(entry.key(&registry, meta.name(), map_keys)?)
+    }
+}
+
+impl core::fmt::Display for StorageKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "0x{}", hex::encode(self.key()))
+    }
+}
+
 pub trait Entry {
     type Type: EntryTy;
 
@@ -121,50 +179,101 @@ pub trait Entry {
     fn ty(&self) -> &Self::Type;
     fn ty_id(&self) -> u32;
 
-    fn key<T: AsRef<str>>(&self, pallet: &str, map_keys: &[T]) -> Option<Vec<u8>> {
-        self.ty().key(pallet, self.name(), map_keys)
+    fn key<T: AsRef<str>>(
+        &self,
+        registry: &PortableRegistry,
+        pallet: &str,
+        map_keys: &[T],
+    ) -> crate::Result<StorageKey> {
+        self.ty().key(&registry, pallet, self.name(), map_keys)
+    }
+}
+
+fn extract_touple_type(key_id: u32, type_info: &Type<PortableForm>) -> Vec<TypeId> {
+    match &type_info.type_def {
+        scale_info::TypeDef::Tuple(touple) => {
+            let types = touple.fields.iter().map(|x| x.id).collect();
+            return types;
+        }
+        _ => vec![key_id],
     }
 }
 
 pub trait EntryTy {
-    fn key<T: AsRef<str>>(&self, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>>;
-
-    fn build_key<H, T>(
+    fn key<T: AsRef<str>>(
         &self,
+        registry: &PortableRegistry,
+        pallet: &str,
+        item: &str,
+        map_keys: &[T],
+    ) -> crate::Result<StorageKey>;
+
+    fn build_call<H, T>(
+        &self,
+        portable_reg: &PortableRegistry,
+        key_ty_id: Option<u32>,
+        value_ty_id: u32,
         pallet: &str,
         item: &str,
         map_keys: &[T],
         hashers: &[H],
-    ) -> Option<Vec<u8>>
+    ) -> crate::Result<StorageKey>
     where
         H: Borrow<Hasher>,
         T: AsRef<str>,
     {
-        let mut key = hash(&Hasher::Twox128, &pallet);
-        key.append(&mut hash(&Hasher::Twox128, &item));
+        let type_call_ids = if let Some(key_ty_id) = key_ty_id {
+            let key_type_info = portable_reg
+                .resolve(key_ty_id)
+                .ok_or(crate::Error::BadInput)?;
+            extract_touple_type(key_ty_id, key_type_info)
+        } else {
+            vec![]
+        };
 
-        if map_keys.len() != hashers.len() {
-            return None;
-        }
+        let storage_key = StorageKey::new(
+            value_ty_id,
+            hash(&Hasher::Twox128, &pallet),
+            hash(&Hasher::Twox128, &item),
+            type_call_ids
+                .into_iter()
+                .enumerate()
+                .map(|(i, type_id)| {
+                    let k = map_keys.get(i);
+                    let hasher = hashers.get(i).expect("hasher not found");
 
-        for (i, h) in hashers.iter().enumerate() {
-            let hasher = h.borrow();
-            let k = map_keys[i].as_ref();
-            if k.is_empty() {
-                return None;
-            }
-            key.append(&mut hash(hasher, k))
-        }
-        Some(key)
+                    if k.is_none() {
+                        return KeyValue::Empty(type_id);
+                    }
+
+                    let k = k.expect("it must exist").as_ref();
+
+                    let hasher = hasher.borrow();
+                    let mut out = vec![];
+
+                    let key_type = portable_reg
+                        .resolve(type_id)
+                        .expect("type can not be resolved");
+
+                    if k.starts_with("0x") {
+                        let value = hex::decode(&k[2..]).expect("str must be encoded");
+                        to_bytes_with_info(&mut out, &value, Some((&portable_reg, type_id)));
+                    } else {
+                        to_bytes_with_info(&mut out, &k, Some((&portable_reg, type_id)));
+                    }
+
+                    let hash = hash(hasher, &out);
+                    KeyValue::Value((type_id, hash, out, hasher.clone()))
+                })
+                .collect(),
+        );
+
+        Ok(storage_key)
     }
 }
 
 impl<'a> Meta<'a> for Metadata {
     type Pallet = PalletMeta;
-    #[cfg(not(feature = "v14"))]
-    fn pallets(&self) -> Pallets<Self::Pallet> {
-        self.modules.decoded().iter()
-    }
     #[cfg(feature = "v14")]
     fn pallets(&self) -> Pallets<Self::Pallet> {
         self.pallets.iter()
@@ -172,16 +281,6 @@ impl<'a> Meta<'a> for Metadata {
     fn cloned(&self) -> Self {
         #[cfg(feature = "v14")]
         let meta = self.clone();
-        #[cfg(not(feature = "v14"))]
-        let meta = {
-            Metadata {
-                modules: self.modules.clone(),
-                extrinsic: ExtrinsicMeta {
-                    version: self.extrinsic.version,
-                    signed_extensions: self.extrinsic.signed_extensions.clone(),
-                },
-            }
-        };
         meta
     }
 }
@@ -221,8 +320,6 @@ impl<'a> Pallet<'a> for PalletMeta {
     fn name(&self) -> &str {
         #[cfg(feature = "v14")]
         let name = self.name.as_ref();
-        #[cfg(not(feature = "v14"))]
-        let name = self.name.decoded();
         name
     }
 
@@ -237,16 +334,12 @@ impl<'a> Storage<'a> for StorageMeta {
     fn module(&self) -> &str {
         #[cfg(feature = "v14")]
         let pref = self.prefix.as_ref();
-        #[cfg(not(feature = "v14"))]
-        let pref = self.prefix.decoded();
         pref
     }
 
     fn entries(&'a self) -> Entries<Self::Entry> {
         #[cfg(feature = "v14")]
         let entries = self.entries.iter();
-        #[cfg(not(feature = "v14"))]
-        let entries = self.entries.decoded().iter();
         entries
     }
 }
@@ -257,8 +350,6 @@ impl<'a> Entry for EntryMeta {
     fn name(&self) -> &str {
         #[cfg(feature = "v14")]
         let name = self.name.as_ref();
-        #[cfg(not(feature = "v14"))]
-        let name = self.name.decoded();
         name
     }
     fn ty(&self) -> &Self::Type {
@@ -271,44 +362,20 @@ impl<'a> Entry for EntryMeta {
             EntryType::Plain(t) => t.id(),
             EntryType::Map { value, .. } => value.id(),
         }
-        #[cfg(not(feature = "v14"))]
-        0
     }
 }
 
 impl EntryTy for EntryType {
-    fn key<T: AsRef<str>>(&self, pallet: &str, item: &str, map_keys: &[T]) -> Option<Vec<u8>> {
+    fn key<T: AsRef<str>>(
+        &self,
+        registry: &PortableRegistry,
+        pallet: &str,
+        item: &str,
+        map_keys: &[T],
+    ) -> crate::Result<StorageKey> {
         match self {
             Self::Plain(ty) => {
-                log::debug!("Item Type: {:?}", ty);
-                self.build_key::<Hasher, &str>(pallet, item, &[], &[])
-            }
-            #[cfg(any(feature = "v13"))]
-            Self::Map {
-                hasher, key, value, ..
-            } => {
-                log::debug!("Item Type: {:?} => {:?}", key, value);
-                self.build_key(pallet, item, map_keys, &[hasher])
-            }
-            #[cfg(any(feature = "v13"))]
-            Self::DoubleMap {
-                hasher,
-                key2_hasher,
-                key1,
-                key2,
-                value,
-            } => {
-                log::debug!("Item Type: ({:?}, {:?}) => {:?}", key1, key2, value);
-                self.build_key(pallet, item, map_keys, &[hasher, key2_hasher])
-            }
-            #[cfg(feature = "v13")]
-            Self::NMap {
-                hashers,
-                keys,
-                value,
-            } => {
-                log::debug!("Item Type: {:?} => {:?}", keys, value);
-                self.build_key(pallet, item, map_keys, hashers.decoded())
+                self.build_call::<Hasher, &str>(registry, None, ty.id, pallet, item, &[], &[])
             }
             #[cfg(feature = "v14")]
             Self::Map {
@@ -316,26 +383,16 @@ impl EntryTy for EntryType {
                 key,
                 value,
             } => {
-                log::debug!("Item Type: {:?} => {:?}", key, value);
-                self.build_key(pallet, item, map_keys, hashers)
+                self.build_call(
+                    &registry,
+                    Some(key.id),
+                    value.id,
+                    pallet,
+                    item,
+                    map_keys,
+                    hashers,
+                )
             }
-        }
-    }
-}
-
-#[cfg(any(feature = "v13"))]
-trait Decoded {
-    type Output;
-    fn decoded(&self) -> &Self::Output;
-}
-
-#[cfg(any(feature = "v13"))]
-impl<B, O> Decoded for DecodeDifferent<B, O> {
-    type Output = O;
-    fn decoded(&self) -> &Self::Output {
-        match self {
-            DecodeDifferent::Decoded(o) => o,
-            _ => unreachable!(),
         }
     }
 }
