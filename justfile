@@ -1,8 +1,12 @@
-build-web:
-	@mkdir -p dist
-	cargo build --release --target wasm32-unknown-unknown
-	@cp ./target/wasm32-unknown-unknown/release/pjs.wasm dist/
-	wasm-bindgen --out-dir dist --target web --no-typescript --remove-name-section dist/pjs.wasm
+default: check
 
-test:
-	cargo test
+check: check-sube check-scales check-libwallet
+
+check-sube:
+	@just -f sube/justfile check lint
+
+check-scales:
+	@just -f scales/justfile check lint
+
+check-libwallet:
+	@just -f libwallet/justfile check lint

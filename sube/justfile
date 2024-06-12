@@ -1,0 +1,7 @@
+default: check
+
+check:
+    cargo check
+
+lint:
+    cargo clippy -- -D warnings

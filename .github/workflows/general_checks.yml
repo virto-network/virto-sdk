@@ -1,0 +1,32 @@
+name: General checks
+
+on:
+  push:
+    branches: [ main ]
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sube:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: extractions/setup-just@v2
+    - name: Check sube
+      run: just check-sube
+
+  scales:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: extractions/setup-just@v2
+    - name: Check
+      run: just check-scales
+
+  libwallet:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: extractions/setup-just@v2
+    - name: Check
+      run: just check-libwallet

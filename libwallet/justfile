@@ -1,6 +1,12 @@
 default:
 	just --choose
 
+check:
+    cargo check
+
+lint:
+    cargo clippy -- -D warnings
+
 check-no-std:
 	cargo build --features substrate --target wasm32-unknown-unknown
 	cargo build --features substrate --target riscv32i-unknown-none-elf
