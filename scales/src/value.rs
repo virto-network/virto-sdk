@@ -29,7 +29,7 @@ impl<'a> Value<'a> {
     }
 
     fn new_value(&self, data: &mut Bytes, ty_id: TypeId) -> Self {
-        let size = self.ty_len(data.chunk(), ty_id);
+        let size = self.ty_size(data.chunk(), ty_id);
         Value::new(data.copy_to_bytes(size), ty_id, self.registry)
     }
 
@@ -38,11 +38,11 @@ impl<'a> Value<'a> {
         self.registry.resolve(ty).expect("in registry")
     }
 
-    pub fn len(&self) -> usize {
-        self.ty_len(&self.data, self.ty_id)
+    pub fn size(&self) -> usize {
+        self.ty_size(&self.data, self.ty_id)
     }
 
-    fn ty_len(&self, data: &[u8], ty: TypeId) -> usize {
+    fn ty_size(&self, data: &[u8], ty: TypeId) -> usize {
         match &self.resolve(ty).type_def {
             TypeDef::Primitive(ref p) => match p {
                 Primitive::U8 => mem::size_of::<u8>(),
@@ -58,7 +58,7 @@ impl<'a> Value<'a> {
                 Primitive::Bool => mem::size_of::<bool>(),
                 Primitive::Char => mem::size_of::<char>(),
                 Primitive::Str => {
-                    let (l, p_size) = sequence_len(data);
+                    let (l, p_size) = sequence_size(data);
                     l + p_size
                 }
                 _ => unimplemented!(),
@@ -66,7 +66,7 @@ impl<'a> Value<'a> {
             TypeDef::Composite(c) => c
                 .fields
                 .iter()
-                .fold(0, |c, f| c + self.ty_len(&data[c..], f.ty.id)),
+                .fold(0, |c, f| c + self.ty_size(&data[c..], f.ty.id)),
             TypeDef::Variant(e) => {
                 let var = e
                     .variants
@@ -79,20 +79,20 @@ impl<'a> Value<'a> {
                 } else {
                     var.fields
                         .iter()
-                        .fold(1, |c, f| c + self.ty_len(&data[c..], f.ty.id))
+                        .fold(1, |c, f| c + self.ty_size(&data[c..], f.ty.id))
                 }
             }
             TypeDef::Sequence(s) => {
-                let (len, prefix_size) = sequence_len(data);
+                let (len, prefix_size) = sequence_size(data);
                 let ty_id = s.type_param.id;
-                (0..len).fold(prefix_size, |c, _| c + self.ty_len(&data[c..], ty_id))
+                (0..len).fold(prefix_size, |c, _| c + self.ty_size(&data[c..], ty_id))
             }
             TypeDef::Array(a) => a.len.try_into().unwrap(),
             TypeDef::Tuple(t) => t
                 .fields
                 .iter()
-                .fold(0, |c, f| c + self.ty_len(&data[c..], f.id)),
-            TypeDef::Compact(_) => compact_len(data),
+                .fold(0, |c, f| c + self.ty_size(&data[c..], f.id)),
+            TypeDef::Compact(_) => compact_size(data),
             TypeDef::BitSequence(_) => unimplemented!(),
         }
     }
@@ -141,18 +141,18 @@ impl<'a> Serialize for Value<'a> {
                 }
             }
             Bytes(_) => {
-                let (_, s) = sequence_len(data.chunk());
+                let (_, s) = sequence_size(data.chunk());
                 data.advance(s);
                 ser.serialize_bytes(data.chunk())
             }
             Char => ser.serialize_char(char::from_u32(data.get_u32_le()).unwrap()),
             Str => {
-                let (_, s) = sequence_len(data.chunk());
+                let (_, s) = sequence_size(data.chunk());
                 data.advance(s);
                 ser.serialize_str(str::from_utf8(data.chunk()).unwrap())
             }
             Sequence(ty) => {
-                let (len, p_size) = sequence_len(data.chunk());
+                let (len, p_size) = sequence_size(data.chunk());
                 data.advance(p_size);
 
                 let mut seq = ser.serialize_seq(Some(len))?;
@@ -162,7 +162,7 @@ impl<'a> Serialize for Value<'a> {
                 seq.end()
             }
             Map(ty_k, ty_v) => {
-                let (len, p_size) = sequence_len(data.chunk());
+                let (len, p_size) = sequence_size(data.chunk());
                 data.advance(p_size);
 
                 let mut state = ser.serialize_map(Some(len))?;
@@ -242,7 +242,7 @@ impl<'a> Serialize for Value<'a> {
 }
 
 #[inline]
-fn compact_len(data: &[u8]) -> usize {
+fn compact_size(data: &[u8]) -> usize {
     match data[0] % 0b100 {
         0 => 1,
         1 => 2,
@@ -251,11 +251,11 @@ fn compact_len(data: &[u8]) -> usize {
     }
 }
 
-fn sequence_len(data: &[u8]) -> (usize, usize) {
+fn sequence_size(data: &[u8]) -> (usize, usize) {
     // need to peek at the data to know the length of sequence
     // first byte(s) gives us a hint of the(compact encoded) length
     // https://substrate.dev/docs/en/knowledgebase/advanced/codec#compactgeneral-integers
-    let len = compact_len(data);
+    let len = compact_size(data);
     (
         match len {
             1 => (data[0] >> 2).into(),

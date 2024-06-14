@@ -295,9 +295,9 @@ where
         Ok(())
     }
 
-    fn serialize_some<T: ?Sized>(self, value: &T) -> Result<Self::Ok>
+    fn serialize_some<T>(self, value: &T) -> Result<Self::Ok>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         self.out.put_u8(0x01);
         value.serialize(self)
@@ -323,15 +323,15 @@ where
         (variant_index as u8).serialize(self)
     }
 
-    fn serialize_newtype_struct<T: ?Sized>(self, _name: &'static str, value: &T) -> Result<Self::Ok>
+    fn serialize_newtype_struct<T>(self, _name: &'static str, value: &T) -> Result<Self::Ok>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         self.maybe_some()?;
         value.serialize(self)
     }
 
-    fn serialize_newtype_variant<T: ?Sized>(
+    fn serialize_newtype_variant<T>(
         self,
         __name: &'static str,
         variant_index: u32,
@@ -339,7 +339,7 @@ where
         value: &T,
     ) -> Result<Self::Ok>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         self.maybe_some()?;
         self.out.put_u8(variant_index as u8);
@@ -519,7 +519,6 @@ where
     }
 }
 
-///
 #[derive(Debug)]
 pub enum TypedSerializer<'a, 'reg, B>
 where
@@ -583,9 +582,9 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_key<T: ?Sized>(&mut self, key: &T) -> Result<()>
+    fn serialize_key<T>(&mut self, key: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         match self {
             TypedSerializer::Enum(ser) => {
@@ -604,9 +603,9 @@ where
         }
     }
 
-    fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<()>
+    fn serialize_value<T>(&mut self, value: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         match self {
             TypedSerializer::Composite(ser, types) => {
@@ -647,9 +646,9 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<()>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         match self {
             TypedSerializer::Composite(ser, types) => {
@@ -683,9 +682,9 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T: ?Sized>(&mut self, _key: &'static str, value: &T) -> Result<()>
+    fn serialize_field<T>(&mut self, _key: &'static str, value: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(self.serializer())
     }
@@ -702,9 +701,9 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T: ?Sized>(&mut self, _key: &'static str, value: &T) -> Result<()>
+    fn serialize_field<T>(&mut self, _key: &'static str, value: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(self.serializer())
     }
@@ -721,9 +720,9 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<()>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(self.serializer())
     }
@@ -740,9 +739,9 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<()>
+    fn serialize_field<T>(&mut self, value: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(self.serializer())
     }
@@ -759,9 +758,9 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<()>
+    fn serialize_field<T>(&mut self, value: &T) -> Result<()>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(self.serializer())
     }
