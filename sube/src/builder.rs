@@ -9,16 +9,8 @@ use crate::{
 use crate::{prelude::*, Offline, StorageChangeSet};
 
 use async_trait::async_trait;
-use core::{
-    cell::OnceCell,
-    future::{Future, IntoFuture},
-    marker::PhantomData,
-};
-// use heapless::Vec as HVec;
+use core::future::{Future, IntoFuture};
 use url::Url;
-
-// type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
-// static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
 
 pub struct SubeBuilder<'a, Body, Signer> {
     url: Option<&'a str>,
@@ -68,7 +60,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
     async fn build_query(self) -> SubeResult<Response<'a>> {
         let Self { url, metadata, .. } = self;
 
-        let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
+        let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
         let path = url.path();
 
         log::info!("building the backend for {}", url);
@@ -127,7 +119,7 @@ where
             ..
         } = self;
 
-        let url = chain_string_to_url(&url.ok_or(Error::BadInput)?)?;
+        let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
         let path = url.path();
         let body = body.ok_or(Error::BadInput)?;
 
@@ -139,7 +131,7 @@ where
             .get_or_try_init(async {
                 match metadata {
                     Some(m) => Ok(m),
-                    None => backend.metadata().await.map_err(|err| Error::BadMetadata),
+                    None => backend.metadata().await.map_err(|_| Error::BadMetadata),
                 }
             })
             .await?;
@@ -189,7 +181,7 @@ fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
         && !chain.starts_with("http://")
         && !chain.starts_with("https://")
     {
-        ["wss", &chain].join("://")
+        ["wss", chain].join("://")
     } else {
         chain.into()
     };
@@ -228,7 +220,7 @@ enum AnyBackend {
     Http(HttpBackend),
     #[cfg(feature = "ws")]
     Ws(WSBackend),
-    Offline(Offline),
+    _Offline(Offline),
 }
 
 #[async_trait]
@@ -236,14 +228,14 @@ impl Backend for &AnyBackend {
     async fn query_storage_at(
         &self,
         keys: Vec<String>,
-        block: Option<String>
+        block: Option<String>,
     ) -> crate::Result<Vec<StorageChangeSet>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.query_storage_at(keys, block).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.query_storage_at(keys, block).await,
-            AnyBackend::Offline(b) => b.query_storage_at(keys, block).await,
+            AnyBackend::_Offline(b) => b.query_storage_at(keys, block).await,
         }
     }
 
@@ -255,10 +247,10 @@ impl Backend for &AnyBackend {
     ) -> crate::Result<Vec<String>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.get_keys_paged(&from, size, to).await,
+            AnyBackend::Http(b) => b.get_keys_paged(from, size, to).await,
             #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.get_keys_paged(&from, size, to).await,
-            AnyBackend::Offline(b) => b.get_keys_paged(&from, size, to).await,
+            AnyBackend::Ws(b) => b.get_keys_paged(from, size, to).await,
+            AnyBackend::_Offline(b) => b.get_keys_paged(from, size, to).await,
         }
     }
 
@@ -268,7 +260,7 @@ impl Backend for &AnyBackend {
             AnyBackend::Http(b) => b.metadata().await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.metadata().await,
-            AnyBackend::Offline(b) => b.metadata().await,
+            AnyBackend::_Offline(b) => b.metadata().await,
         }
     }
 
@@ -278,7 +270,7 @@ impl Backend for &AnyBackend {
             AnyBackend::Http(b) => b.submit(ext).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.submit(ext).await,
-            AnyBackend::Offline(b) => b.submit(ext).await,
+            AnyBackend::_Offline(b) => b.submit(ext).await,
         }
     }
 
@@ -288,7 +280,7 @@ impl Backend for &AnyBackend {
             AnyBackend::Http(b) => b.block_info(at).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.block_info(at).await,
-            AnyBackend::Offline(b) => b.block_info(at).await,
+            AnyBackend::_Offline(b) => b.block_info(at).await,
         }
     }
 
@@ -298,16 +290,8 @@ impl Backend for &AnyBackend {
             AnyBackend::Http(b) => b.query_storage(key).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.query_storage(key).await,
-            AnyBackend::Offline(b) => b.query_storage(key).await,
+            AnyBackend::_Offline(b) => b.query_storage(key).await,
         }
-    }
-}
-
-#[inline]
-async fn get_metadata(b: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<Metadata> {
-    match metadata {
-        Some(m) => Ok(m),
-        None => Ok(b.metadata().await?),
     }
 }
 

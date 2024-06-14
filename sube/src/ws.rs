@@ -1,38 +1,22 @@
-use crate::prelude::*;
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 
 use async_mutex::Mutex;
-use async_std::future::IntoFuture;
-use async_std::stream::IntoStream;
-use async_std::{channel::Receiver, task};
 use async_trait::async_trait;
-
-use futures_channel::mpsc;
-use futures_channel::mpsc::TryRecvError;
-use futures_channel::oneshot;
-use futures_util::stream::Next;
-
-use ewebsock::{Error as WsError, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
-
-#[cfg(not(feature = "js"))]
-use async_std::task::spawn;
-
-#[cfg(feature = "js")]
-use async_std::task::spawn_local as spawn;
-
-use futures_util::stream;
-use futures_util::{
-    sink::{Sink, SinkExt},
-    stream::SplitSink,
-    Stream, StreamExt,
-};
-
+use ewebsock::{WsEvent, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
+use futures_channel::{mpsc, oneshot};
+use futures_util::StreamExt as _;
+// use futures_util::StreamExt;
 use jsonrpc::{
     error::{result_to_response, standard_error, StandardError},
     serde_json,
 };
 use log::info;
 use serde::Deserialize;
+
+#[cfg(not(feature = "js"))]
+use async_std::task::spawn;
+#[cfg(feature = "js")]
+use async_std::task::spawn_local as spawn;
 
 use crate::{
     rpc::{self, Rpc, RpcResult},
@@ -75,7 +59,7 @@ impl Rpc for Backend {
             .lock()
             .await
             .try_send(Message::Text(msg))
-            .map_err(|x| standard_error(StandardError::InternalError, None))?;
+            .map_err(|_| standard_error(StandardError::InternalError, None))?;
 
         log::info!("sent CMD");
         // wait for the matching response to arrive
@@ -83,8 +67,6 @@ impl Rpc for Backend {
             .await
             .map_err(|_| standard_error(StandardError::InternalError, None))?
             .result()?;
-
-        // log::debug!("RPC Response: {}...", &res[..20]);
 
         Ok(res)
     }
@@ -100,9 +82,9 @@ impl Backend {
         log::trace!("WS connecting to {}", url);
 
         let (tx, rx) =
-            ewebsock::connect(url, ewebsock::Options::default()).map_err(|e| Error::Platform(e))?;
+            ewebsock::connect(url, ewebsock::Options::default()).map_err(Error::Platform)?;
 
-        let (mut sender, recv) = mpsc::channel::<Message>(0);
+        let (sender, recv) = mpsc::channel::<Message>(0);
 
         let backend = Backend {
             tx: Mutex::new(sender),
@@ -116,10 +98,7 @@ impl Backend {
         Ok(backend)
     }
 
-    fn process_tx_send_messages(
-        mut tx: Arc<Mutex<Tx>>,
-        mut recv: Arc<Mutex<mpsc::Receiver<Message>>>,
-    ) {
+    fn process_tx_send_messages(tx: Arc<Mutex<Tx>>, recv: Arc<Mutex<mpsc::Receiver<Message>>>) {
         spawn(async move {
             info!("waiting for coommands...");
 
@@ -133,14 +112,14 @@ impl Backend {
     fn process_incoming_messages(
         &self,
         mut rx: Rx,
-        mut tx: Arc<Mutex<Tx>>,
-        mut recv: Arc<Mutex<mpsc::Receiver<Message>>>,
+        tx: Arc<Mutex<Tx>>,
+        recv: Arc<Mutex<mpsc::Receiver<Message>>>,
     ) {
         let messages = self.messages.clone();
         spawn(async move {
             while let Some(event) = rx.next().await {
                 match event {
-                    ewebsock::WsEvent::Message(msg) => {
+                    WsEvent::Message(msg) => {
                         log::trace!("Got WS message {:?}", msg);
 
                         if let Message::Text(msg) = msg {
@@ -163,13 +142,13 @@ impl Backend {
                             }
                         }
                     }
-                    ewebsock::WsEvent::Error(e) => {
+                    WsEvent::Error(e) => {
                         log::warn!("WS error {}", &e);
                     }
-                    ewebsock::WsEvent::Closed => {
+                    WsEvent::Closed => {
                         log::info!("WS connection closed");
                     }
-                    ewebsock::WsEvent::Opened => {
+                    WsEvent::Opened => {
                         log::info!("Processing tx msg");
                         Backend::process_tx_send_messages(tx.clone(), recv.clone());
                         log::trace!("Ws connection opened");

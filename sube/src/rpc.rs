@@ -1,10 +1,8 @@
 use core::convert::TryInto;
 
 use async_trait::async_trait;
-use jsonrpc::error::standard_error;
 use jsonrpc::serde_json::value::RawValue;
 pub use jsonrpc::{error, Error, Request, Response};
-use rand_core::block;
 use serde::Deserialize;
 
 use crate::meta::{self, Metadata};
@@ -21,7 +19,7 @@ pub trait Rpc: Backend + Send + Sync {
     fn convert_params(params: &[&str]) -> Vec<Box<RawValue>> {
         params
             .iter()
-            .map(|p| format!("{}", p))
+            .map(|p| p.to_string())
             .map(RawValue::from_string)
             .map(Result::unwrap)
             .collect::<Vec<_>>()
@@ -69,7 +67,7 @@ impl<R: Rpc> Backend for R {
                 &[
                     &format!("\"{}\"", &from),
                     &size.to_string(),
-                    &to.or(Some(&from)).map(|f| format!("\"{}\"", &f)).unwrap(),
+                    &to.or(Some(from)).map(|f| format!("\"{}\"", &f)).unwrap(),
                 ],
             )
             .await
@@ -131,9 +129,9 @@ impl<R: Rpc> Backend for R {
         where
             R: Rpc,
         {
-            Ok(s.rpc("chain_getBlockHash", params)
+            s.rpc("chain_getBlockHash", params)
                 .await
-                .map_err(|e| crate::Error::Node(e.to_string()))?)
+                .map_err(|e| crate::Error::Node(e.to_string()))
         }
 
         let block_hash = if let Some(block_number) = at {

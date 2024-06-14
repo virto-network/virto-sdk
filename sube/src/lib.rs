@@ -28,17 +28,16 @@ pub use core::fmt::Display;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use signer::Signer;
 
-use core::future::Future;
 pub use meta::Metadata;
 #[cfg(feature = "v14")]
 pub use scales::{Serializer, Value};
 
 use async_trait::async_trait;
 use codec::Compact;
-use core::{fmt, marker::PhantomData};
+use core::fmt;
 use hasher::hash;
-use meta::{Entry, Meta, Pallet, PalletMeta, Storage};
-use meta_ext as meta;
+// use meta::Meta;
+use meta_ext::{self as meta, Meta as _};
 use meta_ext::{KeyValue, StorageKey};
 use prelude::*;
 #[cfg(feature = "v14")]
@@ -95,15 +94,13 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
 
         return Ok(Response::Value(Value::new(
             const_meta.value.clone(),
-            const_meta.ty.id(),
+            const_meta.ty.id,
             &meta.types,
         )));
     }
 
     if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
     {
-        let storage_key_encoded = format!("{}", &key_res);
-
         if !key_res.is_partial() {
             let res = chain.query_storage(&key_res).await?;
             return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
@@ -113,7 +110,8 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
         let result = chain.query_storage_at(res, None).await?;
 
         if let [storage_change, ..] = &result[..] {
-            let value = storage_change.changes
+            let value = storage_change
+                .changes
                 .iter()
                 .map(|[key, data]| {
                     let key = key.replace(&hex::encode(&key_res.pallet), "");
@@ -126,7 +124,7 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
                             KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
                                 let hashed = &key[pointer..];
                                 let value = Value::new(
-                                    hex::decode(&hashed).expect("hello world"),
+                                    hex::decode(hashed).expect("hello world"),
                                     *type_id,
                                     &meta.types,
                                 );
@@ -160,6 +158,7 @@ pub struct ExtrinsicBody<Body> {
     pub body: Body,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 pub struct AccountInfo {
     nonce: u64,
@@ -169,6 +168,7 @@ pub struct AccountInfo {
     data: Data,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 pub struct Data {
     free: u128,
@@ -187,11 +187,11 @@ async fn submit<'m, V>(
 where
     V: serde::Serialize + core::fmt::Debug,
 {
-    let (pallet, item_or_call, keys) = parse_uri(path).ok_or(Error::BadInput)?;
+    let (pallet, item_or_call, _keys) = parse_uri(path).ok_or(Error::BadInput)?;
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
-    let calls_ty = pallet.calls().ok_or(Error::CallNotFound)?.ty.id();
+    let calls_ty = pallet.calls.as_ref().ok_or(Error::CallNotFound)?.ty.id;
     let type_registry = &meta.types;
 
     let mut encoded_call = vec![pallet.index];
@@ -372,28 +372,27 @@ fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
     Some((pallet, item, map_keys))
 }
 
-struct PalletCall {
-    pallet_idx: u8,
-    ty: u32,
-}
+// struct PalletCall {
+//     pallet_idx: u8,
+//     ty: u32,
+// }
 
-impl PalletCall {
-    fn new(pallet: &PalletMeta, reg: &PortableRegistry, call: &str) -> Result<Self> {
-        let calls = pallet
-            .calls
-            .as_ref()
-            .map(|c| reg.resolve(c.ty.id()))
-            .flatten()
-            .ok_or_else(|| Error::CallNotFound)?
-            .type_def();
-        log::debug!("{:?}", calls);
-        let pallet_idx = pallet.index;
-        Ok(PalletCall { pallet_idx, ty: 0 })
-    }
-}
+// impl PalletCall {
+//     fn new(pallet: &PalletMeta, reg: &PortableRegistry, _call: &str) -> Result<Self> {
+//         let calls = &pallet
+//             .calls
+//             .as_ref()
+//             .and_then(|c| reg.resolve(c.ty.id))
+//             .ok_or_else(|| Error::CallNotFound)?
+//             .type_def;
+//         log::debug!("{:?}", calls);
+//         let pallet_idx = pallet.index;
+//         Ok(PalletCall { pallet_idx, ty: 0 })
+//     }
+// }
 
 #[derive(Deserialize, Serialize, Debug)]
-struct StorageChangeSet {
+pub struct StorageChangeSet {
     block: String,
     changes: Vec<[String; 2]>,
 }
@@ -446,17 +445,17 @@ pub struct Offline(pub Metadata);
 impl Backend for Offline {
     async fn query_storage_at(
         &self,
-        keys: Vec<String>,
-        block: Option<String>,
+        _keys: Vec<String>,
+        _block: Option<String>,
     ) -> crate::Result<Vec<StorageChangeSet>> {
         Err(Error::ChainUnavailable)
     }
 
     async fn get_keys_paged(
         &self,
-        from: &StorageKey,
-        size: u16,
-        to: Option<&StorageKey>,
+        _from: &StorageKey,
+        _size: u16,
+        _to: Option<&StorageKey>,
     ) -> crate::Result<Vec<String>> {
         Err(Error::ChainUnavailable)
     }
@@ -474,7 +473,7 @@ impl Backend for Offline {
     }
 
     async fn metadata(&self) -> Result<Metadata> {
-        Ok(self.0.cloned())
+        Ok(self.0.clone())
     }
 
     async fn block_info(&self, _: Option<u32>) -> Result<meta::BlockInfo> {
