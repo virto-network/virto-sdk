@@ -20,19 +20,18 @@ pub trait Vault {
     type Id;
     type Account: Account;
 
-    async fn unlock(
+    fn unlock(
         &mut self,
         account: Self::Id,
         cred: impl Into<Self::Credentials>,
-    ) -> Result<Self::Account, Self::Error>;
+    ) -> impl core::future::Future<Output = Result<Self::Account, Self::Error>>;
 }
 
 mod utils {
     const MAX_PATH_LEN: usize = 16;
     use arrayvec::ArrayString;
 
-    use crate::{account::Account, any::AnySignature, any, Derive, Network, Pair, Public};
-    
+    use crate::{account::Account, any, any::AnySignature, Derive, Network, Pair, Public};
 
     /// The root account is a container of the key pairs stored in the vault and cannot be
     /// used to sign messages directly, we always derive new key pairs from it to create
@@ -82,7 +81,7 @@ mod utils {
         path: ArrayString<MAX_PATH_LEN>,
         name: ArrayString<{ MAX_PATH_LEN - 2 }>,
     }
- 
+
     impl Account for AccountSigner {
         fn public(&self) -> impl Public {
             self.pair.as_ref().expect("account unlocked").public()
@@ -91,13 +90,13 @@ mod utils {
 
     impl AccountSigner {
         pub(crate) fn new<'a>(name: impl Into<Option<&'a str>>) -> Self {
-            let n = name.into().unwrap_or_else(|| "default");
+            let n = name.into().unwrap_or("default");
             let mut path = ArrayString::from("//").unwrap();
-            path.push_str(&n);
+            path.push_str(n);
             AccountSigner {
                 pair: None,
                 network: Network::default(),
-                name: ArrayString::from(&n).expect("short name"),
+                name: ArrayString::from(n).expect("short name"),
                 path,
             }
         }
@@ -133,12 +132,11 @@ mod utils {
         type Signature = AnySignature;
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
-            Ok(self
-                .pair
+            self.pair
                 .as_ref()
                 .expect("account unlocked")
                 .sign_msg(msg)
-                .await?)
+                .await
         }
 
         async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {

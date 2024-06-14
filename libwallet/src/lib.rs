@@ -16,8 +16,7 @@ mod substrate_ext;
 
 pub use account::Account;
 use arrayvec::ArrayVec;
-use core::{cell::RefCell, convert::TryInto, fmt};
-use key_pair::any::AnySignature;
+use core::{convert::TryInto, fmt};
 
 #[cfg(feature = "mnemonic")]
 use mnemonic;
@@ -27,7 +26,6 @@ pub use key_pair::*;
 pub use mnemonic::{Language, Mnemonic};
 pub use vault::Vault;
 pub mod vault;
-
 
 const MSG_MAX_SIZE: usize = u8::MAX as usize;
 type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
@@ -95,11 +93,7 @@ where
     ) -> Result<(), Error<V::Error>> {
         if self.is_locked() {
             let vault = &mut self.vault;
-
-            let signer = vault
-                .unlock(account, cred)
-                .await
-                .map_err(|e| Error::Vault(e))?;
+            let signer = vault.unlock(account, cred).await.map_err(Error::Vault)?;
 
             if self.default_account.is_none() {
                 self.default_account = Some(0);
@@ -292,4 +286,3 @@ impl<V> From<mnemonic::Error> for Error<V> {
         Error::InvalidPhrase
     }
 }
-

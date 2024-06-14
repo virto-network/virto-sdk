@@ -1,5 +1,4 @@
 use core::{iter, ops};
-use crate::Pair;
 
 #[cfg(feature = "rand")]
 pub fn random_bytes<R, const S: usize>(rng: &mut R) -> [u8; S]
@@ -38,10 +37,7 @@ macro_rules! seed_from_entropy {
     };
 }
 
-use arrayvec::ArrayString;
 pub(crate) use seed_from_entropy;
-
-use crate::{any::{self, AnySignature}, Network, Public };
 
 impl Pin {
     const LEN: usize = 4;
@@ -63,7 +59,11 @@ impl Pin {
         let mut seed = [0; S];
         // using same hashing strategy as Substrate to have some compatibility
         // when pin is 0(no pin) we produce the same addresses
-        let len = self.eq(&0).then_some(salt.len() - 2).unwrap_or(salt.len());
+        let len = if self.eq(&0) {
+            salt.len() - 2
+        } else {
+            salt.len()
+        };
         pbkdf2::<Hmac<Sha512>>(data, &salt[..len], 2048, &mut seed);
         seed
     }
@@ -81,7 +81,7 @@ impl<'a> From<&'a str> for Pin {
             .map(|c| c.to_digit(16).unwrap_or(0))
             .enumerate()
             .fold(0, |pin, (i, d)| {
-                pin | ((d as u16) << (Pin::LEN - 1 - i) * Pin::LEN)
+                pin | ((d as u16) << ((Pin::LEN - 1 - i) * Pin::LEN))
             }))
     }
 }

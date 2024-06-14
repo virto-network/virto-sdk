@@ -1,0 +1,16 @@
+on: 
+  pull_request:
+    paths: ['libwallet/**']
+
+name: Libwallet
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: extractions/setup-just@v2
+      - name: Check
+        run: just -f libwallet/justfile check
+      - name: Lint
+        run: just -f libwallet/justfile lint

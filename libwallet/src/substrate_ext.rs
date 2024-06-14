@@ -1,7 +1,5 @@
 use crate::Network;
 
-trait SubstrateExt {}
-
 impl From<&str> for Network {
     fn from(s: &str) -> Self {
         // TODO use registry

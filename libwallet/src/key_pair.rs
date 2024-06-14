@@ -27,13 +27,19 @@ impl<const N: usize> Signature for Bytes<N> {}
 /// Something that can sign messages
 pub trait Signer {
     type Signature: Signature;
-    async fn sign_msg(&self, data: impl AsRef<[u8]>) -> Result<Self::Signature, ()>;
-    async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool;
+    fn sign_msg(
+        &self,
+        data: impl AsRef<[u8]>,
+    ) -> impl core::future::Future<Output = Result<Self::Signature, ()>>;
+
+    fn verify(
+        &self,
+        msg: impl AsRef<[u8]>,
+        sig: impl AsRef<[u8]>,
+    ) -> impl core::future::Future<Output = bool>;
 }
 /// Wrappers to represent any supported key pair.
 pub mod any {
-    use crate::Signer;
-
     use super::{Public, Signature};
     use core::fmt;
 
@@ -227,7 +233,7 @@ pub mod sr25519 {
             super::derive::parse_substrate_junctions(path)
                 .fold(self.secret.clone(), |key, (part, hard)| {
                     if hard {
-                        key.hard_derive_mini_secret_key(Some(ChainCode(part)), &[])
+                        key.hard_derive_mini_secret_key(Some(ChainCode(part)), [])
                             .0
                             .expand(ExpansionMode::Ed25519)
                     } else {
@@ -323,8 +329,6 @@ pub mod sr25519 {
 }
 
 mod derive {
-    use core::convert::identity;
-
     use super::Bytes;
 
     /// Something to derive key pairs form
@@ -342,8 +346,8 @@ mod derive {
     pub(super) fn parse_substrate_junctions(
         path: &str,
     ) -> impl Iterator<Item = (Junction, bool)> + '_ {
-        path.split_inclusive("/")
-            .flat_map(|s| if s == "/" { "" } else { s }.split("/")) // "//Alice//Bob" -> ["","","Alice","","","Bob"]
+        path.split_inclusive('/')
+            .flat_map(|s| if s == "/" { "" } else { s }.split('/')) // "//Alice//Bob" -> ["","","Alice","","","Bob"]
             .scan(0u8, |j, part| {
                 Some(if part.is_empty() {
                     *j += 1;
@@ -354,7 +358,7 @@ mod derive {
                     Some((encoded_junction(part), hard))
                 })
             })
-            .filter_map(identity)
+            .flatten()
     }
 
     fn encoded_junction(part: &str) -> Junction {
@@ -364,7 +368,7 @@ mod derive {
         } else {
             let len = part.len().min(JUNCTION_LEN - 1);
             code[0] = (len as u8) << 2;
-            code[1..len + 1].copy_from_slice(&part[..len].as_bytes());
+            code[1..len + 1].copy_from_slice(part[..len].as_bytes());
         }
         code
     }
