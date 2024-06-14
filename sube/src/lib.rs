@@ -128,7 +128,7 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
                                     *type_id,
                                     &meta.types,
                                 );
-                                pointer += (value.len() * 2) + 32;
+                                pointer += (value.size() * 2) + 32;
                                 value
                             }
                         })

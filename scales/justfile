@@ -5,3 +5,6 @@ check:
 
 lint:
     cargo clippy -- -D warnings
+
+test:
+    cargo test
