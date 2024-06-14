@@ -25,7 +25,7 @@ twox-hash = { version = "1.6.2", default-features = false }
 url = "2.5.0"
 
 # http backend
-surf = { version = "2.3.2", default_features = false, optional = true }
+surf = { version = "2.3.2", default-features = false, optional = true }
 
 # ws backend
 async-tungstenite = { version = "0.17.2", features = ["async-std-runtime"], optional = true }
@@ -35,7 +35,7 @@ async-mutex = { version = "1.4.0", optional = true }
 async-tls = { version = "0.11.0", default-features = false, optional = true }
 
 # bin target
-async-std = { version = "1.11.0", default_features = false, optional = true }
+async-std = { version = "1.11.0", default-features = false, optional = true }
 paste = { version = "1.0", optional = true }
 wasm-bindgen = { version = "0.2.91", optional = true }
 once_cell = { version = "1.17.1", optional = true }
@@ -48,14 +48,14 @@ env_logger = "0.11.3"
 [dev-dependencies]
 async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
-libwallet = { path = "../libwallet", default_features=false, features=["substrate", "mnemonic", "sr25519",  "util_pin", "rand", "std" ] }
+libwallet = { path = "../libwallet", default-features=false, features=["substrate", "mnemonic", "sr25519",  "util_pin", "rand", "std" ] }
 rand_core = "0.6.3"
 
 [features]
-default = ["v14"]
-test = ["std", "wss", "ws", "http", "json", "v14", "dep:async-std", "dep:rand_core"]
+default = ["v14", "wss", "http"]
+test = ["std", "wss", "http", "json", "v14", "dep:async-std", "dep:rand_core"]
 http = ["dep:jsonrpc", "surf/h1-client-rustls"]
-http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "surf/wasm-client"]
+http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "surf?/wasm-client"]
 json = ["scales/json"]
 std = []
 

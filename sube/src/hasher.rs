@@ -30,7 +30,7 @@ pub fn hash<I: AsRef<[u8]>>(hasher: &Hasher, input: I) -> Vec<u8> {
         Hasher::Blake2_128 => digest::<Blake2b<U16>>(input).to_vec(),
         Hasher::Blake2_256 => digest::<Blake2b<U32>>(input).to_vec(),
         Hasher::Blake2_128Concat => [digest::<Blake2b<U16>>(input).as_slice(), input].concat(),
-        Hasher::Twox128 => twox_hash(&input),
+        Hasher::Twox128 => twox_hash(input),
         Hasher::Twox256 => unimplemented!(),
         Hasher::Twox64Concat => twox_hash_concat(input),
         Hasher::Identity => input.into(),
