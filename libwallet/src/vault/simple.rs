@@ -1,19 +1,15 @@
-use core::convert::TryInto;
-use core::marker::PhantomData;
-
-use arrayvec::ArrayVec;
-
 use crate::util::{seed_from_entropy, Pin};
 use crate::{
     vault::utils::{AccountSigner, RootAccount},
-    Derive, Vault,
+    Vault,
 };
+use core::marker::PhantomData;
 
 /// A vault that holds secrets in memory
 pub struct Simple<S> {
     locked: Option<[u8; 32]>,
     unlocked: Option<[u8; 32]>,
-    _phantom: PhantomData<S>
+    _phantom: PhantomData<S>,
 }
 
 impl<S> Simple<S> {
@@ -37,7 +33,7 @@ impl<S> Simple<S> {
         Simple {
             locked: Some(crate::util::random_bytes::<_, 32>(rng)),
             unlocked: None,
-            _phantom: Default::default()
+            _phantom: Default::default(),
         }
     }
 

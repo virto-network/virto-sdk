@@ -1,9 +1,5 @@
-use core::fmt::{Debug, Display};
+use crate::{Public, Signer};
 
-use crate::{
-    Public, Signer,
-};
-
-pub trait Account: Signer + Display {
+pub trait Account: Signer + core::fmt::Display {
     fn public(&self) -> impl Public;
 }
