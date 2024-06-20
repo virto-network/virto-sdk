@@ -1,9 +1,5 @@
-// #![feature(async_closure)]
-// #![feature(trait_alias)]
-// #![feature(async_fn_traits)]
-// #![feature(impl_trait_in_assoc_type)]
 #![cfg_attr(not(feature = "std"), no_std)]
-
+#![allow(async_fn_in_trait)]
 /*!
 Sube is a lightweight blockchain client to query and submit extrinsics
 to Substrate based blockchains.
@@ -19,20 +15,16 @@ compile_error!("Enable one of the metadata versions");
 #[macro_use]
 extern crate alloc;
 
-pub use builder::SubeBuilder;
-pub use signer::SignerFn;
-
 pub use codec;
 use codec::Encode;
 pub use core::fmt::Display;
 pub use frame_metadata::RuntimeMetadataPrefixed;
-pub use signer::Signer;
+pub use signer::{Signer, SignerFn};
 
 pub use meta::Metadata;
 #[cfg(feature = "v14")]
 pub use scales::{Serializer, Value};
 
-use async_trait::async_trait;
 use codec::Compact;
 use core::fmt;
 use hasher::hash;
@@ -72,8 +64,8 @@ pub mod util;
 /// The batteries included way to query or submit extrinsics to a Substrate based blockchain
 ///
 /// Returns a builder that implments `IntoFuture` so it can be `.await`ed on.
-pub async fn sube(url: &str) -> SubeBuilder<(), ()> {
-    SubeBuilder::default().with_url(url)
+pub fn sube(url: &str) -> builder::SubeBuilder<(), ()> {
+    builder::SubeBuilder::default().with_url(url)
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
@@ -400,18 +392,16 @@ pub struct StorageChangeSet {
 /// Generic definition of a blockchain backend
 ///
 /// ```rust,ignore
-/// #[async_trait]
 /// pub trait Backend {
 ///     async fn query_bytes(&self, key: &StorageKey) -> Result<Vec<u8>>;
 ///
 ///     async fn submit<T>(&self, ext: T) -> Result<()>
 ///     where
-///         T: AsRef<[u8]> + Send;
+///         T: AsRef<[u8]>;
 ///
 ///     async fn metadata(&self) -> Result<Metadata>;
 /// }
 /// ```
-#[async_trait]
 pub trait Backend {
     async fn query_storage_at(
         &self,
@@ -425,13 +415,12 @@ pub trait Backend {
         size: u16,
         to: Option<&StorageKey>,
     ) -> crate::Result<Vec<String>>;
+
     /// Get raw storage items form the blockchain
     async fn query_storage(&self, key: &StorageKey) -> Result<Vec<u8>>;
 
     /// Send a signed extrinsic to the blockchain
-    async fn submit<T>(&self, ext: T) -> Result<()>
-    where
-        T: AsRef<[u8]> + Send;
+    async fn submit(&self, ext: impl AsRef<[u8]>) -> Result<()>;
 
     async fn metadata(&self) -> Result<Metadata>;
 
@@ -441,7 +430,6 @@ pub trait Backend {
 /// A Dummy backend for offline querying of metadata
 pub struct Offline(pub Metadata);
 
-#[async_trait]
 impl Backend for Offline {
     async fn query_storage_at(
         &self,
@@ -465,10 +453,7 @@ impl Backend for Offline {
     }
 
     /// Send a signed extrinsic to the blockchain
-    async fn submit<T>(&self, _ext: T) -> Result<()>
-    where
-        T: AsRef<[u8]> + Send,
-    {
+    async fn submit(&self, _ext: impl AsRef<[u8]>) -> Result<()> {
         Err(Error::ChainUnavailable)
     }
 

@@ -1,7 +1,7 @@
 default: check
 
 check:
-    cargo check
+    cargo check --features http,wss
 
 lint:
     cargo clippy --features http,wss -- -D warnings

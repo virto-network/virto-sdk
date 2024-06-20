@@ -1,6 +1,4 @@
 use core::convert::TryInto;
-
-use async_trait::async_trait;
 use jsonrpc::serde_json::value::RawValue;
 pub use jsonrpc::{error, Error, Request, Response};
 use serde::Deserialize;
@@ -12,9 +10,10 @@ use crate::{Backend, StorageKey};
 pub type RpcResult<T> = Result<T, error::Error>;
 
 /// Rpc defines types of backends that are remote and talk JSONRpc
-#[async_trait]
-pub trait Rpc: Backend + Send + Sync {
-    async fn rpc<T: for<'a> Deserialize<'a>>(&self, method: &str, params: &[&str]) -> RpcResult<T>;
+pub trait Rpc {
+    async fn rpc<T>(&self, method: &str, params: &[&str]) -> RpcResult<T>
+    where
+        T: for<'de> Deserialize<'de>;
 
     fn convert_params(params: &[&str]) -> Vec<Box<RawValue>> {
         params
@@ -26,8 +25,9 @@ pub trait Rpc: Backend + Send + Sync {
     }
 }
 
-#[async_trait]
-impl<R: Rpc> Backend for R {
+pub struct RpcClient<R>(pub R);
+
+impl<R: Rpc> Backend for RpcClient<R> {
     async fn query_storage_at(
         &self,
         keys: Vec<String>,
@@ -40,19 +40,20 @@ impl<R: Rpc> Backend for R {
             vec![keys]
         };
 
-        self.rpc(
-            "state_queryStorageAt",
-            params
-                .iter()
-                .map(|s| s.as_ref())
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .await
-        .map_err(|err| {
-            log::info!("error {:?}", err);
-            crate::Error::StorageKeyNotFound
-        })
+        self.0
+            .rpc(
+                "state_queryStorageAt",
+                params
+                    .iter()
+                    .map(|s| s.as_ref())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
+            .await
+            .map_err(|err| {
+                log::info!("error {:?}", err);
+                crate::Error::StorageKeyNotFound
+            })
     }
 
     async fn get_keys_paged(
@@ -62,6 +63,7 @@ impl<R: Rpc> Backend for R {
         to: Option<&StorageKey>,
     ) -> crate::Result<Vec<String>> {
         let r: Vec<String> = self
+            .0
             .rpc(
                 "state_getKeysPaged",
                 &[
@@ -84,6 +86,7 @@ impl<R: Rpc> Backend for R {
         log::debug!("StorageKey encoded: {}", key);
 
         let res: String = self
+            .0
             .rpc("state_getStorage", &[&format!("\"{}\"", &key)])
             .await
             .map_err(|e| {
@@ -97,23 +100,20 @@ impl<R: Rpc> Backend for R {
         Ok(response)
     }
 
-    async fn submit<T>(&self, ext: T) -> crate::Result<()>
-    where
-        T: AsRef<[u8]> + Send,
-    {
+    async fn submit(&self, ext: impl AsRef<[u8]>) -> crate::Result<()> {
         let extrinsic = format!("0x{}", hex::encode(ext.as_ref()));
         log::debug!("Extrinsic: {}", extrinsic);
 
-        let res = self
+        self.0
             .rpc("author_submitExtrinsic", &[&format!("\"{}\"", &extrinsic)])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
-        log::debug!("Extrinsic {:x?}", res);
         Ok(())
     }
 
     async fn metadata(&self) -> crate::Result<Metadata> {
         let res: String = self
+            .0
             .rpc("state_getMetadata", &[])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
@@ -125,10 +125,8 @@ impl<R: Rpc> Backend for R {
     }
 
     async fn block_info(&self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
-        async fn block_info<R>(s: &R, params: &[&str]) -> crate::Result<Vec<u8>>
-        where
-            R: Rpc,
-        {
+        #[inline]
+        async fn block_info(s: &impl Rpc, params: &[&str]) -> crate::Result<Vec<u8>> {
             s.rpc("chain_getBlockHash", params)
                 .await
                 .map_err(|e| crate::Error::Node(e.to_string()))
@@ -136,9 +134,9 @@ impl<R: Rpc> Backend for R {
 
         let block_hash = if let Some(block_number) = at {
             let block_number = block_number.to_string();
-            block_info(self, &[&block_number]).await?
+            block_info(&self.0, &[&block_number]).await?
         } else {
-            block_info(self, &[]).await?
+            block_info(&self.0, &[]).await?
         };
 
         Ok(meta::BlockInfo {

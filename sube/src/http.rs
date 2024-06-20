@@ -1,11 +1,10 @@
 use crate::prelude::*;
-use async_trait::async_trait;
-use serde::Deserialize;
 use core::{convert::TryInto, fmt};
 use jsonrpc::{
     error::{standard_error, StandardError},
     serde_json::{to_string, value::to_raw_value},
 };
+use serde::Deserialize;
 pub use surf::Url;
 
 use crate::rpc::{self, Rpc, RpcResult};
@@ -23,10 +22,12 @@ impl Backend {
     }
 }
 
-#[async_trait]
 impl Rpc for Backend {
     /// HTTP based JSONRpc request expecting an hex encoded result
-    async fn rpc<T: for<'a> Deserialize<'a>>(&self, method: &str, params: &[&str]) -> RpcResult<T> {
+    async fn rpc<T>(&self, method: &str, params: &[&str]) -> RpcResult<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         log::info!("RPC `{}` to {}", method, &self.0);
         let req = surf::post(&self.0).content_type("application/json").body(
             to_string(&rpc::Request {
