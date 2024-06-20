@@ -1,7 +1,6 @@
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
+use alloc::{collections::BTreeMap, sync::Arc};
 
 use async_mutex::Mutex;
-use async_trait::async_trait;
 use ewebsock::{WsEvent, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
 use futures_channel::{mpsc, oneshot};
 use futures_util::StreamExt as _;
@@ -33,9 +32,11 @@ pub struct Backend {
 unsafe impl Send for Backend {}
 unsafe impl Sync for Backend {}
 
-#[async_trait]
 impl Rpc for Backend {
-    async fn rpc<T: for<'a> Deserialize<'a>>(&self, method: &str, params: &[&str]) -> RpcResult<T> {
+    async fn rpc<T>(&self, method: &str, params: &[&str]) -> RpcResult<T>
+    where
+        T: for<'a> Deserialize<'a>,
+    {
         let id = self.next_id().await;
         info!("RPC `{}` (ID={})", method, id);
 

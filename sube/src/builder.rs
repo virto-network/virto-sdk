@@ -1,5 +1,7 @@
 #[cfg(any(feature = "http", feature = "http-web"))]
 use crate::http::Backend as HttpBackend;
+#[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
+use crate::rpc::RpcClient;
 #[cfg(feature = "ws")]
 use crate::ws::Backend as WSBackend;
 use crate::{
@@ -8,7 +10,6 @@ use crate::{
 };
 use crate::{prelude::*, Offline, StorageChangeSet};
 
-use async_trait::async_trait;
 use core::future::{Future, IntoFuture};
 use url::Url;
 
@@ -205,25 +206,23 @@ fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
 async fn get_backend_by_url(url: Url) -> SubeResult<AnyBackend> {
     match url.scheme() {
         #[cfg(feature = "ws")]
-        "ws" | "wss" => Ok(AnyBackend::Ws(
-            #[cfg(feature = "ws")]
+        "ws" | "wss" => Ok(AnyBackend::Ws(RpcClient(
             WSBackend::new_ws2(url.to_string().as_str()).await?,
-        )),
+        ))),
         #[cfg(any(feature = "http", feature = "http-web"))]
-        "http" | "https" => Ok(AnyBackend::Http(HttpBackend::new(url))),
+        "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(url)))),
         _ => Err(Error::BadInput),
     }
 }
 
 enum AnyBackend {
     #[cfg(any(feature = "http", feature = "http-web"))]
-    Http(HttpBackend),
+    Http(RpcClient<HttpBackend>),
     #[cfg(feature = "ws")]
-    Ws(WSBackend),
+    Ws(RpcClient<WSBackend>),
     _Offline(Offline),
 }
 
-#[async_trait]
 impl Backend for &AnyBackend {
     async fn query_storage_at(
         &self,
@@ -264,7 +263,7 @@ impl Backend for &AnyBackend {
         }
     }
 
-    async fn submit<U: AsRef<[u8]> + Send>(&self, ext: U) -> SubeResult<()> {
+    async fn submit(&self, ext: impl AsRef<[u8]>) -> SubeResult<()> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.submit(ext).await,
