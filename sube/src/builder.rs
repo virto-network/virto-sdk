@@ -8,17 +8,20 @@ use crate::{
 };
 use crate::{prelude::*, Offline, StorageChangeSet};
 
+use alloc::rc::Rc;
+use alloc::sync::Arc;
 use async_trait::async_trait;
+
+use async_mutex::Mutex;
+use core::borrow::Borrow;
 use core::{
-    cell::OnceCell,
     future::{Future, IntoFuture},
     marker::PhantomData,
 };
-// use heapless::Vec as HVec;
-use url::Url;
 
-// type PairHostBackend<'a> = (&'a str, AnyBackend, Metadata);
-// static INSTANCE: OnceCell<HVec<PairHostBackend, 10>> = OnceCell::new();
+// use std::os::macos::raw::stat;
+
+use url::Url;
 
 pub struct SubeBuilder<'a, Body, Signer> {
     url: Option<&'a str>,
@@ -85,6 +88,8 @@ impl<'a> SubeBuilder<'a, (), ()> {
             })
             .await?;
 
+        // let (backend, meta) = get_cache_by_url(url.clone(), metadata).await?;
+
         Ok(match path {
             "_meta" => Response::Meta(meta),
             "_meta/registry" => Response::Registry(&meta.types),
@@ -131,6 +136,8 @@ where
         let path = url.path();
         let body = body.ok_or(Error::BadInput)?;
 
+        // let (backend, meta) = get_cache_by_url(url.clone(), metadata).await?;
+
         let backend = BACKEND
             .get_or_try_init(get_backend_by_url(url.clone()))
             .await?;
@@ -139,7 +146,7 @@ where
             .get_or_try_init(async {
                 match metadata {
                     Some(m) => Ok(m),
-                    None => backend.metadata().await.map_err(|err| Error::BadMetadata),
+                    None => backend.metadata().await.map_err(|_| Error::BadMetadata),
                 }
             })
             .await?;
@@ -155,6 +162,58 @@ where
         })
     }
 }
+
+#[inline]
+async fn get_cache_by_url<'a>(
+    url: Url,
+    metadata: Option<Metadata>,
+) -> SubeResult<(&'a AnyBackend, &'a Metadata)> {
+    let mut instance_backend = INSTANCE_BACKEND
+        .get_or_init(async { Mutex::new(Map::new()) })
+        .await
+        .lock()
+        .await;
+
+    let mut instance_metadata = INSTANCE_METADATA
+        .get_or_init(async { Mutex::new(Map::new()) })
+        .await
+        .lock()
+        .await;
+
+    let base_path = format!(
+        "{}://{}",
+        url.scheme(),
+        url.host_str().expect("url to have a host")
+    );
+
+    let cached_b = instance_backend.get(&base_path);
+    let cached_m = instance_metadata.get(&base_path);
+
+    match (cached_b, cached_m) {
+        (Some(b), Some(m)) => Ok((b, m)),
+        _ => {
+            let backend = Box::new(get_backend_by_url(url.clone()).await?);
+            let backend = Box::leak::<'static>(backend);
+
+            instance_backend.insert(base_path.clone(), backend);
+
+            let metadata = Box::new(get_metadata(backend, metadata).await?);
+            let metadata = Box::leak::<'static>(metadata);
+
+            instance_metadata.insert(base_path.clone(), metadata);
+
+            Ok((backend, metadata))
+        }
+    }
+}
+
+use heapless::FnvIndexMap as Map;
+
+static INSTANCE_BACKEND: async_once_cell::OnceCell<Mutex<Map<String, &'static AnyBackend, 10>>> =
+    async_once_cell::OnceCell::new();
+
+static INSTANCE_METADATA: async_once_cell::OnceCell<Mutex<Map<String, &'static Metadata, 10>>> =
+    async_once_cell::OnceCell::new();
 
 static BACKEND: async_once_cell::OnceCell<AnyBackend> = async_once_cell::OnceCell::new();
 static META: async_once_cell::OnceCell<Metadata> = async_once_cell::OnceCell::new();
@@ -236,7 +295,7 @@ impl Backend for &AnyBackend {
     async fn query_storage_at(
         &self,
         keys: Vec<String>,
-        block: Option<String>
+        block: Option<String>,
     ) -> crate::Result<Vec<StorageChangeSet>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
@@ -317,24 +376,6 @@ macro_rules! sube {
     ($url:expr) => {
         async {
             $crate::SubeBuilder::default().with_url($url).await
-        }
-    };
-
-    // Two parameters
-    // Match when the macro is called with an expression (url) followed by a block of key-value pairs
-    ( $url:expr => { $($key:ident: $value:expr),+ $(,)? }) => {
-
-        async {
-            use $crate::paste;
-
-            let mut builder = $crate::SubeBuilder::default()
-                .with_url($url);
-
-            paste!($(
-                let mut builder = builder.[<with_ $key>]($value);
-            )*);
-
-            builder.await
         }
     };
 

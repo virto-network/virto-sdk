@@ -10,7 +10,7 @@ async fn main() -> Result<()> {
 
     let response = sube!("ws://127.0.0.1:12281/communityMemberships/collection").await?;
 
-    if let Response::ValueSet(value) = result {
+    if let Response::ValueSet(value) = response {
         let data = serde_json::to_value(&value).expect("to be serializable");
         println!("Collection {}", serde_json::to_string_pretty(&data).expect("it must return an str"));
     }

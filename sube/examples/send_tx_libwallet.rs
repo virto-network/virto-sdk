@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "value": 100000
         }))
     )
-    .await?;
+    .await.expect("it must to work");
 
     println!("Secret phrase: \"{phrase}\"");
     // println!("Default Account: 0x{account}");

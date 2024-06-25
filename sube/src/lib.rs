@@ -27,6 +27,7 @@ use codec::Encode;
 pub use core::fmt::Display;
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use signer::Signer;
+pub use paste::paste;
 
 use core::future::Future;
 pub use meta::Metadata;
@@ -78,6 +79,7 @@ pub async fn sube(url: &str) -> SubeBuilder<(), ()> {
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
+
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
 
@@ -311,7 +313,7 @@ where
         signature_payload
     };
 
-    let signature = signer.sign(payload).await?;
+    let signature = signer.sign(&payload).await?;
 
     let extrinsic_call = {
         let encoded_inner = [

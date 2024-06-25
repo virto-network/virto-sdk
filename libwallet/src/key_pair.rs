@@ -22,6 +22,7 @@ pub trait Signature: AsRef<[u8]> + Debug + PartialEq {
         self.as_ref().try_into().expect("error")
     }
 }
+
 impl<const N: usize> Signature for Bytes<N> {}
 
 /// Something that can sign messages
