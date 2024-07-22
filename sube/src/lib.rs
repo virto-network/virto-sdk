@@ -52,7 +52,8 @@ pub mod http;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-mod builder;
+pub mod builder;
+pub use builder::SubeBuilder;
 mod hasher;
 mod meta_ext;
 mod signer;
@@ -71,11 +72,11 @@ pub fn sube(url: &str) -> builder::SubeBuilder<(), ()> {
 pub type Result<T> = core::result::Result<T, Error>;
 async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
-
+    log::info!("pallet {}", pallet);
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
-
+    
     if item_or_call == "_constants" {
         let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
         let const_meta = pallet
@@ -94,6 +95,7 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
     {
         if !key_res.is_partial() {
+            log::info!("is not partial");
             let res = chain.query_storage(&key_res).await?;
             return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
         }

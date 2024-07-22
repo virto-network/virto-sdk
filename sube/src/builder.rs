@@ -65,8 +65,11 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let path = url.path();
 
         log::info!("building the backend for {}", url);
+        let host_url = Url::parse(&format!("{}://{}", url.scheme(), url.host_str().unwrap()))
+            .map_err(|_| Error::BadInput)?;
+
         let backend = BACKEND
-            .get_or_try_init(get_backend_by_url(url.clone()))
+            .get_or_try_init(get_backend_by_url(host_url))
             .await?;
 
         let meta = META
