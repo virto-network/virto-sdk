@@ -502,5 +502,5 @@ impl fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-#[cfg(not(feature = "std"))]
+#[cfg(feature = "no_std")]
 impl core::error::Error for Error {}
