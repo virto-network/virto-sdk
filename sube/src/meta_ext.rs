@@ -1,8 +1,8 @@
 use crate::prelude::*;
 use core::borrow::Borrow;
 
-use codec::Decode;
-use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
+// use codec::Decode;
+// use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 use scales::to_bytes_with_info;
 
 #[cfg(feature = "v14")]
@@ -24,14 +24,14 @@ mod v14 {
 
 /// Decode metadata from its raw prefixed format to the currently
 /// active metadata version.
-pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
-    let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
-    let meta = match meta.1 {
-        RuntimeMetadata::V14(m) => m,
-        _ => unreachable!("Metadata version not supported"),
-    };
-    Ok(meta)
-}
+// pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
+//     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
+//     let meta = match meta.1 {
+//         RuntimeMetadata::V14(m) => m,
+//         _ => unreachable!("Metadata version not supported"),
+//     };
+//     Ok(meta)
+// }
 
 pub struct BlockInfo {
     pub number: u64,
@@ -128,7 +128,7 @@ impl StorageKey {
             .as_ref()
             .and_then(|s| s.entries.iter().find(|e| e.name == item))
             .ok_or(crate::Error::StorageKeyNotFound)?;
-        log::info!("map_keys={}", map_keys.into_iter().map(|x| x.as_ref()).collect::<Vec<&str>>().join(", "));
+        log::trace!("map_keys={}", map_keys.iter().map(|x| x.as_ref()).collect::<Vec<&str>>().join(", "));
         entry.ty.key(registry, &meta.name, &entry.name, map_keys)
     }
 }
@@ -176,14 +176,14 @@ pub trait EntryTy {
                 .resolve(key_ty_id)
                 .ok_or(crate::Error::BadInput)?;
 
-            log::info!("key_type_info={:?}", key_type_info);
+            log::trace!("key_type_info={:?}", key_type_info);
             extract_touple_type(key_ty_id, key_type_info)
         } else {
             vec![]
         };
         
         if type_call_ids.len() == hashers.len() {
-            log::info!("type_call_ids={:?}", type_call_ids);
+            log::trace!("type_call_ids={:?}", type_call_ids);
             let storage_key = StorageKey::new(
                 value_ty_id,
                 hash(&Hasher::Twox128, pallet_item.0),
@@ -220,26 +220,25 @@ pub trait EntryTy {
     
             Ok(storage_key)
         } else if hashers.len() == 1 {
-            log::info!("hello hashers.len() == 1");
+            log::trace!("treating touple as argument for hasher");
 
             let touple_hex: Vec<u8> = type_call_ids
                     .into_iter()
                     .enumerate()
-                    .map(|(i, type_id)| {
+                    .flat_map(|(i, type_id)| {
                         let k = map_keys.get(i).expect("to exist in map_keys").as_ref();
                         let mut out = vec![];
                         if let Some(k) = k.strip_prefix("0x") {
-                            let value = hex::decode(k).expect("str must be encoded");
+                            let value = hex::decode(k).expect("str must be hex encoded");
                             let _ = to_bytes_with_info(&mut out, &value, Some((portable_reg, type_id)));
                         } else {
                             let _ = to_bytes_with_info(&mut out, &k, Some((portable_reg, type_id)));
                         }
                         out
                     })
-                    .flatten()
                     .collect();
 
-            let hasher = hashers.get(0).expect("hasher not found");
+            let hasher = hashers.first().expect("hasher not found");
             let hasher = hasher.borrow();
             let hashed_value = hash(hasher, &touple_hex);
 
@@ -274,7 +273,7 @@ impl EntryTy for EntryType {
                 key,
                 value,
             } => {
-                log::info!("key={}, value={}, hasher={:?}", key.id, value.id, hashers);
+                log::trace!("key={}, value={}, hasher={:?}", key.id, value.id, hashers);
                 self.build_call(
                     registry,
                     Some(key.id),
