@@ -1,8 +1,8 @@
 use crate::prelude::*;
 use core::borrow::Borrow;
 
-// use codec::Decode;
-// use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
+use codec::Decode;
+use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 use scales::to_bytes_with_info;
 
 #[cfg(feature = "v14")]
@@ -22,16 +22,16 @@ mod v14 {
     pub type Type = scale_info::Type<PortableForm>;
 }
 
-/// Decode metadata from its raw prefixed format to the currently
-/// active metadata version.
-// pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
-//     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
-//     let meta = match meta.1 {
-//         RuntimeMetadata::V14(m) => m,
-//         _ => unreachable!("Metadata version not supported"),
-//     };
-//     Ok(meta)
-// }
+// Decode metadata from its raw prefixed format to the currently
+// active metadata version.
+pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
+    let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
+    let meta = match meta.1 {
+        RuntimeMetadata::V14(m) => m,
+        _ => unreachable!("Metadata version not supported"),
+    };
+    Ok(meta)
+}
 
 pub struct BlockInfo {
     pub number: u64,
