@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::meta::{self, Metadata};
 use crate::{prelude::*, StorageChangeSet};
 use crate::{Backend, StorageKey};
+use meta::from_bytes;
 
 pub type RpcResult<T> = Result<T, error::Error>;
 
@@ -118,8 +119,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
         let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::StorageKeyNotFound)?;
-        let meta =
-            meta::from_bytes(&mut response.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
+        let meta = from_bytes(&mut response.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
         log::trace!("Metadata {:#?}", meta);
         Ok(meta)
     }

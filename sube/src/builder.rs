@@ -65,6 +65,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let path = url.path();
 
         log::info!("building the backend for {}", url);
+
         let backend = BACKEND
             .get_or_try_init(get_backend_by_url(url.clone()))
             .await?;

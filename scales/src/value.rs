@@ -259,11 +259,13 @@ fn sequence_size(data: &[u8]) -> (usize, usize) {
     (
         match len {
             1 => (data[0] >> 2).into(),
-            2 => u16::from_le_bytes([(data[0] >> 2), data[1]]).into(),
-            4 => u32::from_le_bytes([(data[0] >> 2), data[1], data[2], data[3]])
+            2 => u16::from(data[0] >> 2 | data[1] << 6).into(),
+            4 => ((data[0] as u32) >> 2
+                | (data[1] as u32) << 6
+                | (data[2] as u32) << 14
+                | (data[3] as u32) << 22)
                 .try_into()
                 .unwrap(),
-
             _ => todo!(),
         },
         len,
@@ -329,6 +331,18 @@ mod tests {
         Registry, TypeInfo,
     };
     use serde_json::to_value;
+
+    #[test]
+    fn test_compact_two_bytes() {
+        let data: [u8; 2] = [0x99, 0x01];
+        assert_eq!(sequence_size(&data), (102, 2));
+
+        let data: [u8; 2] = [0x15, 0x01];
+        assert_eq!(sequence_size(&data), (69, 2));
+
+        let data: [u8; 4] = [0xfe, 0xff, 0x03, 0x00];
+        assert_eq!(sequence_size(&data), (65535, 4));
+    }
 
     fn register<T>(_ty: &T) -> (u32, PortableRegistry)
     where

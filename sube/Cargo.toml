@@ -53,9 +53,10 @@ rand_core = "0.6.3"
 default = ["v14"]
 test = ["std", "wss", "http", "json", "v14", "dep:async-std", "dep:rand_core"]
 http = ["dep:jsonrpc", "surf/h1-client-rustls"]
-http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "surf?/wasm-client"]
+http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "surf/wasm-client"]
 json = ["scales/json"]
 std = []
+no_std = []
 
 v14 = ["dep:scale-info", "frame-metadata/current"]
 ws = ["dep:async-mutex", "dep:async-std", "dep:ewebsock", "dep:futures-channel", "dep:futures-util", "dep:jsonrpc", "async-std/unstable"]
