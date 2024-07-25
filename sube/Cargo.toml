@@ -11,15 +11,26 @@ repository = "https://github.com/valibre-org/virto-dk/sube"
 async-once-cell = "0.4.4"
 blake2 = { version = "0.10.5", default-features = false }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
-frame-metadata = { version = "16.0.0", default-features = false, features = ["serde_full", "decode"] }
+frame-metadata = { version = "16.0.0", default-features = false, features = [
+	"serde_full",
+	"decode",
+] }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 jsonrpc = { version = "0.12.1", default-features = false, optional = true }
 log = "0.4.17"
 scale-info = { version = "2.1.1", default-features = false, optional = true }
-scales = { path="../scales", package = "scale-serialization", default-features = false, features = ["codec", "experimental-serializer", "json", "std"] }
+scales = { path = "../scales", package = "scale-serialization", default-features = false, features = [
+	"codec",
+	"experimental-serializer",
+	"json",
+	"std",
+] }
 serde = { version = "1.0.137", default-features = false }
 # TODO: shouldn't be a base dependeny. remove after: https://github.com/virto-network/virto-sdk/issues/53
-serde_json = { version = "1.0.80", default-features = false, features = ["alloc", "arbitrary_precision"] }
+serde_json = { version = "1.0.80", default-features = false, features = [
+	"alloc",
+	"arbitrary_precision",
+] }
 twox-hash = { version = "1.6.2", default-features = false }
 url = "2.5.0"
 
@@ -27,27 +38,43 @@ url = "2.5.0"
 surf = { version = "2.3.2", default-features = false, optional = true }
 
 # ws backend
-futures-channel = { version = "0.3.21", default-features = false, features = ["alloc"], optional = true }
-futures-util = { version = "0.3.21", default-features = false, features = ["sink"], optional = true }
+futures-channel = { version = "0.3.21", default-features = false, features = [
+	"alloc",
+], optional = true }
+futures-util = { version = "0.3.21", default-features = false, features = [
+	"sink",
+], optional = true }
 async-mutex = { version = "1.4.0", optional = true }
 async-tls = { version = "0.11.0", default-features = false, optional = true }
 
 # bin target
-async-std = { version = "1.11.0", default-features = false, optional = true }
+async-std = { version = "1.12.0", default-features = false, optional = true, features = [
+	"attributes",
+	"alloc"
+] }
 paste = { version = "1.0", optional = true }
 wasm-bindgen = { version = "0.2.91", optional = true }
 once_cell = { version = "1.17.1", optional = true }
 heapless = "0.8.0"
 anyhow = { version = "1.0.40", optional = true }
-rand_core = {version = "0.6.3", optional = true }
+rand_core = { version = "0.6.3", optional = true }
 ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
 env_logger = "0.11.3"
 
-
 [dev-dependencies]
-async-std = { version = "1.11.0", features = ["attributes"] }
+async-std = { version = "1.12.0", default-features = false, features = [
+	"attributes",
+	"alloc"
+] }
 hex-literal = "0.3.4"
-libwallet = { path = "../libwallet", default-features=false, features=["substrate", "mnemonic", "sr25519",  "util_pin", "rand", "std" ] }
+libwallet = { path = "../libwallet", default-features = false, features = [
+	"substrate",
+	"mnemonic",
+	"sr25519",
+	"util_pin",
+	"rand",
+	"std",
+] }
 rand_core = "0.6.3"
 
 [features]
@@ -60,19 +87,24 @@ std = []
 no_std = []
 
 v14 = ["dep:scale-info", "frame-metadata/current"]
-ws = ["dep:async-mutex", "dep:async-std", "dep:ewebsock", "dep:futures-channel", "dep:futures-util", "dep:jsonrpc", "async-std/unstable"]
-wss = ["dep:async-tls", "ws", "ewebsock/tls", "async-std/unstable"]
+ws = [
+	"dep:async-mutex",
+	"dep:async-std",
+	"dep:ewebsock",
+	"dep:futures-channel",
+	"dep:futures-util",
+	"dep:jsonrpc",
+	"dep:async-std",
+]
+wss = ["dep:async-tls", "ws", "ewebsock/tls", "dep:async-std"]
 examples = ["dep:rand_core"]
-js = ["http-web", "json", "v14", 'async-std/unstable', "ws", "dep:rand_core"]
+js = ["json", "v14", 'dep:async-std', "ws", "dep:rand_core"]
 
 [package.metadata.docs.rs]
 features = ["http"]
 
 [workspace]
-members = [
-	"sube-js",
-	"cli"
-]
+members = ["sube-js", "cli"]
 
 [patch.crates-io]
 cookie = { git = "https://github.com/S0c5/cookie-rs.git" }
