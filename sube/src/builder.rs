@@ -204,12 +204,12 @@ async fn get_multi_backend_by_url<'a>(
             let backend = Box::new(get_backend_by_url(url.clone()).await?);
             let backend = Box::leak::<'static>(backend);
 
-            instance_backend.insert(base_path.clone(), backend);
+            instance_backend.insert(base_path.clone(), backend).map_err(|_| Error::CantInitBackend)?;
 
             let metadata = Box::new(get_metadata(backend, metadata).await?);
             let metadata = Box::leak::<'static>(metadata);
 
-            instance_metadata.insert(base_path.clone(), metadata);
+            instance_metadata.insert(base_path.clone(), metadata).map_err(|_| Error::BadMetadata)?;
 
             Ok((backend, metadata))
         }

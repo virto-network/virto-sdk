@@ -488,6 +488,7 @@ pub enum Error {
     AccountNotFound,
     ConstantNotFound(String),
     Platform(String),
+    CantInitBackend
 }
 
 impl fmt::Display for Error {

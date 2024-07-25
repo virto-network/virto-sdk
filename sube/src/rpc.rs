@@ -106,9 +106,10 @@ impl<R: Rpc> Backend for RpcClient<R> {
         log::debug!("Extrinsic: {}", extrinsic);
 
         self.0
-            .rpc("author_submitExtrinsic", &[&format!("\"{}\"", &extrinsic)])
+            .rpc::<serde_json::Value>("author_submitExtrinsic", &[&format!("\"{}\"", &extrinsic)])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
+
         Ok(())
     }
 
