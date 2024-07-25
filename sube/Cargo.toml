@@ -48,10 +48,7 @@ async-mutex = { version = "1.4.0", optional = true }
 async-tls = { version = "0.11.0", default-features = false, optional = true }
 
 # bin target
-async-std = { version = "1.12.0", default-features = false, optional = true, features = [
-	"attributes",
-	"alloc"
-] }
+async-std = { version = "1.11.0", default-features = false, optional = true }
 paste = { version = "1.0", optional = true }
 wasm-bindgen = { version = "0.2.91", optional = true }
 once_cell = { version = "1.17.1", optional = true }
@@ -61,11 +58,9 @@ rand_core = { version = "0.6.3", optional = true }
 ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
 env_logger = "0.11.3"
 
+
 [dev-dependencies]
-async-std = { version = "1.12.0", default-features = false, features = [
-	"attributes",
-	"alloc"
-] }
+async-std = { version = "1.11.0", features = ["attributes"] }
 hex-literal = "0.3.4"
 libwallet = { path = "../libwallet", default-features = false, features = [
 	"substrate",
@@ -94,11 +89,11 @@ ws = [
 	"dep:futures-channel",
 	"dep:futures-util",
 	"dep:jsonrpc",
-	"dep:async-std",
+	"async-std/unstable",
 ]
-wss = ["dep:async-tls", "ws", "ewebsock/tls", "dep:async-std"]
+wss = ["dep:async-tls", "ws", "ewebsock/tls", "async-std/unstable"]
 examples = ["dep:rand_core"]
-js = ["json", "v14", 'dep:async-std', "ws", "dep:rand_core"]
+js = ["http-web", "json", "v14", 'async-std/unstable', "ws", "dep:rand_core"]
 
 [package.metadata.docs.rs]
 features = ["http"]

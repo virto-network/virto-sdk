@@ -15,17 +15,7 @@ use serde::Deserialize;
 #[cfg(not(feature = "js"))]
 use async_std::task::spawn;
 #[cfg(feature = "js")]
-use async_std::task::{Builder, JoinHandle};
-
-#[cfg(feature = "js")]
-pub fn spawn_local<F, T>(future: F) -> JoinHandle<T>
-where
-    F: futures_util::Future<Output = T> + 'static,
-    T: 'static,
-{
-    #[cfg(feature = "js")]
-    Builder::new().local(future).expect("cannot spawn task")
-}
+use async_std::task::spawn_local as spawn;
 
 use crate::{
     rpc::{self, Rpc, RpcResult},
