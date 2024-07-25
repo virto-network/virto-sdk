@@ -65,20 +65,9 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
         let path = url.path();
 
-        log::info!("building the backend for {}", url);
+        log::trace!("building the backend for {}", url);
 
-        let backend = BACKEND
-            .get_or_try_init(get_backend_by_url(url.clone()))
-            .await?;
-
-        let meta = META
-            .get_or_try_init(async {
-                match metadata {
-                    Some(m) => Ok(m),
-                    None => backend.metadata().await.map_err(|_| Error::BadMetadata),
-                }
-            })
-            .await?;
+        let (backend, meta) = get_multi_backend_by_url(url.clone(), metadata).await?;
 
         Ok(match path {
             "_meta" => Response::Meta(meta),
@@ -126,18 +115,6 @@ where
         let path = url.path();
         let body = body.ok_or(Error::BadInput)?;
 
-        // let backend = BACKEND
-        //     .get_or_try_init(get_backend_by_url(url.clone()))
-        //     .await?;
-
-        // let meta = META
-        //     .get_or_try_init(async {
-        //         match metadata {
-        //             Some(m) => Ok(m),
-        //             None => backend.metadata().await.map_err(|_| Error::BadMetadata),
-        //         }
-        //     })
-        //     .await?;
 
         let (backend, meta) = get_multi_backend_by_url(url.clone(), metadata).await?;
 
@@ -158,10 +135,10 @@ static META: async_once_cell::OnceCell<Metadata> = async_once_cell::OnceCell::ne
 
 use heapless::FnvIndexMap as Map;
 
-static INSTANCE_BACKEND: async_once_cell::OnceCell<async_mutex::Mutex<Map<String, &'static AnyBackend, 10>>> =
+static INSTANCE_BACKEND: async_once_cell::OnceCell<async_mutex::Mutex<Map<String, &'static AnyBackend, 16>>> =
     async_once_cell::OnceCell::new();
 
-static INSTANCE_METADATA: async_once_cell::OnceCell<async_mutex::Mutex<Map<String, &'static Metadata, 10>>> =
+static INSTANCE_METADATA: async_once_cell::OnceCell<async_mutex::Mutex<Map<String, &'static Metadata, 16>>> =
     async_once_cell::OnceCell::new();
 
 
