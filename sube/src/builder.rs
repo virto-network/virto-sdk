@@ -130,9 +130,6 @@ where
     }
 }
 
-static BACKEND: async_once_cell::OnceCell<AnyBackend> = async_once_cell::OnceCell::new();
-static META: async_once_cell::OnceCell<Metadata> = async_once_cell::OnceCell::new();
-
 use heapless::FnvIndexMap as Map;
 
 static INSTANCE_BACKEND: async_once_cell::OnceCell<async_mutex::Mutex<Map<String, &'static AnyBackend, 16>>> =
