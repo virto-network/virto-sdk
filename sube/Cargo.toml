@@ -35,7 +35,7 @@ twox-hash = { version = "1.6.2", default-features = false }
 url = "2.5.0"
 
 # http backend
-surf = { version = "2.3.2", default-features = false, optional = true }
+reqwest = { version = "0.12.5", optional = true, features = ["json"]}
 
 # ws backend
 futures-channel = { version = "0.3.21", default-features = false, features = [
@@ -48,8 +48,8 @@ async-mutex = { version = "1.4.0", optional = true }
 async-tls = { version = "0.11.0", default-features = false, optional = true }
 
 # bin target
-async-std = { version = "1.11.0", default-features = false, optional = true }
-paste = { version = "1.0", optional = true }
+async-std = { version = "1.11.0", optional = true }
+paste = { version = "1.0" }
 wasm-bindgen = { version = "0.2.92", optional = true }
 once_cell = { version = "1.17.1", optional = true }
 heapless = "0.8.0"
@@ -60,7 +60,7 @@ env_logger = "0.11.3"
 
 
 [dev-dependencies]
-async-std = { version = "1.11.0", features = ["attributes"] }
+async-std = { version = "1.11.0", features = ["attributes", "tokio1"] }
 hex-literal = "0.3.4"
 libwallet = { path = "../libwallet", default-features = false, features = [
 	"substrate",
@@ -75,8 +75,8 @@ rand_core = "0.6.3"
 [features]
 default = ["v14"]
 test = ["std", "wss", "http", "json", "v14", "dep:async-std", "dep:rand_core"]
-http = ["dep:jsonrpc", "surf/h1-client-rustls"]
-http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "surf/wasm-client"]
+http = ["dep:jsonrpc", "dep:reqwest"]
+http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "dep:reqwest"]
 json = ["scales/json"]
 std = []
 no_std = []
@@ -99,7 +99,7 @@ js = ["http-web", "json", "v14", 'async-std/unstable', "wss", "dep:rand_core"]
 features = ["http"]
 
 [workspace]
-members = ["sube-js", "cli"]
-
-[patch.crates-io]
-cookie = { git = "https://github.com/S0c5/cookie-rs.git" }
+members = [
+	"sube-js",
+	"cli"
+]
