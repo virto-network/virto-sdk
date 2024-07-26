@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-
 use env_logger;
 use sube::{sube, ExtrinsicBody, Response, Result, SubeBuilder};
 

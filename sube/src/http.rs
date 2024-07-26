@@ -1,13 +1,13 @@
 use crate::prelude::*;
+use crate::rpc::{self, Rpc, RpcResult};
 use core::{convert::TryInto, fmt};
 use jsonrpc::{
     error::{standard_error, StandardError},
-    serde_json::{to_string, value::to_raw_value},
+    serde_json::value::to_raw_value,
 };
+use reqwest::Client;
 use serde::Deserialize;
-pub use surf::Url;
-
-use crate::rpc::{self, Rpc, RpcResult};
+use url::Url;
 
 #[derive(Debug)]
 pub struct Backend(Url);
@@ -29,24 +29,22 @@ impl Rpc for Backend {
         T: for<'de> Deserialize<'de>,
     {
         log::info!("RPC `{}` to {}", method, &self.0);
-        let req = surf::post(&self.0).content_type("application/json").body(
-            to_string(&rpc::Request {
+
+        let res = Client::new()
+            .post(self.0.to_string())
+            .json(&rpc::Request {
                 id: 1.into(),
                 jsonrpc: Some("2.0"),
                 method,
                 params: &Self::convert_params(params),
             })
-            .unwrap(),
-        );
-        let client = surf::client().with(surf::middleware::Redirect::new(2));
-        let mut res = client
-            .send(req)
+            .send()
             .await
-            .map_err(|err| rpc::Error::Transport(err.into_inner().into()))?;
+            .map_err(|err| rpc::Error::Transport(Box::new(err)))?;
 
         let status = res.status();
         let res = if status.is_success() {
-            res.body_json::<rpc::Response>()
+            res.json::<rpc::Response>()
                 .await
                 .map_err(|err| {
                     standard_error(
@@ -58,9 +56,10 @@ impl Rpc for Backend {
         } else {
             log::debug!("RPC HTTP status: {}", res.status());
             let err = res
-                .body_string()
+                .text()
                 .await
-                .unwrap_or_else(|_| status.canonical_reason().into());
+                .unwrap_or_else(|_| status.canonical_reason().expect("to have a message").into());
+
             let err = to_raw_value(&err).expect("error string");
 
             return Err(if status.is_client_error() {
