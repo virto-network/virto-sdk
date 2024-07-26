@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use core::future::{Future, IntoFuture};
 use sube::{sube, Response, Result};
 
