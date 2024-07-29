@@ -1,6 +1,6 @@
 use alloc::{collections::BTreeMap, sync::Arc};
 
-use async_mutex::Mutex;
+use no_std_async::Mutex;
 use ewebsock::{WsEvent, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
 use futures_channel::{mpsc, oneshot};
 use futures_util::StreamExt as _;

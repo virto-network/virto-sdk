@@ -12,7 +12,6 @@ use crate::{prelude::*, Offline, StorageChangeSet};
 
 use core::future::{Future, IntoFuture};
 use url::Url;
-use async_mutex::Mutex;
 
 pub struct SubeBuilder<'a, Body, Signer> {
     url: Option<&'a str>,
@@ -115,7 +114,6 @@ where
         let path = url.path();
         let body = body.ok_or(Error::BadInput)?;
 
-
         let (backend, meta) = get_multi_backend_by_url(url.clone(), metadata).await?;
 
         Ok(match path {
@@ -131,13 +129,15 @@ where
 }
 
 use heapless::FnvIndexMap as Map;
+use no_std_async::Mutex;
 
-static INSTANCE_BACKEND: async_once_cell::OnceCell<async_mutex::Mutex<Map<String, &'static AnyBackend, 16>>> =
-    async_once_cell::OnceCell::new();
+static INSTANCE_BACKEND: async_once_cell::OnceCell<
+    Mutex<Map<String, Mutex<&'static AnyBackend>, 16>>,
+> = async_once_cell::OnceCell::new();
 
-static INSTANCE_METADATA: async_once_cell::OnceCell<async_mutex::Mutex<Map<String, &'static Metadata, 16>>> =
-    async_once_cell::OnceCell::new();
-
+static INSTANCE_METADATA: async_once_cell::OnceCell<
+    Mutex<Map<String, Mutex<&'static Metadata>, 16>>,
+> = async_once_cell::OnceCell::new();
 
 async fn get_metadata(backend: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<Metadata> {
     match metadata {
@@ -173,17 +173,25 @@ async fn get_multi_backend_by_url<'a>(
     let cached_m = instance_metadata.get(&base_path);
 
     match (cached_b, cached_m) {
-        (Some(b), Some(m)) => Ok((b, m)),
+        (Some(b), Some(m)) => {
+            let b = *b.lock().await;
+            let m = *m.lock().await;
+            Ok((b, m))
+        }
         _ => {
             let backend = Box::new(get_backend_by_url(url.clone()).await?);
             let backend = Box::leak::<'static>(backend);
 
-            instance_backend.insert(base_path.clone(), backend).map_err(|_| Error::CantInitBackend)?;
+            instance_backend
+                .insert(base_path.clone(), Mutex::new(backend))
+                .map_err(|_| Error::CantInitBackend)?;
 
             let metadata = Box::new(get_metadata(backend, metadata).await?);
             let metadata = Box::leak::<'static>(metadata);
 
-            instance_metadata.insert(base_path.clone(), metadata).map_err(|_| Error::BadMetadata)?;
+            instance_metadata
+                .insert(base_path.clone(), Mutex::new(metadata))
+                .map_err(|_| Error::BadMetadata)?;
 
             Ok((backend, metadata))
         }
