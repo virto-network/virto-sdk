@@ -127,7 +127,7 @@ impl StorageKey {
             .storage
             .as_ref()
             .and_then(|s| s.entries.iter().find(|e| e.name == item))
-            .ok_or(crate::Error::StorageKeyNotFound)?;
+            .ok_or(crate::Error::CantFindMethodInPallet)?;
         log::trace!("map_keys={}", map_keys.iter().map(|x| x.as_ref()).collect::<Vec<&str>>().join(", "));
         entry.ty.key(registry, &meta.name, &entry.name, map_keys)
     }

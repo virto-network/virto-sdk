@@ -46,7 +46,7 @@ mod prelude {
 }
 
 /// Surf based backend
-#[cfg(any(feature = "http", feature = "http-web", feature = "js"))]
+#[cfg(any(feature = "http", feature = "http-web"))]
 pub mod http;
 /// Tungstenite based backend
 #[cfg(feature = "ws")]
@@ -58,7 +58,7 @@ mod hasher;
 mod meta_ext;
 mod signer;
 
-#[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
+#[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
 pub mod rpc;
 pub mod util;
 
@@ -488,6 +488,10 @@ pub enum Error {
     AccountNotFound,
     ConstantNotFound(String),
     Platform(String),
+    CantInitBackend,
+    CantDecodeReponseForMeta,
+    CantDecodeRawQueryResponse,
+    CantFindMethodInPallet,
 }
 
 impl fmt::Display for Error {

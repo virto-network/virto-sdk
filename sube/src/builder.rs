@@ -64,20 +64,9 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
         let path = url.path();
 
-        log::info!("building the backend for {}", url);
+        log::trace!("building the backend for {}", url);
 
-        let backend = BACKEND
-            .get_or_try_init(get_backend_by_url(url.clone()))
-            .await?;
-
-        let meta = META
-            .get_or_try_init(async {
-                match metadata {
-                    Some(m) => Ok(m),
-                    None => backend.metadata().await.map_err(|_| Error::BadMetadata),
-                }
-            })
-            .await?;
+        let (backend, meta) = get_multi_backend_by_url(url.clone(), metadata).await?;
 
         Ok(match path {
             "_meta" => Response::Meta(meta),
@@ -125,18 +114,7 @@ where
         let path = url.path();
         let body = body.ok_or(Error::BadInput)?;
 
-        let backend = BACKEND
-            .get_or_try_init(get_backend_by_url(url.clone()))
-            .await?;
-
-        let meta = META
-            .get_or_try_init(async {
-                match metadata {
-                    Some(m) => Ok(m),
-                    None => backend.metadata().await.map_err(|_| Error::BadMetadata),
-                }
-            })
-            .await?;
+        let (backend, meta) = get_multi_backend_by_url(url.clone(), metadata).await?;
 
         Ok(match path {
             "_meta" => Response::Meta(meta),
@@ -150,8 +128,75 @@ where
     }
 }
 
-static BACKEND: async_once_cell::OnceCell<AnyBackend> = async_once_cell::OnceCell::new();
-static META: async_once_cell::OnceCell<Metadata> = async_once_cell::OnceCell::new();
+use heapless::FnvIndexMap as Map;
+use no_std_async::Mutex;
+
+static INSTANCE_BACKEND: async_once_cell::OnceCell<
+    Mutex<Map<String, Mutex<&'static AnyBackend>, 16>>,
+> = async_once_cell::OnceCell::new();
+
+static INSTANCE_METADATA: async_once_cell::OnceCell<
+    Mutex<Map<String, Mutex<&'static Metadata>, 16>>,
+> = async_once_cell::OnceCell::new();
+
+async fn get_metadata(backend: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<Metadata> {
+    match metadata {
+        Some(m) => Ok(m),
+        None => backend.metadata().await.map_err(|_| Error::BadMetadata),
+    }
+}
+
+async fn get_multi_backend_by_url<'a>(
+    url: Url,
+    metadata: Option<Metadata>,
+) -> SubeResult<(&'a AnyBackend, &'a Metadata)> {
+    let mut instance_backend = INSTANCE_BACKEND
+        .get_or_init(async { Mutex::new(Map::new()) })
+        .await
+        .lock()
+        .await;
+
+    let mut instance_metadata = INSTANCE_METADATA
+        .get_or_init(async { Mutex::new(Map::new()) })
+        .await
+        .lock()
+        .await;
+
+    let base_path = format!(
+        "{}://{}:{}",
+        url.scheme(),
+        url.host_str().expect("url to have a host"),
+        url.port().unwrap_or(80)
+    );
+
+    let cached_b = instance_backend.get(&base_path);
+    let cached_m = instance_metadata.get(&base_path);
+
+    match (cached_b, cached_m) {
+        (Some(b), Some(m)) => {
+            let b = *b.lock().await;
+            let m = *m.lock().await;
+            Ok((b, m))
+        }
+        _ => {
+            let backend = Box::new(get_backend_by_url(url.clone()).await?);
+            let backend = Box::leak::<'static>(backend);
+
+            instance_backend
+                .insert(base_path.clone(), Mutex::new(backend))
+                .map_err(|_| Error::CantInitBackend)?;
+
+            let metadata = Box::new(get_metadata(backend, metadata).await?);
+            let metadata = Box::leak::<'static>(metadata);
+
+            instance_metadata
+                .insert(base_path.clone(), Mutex::new(metadata))
+                .map_err(|_| Error::BadMetadata)?;
+
+            Ok((backend, metadata))
+        }
+    }
+}
 
 pub type BoxFuture<'a, T> = core::pin::Pin<Box<dyn Future<Output = T> + 'a>>;
 
