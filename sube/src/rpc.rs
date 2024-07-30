@@ -52,7 +52,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
             )
             .await
             .map_err(|err| {
-                log::info!("error {:?}", err);
+                log::error!("error state_queryStorageAt {:?}", err);
                 crate::Error::StorageKeyNotFound
             })
     }
@@ -75,7 +75,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
             )
             .await
             .map_err(|err| {
-                log::info!("error {:?}", err);
+                log::error!("error paged {:?}", err);
                 crate::Error::StorageKeyNotFound
             })?;
         log::info!("rpc call {:?}", r);
@@ -91,12 +91,12 @@ impl<R: Rpc> Backend for RpcClient<R> {
             .rpc("state_getStorage", &[&format!("\"{}\"", &key)])
             .await
             .map_err(|e| {
-                log::debug!("RPC failure: {}", e);
+                log::error!("RPC failure: {}", e);
                 // NOTE it could fail for more reasons
                 crate::Error::StorageKeyNotFound
             })?;
 
-        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::StorageKeyNotFound)?;
+        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeRawQueryResponse)?;
 
         Ok(response)
     }
@@ -119,7 +119,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
             .rpc("state_getMetadata", &[])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
-        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::StorageKeyNotFound)?;
+        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeReponseForMeta)?;
         let meta = from_bytes(&mut response.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
         log::trace!("Metadata {:#?}", meta);
         Ok(meta)

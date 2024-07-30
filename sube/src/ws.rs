@@ -22,6 +22,8 @@ use crate::{
     Error,
 };
 
+const MAX_BUFFER: usize = usize::MAX >> 3;
+
 type Id = u32;
 
 pub struct Backend {
@@ -60,13 +62,19 @@ impl Rpc for Backend {
             .lock()
             .await
             .try_send(Message::Text(msg))
-            .map_err(|_| standard_error(StandardError::InternalError, None))?;
+            .map_err(|err| {
+                log::error!("Error tx lock message: {:?}", err);
+                standard_error(StandardError::InternalError, None)
+            })?;
 
         log::info!("sent CMD");
         // wait for the matching response to arrive
         let res = recv
             .await
-            .map_err(|_| standard_error(StandardError::InternalError, None))?
+            .map_err(|err| {
+                log::error!("Error receiving message: {:?}", err);
+                standard_error(StandardError::InternalError, None)
+            })?
             .result()?;
 
         Ok(res)
@@ -84,8 +92,8 @@ impl Backend {
 
         let (tx, rx) =
             ewebsock::connect(url, ewebsock::Options::default()).map_err(Error::Platform)?;
-
-        let (sender, recv) = mpsc::channel::<Message>(0);
+        
+        let (sender, recv) = mpsc::channel::<Message>(MAX_BUFFER);
 
         let backend = Backend {
             tx: Mutex::new(sender),
