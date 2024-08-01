@@ -1,7 +1,6 @@
-use crate::{EnumVariant, SpecificType};
+use crate::{write_compact, SpecificType, VariantKind};
 use alloc::{collections::BTreeMap, vec::Vec};
 use bytes::{Buf, Bytes};
-use codec::Encode;
 use core::{convert::TryInto, str};
 use scale_info::{prelude::*, PortableRegistry, TypeDefPrimitive as Primitive};
 use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple, SerializeTupleStruct};
@@ -126,16 +125,23 @@ impl<'a> Serialize for Value<'a> {
                     .expect("not found in registry")
                     .type_def;
 
-                use codec::Compact;
                 match type_def {
                     TypeDef::Primitive(Primitive::U32) => {
-                        ser.serialize_bytes(&Compact(data.get_u32_le()).encode())
+                        let mut b = [0; 4];
+                        write_compact(data.get_u32_le() as u128, b.as_mut_slice());
+                        ser.serialize_bytes(&b)
                     }
                     TypeDef::Primitive(Primitive::U64) => {
-                        ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
+                        let mut b = [0; 8];
+                        write_compact(data.get_u64_le() as u128, b.as_mut_slice());
+                        ser.serialize_bytes(&b)
+                        // ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
                     }
                     TypeDef::Primitive(Primitive::U128) => {
-                        ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
+                        let mut b = [0; 16];
+                        write_compact(data.get_u128_le(), b.as_mut_slice());
+                        ser.serialize_bytes(&b)
+                        // ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
                     }
                     _ => unimplemented!(),
                 }
@@ -197,42 +203,34 @@ impl<'a> Serialize for Value<'a> {
                 }
                 state.end()
             }
-            ty @ Variant(_, _, _) => {
-                let variant = &ty.pick(data.get_u8());
-                match variant.into() {
-                    EnumVariant::OptionNone => ser.serialize_none(),
-                    EnumVariant::OptionSome(ty) => {
+            ty @ Variant(_, _) => {
+                let variant = ty.pick_variant(data.get_u8()).expect("variant exists");
+                match variant {
+                    VariantKind::OptionNone => ser.serialize_none(),
+                    VariantKind::OptionSome(ty) => {
                         ser.serialize_some(&self.new_value(&mut data, ty))
                     }
-                    EnumVariant::Unit(_idx, name) => ser.serialize_str(name),
-                    EnumVariant::NewType(_idx, name, ty) => {
+                    VariantKind::Unit(name) => ser.serialize_str(name),
+                    VariantKind::NewType(name, ty) => {
                         let mut s = ser.serialize_map(Some(1))?;
                         s.serialize_key(name)?;
                         s.serialize_value(&self.new_value(&mut data, ty))?;
                         s.end()
                     }
 
-                    EnumVariant::Tuple(_idx, name, fields) => {
+                    VariantKind::Tuple(name, fields) => {
                         let mut s = ser.serialize_map(Some(1))?;
                         s.serialize_key(name)?;
-                        s.serialize_value(
-                            &fields
-                                .iter()
-                                .map(|ty| self.new_value(&mut data, *ty))
-                                .collect::<Vec<_>>(),
-                        )?;
+                        s.serialize_value(&fields.map(|ty| self.new_value(&mut data, ty)))?;
                         s.end()
                     }
-                    EnumVariant::Struct(_idx, name, fields) => {
+                    VariantKind::Struct(name, fields) => {
                         let mut s = ser.serialize_map(Some(1))?;
                         s.serialize_key(name)?;
-                        s.serialize_value(&fields.iter().fold(
-                            BTreeMap::new(),
-                            |mut m, (name, ty)| {
-                                m.insert(*name, self.new_value(&mut data, *ty));
-                                m
-                            },
-                        ))?;
+                        s.serialize_value(fields.fold(&BTreeMap::new(), |mut m, (name, ty)| {
+                            m.insert(name, self.new_value(&mut data, ty));
+                            m
+                        }))?;
                         s.end()
                     }
                 }

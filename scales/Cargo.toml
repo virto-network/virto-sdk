@@ -19,7 +19,8 @@ log = "0.4.17"
 
 
 [features]
-default = ["std", "codec", "json", "hex", "experimental-serializer"]
+# default = ["std", "codec", "json", "hex", "experimental-serializer"]
+default = ["experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
 experimental-serializer = []
 json = ["serde_json/preserve_order"]

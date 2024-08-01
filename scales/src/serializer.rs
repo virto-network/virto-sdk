@@ -1,12 +1,11 @@
-use crate::prelude::*;
+use crate::{prelude::*, write_compact};
 use bytes::BufMut;
-use codec::Encode;
 use core::fmt::{self, Debug};
 
 use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
 
-use crate::{EnumVariant, SpecificType, TupleOrArray};
+use crate::{SpecificType, TupleOrArray, VariantKind};
 
 type TypeId = u32;
 type Result<T> = core::result::Result<T, Error>;
@@ -118,7 +117,7 @@ where
     B: Debug,
 {
     out: B,
-    ty: Option<SpecificType>,
+    ty: Option<SpecificType<'reg>>,
     registry: Option<&'reg PortableRegistry>,
 }
 
@@ -142,15 +141,17 @@ where
     fn serialize_compact(&mut self, ty: u32, v: u128) -> Result<()> {
         let type_def = self.resolve(ty);
 
-        use codec::Compact;
-        let compact_buffer = match type_def {
-            SpecificType::U32 => Compact(v as u32).encode(),
-            SpecificType::U64 => Compact(v as u64).encode(),
-            SpecificType::U128 => Compact(v).encode(),
-            _ => todo!(),
+        // use codec::Compact;
+        match type_def {
+            SpecificType::U32 | SpecificType::U64 | SpecificType::U128 => {
+                write_compact(v, &mut self.out)
+            }
+            //     SpecificType::U64 => Compact(v as u64).encode(),
+            //     SpecificType::U128 => Compact(v).encode(),
+            _ => unimplemented!(),
         };
 
-        self.out.put_slice(&compact_buffer[..]);
+        // self.out.put_slice(&compact_buffer[..]);
 
         Ok(())
     }
@@ -277,7 +278,7 @@ where
             return Ok(());
         }
 
-        compact_number(v.len(), &mut self.out);
+        write_compact(v.len() as u128, &mut self.out);
         self.out.put(v.as_bytes());
         Ok(())
     }
@@ -285,7 +286,7 @@ where
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok> {
         self.maybe_some()?;
 
-        compact_number(v.len(), &mut self.out);
+        write_compact(v.len() as u128, &mut self.out);
         self.out.put(v);
         Ok(())
     }
@@ -352,7 +353,7 @@ where
             self.ty,
             None | Some(SpecificType::Bytes(_)) | Some(SpecificType::Sequence(_))
         ) {
-            compact_number(len.expect("known length"), &mut self.out);
+            write_compact(len.expect("known length") as u128, &mut self.out);
         }
         Ok(self.into())
     }
@@ -386,7 +387,7 @@ where
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.maybe_some()?;
         if matches!(self.ty, None | Some(SpecificType::Map(_, _))) {
-            compact_number(len.expect("known length"), &mut self.out);
+            write_compact(len.expect("known length") as u128, &mut self.out);
         }
         Ok(self.into())
     }
@@ -417,8 +418,10 @@ where
     // if the type info says its an Option assume its Some and extract the inner type
     fn maybe_some(&mut self) -> Result<()> {
         match &self.ty {
-            Some(SpecificType::Variant(ref name, v, _)) if name == "Option" => {
-                self.ty = v[1].fields.first().map(|f| self.resolve(f.ty.id));
+            Some(SpecificType::Variant(name, variants)) if *name == "Option" => {
+                self.ty = variants
+                    .next()
+                    .and_then(|v| v.fields.first().map(|f| self.resolve(f.ty.id)));
                 self.out.put_u8(0x01);
             }
             _ => (),
@@ -437,7 +440,7 @@ where
         match self.ty {
             Some(SpecificType::Str) | None => Ok(None),
             // { "foo": "Bar" } => "Bar" might be an enum variant
-            Some(ref mut var @ SpecificType::Variant(_, _, None)) => {
+            Some(ref mut var @ SpecificType::Variant(_, _)) => {
                 var.pick_mut(to_vec(val)?, |k| to_vec(&k.name).unwrap())
                     .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
                 self.out.put_u8(var.variant_id());
@@ -537,22 +540,20 @@ where
     fn from(ser: &'a mut Serializer<'reg, B>) -> Self {
         use SpecificType::*;
         match ser.ty.take() {
-            Some(Struct(fields)) => {
-                Self::Composite(ser, fields.iter().map(|(_, ty)| *ty).collect())
-            }
+            Some(Struct(fields)) => Self::Composite(ser, fields.map(|(_, ty)| ty)),
             Some(StructTuple(fields)) => Self::Composite(ser, fields),
             Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty),
             Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Composite(ser, fields),
             Some(Sequence(ty) | Bytes(ty)) => Self::Sequence(ser, ty),
             Some(Map(_, _)) => Self::Empty(ser),
-            Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
-                EnumVariant::Tuple(_, _, types) => Self::Composite(ser, types),
-                EnumVariant::Struct(_, _, types) => {
-                    Self::Composite(ser, types.iter().map(|(_, ty)| *ty).collect())
-                }
-                _ => Self::Empty(ser),
-            },
-            Some(var @ Variant(_, _, None)) => {
+            // Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
+            //     VariantKind::Tuple(_, types) => Self::Composite(ser, types),
+            //     VariantKind::Struct(_, types) => {
+            //         Self::Composite(ser, types.map(|(_, ty)| *ty).collect())
+            //     }
+            //     _ => Self::Empty(ser),
+            // },
+            Some(var @ Variant(_, _)) => {
                 ser.ty = Some(var);
                 Self::Enum(ser)
             }
@@ -588,7 +589,7 @@ where
     {
         match self {
             TypedSerializer::Enum(ser) => {
-                if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = ser.ty {
+                if let Some(ref mut var @ SpecificType::Variant(_, _)) = ser.ty {
                     let key_data = to_vec(key)?;
                     // assume the key is the name of the variant
                     var.pick_mut(key_data, |v| to_vec(&v.name).unwrap())
@@ -618,7 +619,7 @@ where
             }
             TypedSerializer::Enum(ser) => {
                 if let Some(var @ SpecificType::Variant(_, _, Some(_))) = &ser.ty {
-                    if let EnumVariant::NewType(_, _, ty_id) = var.into() {
+                    if let VariantKind::NewType(_, _, ty_id) = var.into() {
                         let ty = ser.resolve(ty_id);
 
                         ser.ty = Some(if let SpecificType::StructNewType(ty_id) = ty {
@@ -806,33 +807,6 @@ impl ser::Error for Error {
     }
 }
 
-// adapted from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
-#[allow(clippy::all)]
-fn compact_number(n: usize, mut dest: impl BufMut) {
-    match n {
-        0..=0b0011_1111 => dest.put_u8((n as u8) << 2),
-        0..=0b0011_1111_1111_1111 => dest.put_u16_le(((n as u16) << 2) | 0b01),
-        0..=0b0011_1111_1111_1111_1111_1111_1111_1111 => dest.put_u32_le(((n as u32) << 2) | 0b10),
-        _ => {
-            let bytes_needed = 8 - n.leading_zeros() / 8;
-            assert!(
-                bytes_needed >= 4,
-                "Previous match arm matches anyting less than 2^30; qed"
-            );
-            dest.put_u8(0b11 + ((bytes_needed - 4) << 2) as u8);
-            let mut v = n;
-            for _ in 0..bytes_needed {
-                dest.put_u8(v as u8);
-                v >>= 8;
-            }
-            assert_eq!(
-                v, 0,
-                "shifted sufficient bits right to lead only leading zeros; qed"
-            )
-        }
-    }
-}
-
 // nightly only
 fn type_name_of_val<T: ?Sized>(_val: &T) -> &'static str {
     core::any::type_name::<T>()
@@ -842,7 +816,7 @@ fn type_name_of_val<T: ?Sized>(_val: &T) -> &'static str {
 mod tests {
     use super::*;
     use alloc::collections::BTreeMap;
-    use codec::{Decode, Encode};
+    use codec::Encode;
     use core::mem::size_of;
     use scale_info::{meta_type, Registry, TypeInfo};
     use serde_json::to_value;
