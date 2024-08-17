@@ -1,7 +1,7 @@
 default:
     just --summary
 
-build plugin:
+build app:
     #!/usr/bin/env nu
     let rustflags = [
         "-C relocation-model=pie",
@@ -11,9 +11,9 @@ build plugin:
         $"--remap-path-prefix=($env.HOME)=~"
     ]
     $env.RUSTFLAGS = ($rustflags | str join " ")
-    cargo build -q --release --bin plugin-{{ plugin }} -p plugin-{{ plugin }}
+    cargo build -q --release --bin app-{{ app }} -p app-{{ app }}
     mkdir out
-    polkatool link --run-only-if-newer -s target/riscv32ema-unknown-none-elf/release/plugin-{{ plugin }} -o out/plugin-{{ plugin }}.pvm
+    polkatool link --run-only-if-newer -s target/riscv32ema-unknown-none-elf/release/app-{{ app }} -o out/app-{{ app }}.pvm
 
 toolchain:
     #!/usr/bin/env nu

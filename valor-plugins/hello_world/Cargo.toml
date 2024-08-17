@@ -1,7 +1,0 @@
-[package]
-name = "plugin-hello-world"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-polkavm-derive = "0.10.0"

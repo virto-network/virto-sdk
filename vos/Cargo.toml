@@ -1,0 +1,11 @@
+[package]
+name = "vos"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+polkavm = { version = "0.10.0", optional = true }
+
+[features]
+default = ["std"]
+std = ["dep:polkavm"]
