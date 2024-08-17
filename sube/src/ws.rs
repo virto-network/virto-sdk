@@ -132,7 +132,6 @@ impl Backend {
                         log::trace!("Got WS message {:?}", msg);
 
                         if let Message::Text(msg) = msg {
-                            log::info!("Got WS message {:?}", msg);
                             let res: rpc::Response =
                                 serde_json::from_str(&msg).unwrap_or_else(|_| {
                                     result_to_response(
@@ -140,7 +139,6 @@ impl Backend {
                                         ().into(),
                                     )
                                 });
-                            // log::info!("res {:?}", res);
                             if res.id.is_u64() {
                                 let id = res.id.as_u64().unwrap() as Id;
                                 log::trace!("Answering request {}", id);
