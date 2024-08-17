@@ -35,6 +35,8 @@ impl<R: Rpc> Backend for RpcClient<R> {
         block: Option<String>,
     ) -> crate::Result<Vec<StorageChangeSet>> {
         let keys = serde_json::to_string(&keys).expect("it to be a valid json");
+
+        log::info!("query_storage_at encoded: {}", keys);
         let params: Vec<String> = if let Some(block_hash) = block {
             vec![keys, block_hash]
         } else {
@@ -82,21 +84,41 @@ impl<R: Rpc> Backend for RpcClient<R> {
         Ok(r)
     }
 
-    async fn query_storage(&self, key: &StorageKey) -> crate::Result<Vec<u8>> {
+    async fn query_storage(
+        &self,
+        key: &StorageKey,
+        block: Option<String>,
+    ) -> crate::Result<Vec<u8>> {
         let key = key.to_string();
         log::debug!("StorageKey encoded: {}", key);
 
+        let params: Vec<String> = if let Some(block_hash) = block {
+            vec![format!("\"{}\"", key), format!("\"{}\"", block_hash)]
+        } else {
+            vec![format!("\"{}\"", key)]
+        };
+
+        log::info!("params with block: {:?}", params);
+
         let res: String = self
             .0
-            .rpc("state_getStorage", &[&format!("\"{}\"", &key)])
+            .rpc(
+                "state_getStorage",
+                params
+                    .iter()
+                    .map(|s| s.as_ref())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
             .await
             .map_err(|e| {
                 log::error!("RPC failure: {}", e);
                 // NOTE it could fail for more reasons
                 crate::Error::StorageKeyNotFound
             })?;
-
-        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeRawQueryResponse)?;
+        log::info!("result: {:?}", res);
+        let response =
+            hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeRawQueryResponse)?;
 
         Ok(response)
     }
@@ -119,7 +141,8 @@ impl<R: Rpc> Backend for RpcClient<R> {
             .rpc("state_getMetadata", &[])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
-        let response = hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeReponseForMeta)?;
+        let response =
+            hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeReponseForMeta)?;
         let meta = from_bytes(&mut response.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
         log::trace!("Metadata {:#?}", meta);
         Ok(meta)

@@ -14,7 +14,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let vault = vault::OSKeyring::<String>::new(TEST_USER, Language::default());
 
     let mut wallet = Wallet::new(vault);
-    
 
     wallet.unlock(None, pin).await?;
 

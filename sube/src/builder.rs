@@ -62,6 +62,11 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let Self { url, metadata, .. } = self;
 
         let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
+
+        let block = url
+            .query_pairs()
+            .find(|(k, _)| k == "at")
+            .map(|(_, v)| v.to_string());
         let path = url.path();
 
         log::trace!("building the backend for {}", url);
@@ -71,7 +76,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
         Ok(match path {
             "_meta" => Response::Meta(meta),
             "_meta/registry" => Response::Registry(&meta.types),
-            _ => crate::query(&backend, meta, path).await?,
+            _ => crate::query(&backend, meta, path, block).await?,
         })
     }
 }
@@ -329,13 +334,13 @@ impl Backend for &AnyBackend {
         }
     }
 
-    async fn query_storage(&self, key: &StorageKey) -> SubeResult<Vec<u8>> {
+    async fn query_storage(&self, key: &StorageKey, block: Option<String>) -> SubeResult<Vec<u8>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.query_storage(key).await,
+            AnyBackend::Http(b) => b.query_storage(key, block).await,
             #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.query_storage(key).await,
-            AnyBackend::_Offline(b) => b.query_storage(key).await,
+            AnyBackend::Ws(b) => b.query_storage(key, block).await,
+            AnyBackend::_Offline(b) => b.query_storage(key, block).await,
         }
     }
 }

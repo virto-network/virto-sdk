@@ -10,14 +10,20 @@ async fn main() -> Result<()> {
 
     if let Response::ValueSet(value) = response {
         let data = serde_json::to_value(&value).expect("to be serializable");
-        println!("Collection {}", serde_json::to_string_pretty(&data).expect("it must return an str"));
+        println!(
+            "Collection {}",
+            serde_json::to_string_pretty(&data).expect("it must return an str")
+        );
     }
 
     let result = sube!("https://kreivo.io/system/account/0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b").await?;
 
     if let Response::Value(value) = result {
         let data = serde_json::to_value(&value).expect("to be serializable");
-        println!("Account info: {}", serde_json::to_string_pretty(&data).expect("it must return an str"));
+        println!(
+            "Account info: {}",
+            serde_json::to_string_pretty(&data).expect("it must return an str")
+        );
     }
 
     Ok(())

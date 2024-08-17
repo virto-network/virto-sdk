@@ -70,13 +70,19 @@ pub fn sube(url: &str) -> builder::SubeBuilder<(), ()> {
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
-async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
+async fn query<'m>(
+    chain: &impl Backend,
+    meta: &'m Metadata,
+    path: &str,
+    block: Option<String>,
+) -> Result<Response<'m>> {
+    log::info!("path {}", path);
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
     log::info!("pallet {}", pallet);
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
-    
+
     if item_or_call == "_constants" {
         let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
         let const_meta = pallet
@@ -96,12 +102,12 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     {
         if !key_res.is_partial() {
             log::info!("is not partial");
-            let res = chain.query_storage(&key_res).await?;
+            let res = chain.query_storage(&key_res, block).await?;
             return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
         }
 
         let res = chain.get_keys_paged(&key_res, 1000, None).await?;
-        let result = chain.query_storage_at(res, None).await?;
+        let result = chain.query_storage_at(res, block).await?;
 
         if let [storage_change, ..] = &result[..] {
             let value = storage_change
@@ -110,19 +116,19 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
                 .map(|[key, data]| {
                     let key = key.replace(&hex::encode(&key_res.pallet), "");
                     let key = key.replace(&hex::encode(&key_res.call), "");
-                    let mut pointer = 2 + 32; // + 0x
+                    let mut offset = 2 + 32; // + 0x
                     let keys = key_res
                         .args
                         .iter()
                         .map(|arg| match arg {
                             KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
-                                let hashed = &key[pointer..];
+                                let hashed = &key[offset..];
                                 let value = Value::new(
                                     hex::decode(hashed).expect("hello world"),
                                     *type_id,
                                     &meta.types,
                                 );
-                                pointer += (value.size() * 2) + 32;
+                                offset += (value.size() * 2) + 32;
                                 value
                             }
                         })
@@ -215,6 +221,7 @@ where
                     &chain,
                     meta,
                     &format!("system/account/0x{}", hex::encode(from_account.as_ref())),
+                    None,
                 )
                 .await?;
 
@@ -419,7 +426,7 @@ pub trait Backend {
     ) -> crate::Result<Vec<String>>;
 
     /// Get raw storage items form the blockchain
-    async fn query_storage(&self, key: &StorageKey) -> Result<Vec<u8>>;
+    async fn query_storage(&self, key: &StorageKey, block: Option<String>) -> Result<Vec<u8>>;
 
     /// Send a signed extrinsic to the blockchain
     async fn submit(&self, ext: impl AsRef<[u8]>) -> Result<()>;
@@ -450,7 +457,7 @@ impl Backend for Offline {
         Err(Error::ChainUnavailable)
     }
 
-    async fn query_storage(&self, _key: &StorageKey) -> Result<Vec<u8>> {
+    async fn query_storage(&self, _key: &StorageKey, _block: Option<String>) -> Result<Vec<u8>> {
         Err(Error::ChainUnavailable)
     }
 

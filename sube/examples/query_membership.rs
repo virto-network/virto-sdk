@@ -9,10 +9,9 @@ async fn main() -> sube::Result<()> {
 
     let query = format!(
         "ws://127.0.0.1:12281/communityMemberships/account/{}/{}",
-        "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b",
-        1
+        "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b", 1
     );
-    
+
     let r = sube!(&query).await?;
 
     if let Response::ValueSet(ref v) = r {
