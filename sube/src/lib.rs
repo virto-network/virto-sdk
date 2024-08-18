@@ -18,6 +18,8 @@ extern crate alloc;
 pub use codec;
 use codec::Encode;
 pub use core::fmt::Display;
+use core::iter::Empty;
+
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use signer::{Signer, SignerFn};
 
@@ -98,55 +100,68 @@ async fn query<'m>(
         )));
     }
 
+    let block = match block {
+        Some(block) if block.starts_with("0x") => Some(block),
+        Some(block) => {
+            let block_number =
+                u32::from_str_radix(&block, 10).expect("blockhash to be a number or either a hash");
+            let info = chain.block_info(Some(block_number)).await?;
+            Some(format!("0x{}", hex::encode(info.hash)))
+        }
+        _ => None,
+    };
+
     if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
     {
         if !key_res.is_partial() {
-            log::info!("is not partial");
-            let res = chain.query_storage(&key_res, block).await?;
+            let res = chain.get_storage_item(key_res.to_string(), block).await?;
             return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
         }
 
         let res = chain.get_keys_paged(&key_res, 1000, None).await?;
-        let result = chain.query_storage_at(res, block).await?;
+        let result = chain.get_storage_items(res, block).await?;
 
-        if let [storage_change, ..] = &result[..] {
-            let value = storage_change
-                .changes
-                .iter()
-                .map(|[key, data]| {
-                    let key = key.replace(&hex::encode(&key_res.pallet), "");
-                    let key = key.replace(&hex::encode(&key_res.call), "");
-                    let mut offset = 2 + 32; // + 0x
-                    let keys = key_res
-                        .args
-                        .iter()
-                        .map(|arg| match arg {
-                            KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
-                                let hashed = &key[offset..];
-                                let value = Value::new(
-                                    hex::decode(hashed).expect("hello world"),
-                                    *type_id,
-                                    &meta.types,
-                                );
-                                offset += (value.size() * 2) + 32;
-                                value
-                            }
-                        })
-                        .collect::<Vec<Value<'m>>>();
+        let value = result
+            .into_iter()
+            .map(|(key, data)| {
+                log::info!("- key: {}", hex::encode(&key));
+                log::info!("- data: {}", hex::encode(&data));
 
-                    let value = Value::new(
-                        hex::decode(&data[2..]).expect("it to be a byte str"),
-                        key_res.ty,
-                        &meta.types,
-                    );
-                    (keys, value)
-                })
-                .collect::<Vec<_>>();
+                log::info!("[+] pallet: {}", hex::encode(&key_res.pallet));
+                log::info!("[+] call: {}", hex::encode(&key_res.call));
 
-            Ok(Response::ValueSet(value))
-        } else {
-            Ok(Response::Void)
-        }
+                log::info!("[+] pallet_size: {}", key_res.pallet.len());
+                log::info!("[+] call_size: {}", key_res.call.len());
+
+                let key = &key[(key_res.pallet.len() + key_res.call.len())..];
+
+                log::info!("- result: {}", hex::encode(&key));
+
+                let mut offset = 16; // TODO it depends on the hasher used to encode the key, then the size could change
+                let keys = key_res
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
+                            let hashed = &key[offset..];
+                            log::info!("hashed: {}", hex::encode(&hashed));
+                            log::info!(" {:?}", &arg);
+
+                            let value = Value::new(hashed.to_vec(), *type_id, &meta.types);
+
+                            log::info!("value done!");
+                            offset += value.size() + 16;
+                            value
+                        }
+                    })
+                    .collect::<Vec<Value<'m>>>();
+
+                let value = Value::new(data.to_vec(), key_res.ty, &meta.types);
+                (keys, value)
+            })
+            .collect::<Vec<_>>();
+
+        Ok(Response::ValueSet(value))
     } else {
         Err(Error::ChainUnavailable)
     }
@@ -412,11 +427,20 @@ pub struct StorageChangeSet {
 /// }
 /// ```
 pub trait Backend {
-    async fn query_storage_at(
+    async fn get_storage_items(
         &self,
         keys: Vec<String>,
         block: Option<String>,
-    ) -> crate::Result<Vec<StorageChangeSet>>;
+    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>>;
+
+    async fn get_storage_item(&self, key: String, block: Option<String>) -> crate::Result<Vec<u8>> {
+        let res = self.get_storage_items(vec![key], block).await?;
+        Ok(res
+            .into_iter()
+            .next()
+            .map(|(_, v)| v)
+            .ok_or(Error::StorageKeyNotFound)?)
+    }
 
     async fn get_keys_paged(
         &self,
@@ -424,9 +448,6 @@ pub trait Backend {
         size: u16,
         to: Option<&StorageKey>,
     ) -> crate::Result<Vec<String>>;
-
-    /// Get raw storage items form the blockchain
-    async fn query_storage(&self, key: &StorageKey, block: Option<String>) -> Result<Vec<u8>>;
 
     /// Send a signed extrinsic to the blockchain
     async fn submit(&self, ext: impl AsRef<[u8]>) -> Result<()>;
@@ -440,12 +461,12 @@ pub trait Backend {
 pub struct Offline(pub Metadata);
 
 impl Backend for Offline {
-    async fn query_storage_at(
+    async fn get_storage_items(
         &self,
         _keys: Vec<String>,
         _block: Option<String>,
-    ) -> crate::Result<Vec<StorageChangeSet>> {
-        Err(Error::ChainUnavailable)
+    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+        Err::<Empty<(Vec<u8>, Vec<u8>)>, _>(Error::ChainUnavailable)
     }
 
     async fn get_keys_paged(
@@ -454,10 +475,6 @@ impl Backend for Offline {
         _size: u16,
         _to: Option<&StorageKey>,
     ) -> crate::Result<Vec<String>> {
-        Err(Error::ChainUnavailable)
-    }
-
-    async fn query_storage(&self, _key: &StorageKey, _block: Option<String>) -> Result<Vec<u8>> {
         Err(Error::ChainUnavailable)
     }
 

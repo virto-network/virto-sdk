@@ -67,6 +67,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
             .query_pairs()
             .find(|(k, _)| k == "at")
             .map(|(_, v)| v.to_string());
+
         let path = url.path();
 
         log::trace!("building the backend for {}", url);
@@ -275,17 +276,29 @@ enum AnyBackend {
 }
 
 impl Backend for &AnyBackend {
-    async fn query_storage_at(
+    async fn get_storage_items(
         &self,
         keys: Vec<String>,
         block: Option<String>,
-    ) -> crate::Result<Vec<StorageChangeSet>> {
+    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+        let result: Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> = match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            AnyBackend::Http(b) => Box::new(b.get_storage_items(keys, block).await?),
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => Box::new(b.get_storage_items(keys, block).await?),
+            AnyBackend::_Offline(b) => Box::new(b.get_storage_items(keys, block).await?),
+        };
+
+        Ok(result)
+    }
+
+    async fn get_storage_item(&self, key: String, block: Option<String>) -> crate::Result<Vec<u8>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.query_storage_at(keys, block).await,
+            AnyBackend::Http(b) => b.get_storage_item(key, block).await,
             #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.query_storage_at(keys, block).await,
-            AnyBackend::_Offline(b) => b.query_storage_at(keys, block).await,
+            AnyBackend::Ws(b) => b.get_storage_item(key, block).await,
+            AnyBackend::_Offline(b) => b.get_storage_item(key, block).await,
         }
     }
 
@@ -331,16 +344,6 @@ impl Backend for &AnyBackend {
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.block_info(at).await,
             AnyBackend::_Offline(b) => b.block_info(at).await,
-        }
-    }
-
-    async fn query_storage(&self, key: &StorageKey, block: Option<String>) -> SubeResult<Vec<u8>> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.query_storage(key, block).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.query_storage(key, block).await,
-            AnyBackend::_Offline(b) => b.query_storage(key, block).await,
         }
     }
 }

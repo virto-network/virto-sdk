@@ -29,22 +29,25 @@ pub trait Rpc {
 pub struct RpcClient<R>(pub R);
 
 impl<R: Rpc> Backend for RpcClient<R> {
-    async fn query_storage_at(
+    async fn get_storage_items(
         &self,
         keys: Vec<String>,
         block: Option<String>,
-    ) -> crate::Result<Vec<StorageChangeSet>> {
+    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
         let keys = serde_json::to_string(&keys).expect("it to be a valid json");
 
         log::info!("query_storage_at encoded: {}", keys);
         let params: Vec<String> = if let Some(block_hash) = block {
-            vec![keys, block_hash]
+            vec![keys, format!("\"{}\"", block_hash)]
         } else {
             vec![keys]
         };
 
-        self.0
-            .rpc(
+        log::info!("params encoded: {:?}", params);
+
+        let result = self
+            .0
+            .rpc::<Vec<StorageChangeSet>>(
                 "state_queryStorageAt",
                 params
                     .iter()
@@ -56,7 +59,22 @@ impl<R: Rpc> Backend for RpcClient<R> {
             .map_err(|err| {
                 log::error!("error state_queryStorageAt {:?}", err);
                 crate::Error::StorageKeyNotFound
-            })
+            })?;
+
+        if let Some(change_set) = result.into_iter().next() {
+            let keys_response = change_set.changes.into_iter().map(|[k, v]| {
+                log::info!("key: {} value: {}", k, v);
+
+                (
+                    hex::decode(&k[2..]).expect("to be an hex"),
+                    hex::decode(&v[2..]).expect("to be an hex"),
+                )
+            });
+
+            return Ok(keys_response);
+        } else {
+            return Err(crate::Error::StorageKeyNotFound);
+        }
     }
 
     async fn get_keys_paged(
@@ -82,45 +100,6 @@ impl<R: Rpc> Backend for RpcClient<R> {
             })?;
         log::info!("rpc call {:?}", r);
         Ok(r)
-    }
-
-    async fn query_storage(
-        &self,
-        key: &StorageKey,
-        block: Option<String>,
-    ) -> crate::Result<Vec<u8>> {
-        let key = key.to_string();
-        log::debug!("StorageKey encoded: {}", key);
-
-        let params: Vec<String> = if let Some(block_hash) = block {
-            vec![format!("\"{}\"", key), format!("\"{}\"", block_hash)]
-        } else {
-            vec![format!("\"{}\"", key)]
-        };
-
-        log::info!("params with block: {:?}", params);
-
-        let res: String = self
-            .0
-            .rpc(
-                "state_getStorage",
-                params
-                    .iter()
-                    .map(|s| s.as_ref())
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-            .await
-            .map_err(|e| {
-                log::error!("RPC failure: {}", e);
-                // NOTE it could fail for more reasons
-                crate::Error::StorageKeyNotFound
-            })?;
-        log::info!("result: {:?}", res);
-        let response =
-            hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeRawQueryResponse)?;
-
-        Ok(response)
     }
 
     async fn submit(&self, ext: impl AsRef<[u8]>) -> crate::Result<()> {
@@ -151,9 +130,12 @@ impl<R: Rpc> Backend for RpcClient<R> {
     async fn block_info(&self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
         #[inline]
         async fn block_info(s: &impl Rpc, params: &[&str]) -> crate::Result<Vec<u8>> {
-            s.rpc("chain_getBlockHash", params)
+            let f = s
+                .rpc::<String>("chain_getBlockHash", params)
                 .await
-                .map_err(|e| crate::Error::Node(e.to_string()))
+                .map_err(|e| crate::Error::Node(e.to_string()));
+
+            Ok(hex::decode(&f?.as_str()[2..]).expect("to be an valid hex"))
         }
 
         let block_hash = if let Some(block_number) = at {
