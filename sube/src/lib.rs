@@ -103,8 +103,9 @@ async fn query<'m>(
     let block = match block {
         Some(block) if block.starts_with("0x") => Some(block),
         Some(block) => {
-            let block_number =
-                u32::from_str_radix(&block, 10).expect("blockhash to be a number or either a hash");
+            let block_number = block
+                .parse::<u32>()
+                .expect("blockhash to be a number or either a hash");
             let info = chain.block_info(Some(block_number)).await?;
             Some(format!("0x{}", hex::encode(info.hash)))
         }
@@ -124,19 +125,7 @@ async fn query<'m>(
         let value = result
             .into_iter()
             .map(|(key, data)| {
-                log::info!("- key: {}", hex::encode(&key));
-                log::info!("- data: {}", hex::encode(&data));
-
-                log::info!("[+] pallet: {}", hex::encode(&key_res.pallet));
-                log::info!("[+] call: {}", hex::encode(&key_res.call));
-
-                log::info!("[+] pallet_size: {}", key_res.pallet.len());
-                log::info!("[+] call_size: {}", key_res.call.len());
-
                 let key = &key[(key_res.pallet.len() + key_res.call.len())..];
-
-                log::info!("- result: {}", hex::encode(&key));
-
                 let mut offset = 16; // TODO it depends on the hasher used to encode the key, then the size could change
                 let keys = key_res
                     .args
@@ -144,12 +133,7 @@ async fn query<'m>(
                     .map(|arg| match arg {
                         KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
                             let hashed = &key[offset..];
-                            log::info!("hashed: {}", hex::encode(&hashed));
-                            log::info!(" {:?}", &arg);
-
                             let value = Value::new(hashed.to_vec(), *type_id, &meta.types);
-
-                            log::info!("value done!");
                             offset += value.size() + 16;
                             value
                         }
@@ -435,11 +419,10 @@ pub trait Backend {
 
     async fn get_storage_item(&self, key: String, block: Option<String>) -> crate::Result<Vec<u8>> {
         let res = self.get_storage_items(vec![key], block).await?;
-        Ok(res
-            .into_iter()
+        res.into_iter()
             .next()
             .map(|(_, v)| v)
-            .ok_or(Error::StorageKeyNotFound)?)
+            .ok_or(Error::StorageKeyNotFound)
     }
 
     async fn get_keys_paged(

@@ -71,9 +71,9 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 )
             });
 
-            return Ok(keys_response);
+            Ok(keys_response)
         } else {
-            return Err(crate::Error::StorageKeyNotFound);
+            Err(crate::Error::StorageKeyNotFound)
         }
     }
 
