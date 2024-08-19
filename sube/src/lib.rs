@@ -76,7 +76,7 @@ async fn query<'m>(
     chain: &impl Backend,
     meta: &'m Metadata,
     path: &str,
-    block: Option<String>,
+    block: Option<u32>,
 ) -> Result<Response<'m>> {
     log::info!("path {}", path);
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
@@ -100,26 +100,14 @@ async fn query<'m>(
         )));
     }
 
-    let block = match block {
-        Some(block) if block.starts_with("0x") => Some(block),
-        Some(block) => {
-            let block_number = block
-                .parse::<u32>()
-                .expect("blockhash to be a number or either a hash");
-            let info = chain.block_info(Some(block_number)).await?;
-            Some(format!("0x{}", hex::encode(info.hash)))
-        }
-        _ => None,
-    };
-
     if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
     {
         if !key_res.is_partial() {
-            let res = chain.get_storage_item(key_res.to_string(), block).await?;
+            let res = chain.get_storage_item(key_res.key(), block).await?;
             return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
         }
 
-        let res = chain.get_keys_paged(&key_res, 1000, None).await?;
+        let res = chain.get_keys_paged(key_res.key(), 1000, None).await?;
         let result = chain.get_storage_items(res, block).await?;
 
         let value = result
@@ -372,30 +360,15 @@ fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
     Some((pallet, item, map_keys))
 }
 
-// struct PalletCall {
-//     pallet_idx: u8,
-//     ty: u32,
-// }
-
-// impl PalletCall {
-//     fn new(pallet: &PalletMeta, reg: &PortableRegistry, _call: &str) -> Result<Self> {
-//         let calls = &pallet
-//             .calls
-//             .as_ref()
-//             .and_then(|c| reg.resolve(c.ty.id))
-//             .ok_or_else(|| Error::CallNotFound)?
-//             .type_def;
-//         log::debug!("{:?}", calls);
-//         let pallet_idx = pallet.index;
-//         Ok(PalletCall { pallet_idx, ty: 0 })
-//     }
-// }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct StorageChangeSet {
     block: String,
     changes: Vec<[String; 2]>,
 }
+
+pub type RawKey = Vec<u8>;
+pub type RawValue = Vec<u8>;
 
 /// Generic definition of a blockchain backend
 ///
@@ -413,11 +386,11 @@ pub struct StorageChangeSet {
 pub trait Backend {
     async fn get_storage_items(
         &self,
-        keys: Vec<String>,
-        block: Option<String>,
-    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>>;
+        keys: Vec<RawKey>,
+        block: Option<u32>,
+    ) -> crate::Result<impl Iterator<Item = (RawKey, RawValue)>>;
 
-    async fn get_storage_item(&self, key: String, block: Option<String>) -> crate::Result<Vec<u8>> {
+    async fn get_storage_item(&self, key: RawKey, block: Option<u32>) -> crate::Result<RawValue> {
         let res = self.get_storage_items(vec![key], block).await?;
         res.into_iter()
             .next()
@@ -427,10 +400,10 @@ pub trait Backend {
 
     async fn get_keys_paged(
         &self,
-        from: &StorageKey,
+        from: RawKey,
         size: u16,
-        to: Option<&StorageKey>,
-    ) -> crate::Result<Vec<String>>;
+        to: Option<RawKey>,
+    ) -> crate::Result<Vec<RawValue>>;
 
     /// Send a signed extrinsic to the blockchain
     async fn submit(&self, ext: impl AsRef<[u8]>) -> Result<()>;
@@ -446,18 +419,18 @@ pub struct Offline(pub Metadata);
 impl Backend for Offline {
     async fn get_storage_items(
         &self,
-        _keys: Vec<String>,
-        _block: Option<String>,
+        _keys: Vec<RawKey>,
+        _block: Option<u32>,
     ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
-        Err::<Empty<(Vec<u8>, Vec<u8>)>, _>(Error::ChainUnavailable)
+        Err::<Empty<(RawKey, RawValue)>, _>(Error::ChainUnavailable)
     }
 
     async fn get_keys_paged(
         &self,
-        _from: &StorageKey,
+        _from: RawKey,
         _size: u16,
-        _to: Option<&StorageKey>,
-    ) -> crate::Result<Vec<String>> {
+        _to: Option<RawKey>,
+    ) -> crate::Result<Vec<RawKey>> {
         Err(Error::ChainUnavailable)
     }
 
@@ -499,6 +472,7 @@ pub enum Error {
     CantDecodeReponseForMeta,
     CantDecodeRawQueryResponse,
     CantFindMethodInPallet,
+    BadBlockNumber
 }
 
 impl fmt::Display for Error {

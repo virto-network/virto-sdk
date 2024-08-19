@@ -8,7 +8,7 @@ use crate::{
     meta::BlockInfo, Backend, Error, ExtrinsicBody, Metadata, Response, Result as SubeResult,
     Signer, StorageKey,
 };
-use crate::{prelude::*, Offline};
+use crate::{prelude::*, Offline, RawKey, RawValue};
 
 use core::future::{Future, IntoFuture};
 use url::Url;
@@ -66,7 +66,10 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let block = url
             .query_pairs()
             .find(|(k, _)| k == "at")
-            .map(|(_, v)| v.to_string());
+            .map(|(_, v)| {
+                log::info!("hello world{:?}", v);
+                v.parse::<u32>().expect("at to be a number")
+            });
 
         let path = url.path();
 
@@ -278,10 +281,10 @@ enum AnyBackend {
 impl Backend for &AnyBackend {
     async fn get_storage_items(
         &self,
-        keys: Vec<String>,
-        block: Option<String>,
-    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
-        let result: Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)>> = match self {
+        keys: Vec<RawKey>,
+        block: Option<u32>,
+    ) -> crate::Result<impl Iterator<Item = (RawKey, RawValue)>> {
+        let result: Box<dyn Iterator<Item = (RawKey, RawValue)>> = match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => Box::new(b.get_storage_items(keys, block).await?),
             #[cfg(feature = "ws")]
@@ -292,7 +295,7 @@ impl Backend for &AnyBackend {
         Ok(result)
     }
 
-    async fn get_storage_item(&self, key: String, block: Option<String>) -> crate::Result<Vec<u8>> {
+    async fn get_storage_item(&self, key: RawKey, block: Option<u32>) -> crate::Result<Vec<u8>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.get_storage_item(key, block).await,
@@ -304,10 +307,10 @@ impl Backend for &AnyBackend {
 
     async fn get_keys_paged(
         &self,
-        from: &StorageKey,
+        from: RawKey,
         size: u16,
-        to: Option<&StorageKey>,
-    ) -> crate::Result<Vec<String>> {
+        to: Option<RawKey>,
+    ) -> crate::Result<Vec<RawKey>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.get_keys_paged(from, size, to).await,

@@ -1,11 +1,12 @@
 use core::convert::TryInto;
 use jsonrpc::serde_json::value::RawValue;
-pub use jsonrpc::{error, Error, Request, Response};
+pub use jsonrpc::{error, Request, Response};
 use serde::Deserialize;
 
 use crate::meta::{self, Metadata};
-use crate::{prelude::*, StorageChangeSet};
-use crate::{Backend, StorageKey};
+use crate::Backend;
+use crate::Error;
+use crate::{prelude::*, RawKey, StorageChangeSet};
 use meta::from_bytes;
 
 pub type RpcResult<T> = Result<T, error::Error>;
@@ -31,14 +32,26 @@ pub struct RpcClient<R>(pub R);
 impl<R: Rpc> Backend for RpcClient<R> {
     async fn get_storage_items(
         &self,
-        keys: Vec<String>,
-        block: Option<String>,
+        keys: Vec<RawKey>,
+        block: Option<u32>,
     ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
-        let keys = serde_json::to_string(&keys).expect("it to be a valid json");
+        let keys = serde_json::to_string(
+            &keys
+                .iter()
+                .map(|v| format!("0x{}", hex::encode(v)))
+                .collect::<Vec<String>>(),
+        )
+        .expect("it to be a valid json");
 
         log::info!("query_storage_at encoded: {}", keys);
-        let params: Vec<String> = if let Some(block_hash) = block {
-            vec![keys, format!("\"{}\"", block_hash)]
+
+        let params: Vec<String> = if let Some(block_number) = block {
+            let info = self
+                .block_info(Some(block_number))
+                .await
+                .map_err(|_| Error::BadBlockNumber)?;
+
+            vec![keys, format!("\"0x{}\"", hex::encode(&info.hash))]
         } else {
             vec![keys]
         };
@@ -79,18 +92,20 @@ impl<R: Rpc> Backend for RpcClient<R> {
 
     async fn get_keys_paged(
         &self,
-        from: &StorageKey,
+        from: RawKey,
         size: u16,
-        to: Option<&StorageKey>,
-    ) -> crate::Result<Vec<String>> {
-        let r: Vec<String> = self
+        to: Option<RawKey>,
+    ) -> crate::Result<Vec<RawKey>> {
+        let result: Vec<String> = self
             .0
             .rpc(
                 "state_getKeysPaged",
                 &[
-                    &format!("\"{}\"", &from),
+                    &format!("\"0x{}\"", hex::encode(&from)),
                     &size.to_string(),
-                    &to.or(Some(from)).map(|f| format!("\"{}\"", &f)).unwrap(),
+                    &to.or(Some(from))
+                        .map(|f| format!("\"0x{}\"", hex::encode(f)))
+                        .unwrap(),
                 ],
             )
             .await
@@ -98,8 +113,11 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 log::error!("error paged {:?}", err);
                 crate::Error::StorageKeyNotFound
             })?;
-        log::info!("rpc call {:?}", r);
-        Ok(r)
+        log::info!("rpc call {:?}", result);
+        Ok(result
+            .into_iter()
+            .map(|k| hex::decode(&k[2..]).expect("to be an hex"))
+            .collect())
     }
 
     async fn submit(&self, ext: impl AsRef<[u8]>) -> crate::Result<()> {

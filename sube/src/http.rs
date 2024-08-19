@@ -40,7 +40,7 @@ impl Rpc for Backend {
             })
             .send()
             .await
-            .map_err(|err| rpc::Error::Transport(Box::new(err)))?;
+            .map_err(|err| rpc::error::Error::Transport(Box::new(err)))?;
 
         let status = res.status();
         let res = if status.is_success() {
