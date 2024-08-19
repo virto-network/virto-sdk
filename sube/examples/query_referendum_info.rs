@@ -16,7 +16,10 @@ async fn main() -> Result<()> {
     if let Response::Value(ref v) = r {
         let json_value = serde_json::to_value(v).expect("it must to be an valid Value");
         println!("Raw JSON value: {:?}", json_value);
-        println!("Info: {}", serde_json::to_string_pretty(&json_value).expect("it must return an str"));
+        println!(
+            "Info: {}",
+            serde_json::to_string_pretty(&json_value).expect("it must return an str")
+        );
     }
     Ok(())
 }

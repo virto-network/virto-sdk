@@ -1,9 +1,9 @@
 use alloc::{collections::BTreeMap, sync::Arc};
 
-use no_std_async::Mutex;
 use ewebsock::{WsEvent, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
 use futures_channel::{mpsc, oneshot};
 use futures_util::StreamExt as _;
+use no_std_async::Mutex;
 // use futures_util::StreamExt;
 use jsonrpc::{
     error::{result_to_response, standard_error, StandardError},
@@ -92,7 +92,7 @@ impl Backend {
 
         let (tx, rx) =
             ewebsock::connect(url, ewebsock::Options::default()).map_err(Error::Platform)?;
-        
+
         let (sender, recv) = mpsc::channel::<Message>(MAX_BUFFER);
 
         let backend = Backend {
@@ -139,7 +139,6 @@ impl Backend {
                                         ().into(),
                                     )
                                 });
-                            // log::info!("res {:?}", res);
                             if res.id.is_u64() {
                                 let id = res.id.as_u64().unwrap() as Id;
                                 log::trace!("Answering request {}", id);

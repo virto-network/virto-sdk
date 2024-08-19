@@ -9,10 +9,9 @@ async fn main() -> sube::Result<()> {
 
     let query = format!(
         "ws://127.0.0.1:12281/preimage/preimageFor/{}/{}",
-        "0x6b172c3695dca229e71c0bca790f5991b68f8eee96334e842312a0a7d4a46c6c",
-        30
+        "0x6b172c3695dca229e71c0bca790f5991b68f8eee96334e842312a0a7d4a46c6c", 30
     );
-    
+
     let r = sube!(&query).await?;
 
     if let Response::Value(ref v) = r {

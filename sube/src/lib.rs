@@ -18,6 +18,8 @@ extern crate alloc;
 pub use codec;
 use codec::Encode;
 pub use core::fmt::Display;
+use core::iter::Empty;
+
 pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use signer::{Signer, SignerFn};
 
@@ -70,13 +72,17 @@ pub fn sube(url: &str) -> builder::SubeBuilder<(), ()> {
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
-async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Result<Response<'m>> {
+async fn query<'m>(
+    chain: &impl Backend,
+    meta: &'m Metadata,
+    path: &str,
+    block: Option<u32>,
+) -> Result<Response<'m>> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
-    log::info!("pallet {}", pallet);
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
-    
+
     if item_or_call == "_constants" {
         let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
         let const_meta = pallet
@@ -95,52 +101,37 @@ async fn query<'m>(chain: &impl Backend, meta: &'m Metadata, path: &str) -> Resu
     if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
     {
         if !key_res.is_partial() {
-            log::info!("is not partial");
-            let res = chain.query_storage(&key_res).await?;
+            let res = chain.get_storage_item(key_res.key(), block).await?;
             return Ok(Response::Value(Value::new(res, key_res.ty, &meta.types)));
         }
 
-        let res = chain.get_keys_paged(&key_res, 1000, None).await?;
-        let result = chain.query_storage_at(res, None).await?;
+        let res = chain.get_keys_paged(key_res.key(), 1000, None).await?;
+        let result = chain.get_storage_items(res, block).await?;
 
-        if let [storage_change, ..] = &result[..] {
-            let value = storage_change
-                .changes
-                .iter()
-                .map(|[key, data]| {
-                    let key = key.replace(&hex::encode(&key_res.pallet), "");
-                    let key = key.replace(&hex::encode(&key_res.call), "");
-                    let mut pointer = 2 + 32; // + 0x
-                    let keys = key_res
-                        .args
-                        .iter()
-                        .map(|arg| match arg {
-                            KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
-                                let hashed = &key[pointer..];
-                                let value = Value::new(
-                                    hex::decode(hashed).expect("hello world"),
-                                    *type_id,
-                                    &meta.types,
-                                );
-                                pointer += (value.size() * 2) + 32;
-                                value
-                            }
-                        })
-                        .collect::<Vec<Value<'m>>>();
+        let value = result
+            .into_iter()
+            .map(|(key, data)| {
+                let key = &key[(key_res.pallet.len() + key_res.call.len())..];
+                let mut offset = 16; // TODO it depends on the hasher used to encode the key, then the size could change
+                let keys = key_res
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
+                            let hashed = &key[offset..];
+                            let value = Value::new(hashed.to_vec(), *type_id, &meta.types);
+                            offset += value.size() + 16;
+                            value
+                        }
+                    })
+                    .collect::<Vec<Value<'m>>>();
 
-                    let value = Value::new(
-                        hex::decode(&data[2..]).expect("it to be a byte str"),
-                        key_res.ty,
-                        &meta.types,
-                    );
-                    (keys, value)
-                })
-                .collect::<Vec<_>>();
+                let value = Value::new(data.to_vec(), key_res.ty, &meta.types);
+                (keys, value)
+            })
+            .collect::<Vec<_>>();
 
-            Ok(Response::ValueSet(value))
-        } else {
-            Ok(Response::Void)
-        }
+        Ok(Response::ValueSet(value))
     } else {
         Err(Error::ChainUnavailable)
     }
@@ -215,16 +206,15 @@ where
                     &chain,
                     meta,
                     &format!("system/account/0x{}", hex::encode(from_account.as_ref())),
+                    None,
                 )
                 .await?;
 
                 match response {
                     Response::Value(value) => {
-                        log::info!("{:?}", serde_json::to_string(&value));
                         let str = serde_json::to_string(&value).expect("wrong account info");
                         let account_info: AccountInfo =
                             serde_json::from_str(&str).expect("it must serialize");
-                        log::info!("{}", &account_info.nonce);
                         Ok(account_info.nonce)
                     }
                     _ => Err(Error::AccountNotFound),
@@ -366,30 +356,15 @@ fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
     Some((pallet, item, map_keys))
 }
 
-// struct PalletCall {
-//     pallet_idx: u8,
-//     ty: u32,
-// }
-
-// impl PalletCall {
-//     fn new(pallet: &PalletMeta, reg: &PortableRegistry, _call: &str) -> Result<Self> {
-//         let calls = &pallet
-//             .calls
-//             .as_ref()
-//             .and_then(|c| reg.resolve(c.ty.id))
-//             .ok_or_else(|| Error::CallNotFound)?
-//             .type_def;
-//         log::debug!("{:?}", calls);
-//         let pallet_idx = pallet.index;
-//         Ok(PalletCall { pallet_idx, ty: 0 })
-//     }
-// }
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct StorageChangeSet {
     block: String,
     changes: Vec<[String; 2]>,
 }
+
+pub type RawKey = Vec<u8>;
+pub type RawValue = Vec<u8>;
 
 /// Generic definition of a blockchain backend
 ///
@@ -405,21 +380,27 @@ pub struct StorageChangeSet {
 /// }
 /// ```
 pub trait Backend {
-    async fn query_storage_at(
+    async fn get_storage_items(
         &self,
-        keys: Vec<String>,
-        block: Option<String>,
-    ) -> crate::Result<Vec<StorageChangeSet>>;
+        keys: Vec<RawKey>,
+        block: Option<u32>,
+    ) -> crate::Result<impl Iterator<Item = (RawKey, RawValue)>>;
+
+    async fn get_storage_item(&self, key: RawKey, block: Option<u32>) -> crate::Result<RawValue> {
+        let res = self.get_storage_items(vec![key], block).await?;
+
+        res.into_iter()
+            .next()
+            .map(|(_, v)| v)
+            .ok_or(Error::StorageKeyNotFound)
+    }
 
     async fn get_keys_paged(
         &self,
-        from: &StorageKey,
+        from: RawKey,
         size: u16,
-        to: Option<&StorageKey>,
-    ) -> crate::Result<Vec<String>>;
-
-    /// Get raw storage items form the blockchain
-    async fn query_storage(&self, key: &StorageKey) -> Result<Vec<u8>>;
+        to: Option<RawKey>,
+    ) -> crate::Result<Vec<RawValue>>;
 
     /// Send a signed extrinsic to the blockchain
     async fn submit(&self, ext: impl AsRef<[u8]>) -> Result<()>;
@@ -433,24 +414,20 @@ pub trait Backend {
 pub struct Offline(pub Metadata);
 
 impl Backend for Offline {
-    async fn query_storage_at(
+    async fn get_storage_items(
         &self,
-        _keys: Vec<String>,
-        _block: Option<String>,
-    ) -> crate::Result<Vec<StorageChangeSet>> {
-        Err(Error::ChainUnavailable)
+        _keys: Vec<RawKey>,
+        _block: Option<u32>,
+    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
+        Err::<Empty<(RawKey, RawValue)>, _>(Error::ChainUnavailable)
     }
 
     async fn get_keys_paged(
         &self,
-        _from: &StorageKey,
+        _from: RawKey,
         _size: u16,
-        _to: Option<&StorageKey>,
-    ) -> crate::Result<Vec<String>> {
-        Err(Error::ChainUnavailable)
-    }
-
-    async fn query_storage(&self, _key: &StorageKey) -> Result<Vec<u8>> {
+        _to: Option<RawKey>,
+    ) -> crate::Result<Vec<RawKey>> {
         Err(Error::ChainUnavailable)
     }
 
@@ -492,6 +469,7 @@ pub enum Error {
     CantDecodeReponseForMeta,
     CantDecodeRawQueryResponse,
     CantFindMethodInPallet,
+    BadBlockNumber
 }
 
 impl fmt::Display for Error {

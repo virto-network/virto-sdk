@@ -3,8 +3,8 @@ use core::marker::PhantomData;
 use crate::{
     mnemonic::{Language, Mnemonic},
     util::{seed_from_entropy, Pin},
+    vault::utils::{AccountSigner, RootAccount},
     Vault,
-    vault::utils::{ RootAccount,  AccountSigner }
 };
 use arrayvec::ArrayVec;
 use keyring;
@@ -16,7 +16,7 @@ pub struct OSKeyring<S> {
     entry: keyring::Entry,
     root: Option<RootAccount>,
     auto_generate: Option<Language>,
-    _phantom: PhantomData<S>
+    _phantom: PhantomData<S>,
 }
 
 impl<S> OSKeyring<S> {
@@ -28,7 +28,7 @@ impl<S> OSKeyring<S> {
             entry: keyring::Entry::new(SERVICE, &uname),
             root: None,
             auto_generate: lang.into(),
-            _phantom: PhantomData::default()
+            _phantom: PhantomData::default(),
         }
     }
 
@@ -119,7 +119,7 @@ impl<S: AsRef<str>> Vault for OSKeyring<S> {
                     .and_then(|l| self.generate(pin, l))
             })
             .map(|r| {
-                let acc = AccountSigner::new(account.as_ref().map(|x|  x.as_ref())).unlock(&r);
+                let acc = AccountSigner::new(account.as_ref().map(|x| x.as_ref())).unlock(&r);
                 self.root = Some(r);
                 acc
             })

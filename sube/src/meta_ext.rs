@@ -128,7 +128,14 @@ impl StorageKey {
             .as_ref()
             .and_then(|s| s.entries.iter().find(|e| e.name == item))
             .ok_or(crate::Error::CantFindMethodInPallet)?;
-        log::trace!("map_keys={}", map_keys.iter().map(|x| x.as_ref()).collect::<Vec<&str>>().join(", "));
+        log::trace!(
+            "map_keys={}",
+            map_keys
+                .iter()
+                .map(|x| x.as_ref())
+                .collect::<Vec<&str>>()
+                .join(", ")
+        );
         entry.ty.key(registry, &meta.name, &entry.name, map_keys)
     }
 }
@@ -181,7 +188,7 @@ pub trait EntryTy {
         } else {
             vec![]
         };
-        
+
         if type_call_ids.len() == hashers.len() {
             log::trace!("type_call_ids={:?}", type_call_ids);
             let storage_key = StorageKey::new(
@@ -192,51 +199,52 @@ pub trait EntryTy {
                     .into_iter()
                     .enumerate()
                     .map(|(i, type_id)| {
-                        log::info!("type_call_ids.i={} type_call_ids.type_id={}", i, type_id);
+                        log::trace!("type_call_ids.i={} type_call_ids.type_id={}", i, type_id);
                         let k = map_keys.get(i);
                         let hasher = hashers.get(i).expect("hasher not found");
-    
+
                         if k.is_none() {
                             return KeyValue::Empty(type_id);
                         }
-    
+
                         let k = k.expect("it must exist").as_ref();
-    
+
                         let hasher = hasher.borrow();
                         let mut out = vec![];
-    
+
                         if let Some(k) = k.strip_prefix("0x") {
                             let value = hex::decode(k).expect("str must be encoded");
-                            let _ = to_bytes_with_info(&mut out, &value, Some((portable_reg, type_id)));
+                            let _ =
+                                to_bytes_with_info(&mut out, &value, Some((portable_reg, type_id)));
                         } else {
                             let _ = to_bytes_with_info(&mut out, &k, Some((portable_reg, type_id)));
                         }
-    
+
                         let hash = hash(hasher, &out);
                         KeyValue::Value((type_id, hash, out, hasher.clone()))
                     })
                     .collect(),
             );
-    
+
             Ok(storage_key)
         } else if hashers.len() == 1 {
             log::trace!("treating touple as argument for hasher");
 
             let touple_hex: Vec<u8> = type_call_ids
-                    .into_iter()
-                    .enumerate()
-                    .flat_map(|(i, type_id)| {
-                        let k = map_keys.get(i).expect("to exist in map_keys").as_ref();
-                        let mut out = vec![];
-                        if let Some(k) = k.strip_prefix("0x") {
-                            let value = hex::decode(k).expect("str must be hex encoded");
-                            let _ = to_bytes_with_info(&mut out, &value, Some((portable_reg, type_id)));
-                        } else {
-                            let _ = to_bytes_with_info(&mut out, &k, Some((portable_reg, type_id)));
-                        }
-                        out
-                    })
-                    .collect();
+                .into_iter()
+                .enumerate()
+                .flat_map(|(i, type_id)| {
+                    let k = map_keys.get(i).expect("to exist in map_keys").as_ref();
+                    let mut out = vec![];
+                    if let Some(k) = k.strip_prefix("0x") {
+                        let value = hex::decode(k).expect("str must be hex encoded");
+                        let _ = to_bytes_with_info(&mut out, &value, Some((portable_reg, type_id)));
+                    } else {
+                        let _ = to_bytes_with_info(&mut out, &k, Some((portable_reg, type_id)));
+                    }
+                    out
+                })
+                .collect();
 
             let hasher = hashers.first().expect("hasher not found");
             let hasher = hasher.borrow();
@@ -246,12 +254,19 @@ pub trait EntryTy {
                 value_ty_id,
                 hash(&Hasher::Twox128, pallet_item.0),
                 hash(&Hasher::Twox128, pallet_item.1),
-                vec![KeyValue::Value((key_ty_id.expect("must key id must work"), hashed_value, touple_hex, hasher.clone()))]
+                vec![KeyValue::Value((
+                    key_ty_id.expect("must key id must work"),
+                    hashed_value,
+                    touple_hex,
+                    hasher.clone(),
+                ))],
             );
-            
+
             Ok(storage_key)
         } else {
-            Err(crate::Error::Encode("Wrong number of hashers vs map_keys".into()))
+            Err(crate::Error::Encode(
+                "Wrong number of hashers vs map_keys".into(),
+            ))
         }
     }
 }
@@ -282,7 +297,7 @@ impl EntryTy for EntryType {
                     map_keys,
                     hashers,
                 )
-            },
+            }
         }
     }
 }

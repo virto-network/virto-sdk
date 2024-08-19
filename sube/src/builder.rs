@@ -6,9 +6,9 @@ use crate::rpc::RpcClient;
 use crate::ws::Backend as WSBackend;
 use crate::{
     meta::BlockInfo, Backend, Error, ExtrinsicBody, Metadata, Response, Result as SubeResult,
-    Signer, StorageKey,
+    Signer,
 };
-use crate::{prelude::*, Offline, StorageChangeSet};
+use crate::{prelude::*, Offline, RawKey, RawValue};
 
 use core::future::{Future, IntoFuture};
 use url::Url;
@@ -62,6 +62,12 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let Self { url, metadata, .. } = self;
 
         let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
+
+        let block = url
+            .query_pairs()
+            .find(|(k, _)| k == "at")
+            .map(|(_, v)| v.parse::<u32>().expect("at query params must be a number"));
+
         let path = url.path();
 
         log::trace!("building the backend for {}", url);
@@ -71,7 +77,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
         Ok(match path {
             "_meta" => Response::Meta(meta),
             "_meta/registry" => Response::Registry(&meta.types),
-            _ => crate::query(&backend, meta, path).await?,
+            _ => crate::query(&backend, meta, path, block).await?,
         })
     }
 }
@@ -270,26 +276,38 @@ enum AnyBackend {
 }
 
 impl Backend for &AnyBackend {
-    async fn query_storage_at(
+    async fn get_storage_items(
         &self,
-        keys: Vec<String>,
-        block: Option<String>,
-    ) -> crate::Result<Vec<StorageChangeSet>> {
+        keys: Vec<RawKey>,
+        block: Option<u32>,
+    ) -> crate::Result<impl Iterator<Item = (RawKey, RawValue)>> {
+        let result: Box<dyn Iterator<Item = (RawKey, RawValue)>> = match self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            AnyBackend::Http(b) => Box::new(b.get_storage_items(keys, block).await?),
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => Box::new(b.get_storage_items(keys, block).await?),
+            AnyBackend::_Offline(b) => Box::new(b.get_storage_items(keys, block).await?),
+        };
+
+        Ok(result)
+    }
+
+    async fn get_storage_item(&self, key: RawKey, block: Option<u32>) -> crate::Result<Vec<u8>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.query_storage_at(keys, block).await,
+            AnyBackend::Http(b) => b.get_storage_item(key, block).await,
             #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.query_storage_at(keys, block).await,
-            AnyBackend::_Offline(b) => b.query_storage_at(keys, block).await,
+            AnyBackend::Ws(b) => b.get_storage_item(key, block).await,
+            AnyBackend::_Offline(b) => b.get_storage_item(key, block).await,
         }
     }
 
     async fn get_keys_paged(
         &self,
-        from: &StorageKey,
+        from: RawKey,
         size: u16,
-        to: Option<&StorageKey>,
-    ) -> crate::Result<Vec<String>> {
+        to: Option<RawKey>,
+    ) -> crate::Result<Vec<RawKey>> {
         match self {
             #[cfg(any(feature = "http", feature = "http-web"))]
             AnyBackend::Http(b) => b.get_keys_paged(from, size, to).await,
@@ -326,16 +344,6 @@ impl Backend for &AnyBackend {
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.block_info(at).await,
             AnyBackend::_Offline(b) => b.block_info(at).await,
-        }
-    }
-
-    async fn query_storage(&self, key: &StorageKey) -> SubeResult<Vec<u8>> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.query_storage(key).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.query_storage(key).await,
-            AnyBackend::_Offline(b) => b.query_storage(key).await,
         }
     }
 }
