@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pass component</title>
+  <script async src="dist/pass.js" type="module"></script>
+  <style>
+    html,
+    body {
+      all: initial;
+      height: 100%;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+  </style>
+</head>
+
+<body>
+  <vos-pass>
+    <button onclick="this.parentElement.connect()">Connect</button>
+  </vos-pass>
+</body>
+
+</html>
