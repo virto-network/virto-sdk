@@ -49,7 +49,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 .await
                 .map_err(|_| Error::BadBlockNumber)?;
 
-            vec![keys, format!("\"0x{}\"", hex::encode(&info.hash))]
+            vec![keys, format!("\"0x{}\"", hex::encode(info.hash))]
         } else {
             vec![keys]
         };

@@ -6,7 +6,7 @@ use crate::rpc::RpcClient;
 use crate::ws::Backend as WSBackend;
 use crate::{
     meta::BlockInfo, Backend, Error, ExtrinsicBody, Metadata, Response, Result as SubeResult,
-    Signer, StorageKey,
+    Signer,
 };
 use crate::{prelude::*, Offline, RawKey, RawValue};
 
