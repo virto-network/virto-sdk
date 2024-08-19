@@ -43,8 +43,6 @@ impl<R: Rpc> Backend for RpcClient<R> {
         )
         .expect("it to be a valid json");
 
-        log::info!("query_storage_at encoded: {}", keys);
-
         let params: Vec<String> = if let Some(block_number) = block {
             let info = self
                 .block_info(Some(block_number))
@@ -56,7 +54,6 @@ impl<R: Rpc> Backend for RpcClient<R> {
             vec![keys]
         };
 
-        log::info!("params encoded: {:?}", params);
 
         let result = self
             .0
