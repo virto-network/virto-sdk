@@ -78,9 +78,7 @@ async fn query<'m>(
     path: &str,
     block: Option<u32>,
 ) -> Result<Response<'m>> {
-    log::info!("path {}", path);
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
-    log::info!("pallet {}", pallet);
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
@@ -214,11 +212,9 @@ where
 
                 match response {
                     Response::Value(value) => {
-                        log::info!("{:?}", serde_json::to_string(&value));
                         let str = serde_json::to_string(&value).expect("wrong account info");
                         let account_info: AccountInfo =
                             serde_json::from_str(&str).expect("it must serialize");
-                        log::info!("{}", &account_info.nonce);
                         Ok(account_info.nonce)
                     }
                     _ => Err(Error::AccountNotFound),
@@ -392,6 +388,7 @@ pub trait Backend {
 
     async fn get_storage_item(&self, key: RawKey, block: Option<u32>) -> crate::Result<RawValue> {
         let res = self.get_storage_items(vec![key], block).await?;
+
         res.into_iter()
             .next()
             .map(|(_, v)| v)

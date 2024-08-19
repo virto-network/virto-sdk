@@ -66,10 +66,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
         let block = url
             .query_pairs()
             .find(|(k, _)| k == "at")
-            .map(|(_, v)| {
-                log::info!("hello world{:?}", v);
-                v.parse::<u32>().expect("at to be a number")
-            });
+            .map(|(_, v)| v.parse::<u32>().expect("at query params must be a number"));
 
         let path = url.path();
 

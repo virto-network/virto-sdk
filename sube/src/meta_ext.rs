@@ -199,7 +199,7 @@ pub trait EntryTy {
                     .into_iter()
                     .enumerate()
                     .map(|(i, type_id)| {
-                        log::info!("type_call_ids.i={} type_call_ids.type_id={}", i, type_id);
+                        log::trace!("type_call_ids.i={} type_call_ids.type_id={}", i, type_id);
                         let k = map_keys.get(i);
                         let hasher = hashers.get(i).expect("hasher not found");
 
