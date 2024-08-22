@@ -1,10 +1,22 @@
 use env_logger;
+use futures_util::future::join_all;
 use serde_json;
 use sube::{sube, ExtrinsicBody, Response, Result, SubeBuilder};
+
 
 #[async_std::main]
 async fn main() -> Result<()> {
     env_logger::init();
+
+    let response = sube!("wss://kreivo.io/communityMemberships/account/0xe25b1e3758a5fbedb956b36113252f9e866d3ece688364cc9d34eb01f4b2125d/2").await.expect("to work");
+
+    if let Response::ValueSet(value) = response {
+        let data = serde_json::to_value(&value).expect("to be serializable");
+        println!(
+            "Collection Array {}",
+            serde_json::to_string_pretty(&data).expect("it must return an str")
+        );
+    }
 
     let response = sube!("ws://127.0.0.1:12281/communityMemberships/collection").await?;
 

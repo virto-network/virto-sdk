@@ -388,7 +388,7 @@ pub trait Backend {
 
     async fn get_storage_item(&self, key: RawKey, block: Option<u32>) -> crate::Result<RawValue> {
         let res = self.get_storage_items(vec![key], block).await?;
-
+        log::info!("before it died");
         res.into_iter()
             .next()
             .map(|(_, v)| v)
