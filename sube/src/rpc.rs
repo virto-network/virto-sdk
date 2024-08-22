@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::meta::{self, Metadata};
 use crate::Backend;
 use crate::Error;
-use crate::{prelude::*, RawKey as RawStorageKey, RawValue as RawStorageValue, StorageChangeSet};
+use crate::{prelude::*, RawKey as RawStorageKey, StorageChangeSet};
 use meta::from_bytes;
 
 pub type RpcResult<T> = Result<T, error::Error>;
@@ -54,7 +54,6 @@ impl<R: Rpc> Backend for RpcClient<R> {
             vec![keys]
         };
 
-
         let result = self
             .0
             .rpc::<Vec<StorageChangeSet>>(
@@ -70,21 +69,21 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 log::error!("error state_queryStorageAt {:?}", err);
                 crate::Error::StorageKeyNotFound
             })?;
-        
+
         let result = match result.into_iter().next() {
             None => vec![],
-            Some(change_set) => {
-                let keys_response = change_set.changes.into_iter().map(|[k, v]| {
+            Some(change_set) => change_set
+                .changes
+                .into_iter()
+                .map(|[k, v]| {
                     log::info!("key: {} value: {}", k, v);
-    
+
                     (
                         hex::decode(&k[2..]).expect("to be an hex"),
                         hex::decode(&v[2..]).expect("to be an hex"),
                     )
-                }).collect();
-    
-                keys_response
-            }
+                })
+                .collect(),
         };
 
         Ok(result.into_iter())
