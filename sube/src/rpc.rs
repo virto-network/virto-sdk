@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::meta::{self, Metadata};
 use crate::Backend;
 use crate::Error;
-use crate::{prelude::*, RawKey, StorageChangeSet};
+use crate::{prelude::*, RawKey as RawStorageKey, RawValue as RawStorageValue, StorageChangeSet};
 use meta::from_bytes;
 
 pub type RpcResult<T> = Result<T, error::Error>;
@@ -32,7 +32,7 @@ pub struct RpcClient<R>(pub R);
 impl<R: Rpc> Backend for RpcClient<R> {
     async fn get_storage_items(
         &self,
-        keys: Vec<RawKey>,
+        keys: Vec<RawStorageKey>,
         block: Option<u32>,
     ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Vec<u8>)>> {
         let keys = serde_json::to_string(
@@ -70,29 +70,32 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 log::error!("error state_queryStorageAt {:?}", err);
                 crate::Error::StorageKeyNotFound
             })?;
+        
+        let result = match result.into_iter().next() {
+            None => vec![],
+            Some(change_set) => {
+                let keys_response = change_set.changes.into_iter().map(|[k, v]| {
+                    log::info!("key: {} value: {}", k, v);
+    
+                    (
+                        hex::decode(&k[2..]).expect("to be an hex"),
+                        hex::decode(&v[2..]).expect("to be an hex"),
+                    )
+                }).collect();
+    
+                keys_response
+            }
+        };
 
-        if let Some(change_set) = result.into_iter().next() {
-            let keys_response = change_set.changes.into_iter().map(|[k, v]| {
-                log::info!("key: {} value: {}", k, v);
-
-                (
-                    hex::decode(&k[2..]).expect("to be an hex"),
-                    hex::decode(&v[2..]).expect("to be an hex"),
-                )
-            });
-
-            Ok(keys_response)
-        } else {
-            Err(crate::Error::StorageKeyNotFound)
-        }
+        Ok(result.into_iter())
     }
 
     async fn get_keys_paged(
         &self,
-        from: RawKey,
+        from: RawStorageKey,
         size: u16,
-        to: Option<RawKey>,
-    ) -> crate::Result<Vec<RawKey>> {
+        to: Option<RawStorageKey>,
+    ) -> crate::Result<Vec<RawStorageKey>> {
         let result: Vec<String> = self
             .0
             .rpc(
