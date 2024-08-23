@@ -145,7 +145,9 @@ impl Backend {
                                 let mut messages = messages.lock().await;
                                 if let Some(channel) = messages.remove(&id) {
                                     log::debug!("Answered request id: {}", id);
-                                    channel.send(res).expect("receiver waiting");
+                                    if let Err(res) = channel.send(res) {
+                                        log::warn!("response error: {:?}", res);
+                                    }
                                 }
                             }
                         }
