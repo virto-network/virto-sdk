@@ -1,31 +1,31 @@
-use std::cell::OnceCell;
+use std::error::Error;
 
-use futures_util::{never::Never, sink::unfold, Sink, Stream, StreamExt};
-use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::spawn_local;
-use web_sys::{
-    js_sys::{global, Object, Reflect},
-    DedicatedWorkerGlobalScope, MessageEvent,
-};
+use futures_util::{Sink, Stream, StreamExt};
+use matrix_sdk::Client as MxClient;
 
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
+#[cfg(target_arch = "wasm32")]
+mod js_worker;
+#[cfg(target_arch = "wasm32")]
+use js_worker::get_commands_channel;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_commands_channel() -> (impl Stream<Item = RawCmd>, impl Sink<u32>) {
+    // TODO dummy
+    (
+        futures_util::stream::once(async {
+            RawCmd {
+                id: 0,
+                cmd: "dummy".into(),
+            }
+        }),
+        futures_util::sink::drain(),
+    )
 }
 
-#[wasm_bindgen(start)]
-pub async fn start() {
-    log("starting worker .-.");
-    if let Err(e) = setup().await {
-        log(&e.as_string().unwrap_or("-".into()))
-    }
-}
-
-async fn setup() -> Result<(), JsValue> {
-    let chan = setup_commands_channel();
-    handle_commands(chan).await;
-    // spawn_local(handle_commands(rx));
+pub async fn run() -> Result<(), Box<dyn Error>> {
+    let (cmds, res) = get_commands_channel();
+    let client = Client::new(cmds);
+    client.answer_commands(res).await;
     Ok(())
 }
 
@@ -34,71 +34,44 @@ struct RawCmd {
     cmd: String,
 }
 
-async fn handle_commands(chan: (impl Stream<Item = RawCmd>, impl Sink<u32>)) {
-    if chan
-        .0
-        .then(|RawCmd { id, cmd: _ }| async move {
-            log(&format!("doing magic! {id}"));
-            // TODO handle command
-            Ok(id)
-        })
-        .forward(chan.1)
-        .await
-        .is_err()
-    {
-        log("command stream closed");
-    }
+struct Client<Cmds> {
+    mx: Option<MxClient>,
+    cmd_stream: Option<Cmds>,
 }
 
-fn setup_commands_channel() -> (impl Stream<Item = RawCmd>, impl Sink<u32>) {
-    const ON_MSG: OnceCell<JsValue> = OnceCell::new();
-    async fn process_worker_message(
-        sender: async_channel::Sender<RawCmd>,
-        event: MessageEvent,
-    ) -> Result<(), JsValue> {
-        let Ok(message) = event.data().dyn_into::<Object>() else {
-            return Ok(());
-        };
-        let id = Reflect::get(&message, &"id".into())?
-            .as_f64()
-            .ok_or("Missing msg id")?
-            .round() as u32;
-        let cmd = Reflect::get(&message, &"cmd".into())?
-            .as_string()
-            .ok_or("Invalid command")?;
-
-        sender
-            .send(RawCmd { id, cmd })
-            .await
-            .map_err(|e| format!("processing: {e}").into())
+impl<Cmds: Stream<Item = RawCmd>> Client<Cmds> {
+    pub fn new(cmds: Cmds) -> Self {
+        Self {
+            mx: None,
+            cmd_stream: Some(cmds),
+        }
     }
 
-    let worker = global()
-        .dyn_into::<DedicatedWorkerGlobalScope>()
-        .expect("worker");
-    let (sender, cmd_stream) = async_channel::unbounded();
-
-    let on_msg = ON_MSG;
-    let on_msg = on_msg.get_or_init(move || {
-        let cb = Closure::wrap(Box::new(move |event| {
-            let s = sender.clone();
-            spawn_local(async move {
-                if let Err(err) = process_worker_message(s.clone(), event).await {
-                    log(&err
-                        .as_string()
-                        .unwrap_or_else(|| "incoming message error".to_string()))
+    pub async fn answer_commands(mut self, responder: impl Sink<u32>) {
+        let mut cmds = Box::pin(self.cmd_stream.take().unwrap());
+        // make sure we are connected or first command is to connect
+        if self.mx.is_none() {
+            while let Some(RawCmd { id, cmd }) = cmds.next().await {
+                if let Some(_args) = cmd.strip_prefix("auth ") {
+                    self.connect("todo!").await;
+                } else {
+                    log::debug!("ignored cmd `{id}`");
                 }
-            })
-        }) as Box<dyn FnMut(MessageEvent)>);
-        cb.into_js_value()
-    });
-    worker.set_onmessage(Some(on_msg.unchecked_ref()));
+            }
+        }
+        let _mx = self.mx.expect("matrix connected");
+        if cmds
+            .then(|RawCmd { id, cmd: _ }| async move { Ok(id) })
+            .forward(responder)
+            .await
+            .is_err()
+        {
+            log::warn!("command stream closed");
+        }
+    }
 
-    let reply_sender = unfold((), |_, id: u32| async move {
-        let worker = global().unchecked_into::<DedicatedWorkerGlobalScope>();
-        worker.post_message(&JsValue::from(id)).expect("foo");
-        Ok::<_, Never>(())
-    });
-
-    (cmd_stream, reply_sender)
+    async fn connect(&mut self, _user: &str) {
+        self.mx
+            .replace(MxClient::new("".try_into().unwrap()).await.expect("matrix"));
+    }
 }
