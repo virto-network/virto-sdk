@@ -15,15 +15,14 @@
 
     body {
       display: flex;
-      flex-direction: column;
       justify-content: center;
     }
   </style>
 </head>
 
 <body>
-  <vos-pass>
-    <button onclick="this.parentElement.connect()">Connect</button>
+  <vos-pass id="vos">
+    <button onclick="vos.open()">Connect</button>
   </vos-pass>
 </body>
 

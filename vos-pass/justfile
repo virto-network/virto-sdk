@@ -1,6 +1,8 @@
 build:
+    # cargo clean --release --target wasm32-unknown-unknown
     @mkdir -p dist
-    cargo build --release --target wasm32-unknown-unknown
-    @cp ./target/wasm32-unknown-unknown/release/vos_pass.wasm dist/
-    wasm-bindgen --out-dir dist --target web --no-typescript --remove-name-section dist/vos_pass.wasm
     @cp src/pass.js dist/
+    cargo build --release --target wasm32-unknown-unknown
+    @mv ./target/wasm32-unknown-unknown/release/vos_pass.wasm dist/
+    wasm-bindgen --out-dir dist --target web --no-typescript --remove-name-section dist/vos_pass.wasm
+    @echo 'await __wbg_init();' >> dist/vos_pass.js
