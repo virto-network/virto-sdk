@@ -1,3 +1,4 @@
+use crate::io::{self, Input, InputStream, Output, OutputSink};
 use core::cell::OnceCell;
 use futures_util::{never::Never, sink::unfold, Sink, Stream};
 use wasm_bindgen::prelude::*;
@@ -7,35 +8,35 @@ use web_sys::{
     DedicatedWorkerGlobalScope, MessageEvent,
 };
 
-use crate::{run, RawCmd};
-
-#[wasm_bindgen(start)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn start() {
+    wasm_logger::init(Default::default());
     log::debug!("worker started");
-    if let Err(_) = run().await {
+    if let Err(_) = crate::run().await {
         log::warn!("vos client setup failed");
     }
 }
 
-pub fn get_commands_channel() -> (impl Stream<Item = RawCmd>, impl Sink<u32>) {
+pub fn setup_io() -> (impl InputStream, impl OutputSink) {
     const ON_MSG: OnceCell<JsValue> = OnceCell::new();
     async fn process_worker_message(
-        sender: async_channel::Sender<RawCmd>,
+        sender: async_channel::Sender<Input>,
         event: MessageEvent,
     ) -> Result<(), JsValue> {
-        let Ok(message) = event.data().dyn_into::<Object>() else {
-            return Ok(());
-        };
-        let id = Reflect::get(&message, &"id".into())?
-            .as_f64()
-            .ok_or("Missing msg id")?
-            .round() as u32;
-        let cmd = Reflect::get(&message, &"cmd".into())?
-            .as_string()
-            .ok_or("Invalid command")?;
+        // let Ok(message) = event.data().dyn_into::<Object>() else {
+        //     return Ok(());
+        // };
+        let input: Input = serde_wasm_bindgen::from_value(event.data())?;
+        // let id = Reflect::get(&message, &"id".into())?
+        //     .as_f64()
+        //     .ok_or("Missing msg id")?
+        //     .round() as u32;
+        // let cmd = Reflect::get(&message, &"cmd".into())?
+        //     .as_string()
+        //     .ok_or("Invalid command")?;
 
         sender
-            .send(RawCmd { id, cmd })
+            .send(input)
             .await
             .map_err(|e| format!("processing: {e}").into())
     }
@@ -63,10 +64,11 @@ pub fn get_commands_channel() -> (impl Stream<Item = RawCmd>, impl Sink<u32>) {
     });
     worker.set_onmessage(Some(on_msg.unchecked_ref()));
 
-    let reply_sender = unfold((), |_, id: u32| async move {
+    let reply_sender = unfold((), |_, out: io::Result| async move {
         let worker = global().unchecked_into::<DedicatedWorkerGlobalScope>();
-        worker.post_message(&JsValue::from(id)).expect("foo");
-        Ok::<_, Never>(())
+        let out = serde_wasm_bindgen::to_value(&out).expect("output serialized");
+        worker.post_message(&out).expect("output sent");
+        Ok::<_, ()>(())
     });
 
     (cmd_stream, reply_sender)

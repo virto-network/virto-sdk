@@ -1,77 +1,84 @@
-use std::error::Error;
+use std::{error::Error, pin::Pin};
 
-use futures_util::{Sink, Stream, StreamExt};
-use matrix_sdk::Client as MxClient;
+use futures_util::{SinkExt, StreamExt};
+use io::{Auth, Input, InputStream, Output, OutputSink};
+use matrix_sdk::{ruma::UserId, Client as MxClient};
 
+mod io;
 #[cfg(target_arch = "wasm32")]
 mod js_worker;
 #[cfg(target_arch = "wasm32")]
-use js_worker::get_commands_channel;
+use js_worker::setup_io;
 
 #[cfg(not(target_arch = "wasm32"))]
-fn get_commands_channel() -> (impl Stream<Item = RawCmd>, impl Sink<u32>) {
+fn setup_io() -> (impl InputStream, impl OutputSink) {
     // TODO dummy
     (
-        futures_util::stream::once(async {
-            RawCmd {
-                id: 0,
-                cmd: "dummy".into(),
-            }
-        }),
-        futures_util::sink::drain(),
+        futures_util::stream::once(async { Input::Prompt("hello".into()) }),
+        futures_util::sink::unfold(Output::Empty, |o, _| async { Ok(o) }),
     )
 }
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
-    let (cmds, res) = get_commands_channel();
-    let client = Client::new(cmds);
-    client.answer_commands(res).await;
+    let (input, out) = setup_io();
+    let sh = Shell::new(input);
+    sh.process_input_stream(Box::pin(out)).await;
     Ok(())
 }
 
-struct RawCmd {
-    id: u32,
-    cmd: String,
-}
-
-struct Client<Cmds> {
+struct Shell {
     mx: Option<MxClient>,
-    cmd_stream: Option<Cmds>,
+    in_stream: Pin<Box<dyn InputStream>>,
 }
 
-impl<Cmds: Stream<Item = RawCmd>> Client<Cmds> {
-    pub fn new(cmds: Cmds) -> Self {
+impl Shell {
+    pub fn new(input: impl io::InputStream) -> Self {
         Self {
             mx: None,
-            cmd_stream: Some(cmds),
+            in_stream: Box::pin(input),
         }
     }
 
-    pub async fn answer_commands(mut self, responder: impl Sink<u32>) {
-        let mut cmds = Box::pin(self.cmd_stream.take().unwrap());
-        // make sure we are connected or first command is to connect
-        if self.mx.is_none() {
-            while let Some(RawCmd { id, cmd }) = cmds.next().await {
-                if let Some(_args) = cmd.strip_prefix("auth ") {
-                    self.connect("todo!").await;
-                } else {
-                    log::debug!("ignored cmd `{id}`");
-                }
-            }
+    pub async fn process_input_stream(mut self, mut out: Pin<Box<dyn OutputSink>>) {
+        while let Some(input) = self.in_stream.next().await {
+            out.send(self.handle_input(input).await)
+                .await
+                .unwrap_or_else(|_| {
+                    log::warn!("failed sending output");
+                });
         }
-        let _mx = self.mx.expect("matrix connected");
-        if cmds
-            .then(|RawCmd { id, cmd: _ }| async move { Ok(id) })
-            .forward(responder)
+    }
+
+    async fn handle_input(&mut self, input: Input) -> io::Result {
+        if !self.mx.as_ref().is_some_and(|m| m.logged_in()) {
+            return Ok(Output::WaitingAuth([0; 32]));
+        }
+        Ok(match input {
+            Input::Empty => todo!(),
+            Input::Auth(user, auth) => self.connect(&user, auth).await?,
+            Input::Prompt(_) => todo!(),
+            Input::Open(_) => todo!(),
+            Input::Answer(_) => todo!(),
+            Input::Data(_) => todo!(),
+        })
+    }
+
+    pub async fn connect(&mut self, user: &str, credentials: Auth) -> io::Result {
+        let mid = UserId::parse(user).map_err(|_| ())?;
+        let mx = MxClient::new(mid.server_name().as_str().try_into().unwrap())
             .await
-            .is_err()
-        {
-            log::warn!("command stream closed");
-        }
-    }
+            .map_err(|_| ())?;
 
-    async fn connect(&mut self, _user: &str) {
-        self.mx
-            .replace(MxClient::new("".try_into().unwrap()).await.expect("matrix"));
+        let auth = mx.matrix_auth();
+        let flows = auth.get_login_types().await.map_err(|_| ())?.flows;
+        log::info!("{:?}", flows);
+
+        match credentials {
+            Auth::Pwd { user: _, pwd: _ } => todo!(),
+            Auth::Credential {} => todo!(),
+        }
+
+        self.mx.replace(mx);
+        Ok(Output::Empty)
     }
 }
