@@ -5,6 +5,7 @@ pub type Result = core::result::Result<Output, ()>;
 pub type Id = u32;
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Input {
     Empty,
     Prompt(String),
@@ -14,11 +15,15 @@ pub enum Input {
     Data(Vec<u8>),
 }
 
+#[serde(rename_all = "camelCase")]
 #[derive(Debug, Deserialize)]
 pub enum Auth {
     Pwd { user: String, pwd: String },
-    Credential {},
+    Authenticator(AuthenticatorResponse),
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthenticatorResponse {}
 
 type Challenge = [u8; 32];
 
@@ -30,6 +35,7 @@ pub struct Message {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Output {
     Empty,
     Busy,

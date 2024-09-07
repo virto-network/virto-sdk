@@ -75,7 +75,7 @@ impl Shell {
 
         match credentials {
             Auth::Pwd { user: _, pwd: _ } => todo!(),
-            Auth::Credential {} => todo!(),
+            Auth::Authenticator(_) => todo!(),
         }
 
         self.mx.replace(mx);

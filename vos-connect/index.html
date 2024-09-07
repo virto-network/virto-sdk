@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pass component</title>
-  <script async src="dist/pass.js" type="module"></script>
+  <script async src="dist/vos.js" type="module"></script>
   <style>
     html,
     body {
@@ -21,9 +21,7 @@
 </head>
 
 <body>
-  <vos-pass id="vos">
-    <button onclick="vos.open()">Connect</button>
-  </vos-pass>
+  <vos-connect id="vos" servers="virto.community matrix.org"></vos-connect>
 </body>
 
 </html>
