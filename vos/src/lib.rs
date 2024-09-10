@@ -1,64 +1,84 @@
-use core::fmt;
-use matrix_sdk::{
-    config::SyncSettings,
-    ruma::{events::room::message::SyncRoomMessageEvent, UserId},
-    Client,
-};
-use std::path::PathBuf;
+use std::{error::Error, pin::Pin};
 
-mod command_engine;
+use futures_util::{SinkExt, StreamExt};
+use io::{Auth, Input, InputStream, Output, OutputSink};
+use matrix_sdk::{ruma::UserId, Client as MxClient};
 
-pub struct Cfg<'a> {
-    pub uid: &'a str,
-    pub pwd: &'a str,
-    pub home: PathBuf,
+mod io;
+#[cfg(target_arch = "wasm32")]
+mod js_worker;
+#[cfg(target_arch = "wasm32")]
+use js_worker::setup_io;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn setup_io() -> (impl InputStream, impl OutputSink) {
+    // TODO dummy
+    (
+        futures_util::stream::once(async { Input::Prompt("hello".into()) }),
+        futures_util::sink::unfold(Output::Empty, |o, _| async { Ok(o) }),
+    )
 }
 
-pub async fn start(cfg: Cfg<'_>) -> Result<(), Error> {
-    let Cfg { uid, pwd, home } = cfg;
-
-    let db_path = home.join("matrix");
-    let bot = start_matrix_client(uid, pwd, db_path.to_str().expect("unicode")).await?;
-    bot.sync(SyncSettings::default())
-        .await
-        .map_err(|_| Error::MatrixSync)?;
+pub async fn run() -> Result<(), Box<dyn Error>> {
+    let (input, out) = setup_io();
+    let sh = Shell::new(input);
+    sh.process_input_stream(Box::pin(out)).await;
     Ok(())
 }
 
-#[derive(Debug)]
-pub enum Error {
-    MatrixSetup(&'static str),
-    MatrixSync,
+struct Shell {
+    mx: Option<MxClient>,
+    in_stream: Pin<Box<dyn InputStream>>,
 }
-impl std::error::Error for Error {}
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::MatrixSetup(e) => write!(f, "matrix setup error: {e}"),
-            Error::MatrixSync => write!(f, "matrix sync error"),
+
+impl Shell {
+    pub fn new(input: impl io::InputStream) -> Self {
+        Self {
+            mx: None,
+            in_stream: Box::pin(input),
         }
     }
-}
 
-async fn start_matrix_client(uid: &str, pwd: &str, db_path: &str) -> Result<Client, Error> {
-    let uid = <&UserId>::try_from(uid).map_err(|_| Error::MatrixSetup("bad bot id"))?;
-    let client = Client::builder()
-        .server_name(uid.server_name())
-        .sqlite_store(db_path, Some(pwd))
-        .build()
-        .await
-        .map_err(|_| Error::MatrixSetup("creating client"))?;
-    client
-        .matrix_auth()
-        .login_username(uid, pwd)
-        .device_id("VOS-FIDO-1")
-        .send()
-        .await
-        .map_err(|_| Error::MatrixSetup("credentials"))?;
+    pub async fn process_input_stream(mut self, mut out: Pin<Box<dyn OutputSink>>) {
+        while let Some(input) = self.in_stream.next().await {
+            out.send(self.handle_input(input).await)
+                .await
+                .unwrap_or_else(|_| {
+                    log::warn!("failed sending output");
+                });
+        }
+    }
 
-    client.add_event_handler(|ev: SyncRoomMessageEvent| async move {
-        println!("Received a message {:?}", ev);
-    });
+    async fn handle_input(&mut self, input: Input) -> io::Result {
+        if !self.mx.as_ref().is_some_and(|m| m.logged_in()) {
+            return Ok(Output::WaitingAuth([0; 32]));
+        }
+        Ok(match input {
+            Input::Empty => todo!(),
+            Input::Auth(user, auth) => self.connect(&user, auth).await?,
+            Input::Prompt(_) => todo!(),
+            Input::Open(_) => todo!(),
+            Input::Answer(_) => todo!(),
+            Input::Data(_) => todo!(),
+        })
+    }
 
-    Ok(client)
+    pub async fn connect(&mut self, user: &str, credentials: Auth) -> io::Result {
+        let mid = UserId::parse(user).map_err(|_| ())?;
+        let mx = MxClient::new(mid.server_name().as_str().try_into().unwrap())
+            .await
+            .map_err(|_| ())?;
+
+        let auth = mx.matrix_auth();
+        let flows = auth.get_login_types().await.map_err(|_| ())?.flows;
+        log::info!("{:?}", flows);
+
+        match credentials {
+            Auth::Pwd { user: _, pwd: _ } => todo!(),
+            Auth::Authenticator(_) => todo!(),
+        }
+
+        self.mx.replace(mx);
+        Ok(Output::Empty)
+    }
 }

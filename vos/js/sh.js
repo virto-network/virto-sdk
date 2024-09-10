@@ -26,7 +26,7 @@ export class Shell {
   constructor() {
     if (!Shell.worker) {
       let params = new URL(import.meta.url).searchParams
-      Shell.worker = new Worker(new URL(`vos_pass.js?${params}`, import.meta.url), { type: 'module' })
+      Shell.worker = new Worker(new URL(`vos.js?${params}`, import.meta.url), { type: 'module' })
       Shell.worker.addEventListener('message', this.#onMsg)
     }
   }
@@ -39,17 +39,16 @@ export class Shell {
     return this.send({ prompt })
   }
 
-  async connect(user, credentials) {
-    const id = mxId(user)
-    if (!id) throw new ConnectError({ msg: `Mxid ${user}` })
+  async connect(id, credentials) {
+    if (!id) throw new ConnectError({ msg: `Mxid ${id}` })
     try { await this.ping() } catch (e) {
       if (e instanceof ConnectError) challenge = e.challenge
       throw e
     }
     credentials = typeof credentials == 'string'
-      ? { pwd: { user, pwd: credentials } }
+      ? { pwd: { user: `${id}`, pwd: credentials } }
       : { authenticator: credentials }
-    return this.send({ auth: [user, credentials] })
+    return this.send({ auth: [`${id}`, credentials] })
   }
 
   async* updates() { yield this.output }
@@ -69,15 +68,3 @@ class ConnectError extends Error {
   }
 }
 
-function mxId(id) {
-  if (!id.startsWith('@')) return
-  let [user, server] = id.slice(1).split(':')
-  if (user.length == 0) return
-  if (!server) return
-  try { server = new URL(`https://${server}`) } catch { return }
-  return {
-    user,
-    server,
-    toString() { return `@${this.user}:${this.server.host}` }
-  }
-}
