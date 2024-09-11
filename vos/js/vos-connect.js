@@ -6,10 +6,7 @@ const html = tagFn(s => new DOMParser().parseFromString(`<template>${s}</templat
 const css = tagFn(s => new CSSStyleSheet().replace(s))
 
 const formTp = html`
-<form id="auth" method="dialog">
-  <mx-id></mx-id>
-  <button>connect with passkey</button>
-</form>
+<mx-login-dialog part="login-form"></mx-login-dialog>
 `
 const formCss = await css`
 :host {
@@ -18,7 +15,6 @@ const formCss = await css`
   width: 100%;
 }
 `
-
 /*
  * The Connect element includes everything you need to interact with your VOS
  */
@@ -27,32 +23,30 @@ export class Connect extends HTMLElement {
   static observedAttributes = ['servers']
 
   // DOM elements
-  #$mxId
-  #$auth
+  #$form
 
-  #onAuth = async (e) => this.connect(e.target.username.value)
+  // #onAuth = async (e) => this.connect(e.target.username.value)
 
   sh = new Shell()
 
   constructor() {
     super()
-    let shadow = this.attachShadow({ mode: 'open' })
+    let shadow = this.attachShadow({ mode: 'open', delegatesFocus: true })
     shadow.append(formTp.content.cloneNode(true))
     shadow.adoptedStyleSheets = [formCss]
 
-    this.#$mxId = shadow.querySelector('mx-id')
-    this.#$auth = shadow.querySelector('form')
+    this.#$form = shadow.querySelector('mx-login-dialog')
   }
 
   connectedCallback() {
-    this.#$auth.addEventListener('submit', this.#onAuth)
+    // this.#$auth.addEventListener('submit', this.#onAuth)
     if (!this.deviceId) this.dataset.deviceId = randString(8)
     console.log(this.getAttribute('servers'))
   }
 
   attributeChangedCallback(name, a, attr) {
     switch (name) {
-      case 'servers': this.#$mxId.serverList = attr.split(' ')
+      case 'servers': this.#$form.user.serverList = attr.split(' ')
         break
     }
   }
