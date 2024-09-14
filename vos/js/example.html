@@ -8,30 +8,77 @@
   <script async src="vos-connect.js" type="module"></script>
   <style>
     :root {
+      --color-txt: darkslategray;
       --color-accent: lightgreen;
       --color-outline: darkseagreen;
+      --mx-login-height: 10rem;
+      --mx-login-width: 50vw;
     }
 
-    html,
     body {
       all: initial;
-      height: 100%;
-    }
-
-    body {
+      height: 100vh;
       display: flex;
-      justify-content: center;
+      flex-direction: column-reverse;
     }
 
-    vos-connect::part(login-form) {
-      height: 210px;
-      width: 250px;
+    nav {
+      display: flex;
+      border-top: 1px solid var(--color-outline);
+
+      & mx-prompt {
+        padding: 0.3rem;
+        flex: 1;
+      }
+
+      vos-connect {
+        padding: 0.3rem;
+
+        &>button {
+          max-height: 3rem;
+        }
+
+        /* login form can also be adjusted directly */
+        &::part(login-form) {}
+      }
+    }
+
+    #messages {
+      display: flex;
+      flex: 1;
+      flex-direction: column-reverse;
+      overflow-y: auto;
+
+      & mx-msg:not(:first-child) {
+        border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+      }
     }
   </style>
 </head>
 
 <body>
-  <vos-connect id="vos" servers="virto.community matrix.org"></vos-connect>
+  <nav>
+    <mx-prompt></mx-prompt>
+    <!-- only this component is necessary to interact with the VOS -->
+    <vos-connect id="vos" servers="virto.community matrix.org">
+      <button>connect</button>
+      <template slot="connected" with="user">
+        <img alt="${user.name}" src="${user.avatar}" />
+      </template>
+      <p slot="login-form">Create or connect a matrix account</p>
+    </vos-connect>
+  </nav>
+
+  <main id="messages"></main>
 </body>
+<script type="module">
+  const messages = document.getElementById('messages')
+  await customElements.whenDefined('mx-prompt')
+  for await (let message of document.querySelector('mx-prompt')) {
+    let msg = Object.assign(document.createElement('mx-msg'), {message})
+    messages.insertBefore(msg, messages.firstChild)
+    msg.scrollIntoView({behavior: 'smooth'})
+  }
+</script>
 
 </html>

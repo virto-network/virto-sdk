@@ -4,28 +4,52 @@ import { Shell } from './sh.js'
 const tagFn = fn => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, '').concat(strings[parts.length]))
 const html = tagFn(s => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'))
 const css = tagFn(s => new CSSStyleSheet().replace(s))
+const PARAMS = new URL(import.meta.url).searchParams
 
+/*
+ * The Connect element includes everything you need to interact with VOS
+ */
 const formTp = html`
-<mx-login-dialog part="login-form"></mx-login-dialog>
+<dialog id="login">
+  <mx-login-form part="login-form">
+    <slot name="login-form"></slot>
+  </mx-login-form>
+</dialog>
+<div id="connect"><slot></slot></div>
+<div id="connected" hidden><slot name="connected"></slot></div>
 `
 const formCss = await css`
 :host {
+  display: inline-block;
+  height: 1.8rem;
+  vertical-aligh: top;
 }
-::slotted(button) {
-  width: 100%;
+#connect { height: 100%; }
+#connect ::slotted(button) {
+  background: var(--color-accent);
+  border-radius: var(--border-radius, 2px);
+  border: none;
+  color: white;
+  display: inline-block;
+  height: 100%;
+  padding: 0 0.5rem;
+}
+dialog#login {
+  padding: 0;
+  border: none;
+}
+mx-login-form {
+  border: 1px solid var(--color-outline, #999);
 }
 `
-/*
- * The Connect element includes everything you need to interact with your VOS
- */
 export class Connect extends HTMLElement {
   static tag = 'vos-connect'
   static observedAttributes = ['servers']
 
   // DOM elements
-  #$form
-
-  // #onAuth = async (e) => this.connect(e.target.username.value)
+  #$loginDialog
+  #$loginForm
+  #$connect
 
   sh = new Shell()
 
@@ -35,18 +59,19 @@ export class Connect extends HTMLElement {
     shadow.append(formTp.content.cloneNode(true))
     shadow.adoptedStyleSheets = [formCss]
 
-    this.#$form = shadow.querySelector('mx-login-dialog')
+    this.#$loginDialog = shadow.querySelector('#login')
+    this.#$loginForm = this.#$loginDialog.firstElementChild
+    this.#$connect = shadow.querySelector('#connect')
   }
 
   connectedCallback() {
-    // this.#$auth.addEventListener('submit', this.#onAuth)
     if (!this.deviceId) this.dataset.deviceId = randString(8)
-    console.log(this.getAttribute('servers'))
+    this.#$connect.addEventListener('click', () => this.#$loginDialog.showModal())
   }
 
-  attributeChangedCallback(name, a, attr) {
+  attributeChangedCallback(name, _a, attr) {
     switch (name) {
-      case 'servers': this.#$form.user.serverList = attr.split(' ')
+      case 'servers': this.#$loginForm.user.serverList = attr.split(' ')
         break
     }
   }
@@ -64,8 +89,9 @@ export class Connect extends HTMLElement {
   }
 
   get deviceId() { return this.dataset.deviceId }
+
 }
-customElements.define(Connect.tag, Connect)
+if (PARAMS.get('def') != 'no') customElements.define(Connect.tag, Connect)
 
 async function createAuthCredential(mxid, challenge) {
   const url = new URL(import.meta.url)
