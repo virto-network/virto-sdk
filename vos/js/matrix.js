@@ -13,7 +13,7 @@ const i18 = new Proxy({
  */
 const userIdTp = html`
 <div id="userId" class="input">
-  <span>@</span><input id="user" placeholder="${i18.user}" autocapitalize="none" />
+  <span>@</span><input id="user" placeholder="${i18.user}" autocapitalize="none" enterkeyhint="next"/>
   <span>:</span><input id="server" list="server-list" />
   <datalist id="server-list"></datalist>
 </div>
@@ -170,37 +170,42 @@ export function parseMxId(id) {
  *
  */
 const formTp = html`
-<div id="context"><slot></slot></div>
-<form>
-  <label>
-    <div class="label">${i18.user}</div>
-    <mx-id id="id" name="id" required></mx-id>
-  </label>
-  <label>
-    <div class="label">${i18.pwd}</div>
-    <input id="pwd" name="pwd" class="input" type="password" placeholder="${i18.pwd}" required />
-  </label>
-  <button>${i18.connect}</button>
-</form>
+<section id="connect" part="connect-form">
+  <div id="context"><slot></slot></div>
+  <form>
+    <label>
+      <div class="label">${i18.user}</div>
+      <mx-id id="id" name="id" required></mx-id>
+    </label>
+    <label>
+      <div class="label">${i18.pwd}</div>
+      <input id="pwd" name="pwd" class="input" type="password" placeholder="${i18.pwd}" required />
+    </label>
+    <button>${i18.connect}</button>
+  </form>
+</section>
+<section id="connected" hidden><slot name="connected"></slot></section>
 `
 const formCss = await css`
 :host {
-  --mx-login-width: 18rem;
   --mx-login-height: 20rem;
   box-sizing: border-box;
   color: var(--colot-txt, #111);
+  display: block;
+  font-familty: sans;
+  padding: 0.4rem 0.6rem;
+}
+::slotted(p) { margin: 0; }
+#connect {
+  box-sizing: border-box;
   container-type: size;
   display: flex;
   flex-direction: column;
-  font-familty: sans;
   height: var(--mx-login-height);
   justify-content: center;
   overflow-y: auto;
-  padding: 1rem;
-  width: var(--mx-login-width);
-}
-::slotted(p) {
-  margin: 0;
+  width: 100%;
+  &[hidden] { display: none; }
 }
 #context {
   color: var(--color-txt, #111);
@@ -245,14 +250,15 @@ button {
   button { margin: 0 0.3rem; width: fit-content; }
   form { display: flex; }
   label .label { display: inline; margin: auto 0.3rem auto 0; }
-  label { display: flex; height: 100%; font-size: 0.9em; margin-right: 0.3rem }
+  label { display: flex; flex: 1; height: 100%; font-size: 0.9em; margin-right: 0.3rem }
   :is(#id, #pwd.input) { margin: 0; }
 }
 `
-export class LoginForm extends HTMLElement {
-  static TAG = 'mx-login-form'
-
+export class MxConnect extends HTMLElement {
+  static TAG = 'mx-connect'
   #$form
+  #$connect
+  #$connected
 
   constructor() {
     super()
@@ -261,6 +267,8 @@ export class LoginForm extends HTMLElement {
     shadow.adoptedStyleSheets = [inputCss, formCss]
 
     this.#$form = shadow.querySelector('form')
+    this.#$connect = shadow.querySelector('#connect')
+    this.#$connected = shadow.querySelector('#connected')
     this.user = shadow.querySelector('mx-id')
   }
 
@@ -270,32 +278,45 @@ export class LoginForm extends HTMLElement {
 
   #onSubmit = (e) => {
     e.preventDefault()
-    console.log(new FormData(this.#$form))
+    console.log('connected', new FormData(this.#$form))
+    this.#$connect.hidden = true
+    this.#$connected.hidden = false
   }
 }
-customElements.define(LoginForm.TAG, LoginForm)
+customElements.define(MxConnect.TAG, MxConnect)
 
 /*
  *
  */
 const promptTp = html`
-<header part="header"><slot name="header"></slot></header>
-<main class="empty">
+<aside id="more"><slot name="more"></slot></aside>
+<main class="empty" part="prompt">
   <span id="placeholder">${i18.prompt}</span>
-  <pre id="input" contenteditable><br></pre>
+  <pre id="input" contenteditable enterkeyhint="send"><br></pre>
+  <div id="helpers"><slot></slot></div>
 </main>
-<aside part="extra"><slot name="extra"></slot></aside>
+<div part="action"></div>
+`
+const emojiTp = html`
+<emoji-picker class="popover light" popover="auto"></emoji-picker>
+<button popovertargetaction="toggle">☻</button>
 `
 const promptCss = await css`
-:host { display: inline-flex; width: 50vw; }
+:host {
+  --prompt-bg: var(--color-bg, #CCC);
+  display: inline-flex;
+  position: relative;
+  width: 50vw;
+}
 :host([type=code]) #input { font-family: monospace; }
 :host(:focus) {
   & main { border: 1px solid var(--color-accent); }
   & #placeholder { display: none; }
 }
 main {
-  border: 1px solid var(--color-outline);
+  border: 1px solid transparent;
   box-sizing: border-box;
+  display: inline-flex;
   height: 100%;
   padding: 0.3rem;
   position: relative;
@@ -303,15 +324,15 @@ main {
   &:not(.empty) #placeholder { display: none; }
 }
 #placeholder {
-  position: absolute;
-  pointer-events: none;
-  top: 0.3rem; left: 0.3rem;
+  cursor: text;
   color: rgba(0, 0, 0, 0.4);
   font-size: 0.9em;
+  flex-shrink: 0;
+  margin: auto 0;
 }
 #input {
   font-family: sans-serif;
-  margin: 0;
+  margin: auto 0;
   line-height: 1.2em;
   outline: none;
   width: 100%;
@@ -319,52 +340,96 @@ main {
   overflow-wrap: break-word;
   white-space: pre-wrap;
 }
+#helpers ::slotted(button) {
+  background: none;
+  border-radius: 1rem;
+  border: none;
+  color: var(--color-outline);
+  font-size: 1.2em;
+  height: 1.8rem;
+  line-height: 1rem;
+  vertical-align: middle;
+  white-space: nowrap;
+  width: 1.8rem;
+}
+#helpers ::slotted(button:is(:hover,:focus)) { color: var(--color-white, #FFF); background: var(--color-outline); }
+#helpers ::slotted(button:active) { background: var(--color-accent); }
+#helpers ::slotted(.popover) { border: 1px solid var(--color-outline); display: revert; }
+#helpers ::slotted(.popover:popover-open) {
+  position: absolute;
+  inset: unset;
+  bottom: 0;
+  right: 0;
+}
 `
 export class Prompt extends HTMLElement {
   static TAG = 'mx-prompt'
+  static EMOJI_PICKER_URL = 'https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js'
+  static formAssociated = true
 
   #$input
-
-  #lastMessage
-  #lastMsgReady
+  #internals
+  #helpers = []
 
   constructor() {
     super()
     let shadow = this.attachShadow({ mode: 'closed', delegatesFocus: true })
     shadow.append(promptTp.content.cloneNode(true))
     shadow.adoptedStyleSheets = [promptCss]
+    this.#internals = this.attachInternals()
 
     this.#$input = shadow.querySelector('#input')
-    this.#lastMessage = new Promise(res => this.#lastMsgReady = res)
+    this.#helpers = this.getAttribute('helpers')?.split(' ')
   }
 
   connectedCallback() {
     this.addEventListener('blur', () => this.#$input.parentElement.classList.toggle('empty', !this.value))
     this.#$input.addEventListener('keypress', this.#enterSubmitOrNewLine)
+    this.#insert('', true)
+    if (this.#helpers?.includes('emoji')) {
+      import(Prompt.EMOJI_PICKER_URL).then(() => {
+        let [picker, btn] = emojiTp.content.cloneNode(true).children
+        btn.popoverTargetElement = picker
+        this.append(picker, btn)
+      })
+      this.addEventListener('emoji-click', ({ target, detail }) => {
+        target.hidePopover()
+        this.#insert(detail.unicode)
+      })
+    }
   }
 
   send() {
-    if (!this.value) return;
-    this.#lastMsgReady(this.value)
-    this.#$input.innerHTML = '\n'
-    this.#lastMessage = new Promise(res => this.#lastMsgReady = res)
+    if (!this.value) return
+    this.#insert('', true)
   }
 
   get value() { return this.#$input.textContent.trim() }
 
-  async*[Symbol.asyncIterator]() {
-    while (this.#lastMessage) yield this.#lastMessage
+  // form-associated custom element
+  get form() { return this.#internals.form }
+  get name() { return this.getAttribute('name') }
+  get type() { return this.localName }
+  get validity() { return this.#internals.validity }
+  get validationMessage() { return this.#internals.validationMessage }
+  get willValidate() { return this.#internals.willValidate }
+  checkValidity() { return this.#internals.checkValidity() }
+  reportValidity() { return this.#internals.reportValidity() }
+
+  #insert(txt, replace = false) {
+    if (replace) this.#$input.innerHTML = '\n'
+    if (txt) {
+      let t = this.#$input.lastChild
+      t.textContent = `${t.textContent.slice(0, -1)}${txt}\n`
+      getSelection().collapse(t, t.textContent.length - 1);
+    }
   }
 
   #enterSubmitOrNewLine = e => {
-    if (e.code == 'Enter') {
+    if (e.key == 'Enter') {
       e.preventDefault();
-      if (e.shiftKey) {
-        this.#$input.append('\n')
-        getSelection().collapse(this.#$input.lastChild);
-      } else {
-        this.send()
-      }
+      if (e.shiftKey) this.#insert('\n')
+      else this.send()
     }
   }
 }
@@ -374,8 +439,10 @@ customElements.define(Prompt.TAG, Prompt)
  *
  */
 const msgTp = html`
+<header part="header"><slot name="header"></slot></header>
 <time part="time"></time>
-<div id="content"></div>
+<main id="content"></main>
+<aside part="extra"><slot name="extra"></slot></aside>
 `
 const msgCss = await css`
 :host {
@@ -394,7 +461,7 @@ time {
   font-style: italic;
   font-size: 0.7em;
   position: absolute;
-  bottom: var(--msg-spacing);
+  bottom: calc(var(--msg-spacing) - (var(--msg-spacing) / 2));
   right: var(--msg-spacing);
 }
 `
