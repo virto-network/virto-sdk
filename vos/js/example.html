@@ -63,18 +63,18 @@
     <!-- optional content shown once connected -->
     <!-- example form with multiple types of inputs to send different kinds of commands to VOS -->
     <form id="vos-input" slot="connected">
-      <input-switcher name="type" default="text">
+      <input-switcher name="type" default="code">
         <template data-value="text" data-ic="✎" data-option="Text message">
-          <mx-prompt helpers="emoji"></mx-prompt>
+          <mx-prompt name="message" helpers="emoji"></mx-prompt>
         </template>
-        <template data-value="code" data-ic="⌨︎" data-option="Script">
-          <mx-prompt></mx-prompt>
+        <template data-value="code" data-ic="⌨︎" data-option="Code">
+          <mx-prompt name="script" class="code"></mx-prompt>
         </template>
         <template data-value="audio" data-ic="♫" data-option="Audio">
-          <p><i>soon</i></p>
+          <i>soon</i>
         </template>
         <template data-value="files" data-ic="📄" data-option="Files">
-          <p><i>soon</i></p>
+          <i>soon</i>
         </template>
       </input-switcher>
     </form>

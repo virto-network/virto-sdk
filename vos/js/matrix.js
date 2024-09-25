@@ -308,7 +308,7 @@ const promptCss = await css`
   position: relative;
   width: 50vw;
 }
-:host([type=code]) #input { font-family: monospace; }
+:host(.code) #input { font-family: monospace; }
 :host(:focus) {
   & main { border: 1px solid var(--color-accent); }
   & #placeholder { display: none; }
@@ -318,6 +318,7 @@ main {
   box-sizing: border-box;
   display: inline-flex;
   height: 100%;
+  min-height: 2.4rem;
   padding: 0.3rem;
   position: relative;
   width: 100%;
@@ -332,13 +333,13 @@ main {
 }
 #input {
   font-family: sans-serif;
-  margin: auto 0;
   line-height: 1.2em;
+  margin: auto 0;
   outline: none;
-  width: 100%;
-  overflow: hidden;
   overflow-wrap: break-word;
+  overflow: hidden;
   white-space: pre-wrap;
+  width: 100%;
 }
 #helpers ::slotted(button) {
   background: none;
@@ -401,6 +402,7 @@ export class Prompt extends HTMLElement {
 
   send() {
     if (!this.value) return
+    this.#internals.setFormValue(this.name, this.value)
     this.#insert('', true)
   }
 

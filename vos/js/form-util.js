@@ -28,11 +28,13 @@ const switchCss = await css`
 }
 main {
   flex: 1;
-  &>* { width: 100%; }
+  display: flex;
+  &>[name] { flex: 1; }
 }
 #options {
   border: 1px solid var(--color-outline);
   border-radius: 2px;
+  padding: 0;
   &:popover-open {
     position: absolute;
     inset: unset;
@@ -41,17 +43,25 @@ main {
   }
 }
 li {
-  &::before { content: attr(data-ic) '  '; }
-  &:hover { background: var(--color-outline, #eee); cursor: pointer; }
+  padding: 0.5rem;
+  &::before { content: attr(data-ic) ' '; }
+  &:is(:hover,:focus) {
+    background: var(--color-outline, #eee);
+    color: white;
+    cursor: pointer;
+    outline: none;
+  }
 }
 button {
   background: none;
   border-radius: 1rem;
   border: none;
+  box-sizing: border-box;
   color: var(--color-outline);
-  font-size: 1.2em;
   height: 1.8rem;
   line-height: 1rem;
+  margin-right: 0.2rem;
+  overflow: hidden;
   vertical-align: middle;
   white-space: nowrap;
   width: 1.8rem;
@@ -83,18 +93,14 @@ export class Switcher extends HTMLElement {
     this.querySelectorAll('template').forEach(tpl => {
       let value = tpl.dataset.value
       if (!value) return
+      this.#$options.append(this.#initOption(tpl.dataset))
       this.#options[value] = tpl
     })
-    Object.entries(this.#options).map(([opt, t]) => {
-      let li = document.createElement('li')
-      li.textContent = t.dataset.option
-      li.dataset.ic = t.dataset.ic
-      li.dataset.value = opt
-      this.#$options.append(li)
-    })
-    this.#$options.addEventListener('click', e => {
-      this.select(e.target.dataset.value)
-      this.#$options.hidePopover()
+    this.#$options.addEventListener('click', this.#optionSelected)
+    this.#$options.addEventListener('keypress', this.#optionSelected)
+    this.#$options.addEventListener('keydown', e => {
+      if (e.key == 'ArrowUp' || e.key == 'k') e.target.previousElementSibling?.focus()
+      if (e.key == 'ArrowDown' || e.key == 'j') e.target.nextElementSibling?.focus()
     })
     this.select(this.getAttribute('default'))
   }
@@ -104,6 +110,21 @@ export class Switcher extends HTMLElement {
     this.#$btn.textContent = this.#options[opt].dataset.ic
     const selection = this.#options[opt].content.cloneNode(true)
     this.#$current.replaceChildren(selection)
+  }
+
+  #optionSelected = (e) => {
+    if (e.key && e.key != 'Enter') return
+    this.select(e.target.dataset.value)
+    this.#$options.hidePopover()
+  }
+
+  #initOption({ option, ic, value }) {
+    let li = document.createElement('li')
+    li.textContent = option
+    li.dataset.ic = ic
+    li.dataset.value = value
+    li.tabIndex = 1
+    return li
   }
 
   // form-associated custom element
