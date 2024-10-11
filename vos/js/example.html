@@ -61,14 +61,14 @@
     <!-- you can inject some extra context to the login form -->
     <p>Create or connect a matrix account</p>
     <!-- optional content shown once connected -->
-    <!-- example form with multiple types of inputs to send different kinds of commands to VOS -->
+    <!-- this example form uses a switcher to try out different kinds of inputs to send different kinds of commands to VOS -->
     <form id="vos-input" slot="connected">
-      <input-switcher name="type" default="code">
-        <template data-value="text" data-ic="✎" data-option="Text message">
-          <mx-prompt name="message" helpers="emoji"></mx-prompt>
+      <input-switcher name="type" default="src">
+        <template data-value="msg" data-ic="✎" data-option="Text message">
+          <mx-prompt name="msg" helpers="emoji"></mx-prompt>
         </template>
-        <template data-value="code" data-ic="⌨︎" data-option="Code">
-          <mx-prompt name="script" class="code"></mx-prompt>
+        <template data-value="src" data-ic="⌨︎" data-option="Code">
+          <mx-prompt name="src" class="code"></mx-prompt>
         </template>
         <template data-value="audio" data-ic="♫" data-option="Audio">
           <i>soon</i>
@@ -93,6 +93,7 @@
   let welcome = document.getElementById('welcome')
   for await (let data of streamingFormData('form')) {
     if (welcome) welcome = welcome.remove()
+    console.log('got msg', data)
 
     //let msg = Object.assign(document.createElement('mx-msg'), {message})
     //messages.insertBefore(msg, messages.firstChild)
