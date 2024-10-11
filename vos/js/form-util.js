@@ -9,8 +9,8 @@ export async function* streamingFormData(selector) {
   let lastMsg = new Promise(res => lastMsgReady = res)
   form.addEventListener('submit', e => {
     e.preventDefault()
-    console.log('submitted')
     lastMsgReady(new FormData(form))
+    lastMsg = new Promise(res => lastMsgReady = res)
   })
   while (lastMsg) yield lastMsg
 }
@@ -19,18 +19,15 @@ export async function* streamingFormData(selector) {
 const switchTp = html`
 <ul id="options" popover="auto"></ul>
 <button popovertarget="options" popovertargetaction="toggle"></button>
-<main></main>
+<main><slot></slot></main>
 `
 const switchCss = await css`
 :host {
   display: flex;
   align-items: center;
 }
-main {
-  flex: 1;
-  display: flex;
-  &>[name] { flex: 1; }
-}
+main { flex: 1; display: flex; }
+main ::slotted([name]) { flex: 1; }
 #options {
   border: 1px solid var(--color-outline);
   border-radius: 2px;
@@ -71,11 +68,12 @@ export class Switcher extends HTMLElement {
   static TAG = 'input-switcher'
   static formAssociated = true
 
-  #$btn
-  #$options
-  #$current
+  #$switchBtn
+  #$optionList
+
   #internals
   #options = {}
+  value = null
 
   constructor() {
     super()
@@ -84,21 +82,20 @@ export class Switcher extends HTMLElement {
     shadow.adoptedStyleSheets = [switchCss]
     this.#internals = this.attachInternals()
 
-    this.#$btn = shadow.querySelector('button')
-    this.#$options = shadow.querySelector('#options')
-    this.#$current = shadow.querySelector('main')
+    this.#$switchBtn = shadow.querySelector('button')
+    this.#$optionList = shadow.querySelector('#options')
   }
 
   connectedCallback() {
     this.querySelectorAll('template').forEach(tpl => {
       let value = tpl.dataset.value
       if (!value) return
-      this.#$options.append(this.#initOption(tpl.dataset))
+      this.#$optionList.append(this.#initOption(tpl.dataset))
       this.#options[value] = tpl
     })
-    this.#$options.addEventListener('click', this.#optionSelected)
-    this.#$options.addEventListener('keypress', this.#optionSelected)
-    this.#$options.addEventListener('keydown', e => {
+    this.#$optionList.addEventListener('click', this.#optionSelected)
+    this.#$optionList.addEventListener('keypress', this.#optionSelected)
+    this.#$optionList.addEventListener('keydown', e => {
       if (e.key == 'ArrowUp' || e.key == 'k') e.target.previousElementSibling?.focus()
       if (e.key == 'ArrowDown' || e.key == 'j') e.target.nextElementSibling?.focus()
     })
@@ -106,16 +103,22 @@ export class Switcher extends HTMLElement {
   }
 
   select(opt) {
-    if (!(opt in this.#options)) return
-    this.#$btn.textContent = this.#options[opt].dataset.ic
-    const selection = this.#options[opt].content.cloneNode(true)
-    this.#$current.replaceChildren(selection)
+    const options = Object.keys(this.#options)
+    if (options.length == 0) return
+    opt = options.includes(opt) ? opt : options[0]
+    if (this.value == opt) return
+    this.value = opt
+
+    this.#internals.setFormValue(this.value)
+    this.#$switchBtn.textContent = this.#options[this.value].dataset.ic
+    const selection = this.#options[this.value].content.cloneNode(true)
+    this.replaceChildren(selection)
   }
 
   #optionSelected = (e) => {
     if (e.key && e.key != 'Enter') return
     this.select(e.target.dataset.value)
-    this.#$options.hidePopover()
+    this.#$optionList.hidePopover()
   }
 
   #initOption({ option, ic, value }) {

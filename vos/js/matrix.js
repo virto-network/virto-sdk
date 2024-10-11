@@ -4,8 +4,8 @@ const html = tagFn(s => new DOMParser().parseFromString(`<template>${s}</templat
 const css = tagFn(s => new CSSStyleSheet().replace(s))
 const LANG = navigator.language.split('-')[0]
 const i18 = new Proxy({
-  en: { user: 'user', pwd: 'password', connect: 'connect', mIdError: 'Invalid user Id', prompt: 'Type here ...' },
-  es: { user: 'usuario', pwd: 'contraseña', connect: 'conectar', mIdError: 'Id de usuario invalido', prompt: 'Escribe aquí ...' },
+  en: { user: 'user', pwd: 'password', connect: 'connect', mIdError: 'Invalid user Id', prompt: 'Type here ...', promptEmpty: 'Try to type something' },
+  es: { user: 'usuario', pwd: 'contraseña', connect: 'conectar', mIdError: 'Id de usuario invalido', prompt: 'Escribe aquí ...', promptEmpty: 'Escribe algo primero' },
 }, { get: (i18, prop) => i18[LANG in i18 ? LANG : 'en'][prop] })
 
 /*
@@ -299,7 +299,7 @@ const promptTp = html`
 `
 const emojiTp = html`
 <emoji-picker class="popover light" popover="auto"></emoji-picker>
-<button popovertargetaction="toggle">☻</button>
+<button type="button" popovertargetaction="toggle">☻</button>
 `
 const promptCss = await css`
 :host {
@@ -386,6 +386,7 @@ export class Prompt extends HTMLElement {
   connectedCallback() {
     this.addEventListener('blur', () => this.#$input.parentElement.classList.toggle('empty', !this.value))
     this.#$input.addEventListener('keypress', this.#enterSubmitOrNewLine)
+    this.#$input.addEventListener('input', this.#onInput)
     this.#insert('', true)
     if (this.#helpers?.includes('emoji')) {
       import(Prompt.EMOJI_PICKER_URL).then(() => {
@@ -401,9 +402,14 @@ export class Prompt extends HTMLElement {
   }
 
   send() {
-    if (!this.value) return
-    this.#internals.setFormValue(this.name, this.value)
+    if (!this.value) {
+      this.#internals.setValidity({ valueMissing: true }, i18.promptEmpty, this.#$input)
+      this.#internals.reportValidity()
+      return
+    }
+    this.#internals.setFormValue(this.value)
     this.#insert('', true)
+    this.#internals.form.requestSubmit()
   }
 
   get value() { return this.#$input.textContent.trim() }
@@ -425,6 +431,12 @@ export class Prompt extends HTMLElement {
       t.textContent = `${t.textContent.slice(0, -1)}${txt}\n`
       getSelection().collapse(t, t.textContent.length - 1);
     }
+  }
+
+  #debounce = null
+  #onInput = e => {
+    if (this.#debounce) clearTimeout(this.#debounce)
+    this.#debounce = setTimeout(() => this.#internals.setValidity({}), 300)
   }
 
   #enterSubmitOrNewLine = e => {
