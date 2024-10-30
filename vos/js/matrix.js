@@ -175,7 +175,7 @@ const formTp = html`
   <form>
     <label>
       <div class="label">${i18.user}</div>
-      <mx-id id="id" name="id" required></mx-id>
+      <mx-id id="id" name="username" required autocomplete="username webauthn"></mx-id>
     </label>
     <label>
       <div class="label">${i18.pwd}</div>

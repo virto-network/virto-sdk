@@ -4,8 +4,9 @@ import { Shell } from './sh.js'
 // const tagFn = fn => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, '').concat(strings[parts.length]))
 // const html = tagFn(s => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'))
 // const css = tagFn(s => new CSSStyleSheet().replace(s))
-const SRC_URL = new URL(import.meta.url) 
+const SRC_URL = new URL(import.meta.url)
 const PARAMS = SRC_URL.searchParams
+const VOS_USER = 'vos-connect-user'
 
 /*
  * The Connect element includes everything you need to interact with VOS
@@ -16,12 +17,10 @@ export class Connect extends MxConnect {
 
   sh = new Shell()
 
-  // constructor() {
-  //   super()
-  // }
-
   connectedCallback() {
     super.connectedCallback()
+    let user = localStorage.getItem(VOS_USER)
+    if (user) console.log(user)
     if (!this.deviceId) this.dataset.deviceId = randString(8)
   }
 
@@ -33,23 +32,14 @@ export class Connect extends MxConnect {
   }
 
   async connect(user) {
-    if (!(window.PublicKeyCredential &&
-      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable &&
-      PublicKeyCredential.isConditionalMediationAvailable)) {
-      await Promise.all([
-        PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(),
-        PublicKeyCredential.isConditionalMediationAvailable(),
-      ]).then(results => results.every(r => r === true))
-    }
     await this.sh.connect(user)
   }
 
   get deviceId() { return this.dataset.deviceId }
-
 }
 if (PARAMS.get('def') != 'no') customElements.define(Connect.tag, Connect)
 
-async function createAuthCredential(mxid, challenge) {
+async function createCredential(mxid, challenge) {
   await navigator.credentials.create({
     publicKey: {
       challenge: [],
@@ -72,6 +62,16 @@ async function createAuthCredential(mxid, challenge) {
         residentKey: 'required',
       },
       attestation: 'none',
+    }
+  })
+}
+
+async function getCredential(challenge) {
+  await navigator.credentials.get({
+    mediation: 'conditional',
+    publicKey: {
+      challenge,
+      rpId: SRC_URL.host,
     }
   })
 }
