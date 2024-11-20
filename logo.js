@@ -1,4 +1,5 @@
 class Logo extends HTMLElement {
+    static TAG = 'community-logo'
     static css = `
         :host {
             all: initial;
@@ -32,4 +33,4 @@ class Logo extends HTMLElement {
     }
 }
 
-customElements.define('community-logo', Logo);
+customElements.define(Logo.TAG, Logo);

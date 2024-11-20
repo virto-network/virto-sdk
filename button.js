@@ -33,6 +33,19 @@ class ButtonVirto extends HTMLElement {
       btn.innerText = this.getAttribute("label") || "Button";
       this.shadowRoot.append(style, btn);
     }
+    
+    static get observedAttributes() {
+        return ['label'];
+    }
+
+    attributeChangedCallback(name, oldValue, newValue) {
+        if (name === 'label' && this.shadowRoot) {
+            const btn = this.shadowRoot.querySelector('button');
+            if (btn) {
+                btn.innerText = newValue || "Button";
+            }
+        }
+    }
   }
   
   customElements.define(ButtonVirto.TAG, ButtonVirto);

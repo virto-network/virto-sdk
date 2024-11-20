@@ -59,6 +59,7 @@ class DialogoModal extends HTMLElement {
 
             :host(.visible) .dialog {
                 transform: translateY(0);
+                animation: fadeIn 0.5s ease forwards; /* Duración de 0.5s */
             }
 
             header {
@@ -101,6 +102,28 @@ class DialogoModal extends HTMLElement {
                 opacity: 1;
                 transform: translateX(0);
             }
+
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                    transform: translateY(-20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            @keyframes fadeOut {
+                from {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+                to {
+                    opacity: 0;
+                    transform: translateY(20px);
+                }
+            }
+
         </style>
         <div class="dialog">
             <header>
@@ -115,7 +138,6 @@ class DialogoModal extends HTMLElement {
             `).join('')}
             <div class="navigation">
                 <button-virto id="prevButton" ?disabled="${this.currentStep === 1}"></button-virto>
-                <span>Step ${this.currentStep} of ${this.totalSteps}</span>
                 <button-virto id="nextButton"></button-virto>
             </div>
         </div>
@@ -129,6 +151,7 @@ class DialogoModal extends HTMLElement {
     }
 
     navigate(direction) {
+        // TODO: Add conditional for Close and Cancel button so instead of going back or forward it closes the dialog.
         if (direction === 'prev' && this.currentStep > 1) {
             this.currentStep--;
         } else if (direction === 'next' && this.currentStep < this.totalSteps) {
@@ -145,8 +168,20 @@ class DialogoModal extends HTMLElement {
     updateStepContent() {
         const stepData = this.steps[this.currentStep - 1];
         this.shadowRoot.getElementById('step-title').textContent = stepData.title;
-        this.shadowRoot.getElementById('prevButton').setAttribute('label', stepData.prevButtonLabel);
-        this.shadowRoot.getElementById('nextButton').setAttribute('label', stepData.nextButtonLabel);
+        
+        const prevButton = this.shadowRoot.getElementById('prevButton');
+        const nextButton = this.shadowRoot.getElementById('nextButton');
+
+        if (stepData.singleButton) {
+            prevButton.style.display = 'none';
+            nextButton.setAttribute('label', stepData.singleButtonLabel);
+            nextButton.style.width = '100%';
+        } else {
+            prevButton.style.display = '';
+            prevButton.setAttribute('label', stepData.prevButtonLabel);
+            nextButton.setAttribute('label', stepData.nextButtonLabel);
+            nextButton.style.width = '';
+        }
     }
 
     finish() {
@@ -174,8 +209,8 @@ class DialogoModal extends HTMLElement {
             { title: "Virto requires you to signup", prevButtonLabel: "Change Number", nextButtonLabel: "Continue" },
             { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
             { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
-            { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Close" },
-            { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Close" },
+            { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
+            { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
         ];
     }
 }

@@ -1,4 +1,5 @@
-class BotonSocial extends HTMLElement {
+class SocialButton extends HTMLElement {
+    static TAG = 'button-social'
     static css = `
         :host {
             all: initial;
@@ -43,7 +44,7 @@ class BotonSocial extends HTMLElement {
         const style = document.createElement("style");
         const container = document.createElement("div");
 
-        style.innerHTML = BotonSocial.css;
+        style.innerHTML = SocialButton.css;
         container.innerHTML = `
             <img src="${this.getAttribute("src") || 'public/google.svg'}" alt="${this.getAttribute("alt") || "Social Button"}">
         `;
@@ -52,4 +53,4 @@ class BotonSocial extends HTMLElement {
     }
 }
 
-customElements.define('button-social', BotonSocial);
+customElements.define(SocialButton.TAG, SocialButton);

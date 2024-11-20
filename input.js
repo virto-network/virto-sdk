@@ -1,4 +1,5 @@
 class Input extends HTMLElement {
+    static TAG = 'input-virto'
     static css = `
     :host {
         display: block;
@@ -47,4 +48,4 @@ class Input extends HTMLElement {
     }
 }
 
-customElements.define('input-virto', Input);
+customElements.define(Input.TAG, Input);
