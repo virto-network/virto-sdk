@@ -1,6 +1,4 @@
-
 class Input extends HTMLElement {
-    
     static css = `
     :host {
         display: block;
@@ -13,22 +11,40 @@ class Input extends HTMLElement {
         border-radius: 12px;
         padding: 1em;
         border: 1px solid var(--color-accent);
-        &:focus {
-            outline: 1px solid var(--color-fill-btn);
-        }
     }
-`;
+    input:focus {
+        outline: 1px solid var(--color-fill-btn);
+    }
+    input:invalid {
+        border-color: red;
+    }
+    `;
 
     constructor() {
         super();
         this.attachShadow({ mode: 'open' });
+    }
+
+    connectedCallback() {
+        this.render();
+    }
+
+    render() {
         const style = document.createElement("style");
         const input = document.createElement("input");
+        
+        input.type = this.getAttribute('type') || 'text';
+        if (this.hasAttribute('required')) {
+            input.required = true;
+        }
+        if (this.hasAttribute('aria-placeholder')) {
+            input.placeholder = this.getAttribute('aria-placeholder');
+        }
 
-        style.innerHTML = Input.css;
+        style.textContent = Input.css;
 
         this.shadowRoot.append(style, input);
     }
 }
-  
-  customElements.define('input-virto', Input);
+
+customElements.define('input-virto', Input);

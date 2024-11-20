@@ -45,6 +45,12 @@
             gap: .75em;
             width: 100%;
         }
+
+        p { font-size: .9em; }
+
+        p, label, h3 {
+            color: var(--color-txt);
+        }
         
         ul {
             width: 100%;
@@ -60,6 +66,83 @@
 </head>
 <body>
     <section>
+        <button-virto id="openDialog" label="Open Register Dialog"></button-virto>
+
+        <dialog-virto id="registerDialog">
+            <community-logo slot="logo"></community-logo>
+            
+            <div slot="step-1">
+                <form>
+                    <p>To enter Virto they require you to provide more information.</p>
+                    <label for="tel">Phone number</label>
+                    <input-virto id="tel" type="tel" required></input-virto>
+                </form>
+            </div>
+        
+            <div slot="step-2">
+                <form>
+                    <h3>6 Digit Code</h3>
+                    <p>We've sent a code to ******323. To be able to authorize transactions you need to enter the verification code below.</p>
+                    <label for="verificationCode">Verification Code</label>
+                    <input-virto id="verificationCode" type="text" required></input-virto>
+                </form>
+            </div>
+        
+            <div slot="step-3">
+                <form>
+                    <p>Please fill your information below</p>
+                    <label for="name">Full Name</label>
+                    <input-virto id="name" aria-placeholder="John Doe" required></input-virto>
+                    <label for="email">Email</label>
+                    <input-virto id="email" type="email" aria-placeholder="doejohn@gmail.com" required></input-virto>
+                    <label for="reason">What is your reason to join Virto?</label>
+                    <input-virto id="reason" type="textarea" required></input-virto>
+                </form>
+            </div>
+
+            <div slot="step-4">
+                <form>
+                    <p>Identity Verification</p>
+                    <label for="QR">To be able to authorize transactions you need to scan this QR Code with your phone.</label>
+                    <!-- Todo: Add QR Container -->
+                    <label for="reason">If you can't scan the code, use this link instead</label>
+                    <!-- Todo: Add Link Container -->
+                    <!-- Todo: Input Checkbox -->
+                </form>
+            </div>
+
+            <div slot="step-5">
+                <form>
+                    <h2>Your new device authentication is being verified</h2>
+                    <!-- Todo: Add loader animation -->
+                    <!-- Todo: Just one button here! -->
+                </form>
+            </div>
+
+            <div slot="step-6">
+                <form>
+                    <h2>Thanks! Your new device authentication was verified</h2>
+                    <!-- Todo: Add image from design (ask david) -->
+                    <!-- Todo: Just one button here! -->
+                </form>
+            </div>
+        </dialog-virto>
+            <!--  
+            <dialog-virto label="Enter your data">
+                <h2 slot="logo"></h2>
+                <form slot="action">
+                    <label for="password">Enter your password</label>
+                    <input-virto></input-virto>
+                    <button-virto type="submit">Next</button-virto>
+                </form>
+            </dialog-virto>
+        
+            <dialog-virto label="Registration complete!">
+                <h2 slot="logo"></h2>
+                <p slot="action">Registration Complete!</p>
+            </dialog-virto>
+        
+
         <dialog-virto>
             <community-logo slot="logo"></community-logo>
             <form slot="action">
@@ -75,8 +158,26 @@
                 </ul>
             </form>
         </dialog-virto>
-      
+       -->
     </section>
+    <script>
+    
+    const openDialogButton = document.getElementById('openDialog');
+    const registerDialog = document.getElementById('registerDialog');
+
+    openDialogButton.addEventListener('click', () => {
+        registerDialog.show();
+    });
+
+    registerDialog.addEventListener('step-change', (event) => {
+        console.log(`Step changed to: ${event.detail.step}`);
+    });
+
+    registerDialog.addEventListener('register-complete', () => {
+        console.log('Registration completed!');
+    });
+
+    </script>
     <script src="./dialog.js" defer></script>
     <script src="./input.js" defer></script>
     <script src="./button.js" defer></script>
