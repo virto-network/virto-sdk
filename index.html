@@ -26,7 +26,6 @@
         }
 
         body {
-            background-color: #0000004D;
             color: var(--color-txt);
             display: flex;
             flex: 1;
@@ -104,7 +103,6 @@
                 <form>
                     <p>Identity Verification</p>
                     <label for="QR">To be able to authorize transactions you need to scan this QR Code with your phone.</label>
-                    <!-- Todo: Add QR Container -->
                     <label for="reason">If you can't scan the code, use this link instead</label>
                     <!-- Todo: Add Link Container -->
                     <!-- Todo: Input Checkbox -->
@@ -114,14 +112,13 @@
             <div slot="step-5">
                 <form>
                     <h2>Your new device authentication is being verified</h2>
-                    <!-- Todo: Add loader animation -->
                 </form>
             </div>
 
             <div slot="step-6">
                 <form>
                     <h2>Thanks! Your new device authentication was verified</h2>
-                    <!-- Todo: Add image from design (ask david) -->
+                    <!-- Todo: Replace image from design (already asked david) -->
                 </form>
             </div>
         </dialog-virto>

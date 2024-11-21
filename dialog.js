@@ -25,7 +25,7 @@ class DialogoModal extends HTMLElement {
                 left: 0;
                 width: 100%;
                 height: 100%;
-                background-color: rgba(0, 0, 0, 0.5);
+                background-color: #0000004D;
                 justify-content: center;
                 align-items: center;
                 opacity: 0;
@@ -59,42 +59,23 @@ class DialogoModal extends HTMLElement {
 
             :host(.visible) .dialog {
                 transform: translateX(0);
-                animation: slideInLeft 0.5s forwards;
-            }
-
-            :host(.hidden) {
-                opacity: 0;
+                animation: slideInRight 0.5s forwards;
             }
 
             :host(.hidden) .dialog {
-                transform: translateX(-100%);
-                animation: slideOutLeft 0.5s forwards;
+                opacity: 0;
+                animation: slideOutLeft 0.3s forwards;
             }
 
-            @keyframes 
-                slideInLeft { 
-                    0% { 
-                        transform: translateX(100%); 
-                        opacity: 0; 
-                    } 
-                    100% { 
-                        transform: translateX(0); 
-                        opacity: 1; 
-                    } 
-                } 
-                
-            @keyframes 
-                slideOutLeft { 
-                    0% { 
-                        transform: translateX(0); 
-                        opacity: 1; 
-                    } 
-                    100% 
-                    { 
-                        transform: translateX(-100%); 
-                        opacity: 0; 
-                    } 
-                }
+            @keyframes slideInRight {
+                from { transform: translateX(100%); opacity: 0;  }
+                to { transform: translateX(0); opacity: 1; }
+            }
+
+            @keyframes slideOutLeft {
+                from { transform: translateX(0); opacity: 1;  }
+                to { transform: translateX(-100%); opacity: 0; }
+            }
 
             header {
                 display: flex;
@@ -127,14 +108,54 @@ class DialogoModal extends HTMLElement {
             .step-content {
                 display: none;
                 opacity: 0;
-                transform: translateX(100%);
-                transition: opacity 0.3s ease, transform 0.3s ease;
+                transition: opacity 0.3s ease;
             }
             
             .step-content.active {
                 display: block;
                 opacity: 1;
-                transform: translateX(0);
+            }
+
+            .image-step-1 {
+                position: absolute;
+                top: 0;
+                right: 0;
+                width: 200px;
+                height: 200px;
+                object-fit: contain;
+                margin: auto 0;
+            }
+
+            .center-image {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                width: 200px;
+                height: 200px;
+                margin: 0 auto;
+            }
+
+            .qr-code {
+                background-color: #fff;
+            }
+
+            .loader {
+                width: 70px;
+                height: 70px;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                background: conic-gradient(from 0deg at 50% 50%, #F0FDF1 0%, rgba(255, 255, 255, 0) 100%);
+                mask: radial-gradient(circle, transparent 60%, black 61%);
+                -webkit-mask: radial-gradient(circle, transparent 60%, black 61%);
+            }
+
+            @keyframes spin {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+
+            .verificated {
+                background-color: transparent;
             }
         </style>
         <div class="dialog">
@@ -144,7 +165,8 @@ class DialogoModal extends HTMLElement {
             </header>
             <hr>
             ${Array.from({ length: this.totalSteps }, (_, i) => i + 1).map(step => `
-                <div class="step-content ${step === this.currentStep ? 'active' : ''}">
+                <div class="step-content ${step === this.currentStep ? 'active' : ''}" data-step="${step}">
+                    <div class="image-container"></div>
                     <slot name="step-${step}"></slot>
                 </div>
             `).join('')}
@@ -172,17 +194,24 @@ class DialogoModal extends HTMLElement {
     }
 
     navigate(direction) {
-        if (direction === 'prev' && this.currentStep > 1) {
-            this.currentStep--;
-        } else if (direction === 'next' && this.currentStep < this.totalSteps) {
-            this.currentStep++;
-        } else if (direction === 'next' && this.currentStep === this.totalSteps) {
-            this.finish();
+        const nextStep = direction === 'next' ? this.currentStep + 1 : this.currentStep - 1;
+
+        if (nextStep < 1 || nextStep > this.totalSteps) {
             return;
         }
-        this.render();
-        this.setupEventListeners();
-        this.dispatchEvent(new CustomEvent('step-change', { detail: { step: this.currentStep } }));
+
+        this.currentStep = nextStep;
+        this.updateStepContent();
+        this.animateStepTransition(direction);
+    }
+
+    animateStepTransition(direction) {
+        const dialog = this.shadowRoot.querySelector('.dialog');
+        dialog.style.animation = direction === 'next' ? 'slideOutLeft 0.3s forwards' : 'slideInRight 0.3s forwards';
+        
+        dialog.addEventListener('animationend', () => {
+            dialog.style.animation = direction === 'next' ? 'slideInRight 0.3s forwards' : 'slideOutLeft 0.3s forwards';
+        }, { once: true });
     }
 
     updateStepContent() {
@@ -202,11 +231,36 @@ class DialogoModal extends HTMLElement {
             nextButton.setAttribute('label', stepData.nextButtonLabel);
             nextButton.style.width = '';
         }
+
+        prevButton.disabled = this.currentStep === 1;
+        nextButton.disabled = this.currentStep === this.totalSteps && !stepData.singleButton;
+
+        this.shadowRoot.querySelectorAll('.step-content').forEach(el => el.classList.remove('active'));
+        this.shadowRoot.querySelector(`.step-content[data-step="${this.currentStep}"]`).classList.add('active');
+
+        this.updateStepImage();
     }
 
-    finish() {
-        this.dispatchEvent(new CustomEvent('register-complete'));
-        this.hide();
+    updateStepImage() {
+        const imageContainer = this.shadowRoot.querySelector('.step-content.active .image-container');
+        imageContainer.innerHTML = '';
+
+        switch (this.currentStep) {
+            case 1:
+                imageContainer.innerHTML = '<img class="image-step-1" src="public/Welcome.svg" alt="Illustration">';
+                break;
+            case 4:
+                imageContainer.innerHTML = '<img class="center-image qr-code" src="public/qr.jpg" alt="QR Code Placeholder">';
+                break;
+            case 5:
+                imageContainer.innerHTML = '<div class="center-image loader"></div>';
+                break;
+            case 6:
+                imageContainer.innerHTML = '<img class="center-image verificated" src="public/Ok.svg" alt="Authentication Successful">';
+                break;
+            default:
+                break;
+        }
     }
 
     show() {
@@ -214,9 +268,10 @@ class DialogoModal extends HTMLElement {
     }
 
     hide() {
-        this.classList.add('hidden');
-        this.addEventListener('transitionend', () => {
-            this.classList.remove('visible', 'hidden');
+        const dialog = this.shadowRoot.querySelector('.dialog');
+        dialog.addEventListener('animationend', () => {
+            this.classList.remove('visible');
+            this.dispatchEvent(new CustomEvent('dialog-closed'));
         }, { once: true });
     }
 
@@ -232,7 +287,7 @@ class DialogoModal extends HTMLElement {
             { title: "Virto requires you to signup", prevButtonLabel: "Change Number", nextButtonLabel: "Continue" },
             { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
             { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
-            { title: "Secure your account", singleButton: true, singleButtonLabel: "Clos" },
+            { title: "Secure your account", singleButton: true, singleButtonLabel: "Cloe" },
             { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
         ];
     }
