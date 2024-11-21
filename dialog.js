@@ -54,27 +54,48 @@ class DialogoModal extends HTMLElement {
                 padding: 1em;
                 gap: clamp(4px, 1vw, var(--spacing7, 14px));
                 transform: translateX(100%);
-                transition: transform 0.3s ease;
+                opacity: 0; /* Start hidden */
+                pointer-events: none; /* Prevent interactions */
+                transition: transform 0.3s ease, opacity 0.2s ease;
             }
-
+            
             :host(.visible) .dialog {
                 transform: translateX(0);
+                opacity: 1;
+                pointer-events: auto;
                 animation: slideInRight 0.5s forwards;
             }
-
+            
             :host(.hidden) .dialog {
+                transform: translateX(-100%);
                 opacity: 0;
+                pointer-events: none;
                 animation: slideOutLeft 0.3s forwards;
             }
-
+            
             @keyframes slideInRight {
-                from { transform: translateX(100%); opacity: 0;  }
-                to { transform: translateX(0); opacity: 1; }
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
             }
-
+            
             @keyframes slideOutLeft {
-                from { transform: translateX(0); opacity: 1;  }
-                to { transform: translateX(-100%); opacity: 0; }
+                from {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(-100%);
+                    opacity: 0;
+                }
             }
 
             header {
@@ -86,6 +107,7 @@ class DialogoModal extends HTMLElement {
             header h2 {
                 font-size: 1.4em;
                 font-weight: 600;
+                color: var(--color-txt);
                 margin: 0;
             }
 
@@ -269,6 +291,7 @@ class DialogoModal extends HTMLElement {
 
     hide() {
         const dialog = this.shadowRoot.querySelector('.dialog');
+        dialog.style.animation = 'slideOutLeft 0.5s forwards';
         dialog.addEventListener('animationend', () => {
             this.classList.remove('visible');
             this.dispatchEvent(new CustomEvent('dialog-closed'));
