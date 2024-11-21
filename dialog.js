@@ -32,6 +32,11 @@ class DialogoModal extends HTMLElement {
                 transition: opacity 0.3s ease;
             }
 
+            :host(.visible) {
+                display: flex;
+                opacity: 1;
+            }
+
             .dialog {
                 display: flex;
                 flex-direction: column;
@@ -48,19 +53,48 @@ class DialogoModal extends HTMLElement {
                 backdrop-filter: blur(32px);
                 padding: 1em;
                 gap: clamp(4px, 1vw, var(--spacing7, 14px));
-                transform: translateY(20px);
+                transform: translateX(100%);
                 transition: transform 0.3s ease;
             }
 
-            :host(.visible) {
-                display: flex;
-                opacity: 1;
+            :host(.visible) .dialog {
+                transform: translateX(0);
+                animation: slideInLeft 0.5s forwards;
             }
 
-            :host(.visible) .dialog {
-                transform: translateY(0);
-                animation: fadeIn 0.5s ease forwards; /* Duración de 0.5s */
+            :host(.hidden) {
+                opacity: 0;
             }
+
+            :host(.hidden) .dialog {
+                transform: translateX(-100%);
+                animation: slideOutLeft 0.5s forwards;
+            }
+
+            @keyframes 
+                slideInLeft { 
+                    0% { 
+                        transform: translateX(100%); 
+                        opacity: 0; 
+                    } 
+                    100% { 
+                        transform: translateX(0); 
+                        opacity: 1; 
+                    } 
+                } 
+                
+            @keyframes 
+                slideOutLeft { 
+                    0% { 
+                        transform: translateX(0); 
+                        opacity: 1; 
+                    } 
+                    100% 
+                    { 
+                        transform: translateX(-100%); 
+                        opacity: 0; 
+                    } 
+                }
 
             header {
                 display: flex;
@@ -102,28 +136,6 @@ class DialogoModal extends HTMLElement {
                 opacity: 1;
                 transform: translateX(0);
             }
-
-            @keyframes fadeIn {
-                from {
-                    opacity: 0;
-                    transform: translateY(-20px);
-                }
-                to {
-                    opacity: 1;
-                    transform: translateY(0);
-                }
-            }
-            @keyframes fadeOut {
-                from {
-                    opacity: 1;
-                    transform: translateY(0);
-                }
-                to {
-                    opacity: 0;
-                    transform: translateY(20px);
-                }
-            }
-
         </style>
         <div class="dialog">
             <header>
@@ -146,12 +158,20 @@ class DialogoModal extends HTMLElement {
     }
 
     setupEventListeners() {
-        this.shadowRoot.getElementById('prevButton').addEventListener('click', () => this.navigate('prev'));
-        this.shadowRoot.getElementById('nextButton').addEventListener('click', () => this.navigate('next'));
+        this.shadowRoot.getElementById('prevButton').addEventListener('click', (e) => this.handleButtonClick(e, 'prev'));
+        this.shadowRoot.getElementById('nextButton').addEventListener('click', (e) => this.handleButtonClick(e, 'next'));
+    }
+
+    handleButtonClick(event, direction) {
+        const buttonLabel = event.target.getAttribute('label').toLowerCase();
+        if (buttonLabel === 'cancel' || buttonLabel === 'close') {
+            this.hide();
+        } else {
+            this.navigate(direction);
+        }
     }
 
     navigate(direction) {
-        // TODO: Add conditional for Close and Cancel button so instead of going back or forward it closes the dialog.
         if (direction === 'prev' && this.currentStep > 1) {
             this.currentStep--;
         } else if (direction === 'next' && this.currentStep < this.totalSteps) {
@@ -194,7 +214,10 @@ class DialogoModal extends HTMLElement {
     }
 
     hide() {
-        this.classList.remove('visible');
+        this.classList.add('hidden');
+        this.addEventListener('transitionend', () => {
+            this.classList.remove('visible', 'hidden');
+        }, { once: true });
     }
 
     reset() {
@@ -209,7 +232,7 @@ class DialogoModal extends HTMLElement {
             { title: "Virto requires you to signup", prevButtonLabel: "Change Number", nextButtonLabel: "Continue" },
             { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
             { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
-            { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
+            { title: "Secure your account", singleButton: true, singleButtonLabel: "Clos" },
             { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
         ];
     }
