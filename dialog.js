@@ -271,14 +271,11 @@ class DialogoModal extends HTMLElement {
             case 1:
                 imageContainer.innerHTML = '<img class="image-step-1" src="public/Welcome.svg" alt="Illustration">';
                 break;
-            case 4:
-                imageContainer.innerHTML = '<img class="center-image qr-code" src="public/qr.jpg" alt="QR Code Placeholder">';
-                break;
             case 5:
                 imageContainer.innerHTML = '<div class="center-image loader"></div>';
                 break;
             case 6:
-                imageContainer.innerHTML = '<img class="center-image verificated" src="public/Ok.svg" alt="Authentication Successful">';
+                imageContainer.innerHTML = '<img class="center-image verificated" src="public/verificated.svg" alt="Authentication Successful">';
                 break;
             default:
                 break;

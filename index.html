@@ -22,6 +22,7 @@
             --color-fill-btn: #24AF37;
             --color-fill-social-btn: #c6ebc7;
             --color-fill-social-svg: #006B0A;
+            --color-input: #DDFBE0;
             --color-dialog-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.5) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, rgba(86, 201, 96, 0.5) 0%, rgba(198, 235, 199, 0) 98.5%);
         }
 
@@ -60,6 +61,13 @@
             padding: 0;
             margin: 0;
         }
+
+        .qr-code {
+            border-radius: 35px;
+            padding: 0.5em 1em;
+            border: 1px solid var(--color-accent);
+            background-color: var(--color-input);
+        }
         
     </style>
 </head>
@@ -83,7 +91,7 @@
                     <h3>6 Digit Code</h3>
                     <p>We've sent a code to ******323. To be able to authorize transactions you need to enter the verification code below.</p>
                     <label for="verificationCode">Verification Code</label>
-                    <input-virto id="verificationCode" type="text" required></input-virto>
+                    <input-code></input-code>
                 </form>
             </div>
         
@@ -103,9 +111,10 @@
                 <form>
                     <p>Identity Verification</p>
                     <label for="QR">To be able to authorize transactions you need to scan this QR Code with your phone.</label>
+                    <img class="center-image qr-code" src="public/qr.svg" alt="QR Code">
                     <label for="reason">If you can't scan the code, use this link instead</label>
-                    <!-- Todo: Add Link Container -->
-                    <!-- Todo: Input Checkbox -->
+                    <link-authenticate></link-authenticate>
+                    <checkbox-virto label="Remember this device for 30 days"></checkbox-virto>
                 </form>
             </div>
 
@@ -118,7 +127,6 @@
             <div slot="step-6">
                 <form>
                     <h2>Thanks! Your new device authentication was verified</h2>
-                    <!-- Todo: Replace image from design (already asked david) -->
                 </form>
             </div>
         </dialog-virto>
@@ -179,5 +187,8 @@
     <script src="./button.js" defer></script>
     <script src="./logo.js" defer></script>
     <script src="./button-social.js" defer></script>
-    </body>
+    <script src="./checkbox.js" defer></script>
+    <script src="./link.js" defer></script>
+    <script src="./input-code.js" defer></script>
+</body>
 </html>
