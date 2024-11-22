@@ -120,11 +120,16 @@ class DialogoModal extends HTMLElement {
 
             .navigation {
                 box-sizing: border-box;
-                justify-content: space-between;
                 display: flex;
+                justify-content: space-between;
+                gap: 10px;
                 width: 100%;
                 flex-direction: row;
                 color: var(--color-txt);
+            }
+
+            .navigation button-virto {
+                flex: 1;
             }
 
             .step-content {
@@ -193,7 +198,7 @@ class DialogoModal extends HTMLElement {
                 </div>
             `).join('')}
             <div class="navigation">
-                <button-virto id="prevButton" ?disabled="${this.currentStep === 1}"></button-virto>
+                <button-virto id="prevButton" variant="secondary" ?disabled="${this.currentStep === 1}"></button-virto>
                 <button-virto id="nextButton"></button-virto>
             </div>
         </div>
