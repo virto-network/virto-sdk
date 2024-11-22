@@ -5,19 +5,24 @@ class Input extends HTMLElement {
         display: block;
         width: 100%;
     }
-    input {
+    input, textarea {
         width: 100%;
         box-sizing: border-box;
         line-height: 28px;
         border-radius: 12px;
         padding: 1em;
         border: 1px solid var(--color-accent);
+        font-family: Outfit, sans-serif;
     }
     input:focus {
         outline: 1px solid var(--color-fill-btn);
     }
     input:invalid {
         border-color: red;
+    }
+    textarea {
+        resize: vertical;
+        min-height: 100px;
     }
     `;
 
@@ -32,19 +37,17 @@ class Input extends HTMLElement {
 
     render() {
         const style = document.createElement("style");
-        const input = document.createElement("input");
-        
-        input.type = this.getAttribute('type') || 'text';
-        if (this.hasAttribute('required')) {
-            input.required = true;
-        }
-        if (this.hasAttribute('aria-placeholder')) {
-            input.placeholder = this.getAttribute('aria-placeholder');
-        }
+        const type = this.getAttribute('type') || 'text';
+        const placeholder = this.getAttribute('aria-placeholder') || '';
+        const required = this.hasAttribute('required');
 
-        style.textContent = Input.css;
-
-        this.shadowRoot.append(style, input);
+        this.shadowRoot.innerHTML = `
+            <style>${Input.css}</style>
+            ${type === 'textarea' 
+                ? `<textarea placeholder="${placeholder}" ${required ? 'required' : ''}></textarea>`
+                : `<input type="${type}" placeholder="${placeholder}" ${required ? 'required' : ''}>`
+            }
+        `;
     }
 }
 
