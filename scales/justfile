@@ -1,7 +1,11 @@
 default: check
 
-check:
-    cargo check
+check: check_std
+
+check_std:
+    cargo check --features std,experimental-serializer
+check_no_std:
+    cargo check --target riscv32imac-unknown-none-elf
 
 lint:
     cargo clippy -- -D warnings
