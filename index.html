@@ -98,7 +98,7 @@
                 <form>
                     <p>To enter Virto they require you to provide more information.</p>
                     <label for="tel">Phone number</label>
-                    <input-virto id="tel" type="tel" required></input-virto>
+                    <input-virto id="tel" type="tel"></input-virto>
                 </form>
             </div>
         
@@ -115,11 +115,11 @@
                 <form>
                     <p>Please fill your information below</p>
                     <label for="name">Full Name</label>
-                    <input-virto id="name" aria-placeholder="John Doe" required></input-virto>
+                    <input-virto id="name" aria-placeholder="John Doe"></input-virto>
                     <label for="email">Email</label>
-                    <input-virto id="email" type="email" aria-placeholder="doejohn@gmail.com" required></input-virto>
+                    <input-virto id="email" type="email" aria-placeholder="doejohn@gmail.com"></input-virto>
                     <label for="reason">What is your reason to join Virto?</label>
-                    <input-virto id="reason" type="textarea" required aria-placeholder="I would like to change my company through Virto..."></input-virto>
+                    <input-virto id="reason" type="textarea" aria-placeholder="I would like to change my company through Virto..."></input-virto>
                 </form>
             </div>
 
@@ -142,38 +142,6 @@
                     <h2>Thanks! Your new device authentication was verified</h2>
             </div>
         </dialog-virto>
-            <!--  
-            <dialog-virto label="Enter your data">
-                <h2 slot="logo"></h2>
-                <form slot="action">
-                    <label for="password">Enter your password</label>
-                    <input-virto></input-virto>
-                    <button-virto type="submit">Next</button-virto>
-                </form>
-            </dialog-virto>
-        
-            <dialog-virto label="Registration complete!">
-                <h2 slot="logo"></h2>
-                <p slot="action">Registration Complete!</p>
-            </dialog-virto>
-        
-
-        <dialog-virto>
-            <community-logo slot="logo"></community-logo>
-            <form slot="action">
-                <label for="username">Enter your username</label>
-                <input-virto></input-virto>
-                <button-virto label="Continue"></button-virto>
-                <ul>
-                    <button-social></button-social>
-                    <button-social src="public/fb.svg"></button-social>
-                    <button-social src="public/x.svg"></button-social>
-                    <button-social src="public/apple.svg"></button-social>
-                    <button-social src="public/github.svg"></button-social>
-                </ul>
-            </form>
-        </dialog-virto>
-       -->
     </section>
     <script>
     
@@ -183,14 +151,6 @@
     openDialogButton.addEventListener('click', () => {
         registerDialog.show();
         openDialogButton.hidden;
-    });
-
-    registerDialog.addEventListener('step-change', (event) => {
-        console.log(`Step changed to: ${event.detail.step}`);
-    });
-
-    registerDialog.addEventListener('register-complete', () => {
-        console.log('Registration completed!');
     });
 
     </script>
