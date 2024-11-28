@@ -3,6 +3,7 @@ class DialogoModal extends HTMLElement {
         super();
         this.attachShadow({ mode: 'open' });
         this.currentStep = 1;
+        this.isClosing = false;
     }
 
     connectedCallback() {
@@ -54,8 +55,8 @@ class DialogoModal extends HTMLElement {
                 padding: 1em;
                 gap: clamp(4px, 1vw, var(--spacing7, 14px));
                 transform: translateX(100%);
-                opacity: 0; /* Start hidden */
-                pointer-events: none; /* Prevent interactions */
+                opacity: 0;
+                pointer-events: none;
                 transition: transform 0.3s ease, opacity 0.2s ease;
             }
             
@@ -64,13 +65,6 @@ class DialogoModal extends HTMLElement {
                 opacity: 1;
                 pointer-events: auto;
                 animation: slideInRight 0.5s forwards;
-            }
-            
-            :host(.hidden) .dialog {
-                transform: translateX(-100%);
-                opacity: 0;
-                pointer-events: none;
-                animation: slideOutLeft 0.3s forwards;
             }
             
             @keyframes slideInRight {
@@ -198,12 +192,12 @@ class DialogoModal extends HTMLElement {
                 </div>
             `).join('')}
             <div class="navigation">
-                <button-virto id="prevButton" variant="secondary" ?disabled="${this.currentStep === 1}"></button-virto>
+                <button-virto id="prevButton" variant="secondary""></button-virto>
                 <button-virto id="nextButton"></button-virto>
             </div>
         </div>
         `;
-        this.updateStepContent();
+        this.dialog = this.shadowRoot.querySelector('.dialog');
     }
 
     setupEventListeners() {
@@ -213,6 +207,15 @@ class DialogoModal extends HTMLElement {
 
     handleButtonClick(event, direction) {
         const buttonLabel = event.target.getAttribute('label').toLowerCase();
+
+        if (buttonLabel === 'change number') {
+            if (!this.isClosing) {
+                this.currentStep = 1;
+                this.updateStepContent();
+            }
+            return;
+        }
+
         if (buttonLabel === 'cancel' || buttonLabel === 'close') {
             this.hide();
         } else {
@@ -222,22 +225,28 @@ class DialogoModal extends HTMLElement {
 
     navigate(direction) {
         const nextStep = direction === 'next' ? this.currentStep + 1 : this.currentStep - 1;
-
         if (nextStep < 1 || nextStep > this.totalSteps) {
             return;
         }
-
-        this.currentStep = nextStep;
-        this.updateStepContent();
-        this.animateStepTransition(direction);
+        this.animateStepTransition(direction, () => {
+            this.currentStep = nextStep;
+            this.updateStepContent();
+        });
     }
 
-    animateStepTransition(direction) {
-        const dialog = this.shadowRoot.querySelector('.dialog');
-        dialog.style.animation = direction === 'next' ? 'slideOutLeft 0.3s forwards' : 'slideInRight 0.3s forwards';
+
+    animateStepTransition(direction, callback) {
+        const currentContent = this.shadowRoot.querySelector(`.step-content[data-step="${this.currentStep}"]`);
+        const nextStep = direction === 'next' ? this.currentStep + 1 : this.currentStep - 1;
+        const nextContent = this.shadowRoot.querySelector(`.step-content[data-step="${nextStep}"]`);
+
+
+        const animation = direction === 'next' ? 'slideOutLeft' : 'slideInRight';
+        this.dialog.style.animation = `${animation} 0.3s forwards`;
         
-        dialog.addEventListener('animationend', () => {
-            dialog.style.animation = direction === 'next' ? 'slideInRight 0.3s forwards' : 'slideOutLeft 0.3s forwards';
+        this.dialog.addEventListener('animationend', () => {
+            this.dialog.style.animation = '';
+            callback();
         }, { once: true });
     }
 
@@ -251,16 +260,12 @@ class DialogoModal extends HTMLElement {
         if (stepData.singleButton) {
             prevButton.style.display = 'none';
             nextButton.setAttribute('label', stepData.singleButtonLabel);
-            nextButton.style.width = '100%';
+
         } else {
             prevButton.style.display = '';
             prevButton.setAttribute('label', stepData.prevButtonLabel);
             nextButton.setAttribute('label', stepData.nextButtonLabel);
-            nextButton.style.width = '';
         }
-
-        prevButton.disabled = this.currentStep === 1;
-        nextButton.disabled = this.currentStep === this.totalSteps && !stepData.singleButton;
 
         this.shadowRoot.querySelectorAll('.step-content').forEach(el => el.classList.remove('active'));
         this.shadowRoot.querySelector(`.step-content[data-step="${this.currentStep}"]`).classList.add('active');
@@ -288,15 +293,21 @@ class DialogoModal extends HTMLElement {
     }
 
     show() {
+        this.isClosing = false;
         this.classList.add('visible');
+        this.currentStep = 1;
+        this.updateStepContent();
     }
 
     hide() {
-        const dialog = this.shadowRoot.querySelector('.dialog');
-        dialog.style.animation = 'slideOutLeft 0.5s forwards';
-        dialog.addEventListener('animationend', () => {
+        if (this.isClosing) return;
+        this.isClosing = true;
+        this.dialog.style.animation = 'slideOutLeft 0.5s forwards';
+        this.dialog.addEventListener('animationend', () => {
             this.classList.remove('visible');
             this.dispatchEvent(new CustomEvent('dialog-closed'));
+            this.reset();
+            this.isClosing = false;
         }, { once: true });
     }
 
@@ -312,7 +323,7 @@ class DialogoModal extends HTMLElement {
             { title: "Virto requires you to signup", prevButtonLabel: "Change Number", nextButtonLabel: "Continue" },
             { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
             { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
-            { title: "Secure your account", singleButton: true, singleButtonLabel: "Cloe" },
+            { title: "Secure your account", singleButton: true, singleButtonLabel: "Continue" },
             { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
         ];
     }
