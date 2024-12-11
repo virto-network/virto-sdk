@@ -16,7 +16,7 @@
             --nav-height: calc(3rem + 2vh);
             --max-width: 1100px;
             --color-txt: darkslategray;
-            --color-accent: lightgreen; /*Color borde de inputs y separadores*/
+            --color-accent: lightgreen;
             --color-outline: darkseagreen;
             --color-white: #F0FDF1;
             --color-fill-btn: #24AF37;
@@ -49,10 +49,6 @@
             width: 100%;
         }
 
-        div {
-            align-items: center;
-        }
-
         p { font-size: .9em; }
         
         ul {
@@ -73,141 +69,35 @@
             max-width: 450px;
         }
 
-        .qr-code {
-            width: 100%;
-            max-width: 200px;
-            height: auto;
-            display: flex;
-            margin: 0 auto;
-            border-radius: 16px;
-            padding: 1em 10em;
-            border: 1px solid var(--color-accent);
-            background-color: var(--color-input);
-        }
-        
     </style>
 </head>
 <body>
-    <section>
-        <button-virto id="openSignupDialog" label="Open Signup Dialog"></button-virto>
-        <button-virto id="openLoginDialog" label="Open Login Dialog"></button-virto>
-
-        <dialog-virto id="signupDialog">
-            <community-logo slot="logo"></community-logo>
-            
-            <div slot="step-1">
-                <form>
-                    <p>To enter Virto they require you to provide more information.</p>
-                    <label for="tel">Phone number</label>
-                    <input-virto id="tel" type="tel"></input-virto>
-                </form>
-            </div>
-            <div slot="step-2">
-                <form>
-                    <h3>6 Digit Code</h3>
-                    <p>We've sent a code to ******323. To be able to authorize transactions you need to enter the verification code below.</p>
-                    <label for="verificationCode">Verification Code</label>
-                    <input-code></input-code>
-                </form>
-            </div>
-            <div slot="step-3">
-                <form>
-                    <p>Please fill your information below</p>
-                    <label for="name">Full Name</label>
-                    <input-virto id="name" aria-placeholder="John Doe"></input-virto>
-                    <label for="email">Email</label>
-                    <input-virto id="email" type="email" aria-placeholder="doejohn@gmail.com"></input-virto>
-                    <label for="reason">What is your reason to join Virto?</label>
-                    <input-virto id="reason" type="textarea" aria-placeholder="I would like to change my company through Virto..."></input-virto>
-                </form>
-            </div>
-            <div slot="step-4">
-                <form>
-                    <p>Identity Verification</p>
-                    <label for="QR">To be able to authorize transactions you need to scan this QR Code with your phone.</label>
-                    <img class="center-image qr-code" src="public/qr.svg" alt="QR Code">
-                    <label for="reason">If you can't scan the code, use this link instead</label>
-                    <link-authenticate></link-authenticate>
-                    <checkbox-virto label="Remember this device for 30 days"></checkbox-virto>
-                </form>
-            </div>
-            <div slot="step-5">
-                    <h2>Your new device authentication is being verified</h2>
-            </div>
-            <div slot="step-6">
-                    <h2>Thanks! Your new device authentication was verified</h2>
-            </div>
-        </dialog-virto>
-
-
-        <dialog-virto id="loginDialog">
-            <community-logo slot="logo"></community-logo>
-
-            <div slot="login-step-1">
-                <form>
-                    <label for="username">Enter your username</label>
-                    <input-virto id="username" type="username" aria-placeholder="type an username"></input-virto>
-                </form>
-            </div>
-
-            <div slot="login-step-2">
-                <form>
-                    <label for="email">Email</label>
-                    <input-virto id="email" type="Email" aria-placeholder="type your email"></input-virto>
-                    <label for="password">Enter your password</label>
-                    <input-virto id="password" type="password"></input-virto>
-                    <ul>
-                        <button-social></button-social>
-                        <button-social src="public/fb.svg"></button-social>
-                        <button-social src="public/x.svg"></button-social>
-                        <button-social src="public/apple.svg"></button-social>
-                        <button-social src="public/github.svg"></button-social>
-                    </ul>
-                </form>
-            </div>
-
-            <div slot="login-step-3">
-                <form>
-                    <p>Identity Verification</p>
-                    <label for="QR">To be able to authorize transactions you need to scan this QR Code with your phone.</label>
-                    <img class="center-image qr-code" src="public/qr.svg" alt="QR Code">
-                    <label for="reason">If you can't scan the code, use this link instead</label>
-                    <link-authenticate></link-authenticate>
-                    <checkbox-virto label="Remember this device for 30 days"></checkbox-virto>
-                </form>
-            </div>
-
-            <div slot="login-step-5">
-                    <h2>Your new device authentication is being verified</h2>
-            </div>
-
-            <div slot="login-step-6">
-                    <h2>Thanks! Your new device authentication was verified</h2>
-            </div>
-
-        </dialog-virto>
-
-    </section>
-    <script>
-
-        const openSignupDialogButton = document.getElementById('openSignupDialog');
-        const openLoginDialogButton = document.getElementById('openLoginDialog');
-        const signupDialog = document.getElementById('signupDialog');
-        const loginDialog = document.getElementById('loginDialog');
-
-        openSignupDialogButton.addEventListener('click', () => {
-            signupDialog.setMode(false);
-            signupDialog.show();
-        });
-
-        openLoginDialogButton.addEventListener('click', () => {
-            loginDialog.setMode(true);
-            loginDialog.show();
-        });
-
+    <dialog-virto id="myDialog">
+        <community-logo slot="logo"></community-logo>
+        <h2 slot="title">Dialog Title</h2>
+        <div slot="content">
+          <h3>Subtitle</h3>
+          <p>Some text content</p>
+          <input-virto type="text" placeholder="Enter some text"></input-virto>
+        </div>
+    </dialog-virto>
+    <script type="module">
+        import './dialog.js'
+      
+        const dialog = document.getElementById('myDialog')
+      
+        dialog.addEventListener('button-click', (event) => {
+          if (event.detail.button === 'left') {
+            console.log('Left button clicked')
+          } else {
+            console.log('Right button clicked')
+          }
+        })
+      
+        dialog.setButtons('Back', 'Continue')
+        dialog.show()
 
     </script>
-    <script src="./dialog.js" defer></script>
     <script src="./input.js" defer></script>
     <script src="./button.js" defer></script>
     <script src="./logo.js" defer></script>
