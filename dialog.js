@@ -4,6 +4,7 @@ class DialogoModal extends HTMLElement {
         this.attachShadow({ mode: 'open' });
         this.currentStep = 1;
         this.isClosing = false;
+        this.isLogin = false;    
     }
 
     connectedCallback() {
@@ -12,7 +13,7 @@ class DialogoModal extends HTMLElement {
     }
 
     get totalSteps() {
-        return this.querySelectorAll('[slot^="step-"]').length;
+        return this.querySelectorAll(`[slot^="${this.isLogin ? 'login-' : ''}step-"]`).length;
     }
 
     render() {
@@ -188,17 +189,17 @@ class DialogoModal extends HTMLElement {
             ${Array.from({ length: this.totalSteps }, (_, i) => i + 1).map(step => `
                 <div class="step-content ${step === this.currentStep ? 'active' : ''}" data-step="${step}">
                     <div class="image-container"></div>
-                    <slot name="step-${step}"></slot>
+                    <slot name="${this.isLogin ? 'login-' : ''}step-${step}"></slot>
                 </div>
             `).join('')}
             <div class="navigation">
-                <button-virto id="prevButton" variant="secondary""></button-virto>
+                <button-virto id="prevButton" variant="secondary"></button-virto>
                 <button-virto id="nextButton"></button-virto>
             </div>
         </div>
         `;
-        this.dialog = this.shadowRoot.querySelector('.dialog');
-    }
+    this.dialog = this.shadowRoot.querySelector('.dialog');
+}
 
     setupEventListeners() {
         this.shadowRoot.getElementById('prevButton').addEventListener('click', (e) => this.handleButtonClick(e, 'prev'));
@@ -224,10 +225,15 @@ class DialogoModal extends HTMLElement {
     }
 
     navigate(direction) {
-        const nextStep = direction === 'next' ? this.currentStep + 1 : this.currentStep - 1;
-        if (nextStep < 1 || nextStep > this.totalSteps) {
+        const stepMapping = this.isLogin ? [1, 2, 3, 5, 6] : [1, 2, 3, 4, 5, 6];
+        const currentIndex = stepMapping.indexOf(this.currentStep);
+        const nextIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
+
+        if (nextIndex < 0 || nextIndex >= stepMapping.length) {
             return;
         }
+
+        const nextStep = stepMapping[nextIndex];
         this.animateStepTransition(direction, () => {
             this.currentStep = nextStep;
             this.updateStepContent();
@@ -271,6 +277,7 @@ class DialogoModal extends HTMLElement {
         this.shadowRoot.querySelector(`.step-content[data-step="${this.currentStep}"]`).classList.add('active');
 
         this.updateStepImage();
+
     }
 
     updateStepImage() {
@@ -318,14 +325,38 @@ class DialogoModal extends HTMLElement {
     }
 
     get steps() {
-        return [
-            { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Request Code" },
-            { title: "Virto requires you to signup", prevButtonLabel: "Change Number", nextButtonLabel: "Continue" },
-            { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
-            { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
-            { title: "Secure your account", singleButton: true, singleButtonLabel: "Continue" },
-            { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
-        ];
+        if (this.isLogin) {
+            return [
+                { title: "Login to Virto", singleButton: true, singleButtonLabel: "Continue" },
+                { title: "Login as {username}", singleButton: true, singleButtonLabel: "Continue" },
+                { title: "Secure your account", singleButton: true, singleButtonLabel: "Continue" },
+                { title: "Secure your account", singleButton: true, singleButtonLabel: "Continue" },
+                { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
+            ];
+        } else {
+            return [
+                { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Request Code" },
+                { title: "Virto requires you to signup", prevButtonLabel: "Change Number", nextButtonLabel: "Continue" },
+                { title: "Virto requires you to signup", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
+                { title: "Secure your account", prevButtonLabel: "Cancel", nextButtonLabel: "Continue" },
+                { title: "Secure your account", singleButton: true, singleButtonLabel: "Continue" },
+                { title: "Secure your account", singleButton: true, singleButtonLabel: "Close" },
+            ];
+        }
+    }
+    setDialogType(type) {
+        this.dialogType = type;
+        this.isLogin = type === 'login';
+        this.currentStep = 1;
+        this.updateStepContent();
+      }
+
+    setMode(isLogin) {
+        this.isLogin = isLogin;
+        this.currentStep = 1;
+        this.render();
+        this.setupEventListeners();
+        this.updateStepContent();
     }
 }
 

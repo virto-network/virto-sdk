@@ -89,9 +89,10 @@
 </head>
 <body>
     <section>
-        <button-virto id="openDialog" label="Open Register Dialog"></button-virto>
+        <button-virto id="openSignupDialog" label="Open Signup Dialog"></button-virto>
+        <button-virto id="openLoginDialog" label="Open Login Dialog"></button-virto>
 
-        <dialog-virto id="registerDialog">
+        <dialog-virto id="signupDialog">
             <community-logo slot="logo"></community-logo>
             
             <div slot="step-1">
@@ -101,7 +102,6 @@
                     <input-virto id="tel" type="tel"></input-virto>
                 </form>
             </div>
-        
             <div slot="step-2">
                 <form>
                     <h3>6 Digit Code</h3>
@@ -110,7 +110,6 @@
                     <input-code></input-code>
                 </form>
             </div>
-        
             <div slot="step-3">
                 <form>
                     <p>Please fill your information below</p>
@@ -122,7 +121,6 @@
                     <input-virto id="reason" type="textarea" aria-placeholder="I would like to change my company through Virto..."></input-virto>
                 </form>
             </div>
-
             <div slot="step-4">
                 <form>
                     <p>Identity Verification</p>
@@ -133,25 +131,80 @@
                     <checkbox-virto label="Remember this device for 30 days"></checkbox-virto>
                 </form>
             </div>
-
             <div slot="step-5">
                     <h2>Your new device authentication is being verified</h2>
             </div>
-
             <div slot="step-6">
                     <h2>Thanks! Your new device authentication was verified</h2>
             </div>
         </dialog-virto>
+
+
+        <dialog-virto id="loginDialog">
+            <community-logo slot="logo"></community-logo>
+
+            <div slot="login-step-1">
+                <form>
+                    <label for="username">Enter your username</label>
+                    <input-virto id="username" type="username" aria-placeholder="type an username"></input-virto>
+                </form>
+            </div>
+
+            <div slot="login-step-2">
+                <form>
+                    <label for="email">Email</label>
+                    <input-virto id="email" type="Email" aria-placeholder="type your email"></input-virto>
+                    <label for="password">Enter your password</label>
+                    <input-virto id="password" type="password"></input-virto>
+                    <ul>
+                        <button-social></button-social>
+                        <button-social src="public/fb.svg"></button-social>
+                        <button-social src="public/x.svg"></button-social>
+                        <button-social src="public/apple.svg"></button-social>
+                        <button-social src="public/github.svg"></button-social>
+                    </ul>
+                </form>
+            </div>
+
+            <div slot="login-step-3">
+                <form>
+                    <p>Identity Verification</p>
+                    <label for="QR">To be able to authorize transactions you need to scan this QR Code with your phone.</label>
+                    <img class="center-image qr-code" src="public/qr.svg" alt="QR Code">
+                    <label for="reason">If you can't scan the code, use this link instead</label>
+                    <link-authenticate></link-authenticate>
+                    <checkbox-virto label="Remember this device for 30 days"></checkbox-virto>
+                </form>
+            </div>
+
+            <div slot="login-step-5">
+                    <h2>Your new device authentication is being verified</h2>
+            </div>
+
+            <div slot="login-step-6">
+                    <h2>Thanks! Your new device authentication was verified</h2>
+            </div>
+
+        </dialog-virto>
+
     </section>
     <script>
-    
-    const openDialogButton = document.getElementById('openDialog');
-    const registerDialog = document.getElementById('registerDialog');
 
-    openDialogButton.addEventListener('click', () => {
-        registerDialog.show();
-        openDialogButton.hidden;
-    });
+        const openSignupDialogButton = document.getElementById('openSignupDialog');
+        const openLoginDialogButton = document.getElementById('openLoginDialog');
+        const signupDialog = document.getElementById('signupDialog');
+        const loginDialog = document.getElementById('loginDialog');
+
+        openSignupDialogButton.addEventListener('click', () => {
+            signupDialog.setMode(false);
+            signupDialog.show();
+        });
+
+        openLoginDialogButton.addEventListener('click', () => {
+            loginDialog.setMode(true);
+            loginDialog.show();
+        });
+
 
     </script>
     <script src="./dialog.js" defer></script>
