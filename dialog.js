@@ -12,24 +12,21 @@ const dialogTp = html`
     </div>
     <hr> 
     <slot></slot>
-    <div slot="footer">
-        <button-virto data-dialog="close" label="Close"></button-virto>
-        <button-virto class="dialog-next" data-dialog="next" label="Next"></button-virto>
-    </div>
+    <slot name="buttons"></slot> 
     </wa-dialog>
 `;
 
 const dialogCss = css`
-:host, wa-dialog { font-family: 'Outfit', sans-serif !important; }
+:host, wa-dialog {
+    font-family: 'Outfit', sans-serif !important;
+}
 
 wa-dialog::part(base) {
-    font-family: 'Outfit', sans-serif;
-    font-weight: 400;
     padding: 1em;
     background: var(--color-dialog-bg);
     border-radius: 12px;
     box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08),
-             0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
+                0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
 }
 
 wa-dialog::part(header) {
@@ -48,13 +45,19 @@ wa-dialog::part(title) {
     gap: 1em;
 }
 
-wa-dialog::part(footer) {
-    display: flex;
+[slot="buttons"] {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 1em;
     width: 100%;
-    justify-content: space-between;
 }
 
-hr  { 
+::slotted(virto-button) {
+    width: 100%;
+    min-width: 0;
+}
+
+hr { 
     border-top: 1px solid var(--color-accent); 
 }
 
@@ -63,17 +66,10 @@ hr  {
     align-items: center;
     gap: 1em;
 }
-
-[slot="footer"] {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 1em;
-}
 `;
 
 export class DialogoModal extends HTMLElement {
-    static TAG = 'dialog-virto';
+    static TAG = 'virto-dialog';
  
     constructor() {
         super();
@@ -83,19 +79,17 @@ export class DialogoModal extends HTMLElement {
         const style = document.createElement('style');
         style.textContent = dialogCss;
         this.shadowRoot.appendChild(style);
+
+        this.dialog = this.shadowRoot.querySelector('wa-dialog');
+        this.dialog.open = false;
     }
 
     connectedCallback() {
-        this.dialog = this.shadowRoot.querySelector('wa-dialog');
-        this.nextButton = this.shadowRoot.querySelector("[data-dialog='next']");
-        this.closeButton = this.shadowRoot.querySelector("[data-dialog='close']");
+        const nextButton = document.querySelector("[data-dialog='next']");
+        const closeButton = document.querySelector("[data-dialog='close']");
 
-        this.nextButton.addEventListener("click", () => this.next());
-        this.closeButton.addEventListener("click", () => this.close());
-
-        customElements.whenDefined('wa-dialog').then(() => {
-            console.log('wa-dialog is defined');
-        });
+        nextButton.addEventListener("click", () => this.next());
+        closeButton.addEventListener("click", () => this.close());
     }
 
     async open() {
@@ -107,9 +101,9 @@ export class DialogoModal extends HTMLElement {
         await this.dialog.updateComplete;
         this.dialog.open = false;
     }
-
+    
     async next() {
-        const allDialogs = document.querySelectorAll("dialog-virto");
+        const allDialogs = document.querySelectorAll("virto-dialog");
         const currentIndex = Array.from(allDialogs).indexOf(this);
         if (currentIndex + 1 < allDialogs.length) {
             await this.close();

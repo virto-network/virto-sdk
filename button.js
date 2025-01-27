@@ -1,5 +1,5 @@
 class ButtonVirto extends HTMLElement {
-    static TAG = 'button-virto'
+    static TAG = 'virto-button'
     static css = `
     :host {
         display: inline-block;

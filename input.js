@@ -1,5 +1,5 @@
 class Input extends HTMLElement {
-    static TAG = 'input-virto'
+    static TAG = 'virto-input'
     static css = `
     :host {
         display: block;
