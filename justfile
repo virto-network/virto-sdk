@@ -3,10 +3,10 @@ default: check
 check: check-sube check-scales check-libwallet
 
 check-sube:
-	@just -f sube/justfile check lint
+	@just -f lib/sube/justfile check lint
 
 check-scales:
-	@just -f scales/justfile check lint
+	@just -f lib/scales/justfile check lint
 
 check-libwallet:
-	@just -f libwallet/justfile check lint
+	@just -f lib/libwallet/justfile check lint
