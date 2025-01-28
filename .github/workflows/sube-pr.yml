@@ -11,6 +11,6 @@ jobs:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
       - name: Check
-        run: just -f sube/justfile check
+        run: just -f lib/sube/justfile check
       - name: Lint
-        run: just -f sube/justfile lint
+        run: just -f lib/sube/justfile lint

@@ -11,9 +11,9 @@ jobs:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
       - name: Check
-        run: just -f scales/justfile check
+        run: just -f lib/scales/justfile check
       - name: Lint
-        run: just -f scales/justfile lint
+        run: just -f lib/scales/justfile lint
    
   test:
     runs-on: ubuntu-latest
@@ -22,4 +22,4 @@ jobs:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
       - name: Test
-        run: just -f scales/justfile test
+        run: just -f lib/scales/justfile test

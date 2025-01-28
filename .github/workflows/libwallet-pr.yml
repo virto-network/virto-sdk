@@ -11,6 +11,6 @@ jobs:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
       - name: Check
-        run: just -f libwallet/justfile check
+        run: just -f lib/libwallet/justfile check
       - name: Lint
-        run: just -f libwallet/justfile lint
+        run: just -f lib/libwallet/justfile lint
