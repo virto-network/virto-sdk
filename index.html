@@ -43,7 +43,9 @@
 <body>
     <virto-button id="openDialogButton" label="Log in"></virto-button>
 
-    <virto-dialog id="dialog">
+    <virto-login id="org-name">
+
+    <virto-dialog id="step-1">
         <img slot="logo" src="public/virto.svg" alt="Logo" width="50">
         <h2 slot="title">Login to Virto</h2>
         <form id="log-in">
@@ -54,9 +56,9 @@
                 <virto-button data-dialog="next" label="Next"></virto-button>
             </div>
         </form>
-    </virto-dialog>
+   </virto-dialog>
 
-    <virto-dialog id="dialog">
+   <virto-dialog id="step-2">
         <img slot="logo" src="public/virto.svg" alt="Logo" width="50">
         <h2 slot="title">Login to Virto</h2>
         <form id="log-in">
@@ -68,11 +70,14 @@
         </form>
     </virto-dialog>
 
+    </virto-login>
+
     <script type="module">
         import './dialog.js';
+        import './login.js'
         const openButton = document.getElementById('openDialogButton');
-        const loginDialog = document.querySelector('#dialog');
-        customElements.whenDefined('virto-dialog').then(() => {
+        const loginDialog = document.querySelector('#step-1');
+        customElements.whenDefined('virto-login').then(() => {
             openButton.addEventListener('click', () => {
                 loginDialog.open();
             });

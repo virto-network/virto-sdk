@@ -10,7 +10,7 @@ const dialogTp = html`
         <slot name="logo"></slot>
         <slot name="title"></slot>
     </div>
-    <hr> 
+    <hr>
     <slot></slot>
     <slot name="buttons"></slot> 
     </wa-dialog>
