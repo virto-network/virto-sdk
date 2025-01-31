@@ -1,15 +1,17 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from "vite";
+import { resolve } from "path";
 
 export default defineConfig({
   server: {
     port: 3000,
   },
   build: {
+    outDir: "dist/umd",
     lib: {
-      entry: 'src/auth.ts',
-      name: 'Auth',
-      fileName: (format) => `auth.${format}.js`,
-      formats: ['es', 'umd'],
+      entry: resolve(__dirname, "src/auth.ts"),
+      name: "Auth",
+      fileName: "auth",
+      formats: ["umd"]
     },
-  },
+  }
 });
