@@ -1,4 +1,6 @@
 use core::{iter, ops};
+#[cfg(feature = "mnemonic")]
+use mnemonic::{Language, Mnemonic};
 
 #[cfg(feature = "rand")]
 pub fn random_bytes<R, const S: usize>(rng: &mut R) -> [u8; S]

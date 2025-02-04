@@ -46,7 +46,7 @@ substrate = ["sr25519"]
 util_pin = ["pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
-vault_simple = []
+vault_simple = ["mnemonic", "rand"]
 
 [workspace]
 members = [
