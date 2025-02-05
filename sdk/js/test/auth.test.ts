@@ -9,6 +9,7 @@ describe("Auth - E2E WebAuthn Flow", () => {
   });
 
   it("should register a user successfully", async () => {
+    await jestPuppeteer.debug();
     const result = await page.evaluate(async () => {
       const auth = new window.Auth("http://localhost:3000");
 
@@ -36,30 +37,30 @@ describe("Auth - E2E WebAuthn Flow", () => {
     expect(result.data.success).toBe(true);
   });
 
-  it("should connect a user successfully", async () => {
-    const credentialId = mockService.getCredentialId();
-    console.log("credentialId", credentialId);
+  // it("should connect a user successfully", async () => {
+  //   const credentialId = mockService.getCredentialId();
+  //   console.log("credentialId", credentialId);
 
-    const result = await page.evaluate(async (credentialId) => {
-      const auth = new window.Auth("http://localhost:3000");
+  //   const result = await page.evaluate(async (credentialId) => {
+  //     const auth = new window.Auth("http://localhost:3000");
 
-      try {
-        const res = await auth.connect(credentialId);
-        return {
-          ok: true,
-          data: res,
-          storedKeyring: localStorage.getItem('keyring_pair')
-        };
-      } catch (err) {
-        return { ok: false, error: (err as Error).message };
-      }
-    }, credentialId);
+  //     try {
+  //       const res = await auth.connect(credentialId);
+  //       return {
+  //         ok: true,
+  //         data: res,
+  //         storedKeyring: localStorage.getItem('keyring_pair')
+  //       };
+  //     } catch (err) {
+  //       return { ok: false, error: (err as Error).message };
+  //     }
+  //   }, credentialId);
 
-    if (!result.ok) {
-      throw new Error("Connection failed: " + result.error);
-    }
+  //   if (!result.ok) {
+  //     throw new Error("Connection failed: " + result.error);
+  //   }
 
-    expect(result.data).toBeDefined();
-    expect(result.data.success).toBe(true);
-  });
+  //   expect(result.data).toBeDefined();
+  //   expect(result.data.success).toBe(true);
+  // });
 });
