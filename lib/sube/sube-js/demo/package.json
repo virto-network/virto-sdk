@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@virtonetwork/libwallet": "file:../../../libwallet/js",
-    "sube-js": "file:../",
+    "@virtonetwork/sube": "file:../",
     "ts-node": "^10.9.1",
     "vite-plugin-top-level-await": "^1.2.2",
     "vite-plugin-wasm": "^3.1.1"

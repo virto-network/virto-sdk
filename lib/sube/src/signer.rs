@@ -1,7 +1,7 @@
 use crate::Result;
 use core::{future::Future, marker::PhantomData};
 
-type Bytes<const N: usize> = [u8; N];
+pub type Bytes<const N: usize> = [u8; N];
 
 /// Signed extrinsics need to be signed by a `Signer` before submission  
 pub trait Signer {
@@ -37,7 +37,11 @@ where
     }
 }
 
-impl<A: AsRef<[u8]>, S, SF> From<(A, S)> for SignerFn<S, SF> {
+impl<A: AsRef<[u8]>, S, SF> From<(A, S)> for SignerFn<S, SF>
+where
+    A: AsRef<[u8]>,
+    S: Fn(&[u8]) -> SF,
+{
     fn from((account, signer): (A, S)) -> Self {
         SignerFn {
             account: account.as_ref().try_into().expect("32bit account"),

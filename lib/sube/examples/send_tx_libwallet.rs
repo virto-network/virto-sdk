@@ -1,4 +1,3 @@
-use futures_util::TryFutureExt;
 use libwallet::{self, vault, Account, Signature};
 use rand_core::OsRng;
 use serde_json::json;
@@ -32,7 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "value": 100000
         }))
     )
-    .await?;
+    .await.map_err(|_| format!("Error sending tx"))?;
 
     println!("Secret phrase: \"{phrase}\"");
     // println!("Default Account: 0x{account}");

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
 
+
 use libwallet::{vault::Simple, Signer, Wallet, Account};
 
 #[derive(Serialize, Deserialize)]
@@ -21,6 +22,9 @@ pub struct JsWallet {
 impl JsWallet {
     #[wasm_bindgen(constructor)]
     pub fn new(constructor: JsValue) -> Self {
+        wasm_logger::init(wasm_logger::Config::default());
+        console_error_panic_hook::set_once();
+        
         let constructor: WalletConstructor = from_value(constructor).unwrap();
 
         let (vault, phrase) = match constructor {
@@ -48,7 +52,7 @@ impl JsWallet {
     }
 
     #[wasm_bindgen]
-    pub async fn unlock(&mut self, credentials: JsValue) -> Result<(), JsValue> {
+    pub async fn unlock(&mut self, id: JsValue, credentials: JsValue) -> Result<(), JsValue> {
         let credentials: <SimpleVault as libwallet::Vault>::Credentials =
             if credentials.is_null() || credentials.is_undefined() {
                 None
@@ -56,8 +60,16 @@ impl JsWallet {
                 from_value(credentials).unwrap_or(None)
             };
 
+        let id: <SimpleVault as libwallet::Vault>::Id =
+            if id.is_null() || id.is_undefined() {
+                None
+            } else {
+                from_value(id).unwrap_or(None)
+            };
+
+        
         self.wallet
-            .unlock(None, credentials)
+            .unlock(id, credentials)
             .await
             .map_err(|e| JsError::new(&e.to_string()))?;
 
