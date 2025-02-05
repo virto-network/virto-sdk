@@ -7,22 +7,20 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <h4> Sube Demo </h4>
         <div class="row">
             <label for="mnonic">Wallet nmonic</label>
-            <input id="mnomic">
+            <input id="mnomic" value="">
         </div>
         <div class="row">
             <label for="uri">URI</label>
-            <input id="uri">
+            <input id="uri" value="https://kreivo.io/balances/transfer_keep_alive">
         </div>
         <div class="row">
             <label for="data">Body</label>
             <textarea id="data" name="textarea" rows="10" cols="50">
-              {  
-                "transfer": {
+              {
                   "dest": {
-                      "Id": "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b"
+                      "Id": "0x28f8eba6bdaecef86bc33c0f7ba0ccfc77664776a6033c31c7716f4de2a1c74f"
                   },
                   "value": 100000
-                }
               }
             </textarea>
         </div>

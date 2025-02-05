@@ -5,30 +5,31 @@
   "type": "module",
   "scripts": {
     "test": "node test/index.js",
-    "build": "rm -rf dist pkg-web pkg-node && npx concurrently \"npm:build:*\" && npm run build:cp",
-    "build:pkg:node": "wasm-pack build --target nodejs --out-dir ./dist/pkg-node",
-    "build:pkg:web": "wasm-pack build --target web --out-dir ./dist/pkg-web",
-    "build:js": "npm run build:esm && npm run build:cjs",
-    "build:esm": "tsc --module es2015 --target esnext --outDir dist/esm",
-    "build:cjs": "tsc --module commonjs --target esnext --outDir dist/cjs",
-    "build:cp": "mv ./pkg-web/ ./dist/pkg-web"
+    "build": "rm -rf dist pkg-web pkg-node && npm run build:pkg && npm run build:js",
+    "build:pkg:node": "wasm-pack build --target bundler --out-dir ./dist/pkg",
+    "build:pkg": "npm run build:pkg:node",
+    "build:js": "npx concurrently \"npm:build:js:*\"",
+    "build:js:esm": "tsc --module es2022 --target esnext --outDir dist/esm",
+    "build:js:cjs": "tsc --module commonjs --target esnext --outDir dist/cjs"
   },
   "files": [
     "dist/"
   ],
   "main": "./dist/cjs/index.js",
+  "browser": "./dist/esm/index.js",
   "types": "./dist/cjs/index.d.ts",
   "exports": {
     "import": "./dist/esm/index.js",
     "require": "./dist/cjs/index.js"
   },
-  "imports": {
-    "sube-web": "./dist/pkg-web"
+  "dependencies": {
+    "sube-js": "file:./dist/pkg"
   },
   "publishConfig": {
     "access": "public"
   },
   "devDependencies": {
+    "@types/node": "^22.13.1",
     "typescript": "^4.9.5"
   }
 }

@@ -83,9 +83,9 @@ impl<'a> SubeBuilder<'a, (), ()> {
 }
 
 impl<'a, B> SubeBuilder<'a, B, ()> {
-    pub fn with_signer<S: Signer>(self, signer: impl Into<S>) -> SubeBuilder<'a, B, S> {
+    pub fn with_signer<S>(self, signer: S) -> SubeBuilder<'a, B, S> {
         SubeBuilder {
-            signer: Some(signer.into()),
+            signer: Some(signer),
             body: self.body,
             metadata: self.metadata,
             nonce: self.nonce,
@@ -357,35 +357,28 @@ macro_rules! sube {
         }
     };
 
-    // Two parameters
-    // Match when the macro is called with an expression (url) followed by a block of key-value pairs
-    ( $url:expr => { $($key:ident: $value:expr),+ $(,)? }) => {
-
-        async {
-            use $crate::paste;
-
-            let mut builder = $crate::SubeBuilder::default()
-                .with_url($url);
-
-            paste!($(
-                let mut builder = builder.[<with_ $key>]($value);
-            )*);
-
-            builder.await
-        }
-    };
-
     ($url:expr => ($wallet:expr, $body:expr)) => {
         async {
             let mut builder = $crate::SubeBuilder::default();
+            use $crate::Bytes;
 
             let public = $wallet.default_account().expect("to have a default account").public();
+
+            let signer = $crate::SignerFn::from((public, |message: &[u8]| { 
+                let message = message.to_vec();
+                let wallet = &$wallet;
+                async move {
+                    let signature = wallet.sign(&message).await.map_err(|_| sube::Error::Signing)?;
+                    Ok::<Bytes<64>, sube::Error>(signature.as_ref().try_into().unwrap())
+                }
+            }));
 
             builder
                 .with_url($url)
                 .with_body($body)
-                .with_signer($crate::SignerFn::from((public, |message: &[u8]| async { Ok($wallet.sign(message).await?) })))
-                .await?;
+                .with_signer(signer)
+                .await
+                .map_err(|_| sube::Error::Signing)?;
 
             $crate::Result::Ok($crate::Response::Void)
         }

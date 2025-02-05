@@ -1,7 +1,6 @@
 import { sube } from 'sube-js';
-import  { default as Initwallet, JsWallet } from '@virtonetwork/libwallet';
+import  { JsWallet } from '@virtonetwork/libwallet';
 
-window.sube = sube;
 export function setupSign(element: HTMLButtonElement) {
   let counter = 0
   const setCounter = async (count: number) => {
@@ -10,13 +9,15 @@ export function setupSign(element: HTMLButtonElement) {
     const uri = document.querySelector<HTMLInputElement>('#uri')?.value ?? '';
     const body = JSON.parse(document.querySelector<HTMLInputElement>('#data')?.value ?? '');
     
-    await Initwallet();
+    // await Initwallet();
 
     const wallet = new JsWallet({
       Simple: mnomic,
     });
     
-    await wallet.unlock({});
+    await wallet.unlock("", null)
+
+    console.log('from: ', wallet.getAddress().toHex());
 
     await sube(uri, {
       body,

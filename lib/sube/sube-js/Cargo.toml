@@ -20,7 +20,8 @@ parity-scale-codec = "3.2.1"
 console_error_panic_hook = "0.1.7"
 # sp-core = "10.0.0"
 console_log = "1.0.0"
-log = "0.4.21"
+log = "0.4"
+wasm-logger = "0.2"
 
 [dev-dependencies]
 console_error_panic_hook = { version = "0.1.6" }
