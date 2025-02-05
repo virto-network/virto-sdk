@@ -7,7 +7,7 @@ use jsonrpc::{
 };
 use reqwest::Client;
 use serde::Deserialize;
-use url::Url;
+pub use url::Url;
 
 #[derive(Debug)]
 pub struct Backend(Url);
