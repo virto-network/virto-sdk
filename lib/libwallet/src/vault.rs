@@ -11,6 +11,7 @@ pub use os::*;
 pub use pass::*;
 pub use simple::*;
 
+
 use crate::account::Account;
 
 /// Abstraction for storage of private keys that are protected by some credentials.
@@ -60,6 +61,7 @@ mod utils {
         where
             Self: Sized,
         {
+            log::info!("derive: {}", path);
             match &path[..2] {
                 #[cfg(feature = "substrate")]
                 "//" => self.sub.derive(path).into(),
@@ -122,6 +124,7 @@ mod utils {
 
         pub(crate) fn unlock(mut self, root: &RootAccount) -> Self {
             if self.is_locked() {
+                log::info!("unlock: {}", self.path);
                 self.pair = Some(root.derive(&self.path));
             }
             self

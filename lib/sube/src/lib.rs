@@ -21,7 +21,7 @@ pub use core::fmt::Display;
 use core::iter::Empty;
 
 pub use frame_metadata::RuntimeMetadataPrefixed;
-pub use signer::{Signer, SignerFn};
+pub use signer::{Signer, SignerFn, Bytes};
 
 pub use meta::Metadata;
 #[cfg(feature = "v14")]
@@ -37,7 +37,7 @@ use prelude::*;
 #[cfg(feature = "v14")]
 use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value as JsonValue};
+pub use serde_json::{json, Value as JsonValue};
 
 use crate::util::to_camel;
 
@@ -57,7 +57,7 @@ pub mod ws;
 pub mod builder;
 pub use builder::SubeBuilder;
 mod hasher;
-mod meta_ext;
+pub mod meta_ext;
 mod signer;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
@@ -72,6 +72,7 @@ pub fn sube(url: &str) -> builder::SubeBuilder<(), ()> {
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
+
 async fn query<'m>(
     chain: &impl Backend,
     meta: &'m Metadata,

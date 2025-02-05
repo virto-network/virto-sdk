@@ -6,13 +6,13 @@ use crate::{
 use core::marker::PhantomData;
 
 /// A vault that holds secrets in memory
-pub struct Simple<S> {
-    locked: Option<[u8; 32]>,
-    unlocked: Option<[u8; 32]>,
+pub struct Simple<S, const N: usize = 16> {
+    locked: Option<[u8; N]>,
+    unlocked: Option<[u8; N]>,
     _phantom: PhantomData<S>,
 }
 
-impl<S> Simple<S> {
+impl<S, const N: usize> Simple<S, N> {
     /// A vault with a random seed, once dropped the the vault can't be restored
     ///
     /// ```
@@ -31,7 +31,7 @@ impl<S> Simple<S> {
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         Simple {
-            locked: Some(crate::util::random_bytes::<_, 32>(rng)),
+            locked: Some(crate::util::random_bytes::<_, N>(rng)),
             unlocked: None,
             _phantom: Default::default(),
         }
@@ -50,17 +50,14 @@ impl<S> Simple<S> {
     // Provide your own seed
     pub fn from_phrase(phrase: impl AsRef<str>) -> Self {
         use core::convert::TryInto;
-        let phrase = phrase
-            .as_ref()
-            .parse::<mnemonic::Mnemonic>()
-            .expect("mnemonic");
-        let entropy = phrase
-            .entropy()
-            .try_into()
-            .expect("Size should be 32 bytes");
+        mnemonic::Mnemonic::validate(phrase.as_ref()).expect("its a valid mnemonic");
+        // Count the number of words in the phrase
+        let word_count = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).expect("its a valid mnemonic");
+
+        let raw_entropy = word_count.entropy();
 
         Simple {
-            locked: Some(entropy),
+            locked: Some(raw_entropy.try_into().expect("its a valid entropy")),
             unlocked: None,
             _phantom: Default::default(),
         }
@@ -87,7 +84,7 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-impl<S: AsRef<str>> Vault for Simple<S> {
+impl<S: AsRef<str>, const N: usize> Vault for Simple<S, N> {
     type Credentials = Option<Pin>;
     type Error = Error;
     type Id = Option<S>;

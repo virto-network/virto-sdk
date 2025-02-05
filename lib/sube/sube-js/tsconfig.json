@@ -1,12 +1,13 @@
 {
   "compilerOptions": {
+    "baseUrl": ".",
     "outDir": "./dist",
     "strict": true,
     "sourceMap": true,
-    "lib": ["es2017", "DOM"],
-    "target": "es2017",
-    "module": "commonjs",
-    "moduleResolution": "node",
+    "lib": ["ESNext", "DOM"],
+    "target": "esnext",
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "esModuleInterop": true,
@@ -14,15 +15,17 @@
       "node_modules/@types",
       "@types"
     ],
+    "rootDir": "./src",
     "declaration": true,
     "useDefineForClassFields": true,
-    "resolveJsonModule": true,
     "isolatedModules": true,
     "noUnusedLocals": true,
     "emitDeclarationOnly": false,
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
   },
-  "include": ["src"]
+  "include": ["src/"],
+  "exclude": ["node_modules"]
 }
