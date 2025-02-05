@@ -1,50 +1,60 @@
-import { Keyring } from '@polkadot/keyring';
-import { mnemonicGenerate } from '@polkadot/util-crypto';
-import { signSendAndWait } from "./utils/signAndSend";
+import { JsWallet } from '@virtonetwork/libwallet';
+// import { Keyring } from '@polkadot/api';
 import { SubmittableExtrinsic } from '@polkadot/api/types';
+// import { signSendAndWait } from "./utils/signAndSend";
 
 export class SessionManager {
-    private keyring: Keyring;
-    private mnemonic: string;
-    private pair: any;
+    private wallet: JsWallet;
+    private isUnlocked: boolean = false;
 
     constructor() {
-        this.keyring = new Keyring({ type: 'sr25519' });
-        this.mnemonic = mnemonicGenerate();
-        this.pair = this.keyring.addFromUri(this.mnemonic);
+        this.wallet = new JsWallet({ Simple: null });
     }
 
-    getAddress(): string {
-        return this.pair.address;
+    async unlock(): Promise<void> {
+        // if (!this.isUnlocked) {
+        //     await this.wallet.unlock(null, null);
+        //     this.isUnlocked = true;
+        // }
     }
 
-    async createSession(extrinsic: SubmittableExtrinsic<"promise">) {
-        const signSendAndWaitFn = (typeof window !== "undefined" && window.signSendAndWait)
-            ? window.signSendAndWait
-            : signSendAndWait;
+    async getAddress(): Promise<string> {
+        // if (!this.isUnlocked) {
+        //     await this.unlock();
+        // }
+        // return this.wallet.getAddress().toHex();
+        return "5G91111111111111111111111111111111111111111111111111111111111111";
+    }
 
-        const result = await signSendAndWaitFn(extrinsic, this.pair);
+    async createSession(_: SubmittableExtrinsic<"promise">) {
+        // if (!this.isUnlocked) {
+        //     await this.unlock();
+        // }
 
-        const sessionCreated = (result as any).events.find(
-            (record: { event: { method: string; }; }) => record.event.method === "SessionCreated"
-        );
+        // const signSendAndWaitFn = (typeof window !== "undefined" && window.signSendAndWait)
+        //     ? window.signSendAndWait
+        //     : signSendAndWait;
 
-        if (!sessionCreated) {
-            throw new Error("Session creation failed - SessionCreated event not found");
-        }
+        // const result = await signSendAndWaitFn(extrinsic, this.wallet.keyPair);
 
-        this.persistKeyring();
+        // const sessionCreated = (result as any).events.find(
+        //     (record: { event: { method: string; }; }) => record.event.method === "SessionCreated"
+        // );
+
+        // if (!sessionCreated) {
+        //     throw new Error("Session creation failed - SessionCreated event not found");
+        // }
+
+        this.persistWallet();
 
         return {
             ok: true,
         };
     }
 
-    private persistKeyring() {
-        localStorage.setItem('keyring_pair', JSON.stringify({
-            address: this.pair.address,
-            meta: this.pair.meta,
-            mnemonic: this.mnemonic
+    private persistWallet() {
+        localStorage.setItem('wallet', JSON.stringify({
+            address: this.getAddress(),
         }));
     }
 }
