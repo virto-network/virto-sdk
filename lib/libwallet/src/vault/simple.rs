@@ -6,7 +6,7 @@ use crate::{
 use core::marker::PhantomData;
 
 /// A vault that holds secrets in memory
-pub struct Simple<S, const N: usize = 16> {
+pub struct Simple<S, const N: usize = 32> {
     locked: Option<[u8; N]>,
     unlocked: Option<[u8; N]>,
     _phantom: PhantomData<S>,
@@ -46,15 +46,16 @@ impl<S, const N: usize> Simple<S, N> {
         (Self::from_phrase(&phrase), phrase)
     }
 
+
     #[cfg(feature = "mnemonic")]
     // Provide your own seed
     pub fn from_phrase(phrase: impl AsRef<str>) -> Self {
         use core::convert::TryInto;
         mnemonic::Mnemonic::validate(phrase.as_ref()).expect("its a valid mnemonic");
         // Count the number of words in the phrase
-        let word_count = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).expect("its a valid mnemonic");
+        let mnemonic = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).expect("its a valid mnemonic");
 
-        let raw_entropy = word_count.entropy();
+        let raw_entropy = mnemonic.entropy();
 
         Simple {
             locked: Some(raw_entropy.try_into().expect("its a valid entropy")),
@@ -73,6 +74,8 @@ impl<S, const N: usize> Simple<S, N> {
         }
     }
 }
+
+    
 
 #[derive(Debug)]
 pub struct Error;
