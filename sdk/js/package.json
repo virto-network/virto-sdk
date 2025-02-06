@@ -17,13 +17,10 @@
     "default": "./dist/umd/auth.umd.js"
   },
   "devDependencies": {
-    "@polkadot/api": "^15.5.2",
-    "@polkadot/keyring": "^13.3.1",
-    "@polkadot/types": "^15.5.2",
-    "@polkadot/util-crypto": "^13.3.1",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.12.0",
     "@virtonetwork/libwallet": "file:../../lib/libwallet/js",
+    "@virtonetwork/sube": "file:../../lib/sube/sube-js",
     "jest": "^29.7.0",
     "jest-environment-puppeteer": "^11.0.0",
     "jest-puppeteer": "^11.0.0",

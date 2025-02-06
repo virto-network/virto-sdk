@@ -118,14 +118,9 @@ export class MockServiceRegister {
         <script type="module">
           import Auth from '/dist/esm/auth.js';
 
-          window.signSendAndWait = async (tx, signer) => {
-            // Return a mocked result with an event that has method "SessionCreated"
-            return {
-              isInBlock: true,
-              events: [
-                { event: { method: "SessionCreated" } }
-              ]
-            };
+          window.sube = async (url, options) => {
+            console.log("Mocked sube called", url, options);
+            return { success: true, extrinsic: options.body };
           };
           
           window.Auth = Auth;
