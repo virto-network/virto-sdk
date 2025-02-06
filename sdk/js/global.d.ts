@@ -1,5 +1,5 @@
 import 'jest-environment-puppeteer';
-
+import { SubeOptions } from '@virtonetwork/sube';
 declare global {
   const page: import('puppeteer').Page;
   const browser: import('puppeteer').Browser;
@@ -11,7 +11,7 @@ import { Auth } from "./src/auth";
 declare global {
   interface Window {
     Auth: typeof Auth;
-    signSendAndWait?: <T = any>(tx: any, signer: any) => Promise<T>;
+    sube<T>(url: string, options?: SubeOptions): Promise<T>;
   }
 }
 
