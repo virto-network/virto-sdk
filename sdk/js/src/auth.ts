@@ -1,6 +1,6 @@
 import { VError } from "./utils/error";
 import { fromBase64, fromBase64Url } from "./utils/base64";
-import { SessionManager } from "./manager";
+import SessionManager from "./manager";
 
 export type BaseProfile = {
   id: string;
@@ -56,11 +56,11 @@ export default class Auth {
     return data;
   }
 
-  async connect(credentialId: string) {
+  async connect(email: string) {
     const preRes = await fetch(`${this.baseUrl}/pre-connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credentialId }),
+      body: JSON.stringify({ email }),
     });
 
     const assertion = await preRes.json();
@@ -93,7 +93,7 @@ export default class Auth {
     const data = await sessionPreparationRes.json();
     console.log("Post-connect response:", data);
 
-    const sessionResult = await this.sessionManager.createSession(data.extrinsic);
+    const sessionResult = await this.sessionManager.createSession(data.extrinsic, email);
 
     return {
       ...data,
