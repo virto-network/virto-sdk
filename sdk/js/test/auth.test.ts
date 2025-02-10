@@ -9,7 +9,6 @@ describe("Auth - E2E WebAuthn Flow", () => {
   });
 
   it("should register a user successfully", async () => {
-    await new Promise((r) => setTimeout(r, 2000));
     const result = await page.evaluate(async () => {
       const auth = new window.Auth("http://localhost:3000");
 

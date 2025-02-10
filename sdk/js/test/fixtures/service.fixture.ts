@@ -16,6 +16,7 @@ export class MockServiceRegister {
     await this.setupRequestInterceptor();
     await this.setupVirtualAuthenticator();
     await this.page.goto("http://localhost:3000/fake");
+    await new Promise((r) => setTimeout(r, 2000));
   }
 
   private async setupRequestInterceptor() {
@@ -119,7 +120,6 @@ export class MockServiceRegister {
           import Auth from '/dist/esm/auth.js';
 
           window.sube = async (url, options) => {
-            console.log("Mocked sube called", url, options);
             return { success: true, extrinsic: options.body };
           };
           
@@ -145,8 +145,6 @@ export class MockServiceRegister {
 
     const userIdBytes = new Uint8Array([9, 9, 9, 9, 9, 9, 9, 9]);
     const userIdB64 = toBase64(userIdBytes);
-
-    console.log("userIdB64", userIdB64);
 
     return {
       publicKey: {
