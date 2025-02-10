@@ -40,7 +40,7 @@ export default class SessionManager {
             ? window.sube
             : sube;
 
-        const result = await subeFn("https://kreivo.io/balances/transfer_keep_alive", {
+        const result = await subeFn("https://kreivo.io/pass/authenticate", {
             body: extrinsic,
             from: this.wallet.getAddress().repr,
             sign: (message: Uint8Array) => this.wallet.sign(message)
