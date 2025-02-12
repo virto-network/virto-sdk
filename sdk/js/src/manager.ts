@@ -1,60 +1,42 @@
-import { JsWallet } from '@virtonetwork/libwallet';
-import { sube } from '@virtonetwork/sube';
+import { Command } from './auth';
+import Wallet, { SubeFn, JsWalletFn } from './wallet';
 
 interface Session {
     userId: string;
     createdAt: number;
     address: string;
+    wallet: Wallet;
+}
+
+interface SavedSession {
+    userId: string;
+    createdAt: number;
+    address: string;
+    wallet: {
+        address: string;
+        mnemonic: string;
+        isUnlocked: boolean;
+    };
 }
 
 export default class SessionManager {
-    private wallet: JsWallet;
-    private isUnlocked: boolean = false;
     private sessions: Map<string, Session> = new Map();
 
-    constructor() {
-        this.wallet = new JsWallet({ Simple: null });
+    constructor(private subeFn: SubeFn, private JsWalletFn: JsWalletFn) {
         this.loadSessions();
     }
 
-    async unlock(): Promise<void> {
-        if (!this.isUnlocked) {
-            await this.wallet.unlock(null, null);
-            this.isUnlocked = true;
-        }
-    }
+    async create(command: Command, userId: string) {
+        const wallet = new Wallet(null, this.subeFn, this.JsWalletFn);
+        await wallet.sign(command);
 
-    async getAddress(): Promise<string> {
-        if (!this.isUnlocked) {
-            await this.unlock();
-        }
-        return this.wallet.getAddress().toHex();
-    }
+        const address = await wallet.getAddress();
 
-    async createSession(extrinsic: Record<string, any>, userId: string) {
-        if (!this.isUnlocked) {
-            await this.unlock();
-        }
-
-        const subeFn = (typeof window !== "undefined" && window.sube)
-            ? window.sube
-            : sube;
-
-        const result = await subeFn("https://kreivo.io/pass/authenticate", {
-            body: extrinsic,
-            from: this.wallet.getAddress().repr,
-            sign: (message: Uint8Array) => this.wallet.sign(message)
-        });
-
-        if (!result) {
-            throw new Error("Session creation failed");
-        }
-
-        const address = await this.getAddress();
         const session: Session = {
             userId,
             createdAt: Date.now(),
-            address
+            address,
+            wallet
         };
 
         this.sessions.set(userId, session);
@@ -64,6 +46,11 @@ export default class SessionManager {
             ok: true,
             session
         };
+    }
+
+    getWallet(userId: string): Wallet | null {
+        const session = this.sessions.get(userId);
+        return session?.wallet || null;
     }
 
     getSession(userId: string): Session | undefined {
@@ -84,19 +71,18 @@ export default class SessionManager {
 
     private persistSessions() {
         localStorage.setItem('sessions', JSON.stringify(Array.from(this.sessions.entries())));
-        this.persistWallet();
     }
 
     private loadSessions() {
         const savedSessions = localStorage.getItem('sessions');
         if (savedSessions) {
-            this.sessions = new Map(JSON.parse(savedSessions));
+            const entries = JSON.parse(savedSessions);
+            this.sessions = new Map(
+                entries.map(([userId, session]: [string, SavedSession]) => {
+                    const wallet = new Wallet(session.wallet.mnemonic, this.subeFn, this.JsWalletFn);
+                    return [userId, { ...session, wallet }];
+                })
+            );
         }
-    }
-
-    private persistWallet() {
-        localStorage.setItem('wallet', JSON.stringify({
-            address: this.getAddress(),
-        }));
     }
 }

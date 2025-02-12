@@ -86,7 +86,15 @@ export class MockServiceRegister {
           headers: this.getCorsHeaders(),
           body: JSON.stringify({
             success: true,
-            extrinsic: new Uint8Array([1, 2, 3, 4]), // Mock extrinsic data
+            command: {
+              url: "https://kreivo.io/pass/authenticate",
+              body: {
+                deviceId: "0x01020304",
+                credential: {},
+                duration: null
+              },
+              hex: "0x01020304"
+            },
           })
         });
         return;
@@ -118,11 +126,6 @@ export class MockServiceRegister {
       <body>
         <script type="module">
           import Auth from '/dist/esm/auth.js';
-
-          window.sube = async (url, options) => {
-            return { success: true, extrinsic: options.body };
-          };
-          
           window.Auth = Auth;
         </script>
       </body>
