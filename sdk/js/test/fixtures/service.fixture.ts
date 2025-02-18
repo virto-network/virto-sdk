@@ -126,6 +126,7 @@ export class MockServiceRegister {
       <body>
         <script type="module">
           import Auth from '/dist/esm/auth.js';
+
           window.Auth = Auth;
         </script>
       </body>

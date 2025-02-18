@@ -3,15 +3,14 @@ import { sube } from '@virtonetwork/sube';
 import { Command } from './auth';
 
 export type SubeFn = typeof sube;
-export type JsWalletFn = typeof JsWallet;
+export type JsWalletBuilder = (mnemonic: string | null) => InstanceType<typeof JsWallet>;
 
 export default class Wallet {
     private wallet: JsWallet;
     private isUnlocked: boolean = false;
 
-    // TODO: use JSWalletFn instead of JsWallet
-    constructor(mnemonic: string | null = null, private subeFn: SubeFn, private JsWalletFn: JsWalletFn) {
-        this.wallet = new JsWallet({ Simple: mnemonic });
+    constructor(mnemonic: string | null = null, private subeFn: SubeFn, private JsWalletFn: JsWalletBuilder) {
+        this.wallet = this.JsWalletFn(mnemonic);
     }
 
     async unlock(): Promise<void> {
@@ -38,7 +37,6 @@ export default class Wallet {
             from: await this.wallet.getAddress().repr,
             sign: (message: Uint8Array) => this.wallet.sign(message)
         });
-
         if (!result) {
             throw new Error("Signing with sube failed");
         }

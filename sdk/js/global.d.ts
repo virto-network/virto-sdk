@@ -11,7 +11,8 @@ import { Auth } from "./src/auth";
 declare global {
   interface Window {
     Auth: typeof Auth;
-    sube<T>(url: string, options?: SubeOptions): Promise<T>;
+    mockSube<T>(url: string, options?: SubeOptions): Promise<T>;
+    jsWalletFn(mnemonic?: string): any;
   }
 }
 

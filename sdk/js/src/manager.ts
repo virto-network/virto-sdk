@@ -1,5 +1,5 @@
 import { Command } from './auth';
-import Wallet, { SubeFn, JsWalletFn } from './wallet';
+import Wallet, { SubeFn, JsWalletBuilder } from './wallet';
 
 interface Session {
     userId: string;
@@ -22,7 +22,7 @@ interface SavedSession {
 export default class SessionManager {
     private sessions: Map<string, Session> = new Map();
 
-    constructor(private subeFn: SubeFn, private JsWalletFn: JsWalletFn) {
+    constructor(private subeFn: SubeFn, private JsWalletFn: JsWalletBuilder) {
         this.loadSessions();
     }
 

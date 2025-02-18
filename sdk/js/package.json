@@ -9,7 +9,8 @@
     "build:esm": "tsc --project tsconfig.esm.json",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:umd": "vite build --config vite.config.mts",
-    "test:e2e": "npm run build && jest --config=jest.config.js"
+    "test": "npm run build && jest --config=jest.config.js",
+    "test:watch": "npm run build && jest --config=jest.config.js --watch"
   },
   "exports": {
     "require": "./dist/cjs/auth.js",

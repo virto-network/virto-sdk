@@ -1,8 +1,7 @@
 import { VError } from "./utils/error";
 import { fromBase64, fromBase64Url } from "./utils/base64";
 import SessionManager from "./manager";
-import { JsWallet } from "@virtonetwork/libwallet";
-import { sube } from "@virtonetwork/sube";
+import { JsWalletBuilder, SubeFn } from "./wallet";
 
 export type BaseProfile = {
   id: string;
@@ -25,9 +24,9 @@ export default class Auth {
   private sessionManager: SessionManager;
   constructor(
     private readonly baseUrl: string,
-    private subeFn: typeof sube,
-    private JsWalletFn: typeof JsWallet,
-    sessionManagerFactory: () => SessionManager = () => new SessionManager(this.subeFn, this.JsWalletFn)
+    subeFn: SubeFn,
+    jsWalletFn: JsWalletBuilder,
+    sessionManagerFactory: () => SessionManager = () => new SessionManager(subeFn, jsWalletFn)
   ) {
     this.sessionManager = sessionManagerFactory();
   }
@@ -91,17 +90,11 @@ export default class Auth {
       throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
     }
 
-    const wallet = this.sessionManager.getWallet(userId);
-    if (!wallet) {
-      throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
-    }
-
     const sessionPreparationRes = await fetch(`${this.baseUrl}/pre-connect-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: response.id,
-        address: wallet.getAddress()
       }),
     });
 
@@ -131,5 +124,3 @@ export default class Auth {
     };
   }
 }
-
-
