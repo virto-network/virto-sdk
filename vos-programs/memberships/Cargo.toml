@@ -1,0 +1,10 @@
+[package]
+name = "memberships"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vos = { git = "https://codeberg.org/Virto/vos.git", features = ["bin"] }
+
+[features]
+stand-alone = []
