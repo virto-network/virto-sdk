@@ -9,22 +9,23 @@
     <title>Login</title>
     <style>
         :root {
-            --color-accent-rgb: rgb(72, 61, 139);
-            --color-alt-rgb: rgb(137, 236, 150);
-            --color-bg: white;
-            --color-bg-alt: whitesmoke;
-            --color-text-alt: #446;
-            --nav-height: calc(3rem + 2vh);
-            --max-width: 1100px;
-            --color-txt: darkslategray;
-            --color-accent: lightgreen;
-            --color-outline: darkseagreen;
-            --color-white: #F0FDF1;
-            --color-fill-btn: #24AF37;
-            --color-fill-social-btn: #c6ebc7;
-            --color-fill-social-svg: #006B0A;
-            --color-input: #DDFBE0;
-            --color-dialog-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.5) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, rgba(86, 201, 96, 0.5) 0%, rgba(198, 235, 199, 0) 98.5%);
+            --white: white;
+            --whitesmoke: whitesmoke;
+            --darkslategray: darkslategray;
+            --lightgreen: lightgreen;
+            --darkseagreen: darkseagreen;
+            --black: #0000004D;
+            --green: #24AF37;
+            --whitish-green: #c6ebc7;
+            --dark-green: #006B0A;
+            --extra-light-green: #DDFBE0;
+            --gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.5) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, rgba(86, 201, 96, 0.5) 0%, rgba(198, 235, 199, 0) 98.5%);
+            --font-primary: Outfit, sans-serif;
+            --font-secondary: Plus Jakarta, sans-serif;       
+        }
+
+        virto-avatar {
+            border-radius: 50px;
         }
 
         body {
@@ -34,56 +35,26 @@
             align-items: center;
         }
 
-        * {
-            font-family: 'Outfit', sans-serif;
-            color: var(--color-txt);
-        }
     </style>
 </head>
+
 <body>
     <virto-button id="openDialogButton" label="Log in"></virto-button>
-
-    <virto-login id="org-name">
-
-    <virto-dialog id="step-1">
-        <img slot="logo" src="public/virto.svg" alt="Logo" width="50">
-        <h2 slot="title">Login to Virto</h2>
-        <form id="log-in">
-            <label>Enter your username</label>
-            <virto-input id="username" type="text" required aria-placeholder="Type a username"></virto-input>
-            <div slot="buttons">
-                <virto-button data-dialog="close" label="Close"></virto-button>
-                <virto-button data-dialog="next" label="Next"></virto-button>
-            </div>
-        </form>
-   </virto-dialog>
-
-   <virto-dialog id="step-2">
-        <img slot="logo" src="public/virto.svg" alt="Logo" width="50">
-        <h2 slot="title">Login to Virto</h2>
-        <form id="log-in">
-            <label>Enter your password</label>
-            <virto-input type="password" required aria-placeholder="*******"></virto-input>
-            <div slot="buttons">
-                <virto-button data-dialog="close" label="Close"></virto-button>
-            </div>
-        </form>
-    </virto-dialog>
-
-    </virto-login>
+    <virto-connect id="Virto" logo="public/virto.svg">
+        <form username></form>
+        <form password></form>
+        <form email></form>
+    </virto-connect>
 
     <script type="module">
-        import './dialog.js';
-        import './login.js'
+        import './virto-connect.js';
+
         const openButton = document.getElementById('openDialogButton');
-        const loginDialog = document.querySelector('#step-1');
-        customElements.whenDefined('virto-login').then(() => {
-            openButton.addEventListener('click', () => {
-                loginDialog.open();
-            });
+        const virtoConnect = document.querySelector('virto-connect');
+
+        openButton.addEventListener('click', () => {
+            virtoConnect.open();
         });
     </script>
-    <script src="./input.js" defer></script>
-    <script src="./button.js" defer></script>
 </body>
 </html>
