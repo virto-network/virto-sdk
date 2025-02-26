@@ -55,42 +55,21 @@ fieldset {
     padding: 0;
 }
 
+virto-input:focus {
+  outline: none;
+}
+
 `
 
-const formTemplates = {
-  username: html`
-    <form>
+const loginFormTemplate = html`
+    <form id="login-form">
       <fieldset>
-        <virto-input label="Username" placeholder="Choose a username" required minlength="3" hint="Must be at least 3 characters long"></virto-input>
+        <virto-input label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
+        <virto-input label="Server" placeholder="Enter server address" name="server" type="text" required></virto-input>
+        <virto-input label="Password" placeholder="********" name="password" type="password" required></virto-input>
       </fieldset>
     </form>
-  `,
-  password: html`
-    <form>
-      <fieldset>
-        <virto-input label="Username" placeholder="Enter your username" name='username' type='text' tabindex='1'></virto-input>
-        <virto-input label="Password" placeholder="********" name='password' type='password' tabindex='2'></virto-input>
-      </fieldset>
-    </form>
-  `,
-  email: html`
-    <form>
-      <fieldset>
-        <legend>We'll send you a link to register</legend>
-        <virto-input label="Email" name='email' type='email' tabindex='1'></virto-input>
-      </fieldset>
-    </form>
-  `,
-  personalData: html`
-    <form>
-      <fieldset>
-        <legend>Personal information</legend>
-        Name <virto-input name='name' type='text' tabindex='1'></virto-input>
-        Lastname <virto-input name='lastname' type='text' tabindex='2'></virto-input>
-      </fieldset>
-    </form>
-  `,
-}
+`;
 
 export class VirtoConnect extends HTMLElement {
   static TAG = "virto-connect"
@@ -107,49 +86,38 @@ export class VirtoConnect extends HTMLElement {
     this.dialog = this.shadowRoot.querySelector("wa-dialog")
     this.contentSlot = this.shadowRoot.querySelector("#content-slot")
     this.buttonsSlot = this.shadowRoot.querySelector("#buttons-slot")
-
-    this.forms = []
-    this.currentFormIndex = 0
   }
 
   connectedCallback() {
-    this.forms = Array.from(this.querySelectorAll("form"))
-    this.updateContent()
+    this.contentSlot.appendChild(loginFormTemplate.content.cloneNode(true));
+    this.updateButtons();
   }
 
-  updateContent() {
-    if (this.forms.length === 0) return
-
-    const currentForm = this.forms[this.currentFormIndex]
-    const formType = Object.keys(formTemplates).find((type) => currentForm.hasAttribute(type))
-
-    if (formType && formTemplates[formType]) {
-      const content = formTemplates[formType].content.cloneNode(true)
-      this.contentSlot.innerHTML = ""
-      this.contentSlot.appendChild(content)
-
-      this.updateButtons()
-    } else {
-      console.warn(`No template found for form type: ${formType}`)
-    }
-  }
 
   updateButtons() {
-    this.buttonsSlot.innerHTML = ""
+    this.buttonsSlot.innerHTML = "";
 
-    const closeButton = document.createElement("virto-button")
-    closeButton.setAttribute("data-dialog", "close")
-    closeButton.setAttribute("label", "Close")
-    closeButton.addEventListener("click", () => this.close())
-    this.buttonsSlot.appendChild(closeButton)
+    const closeButton = document.createElement("virto-button");
+    closeButton.setAttribute("data-dialog", "close");
+    closeButton.setAttribute("label", "Close");
+    closeButton.addEventListener("click", () => this.close());
+    this.buttonsSlot.appendChild(closeButton);
 
-    if (this.currentFormIndex < this.forms.length - 1) {
-      const nextButton = document.createElement("virto-button")
-      nextButton.setAttribute("data-dialog", "next")
-      nextButton.setAttribute("label", "Next")
-      nextButton.addEventListener("click", () => this.next())
-      this.buttonsSlot.appendChild(nextButton)
-    }
+    const loginButton = document.createElement("virto-button");
+    loginButton.setAttribute("data-dialog", "login");
+    loginButton.setAttribute("label", "Log In");
+    loginButton.addEventListener("click", () => this.submitForm());
+    this.buttonsSlot.appendChild(loginButton);
+  }
+
+  submitForm() {
+    const form = this.shadowRoot.querySelector("#login-form");
+    const formData = new FormData(form);
+    const values = Object.fromEntries(formData.entries());
+
+    console.log("Form Data:", values);
+
+    this.close();
   }
 
   updateLogo() {
@@ -176,17 +144,6 @@ export class VirtoConnect extends HTMLElement {
 
   close() {
     this.dialog.open = false
-    this.currentFormIndex = 0
-    this.updateContent()
-  }
-
-  next() {
-    if (this.currentFormIndex < this.forms.length - 1) {
-      this.currentFormIndex++
-      this.updateContent()
-    } else {
-      this.close()
-    }
   }
 
   attributeChangedCallback(name, oldValue, newValue) {
