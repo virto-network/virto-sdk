@@ -1,5 +1,5 @@
 import { VError } from "./utils/error";
-import { fromBase64, fromBase64Url } from "./utils/base64";
+import { hexToUint8Array, fromBase64Url, arrayBufferToBase64Url } from "./utils/base64";
 import SessionManager from "./manager";
 import { JsWalletBuilder, SubeFn } from "./wallet";
 
@@ -43,20 +43,40 @@ export default class Auth {
     const attestation = await preRes.json();
     console.log("Pre-register response:", attestation);
 
-    attestation.publicKey.challenge = fromBase64(attestation.publicKey.challenge);
-    attestation.publicKey.user.id = fromBase64(attestation.publicKey.user.id);
+    attestation.publicKey.challenge = hexToUint8Array(attestation.publicKey.challenge);
+    attestation.publicKey.user.id = new Uint8Array(attestation.publicKey.user.id);
 
-    const response = await navigator.credentials.create(attestation);
-    console.log("Credential response:", response);
+    const attestationResponse = await navigator.credentials.create(attestation);
 
-    if (!response) {
+    if (!attestationResponse) {
       throw new VError("E_CANT_CREATE_CREDENTIAL", "Credential creation failed");
     }
+
+    const { id } = attestationResponse;
+    const rawId = (attestationResponse as PublicKeyCredential).rawId;
+    const response = (attestationResponse as PublicKeyCredential).response as AuthenticatorAttestationResponse;
+    const authenticatorData = response.getAuthenticatorData();
+    const clientDataJSON = response.clientDataJSON;
+    const publicKey = response.getPublicKey();
+
+    const credentialData = {
+      id,
+      rawId: arrayBufferToBase64Url(rawId),
+      type: attestationResponse.type,
+      response: {
+        authenticatorData: arrayBufferToBase64Url(authenticatorData),
+        clientDataJSON: arrayBufferToBase64Url(clientDataJSON),
+        publicKey: arrayBufferToBase64Url(publicKey),
+      }
+    };
 
     const postRes = await fetch(`${this.baseUrl}/post-register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: response.id }),
+      body: JSON.stringify({
+        userId: user.profile.id,
+        attestationResponse: credentialData
+      }),
     });
 
     const data = await postRes.json();
@@ -75,7 +95,7 @@ export default class Auth {
     const assertion = await preRes.json();
     console.log("Connect response:", assertion);
 
-    assertion.publicKey.challenge = fromBase64(assertion.publicKey.challenge);
+    assertion.publicKey.challenge = hexToUint8Array(assertion.publicKey.challenge);
 
     if (assertion.publicKey.allowCredentials) {
       for (const desc of assertion.publicKey.allowCredentials) {
@@ -83,18 +103,31 @@ export default class Auth {
       }
     }
 
-    const response = await navigator.credentials.get(assertion);
-    console.log("Credential response:", response);
+    const assertionResponse = await navigator.credentials.get(assertion);
+    console.log("Credential response:", assertionResponse);
 
-    if (!response) {
+    if (!assertionResponse) {
       throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
+    }
+    const { id, rawId, response } = assertionResponse as PublicKeyCredential;
+    const { authenticatorData, clientDataJSON, signature } = response as AuthenticatorAssertionResponse;
+    const credentialData = {
+      id,
+      rawId: arrayBufferToBase64Url(rawId),
+      type: assertionResponse.type,
+      response: {
+        authenticatorData: arrayBufferToBase64Url(authenticatorData),
+        clientDataJSON: arrayBufferToBase64Url(clientDataJSON),
+        signature: arrayBufferToBase64Url(signature),
+      }
     }
 
     const sessionPreparationRes = await fetch(`${this.baseUrl}/pre-connect-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: response.id,
+        userId,
+        assertionResponse: credentialData
       }),
     });
 
