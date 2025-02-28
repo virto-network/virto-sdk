@@ -1309,4 +1309,37 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_serialize_authenticate_pass() -> Result<()> {
+        let bytes = include_bytes!("registry-pass.bin");
+
+        let registry = PortableRegistry::decode(&mut &bytes[..]).expect("it must be valid");
+
+        let transfer_call = serde_json::json!({
+            "authenticate": {
+                "device_id": hex::decode("0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8").expect("expected valid address"),
+                "credential": {
+                    "webAuthn": {
+                        "meta": {
+                            "authorityId": hex::decode("6b726569766f5f70000000000000000000000000000000000000000000000000").expect("expected valid address"),
+                            "userId": hex::decode("a744863d83aefc35f62f9a247025dedfc8964b3c0b39dd794dd3816851fc4a94").expect("expected valid address"),
+                            "context": 1058921
+                        },
+                        "authenticatorData": hex::decode("49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763050000000200").expect("expect a valid authentication data"),
+                        "clientData": hex::decode("7b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2279304c6245355a56797046647a677a5843724b4f6649743030586b4677593366466c316663795033634959222c226f726967696e223a22687474703a2f2f6c6f63616c686f73743a35313733222c2263726f73734f726967696e223a66616c73657d").expect("expect a valid client data"),
+                        "signature": hex::decode("3046022100e5d6fae6ff385858f6df11b0f87c4c3b9db9e7f231bee94f9787637526d7efaf022100efc5645f82ee165a63adbc3cbcd6b6ce17c03596c101ea9af2379be26d3ea160").expect("expect a valid signature")
+                    }
+                },
+                "duration": 150
+            }
+        });
+
+        let call_data =
+            to_vec_with_info(&transfer_call, Some((&registry, 169))).expect("call data");
+
+        let _encoded = hex::encode(call_data);
+
+        Ok(())
+    }
 }

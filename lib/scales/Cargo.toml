@@ -16,8 +16,6 @@ codec = { version = "3.1.2", package = "parity-scale-codec", default-features = 
 hex = { version = "0.4.3", default-features = false, features = ["alloc"], optional = true }
 log = "0.4.17"
 
-
-
 [features]
 default = ["std", "codec", "json", "hex", "experimental-serializer"]
 std = ["scale-info/std", "bytes/std"]
