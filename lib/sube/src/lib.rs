@@ -79,8 +79,6 @@ async fn query<'m>(
     path: &str,
     block: Option<u32>,
 ) -> Result<Response<'m>> {
-    log::info!("query {:?}, {:?}", path, block);
-    log::info!("meta: {:?}", meta);
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
     let pallet = meta
         .pallet_by_name(&pallet)
@@ -101,12 +99,8 @@ async fn query<'m>(
         )));
     }
 
-    log::info!("pallet: {:?}", pallet);
-    log::info!("item_or_call: {:?}", item_or_call);
-    log::info!("keys: {:?}", keys);
     if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
     {
-        log::info!("key_res build_with_registry: {:?}", key_res);
         if !key_res.is_partial() {
             let res = chain.get_storage_item(key_res.key(), block).await?;
 
@@ -118,7 +112,6 @@ async fn query<'m>(
         }
 
         let res = chain.get_keys_paged(key_res.key(), 1000, None).await?;
-        log::info!("before get storage items lib {:?} {:?}", res, block);
         let result = chain.get_storage_items(res, block).await?;
 
         let value = result
@@ -193,18 +186,17 @@ where
         .ok_or_else(|| Error::PalletNotFound(pallet))?;
     let calls_ty = pallet.calls.as_ref().ok_or(Error::CallNotFound)?.ty.id;
 
-    log::info!("calls_ty: {:?}", calls_ty);
+    log::debug!("calls_ty: {:?}", calls_ty);
 
     let type_registry = &meta.types;
 
     let mut encoded_call = vec![pallet.index];
 
-    log::info!("tx_data: {:?}", tx_data);
+    log::debug!("tx_data: {:?}", tx_data);
     let json = &json!({
         &item_or_call.to_lowercase(): &tx_data.body
     });
-
-    log::info!("json_body: {:?}", &json);
+    log::debug!("json_body: {:?}", &json);
 
     let call_data = scales::to_vec_with_info(&json, (type_registry, calls_ty).into())
         .map_err(|e| Error::Encode(e.to_string()))?;
@@ -212,7 +204,8 @@ where
     encoded_call.extend(&call_data);
 
     let from_account = signer.account();
-    log::info!("from_account: {:?}", hex::encode(from_account.as_ref()));
+    log::debug!("from_account: {:?}", hex::encode(from_account.as_ref()));
+
     let extra_params = {
         // ImmortalEra
         let era = 0u8;
@@ -416,7 +409,6 @@ pub trait Backend {
         key: RawKey,
         block: Option<u32>,
     ) -> crate::Result<Option<RawValue>> {
-        log::info!("get storage item lib {:?} {:?}", key, block);
         let res = self.get_storage_items(vec![key], block).await?;
         log::info!("before it died");
         res.into_iter()
