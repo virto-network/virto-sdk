@@ -116,10 +116,6 @@ export class VirtoConnect extends HTMLElement {
     console.log("Username from FormData:", formData.get("username"));
     console.log("Server from FormData:", formData.get("server"));
     console.log("Password from FormData:", formData.get("password"));
-    console.log("All FormData entries:");
-    for (const [key, value] of formData.entries()) {
-      console.log(`${key}: ${value}`);
-    }
     const values = Object.fromEntries(formData.entries());
     console.log("Form Data as object:", values);
     this.close();
