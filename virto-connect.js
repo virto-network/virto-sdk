@@ -1,5 +1,5 @@
-import "https://early.webawesome.com/webawesome@3.0.0-alpha.10/dist/components/dialog/dialog.js"
-import("https://cdn.jsdelivr.net/npm/virto-components@0.1.5/dist/virto-components.min.js")
+import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
+import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
 
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
 const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'));
@@ -113,29 +113,16 @@ export class VirtoConnect extends HTMLElement {
   submitForm() {
     const form = this.shadowRoot.querySelector("#login-form");
     const formData = new FormData(form);
-    const values = Object.fromEntries(formData.entries());
-
-    console.log("Form Data:", values);
-
-    this.close();
-  }
-
-  updateLogo() {
-    const logoSlot = this.shadowRoot.querySelector('slot[name="logo"]')
-    if (logoSlot) {
-      const existingLogo = this.querySelector('[slot="logo"]')
-      if (existingLogo) {
-        existingLogo.remove()
-      }
-
-      const logoSrc = this.getAttribute("logo")
-      if (logoSrc) {
-        const avatar = document.createElement("virto-avatar")
-        avatar.setAttribute("image", logoSrc)
-        avatar.setAttribute("slot", "logo")
-        this.appendChild(avatar)
-      }
+    console.log("Username from FormData:", formData.get("username"));
+    console.log("Server from FormData:", formData.get("server"));
+    console.log("Password from FormData:", formData.get("password"));
+    console.log("All FormData entries:");
+    for (const [key, value] of formData.entries()) {
+      console.log(`${key}: ${value}`);
     }
+    const values = Object.fromEntries(formData.entries());
+    console.log("Form Data as object:", values);
+    this.close();
   }
 
   open() {
