@@ -6,11 +6,12 @@ declare global {
   const jestPuppeteer: import('jest-puppeteer').Global;
 }
 
-import { Auth } from "./src/auth";
+import { SDK } from "./src/sdk";
 
 declare global {
   interface Window {
-    Auth: typeof Auth;
+    SDK: typeof SDK;
+    WalletType: typeof WalletType;
     mockSube<T>(url: string, options?: SubeOptions): Promise<T>;
     jsWalletFn(mnemonic?: string): any;
   }
