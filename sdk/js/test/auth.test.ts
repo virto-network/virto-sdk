@@ -12,6 +12,7 @@ describe("Auth - E2E WebAuthn Flow", () => {
     await mockService.setup();
 
     await page.evaluate(() => {
+      // @ts-ignore
       window.jsWalletFn = (mnemonic: string | null = null) => {
         return {
           unlock: async () => { /* no-op */ },
@@ -20,7 +21,8 @@ describe("Auth - E2E WebAuthn Flow", () => {
             repr: "0xMOCKREPRESENTATION"
           }),
           sign: (_: any) => "mock-signature",
-          phrase: mnemonic || "mock-mnemonic"
+          phrase: mnemonic || "mock-mnemonic",
+          getMnemonic: () => mnemonic || "mock-mnemonic"
         };
       };
     });
@@ -28,10 +30,18 @@ describe("Auth - E2E WebAuthn Flow", () => {
 
   it("should register a user successfully", async () => {
     const result = await page.evaluate(async () => {
+      // @ts-ignore
       const subeFn = window.mockSube;
+      // @ts-ignore
       const jsWalletFn = window.jsWalletFn;
-
-      const auth = new window.Auth("http://localhost:3000", subeFn, jsWalletFn);
+      
+      // @ts-ignore
+      const sdk = new window.SDK({
+        federate_server: "http://localhost:3000",
+        config: {
+          wallet: window.WalletType.VIRTO
+        }
+      }, subeFn, (mnemonic: string | null) => jsWalletFn(mnemonic || undefined));
 
       const user = {
         profile: {
@@ -43,7 +53,7 @@ describe("Auth - E2E WebAuthn Flow", () => {
       };
 
       try {
-        const res = await auth.register(user);
+        const res = await sdk.auth.register(user);
         return { ok: true, data: res };
       } catch (err) {
         return { ok: false, error: (err as Error).message };
@@ -61,13 +71,21 @@ describe("Auth - E2E WebAuthn Flow", () => {
     const credentialId = mockService.getCredentialId();
     console.log("credentialId", credentialId);
     const result = await page.evaluate(async (_credentialId) => {
+      // @ts-ignore
       const subeFn = window.mockSube;
+      // @ts-ignore
       const jsWalletFn = window.jsWalletFn;
-
-      const auth = new window.Auth("http://localhost:3000", subeFn, jsWalletFn);
+      
+      // @ts-ignore
+      const sdk = new window.SDK({
+        federate_server: "http://localhost:3000",
+        config: {
+          wallet: window.WalletType.VIRTO
+        }
+      }, subeFn, (mnemonic: string | null) => jsWalletFn(mnemonic || undefined));
 
       try {
-        const res = await auth.connect("123");
+        const res = await sdk.auth.connect("123");
         return {
           ok: true,
           data: res,
@@ -101,21 +119,38 @@ describe("Auth - E2E WebAuthn Flow", () => {
 
     // First, ensure a session is created for the email
     await page.evaluate(async (userId) => {
+      // @ts-ignore
       const subeFn = window.mockSube;
+      // @ts-ignore
       const jsWalletFn = window.jsWalletFn;
+      
+      // @ts-ignore
+      const sdk = new window.SDK({
+        federate_server: "http://localhost:3000",
+        config: {
+          wallet: window.WalletType.VIRTO
+        }
+      }, subeFn, (mnemonic: string | null) => jsWalletFn(mnemonic || undefined));
 
-      const auth = new window.Auth("http://localhost:3000", subeFn, jsWalletFn);
-      await auth.connect(userId);
+      await sdk.auth.connect(userId);
     }, userId);
 
     const result = await page.evaluate(async (userId, command) => {
+      // @ts-ignore
       const subeFn = window.mockSube;
+      // @ts-ignore
       const jsWalletFn = window.jsWalletFn;
       
-      const auth = new window.Auth("http://localhost:3000", subeFn, jsWalletFn);
+      // @ts-ignore
+      const sdk = new window.SDK({
+        federate_server: "http://localhost:3000",
+        config: {
+          wallet: window.WalletType.VIRTO
+        }
+      }, subeFn, (mnemonic: string | null) => jsWalletFn(mnemonic || undefined));
 
       try {
-        const res = await auth.sign(userId, command);
+        const res = await sdk.auth.sign(userId, command);
         return { ok: true, data: res };
       } catch (err) {
         return { ok: false, error: (err as Error).message };
@@ -126,9 +161,9 @@ describe("Auth - E2E WebAuthn Flow", () => {
       throw new Error("Signing failed: " + result.error);
     }
 
-    expect(result.data).toBeDefined();
-    expect(result.data.userId).toBe(userId);
-    expect(result.data.originalExtrinsic).toBe(command.hex);
-    expect(result.data.signedExtrinsic).toBeTruthy();
+    expect(result.data!).toBeDefined();
+    expect(result.data!.userId).toBe(userId);
+    expect(result.data!.originalExtrinsic).toBe(command.hex);
+    expect(result.data!.signedExtrinsic).toBeTruthy();
   });
 });

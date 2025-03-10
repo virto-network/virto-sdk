@@ -1,34 +1,15 @@
 import { VError } from "./utils/error";
 import { fromBase64, fromBase64Url } from "./utils/base64";
 import SessionManager from "./manager";
-import { JsWalletBuilder, SubeFn } from "./wallet";
-
-export type BaseProfile = {
-  id: string;
-  name: string;
-  displayName: string;
-};
-
-export type User<Profile, Metadata extends Record<string, unknown>> = {
-  profile: Profile;
-  metadata: Metadata;
-};
-
-export type Command = {
-  url: string;
-  body: any;
-  hex: string;
-};
+import { WalletType } from "./factory/walletFactory";
+import { BaseProfile, Command, User } from "./types";
 
 export default class Auth {
-  private sessionManager: SessionManager;
   constructor(
     private readonly baseUrl: string,
-    subeFn: SubeFn,
-    jsWalletFn: JsWalletBuilder,
-    sessionManagerFactory: () => SessionManager = () => new SessionManager(subeFn, jsWalletFn)
+    private readonly sessionManager: SessionManager,
+    private readonly defaultWalletType: WalletType
   ) {
-    this.sessionManager = sessionManagerFactory();
   }
 
   async register<Profile extends BaseProfile, Metadata extends Record<string, unknown>>(
@@ -101,7 +82,7 @@ export default class Auth {
     const data = await sessionPreparationRes.json();
     console.log("Post-connect response:", data);
 
-    const sessionResult = await this.sessionManager.create(data.command, userId);
+    const sessionResult = await this.sessionManager.create(data.command, userId, this.defaultWalletType);
 
     return {
       ...data,
@@ -111,6 +92,7 @@ export default class Auth {
 
   async sign(userId: string, command: Command) {
     const wallet = this.sessionManager.getWallet(userId);
+    console.log({ wallet })
     if (!wallet) {
       throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
     }

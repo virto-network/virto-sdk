@@ -7,6 +7,12 @@ export function fromBase64(b64: string): ArrayBuffer {
     return arr.buffer;
 }
 
+export function arrayBufferToBase64Url(buffer: any) {
+    const bytes = new Uint8Array(buffer);
+    let str = btoa(String.fromCharCode(...bytes));
+    return str.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
 export function toBase64(buffer: Uint8Array): string {
     let binary = "";
     for (let i = 0; i < buffer.length; i++) {

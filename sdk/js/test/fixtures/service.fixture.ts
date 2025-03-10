@@ -125,9 +125,14 @@ export class MockServiceRegister {
       <head><meta charset="utf-8" /><title>Auth Register Test</title></head>
       <body>
         <script type="module">
-          import Auth from '/dist/esm/auth.js';
+          import SDK from '/dist/esm/sdk.js';
 
-          window.Auth = Auth;
+          window.SDK = SDK;
+
+          window.WalletType = {
+            VIRTO: "virto",
+            POLKADOT: "polkadot"
+          };
         </script>
       </body>
       </html>
@@ -190,5 +195,4 @@ export class MockServiceRegister {
       },
     };
   }
-
 }
