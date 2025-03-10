@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Virto Network SDK Demo</title>
+  </head>
+  <body>
+    <div id="app">
+      <h1>Virto Network SDK Demo</h1>
+      <div>
+        <h2>Register User</h2>
+        <input value="testuser" id="userName" placeholder="User Name" />
+        <input value="Test User" id="userDisplayName" placeholder="Display Name" />
+        <button id="registerButton">Register</button>
+      </div>
+      <div>
+        <h2>Connect User</h2>
+        <button id="connectButton">Connect</button>
+      </div>
+      <div>
+        <h2>Sign Extrinsic</h2>
+        <textarea id="command" placeholder="Command JSON">{
+          "url":"ws://localhost:12281/system/remark",
+          "body": "{}",
+          "hex": "0x5404060500073448656c6c6f2c20776f726c64210000"
+         }</textarea>
+        <button id="signButton">Sign</button>
+      </div>
+    </div>
+    <script type="module" src="/src/demo.js"></script>
+  </body>
+</html>
