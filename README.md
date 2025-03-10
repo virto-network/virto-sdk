@@ -28,6 +28,10 @@ Easily integrate with existing web applications.
   
     - **Virto-Connect**: Provides a straightforward interface for connecting to an organization’s authentication system, interacting with the blockchain, and sending feeless transactions such as payments.
 
+## The Virto stack
+![architecture](https://github.com/user-attachments/assets/1fa810b9-eb07-4f08-beca-05c160662767)
+
+
 ## Use Cases
 
 Whether you're looking to:
