@@ -15,6 +15,11 @@ export class MockServiceRegister {
     await this.page.setRequestInterception(true);
     await this.setupRequestInterceptor();
     await this.setupVirtualAuthenticator();
+    this.page.on('console', async msg => {
+      for (let arg of msg.args()) {
+        console.log(await arg.jsonValue());
+      }
+    });
     await this.page.goto("http://localhost:3000/fake");
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -47,8 +52,8 @@ export class MockServiceRegister {
         const postData = req.postData() || "{}";
         try {
           const bodyJson = JSON.parse(postData);
-          if (bodyJson.id) {
-            this.credentialId = bodyJson.id;
+          if (bodyJson.attestationResponse.id) {
+            this.credentialId = bodyJson.attestationResponse.id;
           }
         } catch (err) {
           // ignore parse errors
@@ -175,8 +180,9 @@ export class MockServiceRegister {
   private getPreConnectResponse() {
     const challengeBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
     const challengeB64 = toBase64(challengeBytes);
-
+    
     let allowCredentials: { id: string; type: string; transports: string[]; }[] = [];
+    console.log("credentialId service fixture", this.credentialId);
     if (this.credentialId) {
       allowCredentials = [
         {
