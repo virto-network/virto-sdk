@@ -39,18 +39,27 @@
 </head>
 
 <body>
-    <virto-button id="openDialogButton" label="Log in"></virto-button>
-    <virto-connect id="Virto" logo="public/virto.svg">
-    </virto-connect>
+
+    <virto-button id="sign-up" label="Sign Up"></virto-button>
+    <virto-button id="sign-in" label="Sign In"></virto-button>
+
+    <virto-connect id="Virto - Sign Up" form-type="login"></virto-connect>
+    <virto-connect id="Virto - Sign In" form-type="register"></virto-connect>
 
     <script type="module">
         import './virto-connect.js';
 
-        const openButton = document.getElementById('openDialogButton');
+        const signUp = document.getElementById('sign-up');
+        const signIn = document.getElementById('sign-in');
+
         const virtoConnect = document.querySelector('virto-connect');
 
-        openButton.addEventListener('click', () => {
-            virtoConnect.open();
+        signUp.addEventListener('click', () => {
+            document.querySelector('virto-connect[form-type=login]').open()
+        });
+
+        signIn.addEventListener('click', () => {
+            document.querySelector('virto-connect[form-type=register]').open()
         });
     </script>
 </body>

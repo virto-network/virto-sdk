@@ -65,11 +65,19 @@ virto-input:focus {
 
 const loginFormTemplate = html`
     <form id="login-form">
-      <fieldset>
-        <virto-input value="John Doe" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
-        <virto-input value="johndoe" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
-        <virto-input value="john.doe@example.com" label="Email" placeholder="Enter your email" name="email" type="email" required></virto-input>
-      </fieldset>
+        <fieldset>
+            <virto-input value="John Doe" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
+            <virto-input value="johndoe" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
+            <virto-input value="john.doe@example.com" label="Email" placeholder="Enter your email" name="email" type="email" required></virto-input>
+        </fieldset>
+    </form>
+`;
+
+const registerFormTemplate = html`
+    <form id="register-form">
+        <fieldset>
+            <virto-input label="Email" placeholder="john@example.com" name="email" type="email" required></virto-input>
+        </fieldset>
     </form>
 `;
 
@@ -97,13 +105,26 @@ export class VirtoConnect extends HTMLElement {
   }
 
   connectedCallback() {
-    this.contentSlot.appendChild(loginFormTemplate.content.cloneNode(true));
+    const formType = this.getAttribute("form-type") || "login";
+    let formTemplate;
+
+    switch (formType) {
+        case "register":
+            formTemplate = registerFormTemplate;
+            break;
+        case "login":
+        default:
+            formTemplate = loginFormTemplate;
+            break;
+    }
+
+    this.contentSlot.appendChild(formTemplate.content.cloneNode(true));
     this.updateButtons();
   }
 
-
   updateButtons() {
     this.buttonsSlot.innerHTML = "";
+    const formType = this.getAttribute("form-type") || "login";
 
     const closeButton = document.createElement("virto-button");
     closeButton.setAttribute("data-dialog", "close");
@@ -111,11 +132,11 @@ export class VirtoConnect extends HTMLElement {
     closeButton.addEventListener("click", () => this.close());
     this.buttonsSlot.appendChild(closeButton);
 
-    const loginButton = document.createElement("virto-button");
-    loginButton.setAttribute("data-dialog", "login");
-    loginButton.setAttribute("label", "Log In");
-    loginButton.addEventListener("click", async () => await this.submitForm());
-    this.buttonsSlot.appendChild(loginButton);
+    const actionButton = document.createElement("virto-button");
+    actionButton.setAttribute("data-dialog", formType);
+    actionButton.setAttribute("label", formType === "register" ? "Register" : "Log In");
+    actionButton.addEventListener("click", async () => await this.submitForm());
+    this.buttonsSlot.appendChild(actionButton);
   }
 
   async submitForm() {
