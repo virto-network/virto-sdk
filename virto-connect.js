@@ -1,6 +1,8 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
 import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
 
+import SDK from "http://localhost:8081/sdk.mjs";
+
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
 const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'));
 const css = tagFn((s) => s)
@@ -64,9 +66,9 @@ virto-input:focus {
 const loginFormTemplate = html`
     <form id="login-form">
       <fieldset>
-        <virto-input label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
-        <virto-input label="Server" placeholder="Enter server address" name="server" type="text" required></virto-input>
-        <virto-input label="Password" placeholder="********" name="password" type="password" required></virto-input>
+        <virto-input value="John Doe" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
+        <virto-input value="johndoe" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
+        <virto-input value="john.doe@example.com" label="Email" placeholder="Enter your email" name="email" type="email" required></virto-input>
       </fieldset>
     </form>
 `;
@@ -78,6 +80,12 @@ export class VirtoConnect extends HTMLElement {
     super()
     this.attachShadow({ mode: "open" })
     this.shadowRoot.appendChild(dialogTp.content.cloneNode(true))
+    this.sdk = new SDK({
+      federate_server: "http://localhost:3000",
+      config: {
+        wallet: "polkadotjs"
+      }
+    });
 
     const style = document.createElement("style")
     style.textContent = dialogCss
@@ -106,16 +114,50 @@ export class VirtoConnect extends HTMLElement {
     const loginButton = document.createElement("virto-button");
     loginButton.setAttribute("data-dialog", "login");
     loginButton.setAttribute("label", "Log In");
-    loginButton.addEventListener("click", () => this.submitForm());
+    loginButton.addEventListener("click", async () => await this.submitForm());
     this.buttonsSlot.appendChild(loginButton);
   }
 
-  submitForm() {
+  async submitForm() {
     const form = this.shadowRoot.querySelector("#login-form");
     const formData = new FormData(form);
+    console.log("Name from FormData:", formData.get("name"));
     console.log("Username from FormData:", formData.get("username"));
-    console.log("Server from FormData:", formData.get("server"));
-    console.log("Password from FormData:", formData.get("password"));
+    console.log("Email from FormData:", formData.get("email"));
+
+    const user = {
+      profile: {
+        id: formData.get("email"),
+        name: formData.get("name"),
+        displayName: formData.get("username"),
+      },
+      metadata: {},
+    };
+
+    try {
+      const result = await this.sdk.auth.register(user);
+      console.log('Registration successful:', result);
+    } catch (error) {
+      console.error('Registration failed:', error);
+    }
+
+    const values = Object.fromEntries(formData.entries());
+    console.log("Form Data as object:", values);
+    this.close();
+  }
+
+  async submitForm() {
+    const form = this.shadowRoot.querySelector("#login-form");
+    const formData = new FormData(form);
+    console.log("Email from FormData:", formData.get("email"));
+
+    try {
+      const result = await this.sdk.auth.connect(formData.get("email"));
+      console.log('Registration successful:', result);
+    } catch (error) {
+      console.error('Registration failed:', error);
+    }
+
     const values = Object.fromEntries(formData.entries());
     console.log("Form Data as object:", values);
     this.close();
