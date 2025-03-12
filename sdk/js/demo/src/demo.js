@@ -1,23 +1,13 @@
-import Auth from '../../src/auth';
 import SDK from '../../src/sdk';
-import { sube } from '@virtonetwork/sube';
-import { JsWallet } from '@virtonetwork/libwallet';
 
 (async () => {
   const sdk = new SDK({
+    // Should be a VOS implementation
     federate_server: "http://localhost:3000",
     config: {
       wallet: "polkadotjs"
     }
   });
-  const hashedUserId = new Uint8Array(
-    await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode("testuser@example.com")
-    )
-  );
-
-  console.log("hashedUserId", hashedUserId);
 
   document.getElementById('registerButton').addEventListener('click', async () => {
     const userName = document.getElementById('userName').value;
@@ -25,7 +15,7 @@ import { JsWallet } from '@virtonetwork/libwallet';
 
     const user = {
       profile: {
-        id: hashedUserId,
+        id: "testuser@example.com",
         name: userName,
         displayName: userDisplayName,
       },
