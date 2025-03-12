@@ -5,17 +5,17 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:esm",
-    "build:esm": "tsc --project tsconfig.esm.json",
+    "build": "npm run build:esm && npm run build:cjs && npm run build:umd",
+    "build:esm": "vite build --config vite.config.esm.mts",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:umd": "vite build --config vite.config.mts",
     "test": "npm run build && jest --config=jest.config.js",
     "test:watch": "npm run build && jest --config=jest.config.js --watch"
   },
   "exports": {
-    "require": "./dist/cjs/auth.js",
-    "import": "./dist/esm/auth.js",
-    "default": "./dist/umd/auth.umd.js"
+    "require": "./dist/cjs/sdk.js",
+    "import": "./dist/esm/sdk.js",
+    "default": "./dist/umd/sdk.umd.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
