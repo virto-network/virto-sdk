@@ -15,5 +15,11 @@ export default defineConfig({
       fileName: "sdk",
       formats: ["es"]
     },
+    rollupOptions: {
+      output: {
+        entryFileNames: "sdk.js",
+        format: "es"
+      }
+    }
   }
 });
