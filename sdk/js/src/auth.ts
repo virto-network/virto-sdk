@@ -90,6 +90,18 @@ export default class Auth {
     };
   }
 
+  async isRegistered(userId: string) {
+    const res = await fetch(`${this.baseUrl}/check-user-registered?username=${encodeURIComponent(userId)}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const data = await res.json();
+    console.log("Is registered response:", data);
+
+    return data.ok;
+  }
+
   async sign(userId: string, command: Command) {
     const wallet = this.sessionManager.getWallet(userId);
     console.log({ wallet })
