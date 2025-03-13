@@ -1,8 +1,9 @@
 {
-  "name": "@virto-network/sdk",
+  "name": "@virtonetwork/sdk",
   "version": "0.0.1",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+
   "scripts": {
     "dev": "vite",
     "build": "npm run build:esm",
@@ -13,9 +14,9 @@
     "test:watch": "npm run build && jest --config=jest.config.js --watch"
   },
   "exports": {
-    "require": "./dist/cjs/auth.js",
-    "import": "./dist/esm/auth.js",
-    "default": "./dist/umd/auth.umd.js"
+    "require": "./dist/cjs/sdk.js",
+    "import": "./dist/esm/sdk.mjs",
+    "default": "./dist/umd/sdk.umd.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
