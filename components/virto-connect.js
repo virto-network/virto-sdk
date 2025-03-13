@@ -6,6 +6,9 @@ import SDK from "https://unpkg.com/browse/@virtonetwork/sdk@0.0.1/dist/esm/sdk.m
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
 const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'));
 const css = tagFn((s) => s)
+const SRC_URL = new URL(import.meta.url)
+const PARAMS = SRC_URL.searchParams
+const SERVER_URL = PARAMS.get('server') ?? 'http://localhost:3000'
 
 const dialogTp = html`
     <wa-dialog light-dismiss with-header with-footer>
@@ -88,7 +91,7 @@ export class VirtoConnect extends HTMLElement {
     this.attachShadow({ mode: "open" })
     this.shadowRoot.appendChild(dialogTp.content.cloneNode(true))
     this.sdk = new SDK({
-      federate_server: "http://localhost:3000",
+      federate_server: SERVER_URL,
       config: {
         wallet: "polkadotjs"
       }
