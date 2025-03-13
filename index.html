@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script type="module" async src="./virto-connect.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap" rel="stylesheet">
@@ -31,36 +32,32 @@
         body {
             display: flex;
             flex-direction: column;
-            justify-content: center;
             align-items: center;
+            gap: 10px;
+            height: 100vh;
+            margin: 0;
         }
 
+        button {
+            padding: 10px 20px;
+            background-color: var(--green);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-family: var(--font-primary);
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        #connect-button:hover {
+            background-color: var(--dark-green);
+        }
     </style>
 </head>
 
 <body>
+    <button onclick="virtoConnect.open()">Connect to Virto</button>
 
-    <virto-button id="sign-up" label="Sign Up"></virto-button>
-    <virto-button id="sign-in" label="Sign In"></virto-button>
-
-    <virto-connect id="Virto - Sign Up" form-type="login"></virto-connect>
-    <virto-connect id="Virto - Sign In" form-type="register"></virto-connect>
-
-    <script type="module">
-        import './virto-connect.js';
-
-        const signUp = document.getElementById('sign-up');
-        const signIn = document.getElementById('sign-in');
-
-        const virtoConnect = document.querySelector('virto-connect');
-
-        signUp.addEventListener('click', () => {
-            document.querySelector('virto-connect[form-type=login]').open()
-        });
-
-        signIn.addEventListener('click', () => {
-            document.querySelector('virto-connect[form-type=register]').open()
-        });
-    </script>
+    <virto-connect id="virtoConnect"></virto-connect>
 </body>
 </html>

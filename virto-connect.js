@@ -101,13 +101,20 @@ export class VirtoConnect extends HTMLElement {
     this.dialog = this.shadowRoot.querySelector("wa-dialog")
     this.contentSlot = this.shadowRoot.querySelector("#content-slot")
     this.buttonsSlot = this.shadowRoot.querySelector("#buttons-slot")
+    
+    this.currentFormType = "login";
   }
 
   connectedCallback() {
-    const formType = this.getAttribute("form-type") || "login";
+    this.currentFormType = this.getAttribute("form-type") || "login";
+    this.renderCurrentForm();
+  }
+  
+  renderCurrentForm() {
+    this.contentSlot.innerHTML = "";
+    
     let formTemplate;
-
-    switch (formType) {
+    switch (this.currentFormType) {
         case "register":
             formTemplate = registerFormTemplate;
             break;
@@ -118,23 +125,46 @@ export class VirtoConnect extends HTMLElement {
     }
 
     this.contentSlot.appendChild(formTemplate.content.cloneNode(true));
+    
     this.updateButtons();
+    
+    this.updateDialogTitle();
+  }
+  
+  updateDialogTitle() {
+    const title = this.currentFormType === "login" ? "Sign Up" : "Sign In";
+    const existingTitle = this.querySelector('[slot="title"]');
+    if (existingTitle) {
+      existingTitle.textContent = title;
+    } else {
+      const titleElement = document.createElement("h2");
+      titleElement.textContent = title;
+      titleElement.slot = "title";
+      this.appendChild(titleElement);
+    }
   }
 
   updateButtons() {
     this.buttonsSlot.innerHTML = "";
-    const formType = this.getAttribute("form-type") || "login";
-
+    
     const closeButton = document.createElement("virto-button");
     closeButton.setAttribute("data-dialog", "close");
     closeButton.setAttribute("label", "Close");
     closeButton.addEventListener("click", () => this.close());
     this.buttonsSlot.appendChild(closeButton);
+    
+    const toggleButton = document.createElement("virto-button");
+    const toggleLabel = this.currentFormType === "login" ? "Already have an account? Sign In" : "Need an account? Sign Up";
+    toggleButton.setAttribute("label", toggleLabel);
+    toggleButton.addEventListener("click", () => {
+      this.currentFormType = this.currentFormType === "login" ? "register" : "login";
+      this.renderCurrentForm();
+    });
+    this.buttonsSlot.appendChild(toggleButton);
 
     const actionButton = document.createElement("virto-button");
-    actionButton.setAttribute("data-dialog", formType);
     
-    if (formType === "register") {
+    if (this.currentFormType === "register") {
       actionButton.setAttribute("label", "Sign In");
       actionButton.addEventListener("click", async () => await this.submitFormLogin());
     } else {
@@ -164,7 +194,15 @@ export class VirtoConnect extends HTMLElement {
         
         const errorMsg = document.createElement("div");
         errorMsg.textContent = "This user is already registered. Please sign in instead.";
+        errorMsg.style.color = "#d32f2f";
         errorMsg.style.marginBottom = "10px";
+        
+        const existingErrorMsg = this.contentSlot.querySelector(".error-message");
+        if (existingErrorMsg) {
+          existingErrorMsg.remove();
+        }
+        
+        errorMsg.className = "error-message";
         this.contentSlot.appendChild(errorMsg);
         
         const cancelButton = document.createElement("virto-button");
@@ -172,16 +210,14 @@ export class VirtoConnect extends HTMLElement {
         cancelButton.addEventListener("click", () => this.close());
         this.buttonsSlot.appendChild(cancelButton);
 
-         const loginButton = document.createElement("virto-button");
-         loginButton.setAttribute("label", "Continue with Sign In");
-         loginButton.addEventListener("click", () => {
-           this.close();
-           // Find and open the login dialog
-           const loginDialog = document.querySelector('virto-connect[form-type="register"]');
-           if (loginDialog) loginDialog.open();
-         });
-         this.buttonsSlot.appendChild(loginButton);
-         
+        const loginButton = document.createElement("virto-button");
+        loginButton.setAttribute("label", "Continue with Sign In");
+        loginButton.addEventListener("click", () => {
+          errorMsg.remove();
+          this.currentFormType = "register";
+          this.renderCurrentForm();
+        });
+        this.buttonsSlot.appendChild(loginButton);
         
         return;
       }
@@ -201,30 +237,75 @@ export class VirtoConnect extends HTMLElement {
     try {
       const result = await this.sdk.auth.register(user);
       console.log('Registration successful:', result);
+      
+      const successMsg = document.createElement("div");
+      successMsg.textContent = "Registration successful! You can now sign in.";
+      successMsg.style.color = "#4caf50";
+      successMsg.style.marginBottom = "10px";
+      
+      this.contentSlot.innerHTML = "";
+      this.contentSlot.appendChild(successMsg);
+      
+      this.buttonsSlot.innerHTML = "";
+      
+      const closeBtn = document.createElement("virto-button");
+      closeBtn.setAttribute("label", "Close");
+      closeBtn.addEventListener("click", () => this.close());
+      this.buttonsSlot.appendChild(closeBtn);
+      
+      const signInBtn = document.createElement("virto-button");
+      signInBtn.setAttribute("label", "Sign In Now");
+      signInBtn.addEventListener("click", () => {
+        this.currentFormType = "register";
+        this.renderCurrentForm();
+      });
+      this.buttonsSlot.appendChild(signInBtn);
+      
     } catch (error) {
       console.error('Registration failed:', error);
+      
+      const errorMsg = document.createElement("div");
+      errorMsg.textContent = "Registration failed. Please try again.";
+      errorMsg.style.color = "#d32f2f";
+      errorMsg.style.marginBottom = "10px";
+      this.contentSlot.appendChild(errorMsg);
     }
-
-    const values = Object.fromEntries(formData.entries());
-    console.log("Form Data as object:", values);
-    this.close();
   }
 
   async submitFormLogin() {
     const form = this.shadowRoot.querySelector("#login-form");
     const formData = new FormData(form);
-    console.log("Username from FormData:", formData.get("username"));
+    const username = formData.get("username");
+    console.log("Username from FormData:", username);
 
     try {
-      const result = await this.sdk.auth.connect(formData.get("username"));
-      console.log('Registration successful:', result);
+      const result = await this.sdk.auth.connect(username);
+      console.log('Login successful:', result);
+      
+      const successMsg = document.createElement("div");
+      successMsg.textContent = "Login successful!";
+      successMsg.style.color = "#4caf50";
+      successMsg.style.marginBottom = "10px";
+      
+      this.contentSlot.innerHTML = "";
+      this.contentSlot.appendChild(successMsg);
+      
+      this.buttonsSlot.innerHTML = "";
+      
+      const closeBtn = document.createElement("virto-button");
+      closeBtn.setAttribute("label", "Close");
+      closeBtn.addEventListener("click", () => this.close());
+      this.buttonsSlot.appendChild(closeBtn);
+      
     } catch (error) {
-      console.error('Registration failed:', error);
+      console.error('Login failed:', error);
+      
+      const errorMsg = document.createElement("div");
+      errorMsg.textContent = "Login failed. Please check your username and try again.";
+      errorMsg.style.color = "#d32f2f";
+      errorMsg.style.marginBottom = "10px";
+      this.contentSlot.appendChild(errorMsg);
     }
-
-    const values = Object.fromEntries(formData.entries());
-    console.log("Form Data as object:", values);
-    this.close();
   }
 
   open() {
@@ -237,19 +318,14 @@ export class VirtoConnect extends HTMLElement {
 
   attributeChangedCallback(name, oldValue, newValue) {
     if (name === "id" && this.shadowRoot) {
-      const titleSlot = this.shadowRoot.querySelector('slot[name="title"]')
-      if (titleSlot) {
-        const existingTitle = this.querySelector('[slot="title"]')
-        if (existingTitle) {
-          existingTitle.remove()
-        }
-        const titleElement = document.createElement("h2")
-        titleElement.textContent = newValue
-        titleElement.slot = "title"
-        this.appendChild(titleElement)
-      }
+      this.updateDialogTitle();
     } else if (name === "logo") {
-      this.updateLogo()
+      this.updateLogo();
+    } else if (name === "form-type" && oldValue !== newValue) {
+      this.currentFormType = newValue || "login";
+      if (this.shadowRoot) {
+        this.renderCurrentForm();
+      }
     }
   }
 
@@ -272,7 +348,7 @@ export class VirtoConnect extends HTMLElement {
   }
 
   static get observedAttributes() {
-    return ["id", "logo"]
+    return ["id", "logo", "form-type"]
   }
 }
 
