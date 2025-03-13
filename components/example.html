@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script type="module" async src="./virto-connect.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&display=swap" rel="stylesheet">
+    <title>Login</title>
+    <style>
+        :root {
+            --white: white;
+            --whitesmoke: whitesmoke;
+            --darkslategray: darkslategray;
+            --lightgreen: lightgreen;
+            --darkseagreen: darkseagreen;
+            --black: #0000004D;
+            --green: #24AF37;
+            --whitish-green: #c6ebc7;
+            --dark-green: #006B0A;
+            --extra-light-green: #DDFBE0;
+            --gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.5) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, rgba(86, 201, 96, 0.5) 0%, rgba(198, 235, 199, 0) 98.5%);
+            --font-primary: Outfit, sans-serif;
+            --font-secondary: Plus Jakarta, sans-serif;       
+        }
+
+        virto-avatar {
+            border-radius: 50px;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            height: 100vh;
+            margin: 0;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: var(--green);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-family: var(--font-primary);
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        #connect-button:hover {
+            background-color: var(--dark-green);
+        }
+    </style>
+</head>
+
+<body>
+    <button onclick="virtoConnect.open()">Connect to Virto</button>
+
+    <virto-connect id="virtoConnect"></virto-connect>
+</body>
+</html>
