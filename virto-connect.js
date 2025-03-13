@@ -1,7 +1,7 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
 import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
 
-import SDK from "http://localhost:8081/sdk.mjs";
+import SDK from "http://localhost:8081/dist/esm/sdk.mjs";
 
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
 const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'));
@@ -64,19 +64,18 @@ virto-input:focus {
 `
 
 const loginFormTemplate = html`
-    <form id="login-form">
+    <form id="register-form">
         <fieldset>
             <virto-input value="John Doe" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
             <virto-input value="johndoe" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
-            <virto-input value="john.doe@example.com" label="Email" placeholder="Enter your email" name="email" type="email" required></virto-input>
         </fieldset>
     </form>
 `;
 
 const registerFormTemplate = html`
-    <form id="register-form">
+    <form id="login-form">
         <fieldset>
-            <virto-input label="Email" placeholder="john@example.com" name="email" type="email" required></virto-input>
+            <virto-input value="johndoe" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
         </fieldset>
     </form>
 `;
@@ -134,23 +133,67 @@ export class VirtoConnect extends HTMLElement {
 
     const actionButton = document.createElement("virto-button");
     actionButton.setAttribute("data-dialog", formType);
-    actionButton.setAttribute("label", formType === "register" ? "Register" : "Log In");
-    actionButton.addEventListener("click", async () => await this.submitForm());
+    
+    if (formType === "register") {
+      actionButton.setAttribute("label", "Sign In");
+      actionButton.addEventListener("click", async () => await this.submitFormLogin());
+    } else {
+      actionButton.setAttribute("label", "Register");
+      actionButton.addEventListener("click", async () => await this.submitFormRegister());
+    }
+    
     this.buttonsSlot.appendChild(actionButton);
   }
 
-  async submitForm() {
-    const form = this.shadowRoot.querySelector("#login-form");
+  async submitFormRegister() {
+    const form = this.shadowRoot.querySelector("#register-form");
     const formData = new FormData(form);
+    const username = formData.get("username");
+    
     console.log("Name from FormData:", formData.get("name"));
-    console.log("Username from FormData:", formData.get("username"));
-    console.log("Email from FormData:", formData.get("email"));
+    console.log("Username from FormData:", username);
+
+    // Check if user is already registered
+    try {
+      const isRegistered = await this.sdk.auth.isRegistered(username);
+      
+      if (isRegistered) {
+        console.log(`User ${username} is already registered`);
+        
+        this.buttonsSlot.innerHTML = "";
+        
+        const errorMsg = document.createElement("div");
+        errorMsg.textContent = "This user is already registered. Please sign in instead.";
+        errorMsg.style.marginBottom = "10px";
+        this.contentSlot.appendChild(errorMsg);
+        
+        const cancelButton = document.createElement("virto-button");
+        cancelButton.setAttribute("label", "Cancel");
+        cancelButton.addEventListener("click", () => this.close());
+        this.buttonsSlot.appendChild(cancelButton);
+
+         const loginButton = document.createElement("virto-button");
+         loginButton.setAttribute("label", "Continue with Sign In");
+         loginButton.addEventListener("click", () => {
+           this.close();
+           // Find and open the login dialog
+           const loginDialog = document.querySelector('virto-connect[form-type="register"]');
+           if (loginDialog) loginDialog.open();
+         });
+         this.buttonsSlot.appendChild(loginButton);
+         
+        
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking registration status:', error);
+    }
 
     const user = {
       profile: {
-        id: formData.get("email"),
+        id: username,
         name: formData.get("name"),
-        displayName: formData.get("username"),
+        displayName: username,
       },
       metadata: {},
     };
@@ -167,13 +210,13 @@ export class VirtoConnect extends HTMLElement {
     this.close();
   }
 
-  async submitForm() {
+  async submitFormLogin() {
     const form = this.shadowRoot.querySelector("#login-form");
     const formData = new FormData(form);
-    console.log("Email from FormData:", formData.get("email"));
+    console.log("Username from FormData:", formData.get("username"));
 
     try {
-      const result = await this.sdk.auth.connect(formData.get("email"));
+      const result = await this.sdk.auth.connect(formData.get("username"));
       console.log('Registration successful:', result);
     } catch (error) {
       console.error('Registration failed:', error);
