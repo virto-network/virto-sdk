@@ -1,7 +1,7 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
 import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
 
-import SDK from "http://localhost:8081/dist/esm/sdk.mjs";
+import SDK from "https://unpkg.com/browse/@virtonetwork/sdk@0.0.1/dist/esm/sdk.mjs";
 
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
 const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'));
