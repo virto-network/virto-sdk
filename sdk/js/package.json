@@ -1,8 +1,9 @@
 {
-  "name": "@virto-network/sdk",
+  "name": "@virtonetwork/sdk",
   "version": "0.0.1",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+
   "scripts": {
     "dev": "vite",
     "build": "npm run build:esm && npm run build:cjs && npm run build:umd",
