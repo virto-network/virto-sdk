@@ -32,7 +32,7 @@ import SDK from '../../src/sdk';
 
   document.getElementById('connectButton').addEventListener('click', async () => {
     try {
-      const result = await sdk.auth.connect(hashedUserId);
+      const result = await sdk.auth.connect("testuser@example.com");
       console.log('Connection successful:', result);
     } catch (error) {
       console.error('Connection failed:', error);
@@ -43,7 +43,7 @@ import SDK from '../../src/sdk';
     const command = JSON.parse(document.getElementById('command').value);
 
     try {
-      const result = await sdk.auth.sign(hashedUserId, command);
+      const result = await sdk.auth.sign("testuser@example.com", command);
       console.log('Signing successful:', result);
     } catch (error) {
       console.error('Signing failed:', error);

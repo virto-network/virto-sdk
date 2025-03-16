@@ -1,10 +1,13 @@
-export function fromBase64(b64: string): ArrayBuffer {
-    const bin = atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) {
-        arr[i] = bin.charCodeAt(i);
+export function hexToUint8Array(hex: string): Uint8Array {
+    if (hex.startsWith('0x')) {
+        hex = hex.slice(2);
     }
-    return arr.buffer;
+    const length = hex.length / 2;
+    const bytes = new Uint8Array(length);
+    for (let i = 0; i < length; i++) {
+        bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
 }
 
 export function arrayBufferToBase64Url(buffer: any) {
@@ -21,9 +24,11 @@ export function toBase64(buffer: Uint8Array): string {
     return btoa(binary);
 }
 export function fromBase64Url(str: string): ArrayBuffer {
-    let b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    console.log("fromBase64Url", str);
+    let b64 = str.replace(/-/g, '+').replace(/_/g, '/') + "=";
+    console.log("b64", b64);
     while (b64.length % 4) {
         b64 += '=';
     }
-    return fromBase64(b64);
+    return new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0)));
 }
