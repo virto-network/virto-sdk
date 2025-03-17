@@ -8,12 +8,18 @@ export default defineConfig({
   },
   plugins: [wasm()],
   build: {
-    outDir: "dist/umd",
+    outDir: "dist/esm",
     lib: {
       entry: resolve(__dirname, "src/sdk.ts"),
       name: "SDK",
       fileName: "sdk",
-      formats: ["umd"]
+      formats: ["es"]
     },
+    rollupOptions: {
+      output: {
+        entryFileNames: "sdk.js",
+        format: "es"
+      }
+    }
   }
 });

@@ -1,13 +1,13 @@
 {
   "name": "@virtonetwork/sdk",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
 
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:esm",
-    "build:esm": "tsc --project tsconfig.esm.json",
+    "build": "npm run build:esm && npm run build:cjs && npm run build:umd",
+    "build:esm": "vite build --config vite.config.esm.mts",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:umd": "vite build --config vite.config.mts",
     "test": "npm run build && jest --config=jest.config.js",
@@ -15,7 +15,7 @@
   },
   "exports": {
     "require": "./dist/cjs/sdk.js",
-    "import": "./dist/esm/sdk.mjs",
+    "import": "./dist/esm/sdk.js",
     "default": "./dist/umd/sdk.umd.js"
   },
   "devDependencies": {
@@ -31,5 +31,10 @@
     "typescript": "^5.7.3",
     "vite": "^6.0.11",
     "vite-plugin-wasm": "^3.4.1"
+  },
+  "dependencies": {
+    "@polkadot/api": "^15.7.2",
+    "@polkadot/keyring": "^13.4.3",
+    "@polkadot/util": "^13.4.3"
   }
 }

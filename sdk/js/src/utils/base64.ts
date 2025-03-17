@@ -13,7 +13,6 @@ export function hexToUint8Array(hex: string): Uint8Array {
 export function arrayBufferToBase64Url(buffer: any) {
     const bytes = new Uint8Array(buffer);
     let str = btoa(String.fromCharCode(...bytes));
-    // Ajuste para que sea “URL-safe”
     return str.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   }
 
