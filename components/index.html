@@ -6,39 +6,15 @@
     <title>Custom Dropdown Example</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap" rel="stylesheet">
     <style>
-
-/*Trying this selectors to see if styles are seen when using the library somewhere else*/
-        :where(:root), :host {
-            /*From Dani's proyect*/
-            --white: white;
-            --whitesmoke: whitesmoke;
-            --darkslategray: darkslategray;
-            --lightgreen: lightgreen;
-            --darkseagreen: darkseagreen;
-            --black: #0000004D;
-            /*From Figma*/
-            --green: #24AF37;
-            --whitish-green: #c6ebc7;
-            --dark-green: #006B0A;
-            --extra-light-green: #DDFBE0;
-            /*Dialog background*/
-            --gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.5) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, rgba(86, 201, 96, 0.5) 0%, rgba(198, 235, 199, 0) 98.5%);
-            /*Fonts*/
-            --font-primary: Outfit, sans-serif;
-            --font-secondary: Plus Jakarta, sans-serif;
-            /* Unused by now*/
-            --color-accent-rgb: rgb(72, 61, 139);
-            --color-text-alt: #446;
-        }
         * {
             box-sizing: border-box;
             margin: 0;
-            padding: 12px;
-            font-family: var(--font-primary);
+            padding: 0 12px;
+            font-family: var(--font-primary); /*TODO: Solve how to add this font*/
         }
 
-        body {
-            background-color: var(--whitesmoke);
+        body > * {
+            padding: 12px;
         }
 
     </style>
@@ -56,14 +32,33 @@
 
 <h2>Buttons</h2>
 
-<virto-button label="Hola"></virto-button>
-<virto-button label="Chau" variant="secondary"></virto-button>
+<virto-button label="Primary Button" variant="primary"></virto-button>
+
+<virto-button label="Secondary Button" variant="secondary"></virto-button>
+
+<virto-button label="Small" variant="primary" size="small"></virto-button>
+<virto-button label="Medium" variant="primary" size="medium"></virto-button>
+<virto-button label="Large" variant="primary" size="large"></virto-button>
+
+<virto-button label="Disabled" variant="primary" disabled></virto-button>
+<virto-button label="Disabled Secondary" variant="secondary" disabled></virto-button>
+
+<!-- This checks the submit event and the custom error messages -->
+<form id="login" onsubmit="event.preventDefault(); console.log('Submitted:', Object.fromEntries(new FormData(this)));">
+    <virto-input name="username" pattern="[a-zA-Z0-9_]{3,}" required data-error-message="Use 3+ alphanumeric characters"></virto-input>
+    <virto-input name="email" type="email" required data-error-message="Please enter a valid email (e.g., user@domain.com)"></virto-input>
+    <virto-input name="password" minlength="8" required data-error-message="Password must be 8+ characters"></virto-input>
+    <virto-button label="Login" type="submit" name="submit" value="login"></virto-button>
+  </form>
+
+<virto-button label="Loading" variant="primary" loading></virto-button>
 
 <h2>Input</h2>
 
 <virto-input label="Name" placeholder="Enter your name"></virto-input>
+<virto-input label="Server" pattern="^@[a-zA-Z0-9_]+:[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}$" required></virto-input>
 <virto-input label="Email" type="email" placeholder="Enter your email" required></virto-input>
-<virto-input label="Password" type="password" placeholder="Enter your password"></virto-input>
+<virto-input label="Password" type="password" minlength="8" placeholder="Enter your password"></virto-input>
 <virto-input label="Username" placeholder="Choose a username" required minlength="3" hint="Must be at least 3 characters long"></virto-input>
 <virto-input label="Age" type="number" min="0" max="120" step="1"></virto-input>
 <virto-input label="Birthday" type="date"></virto-input>
@@ -77,6 +72,10 @@
 
 <script type="module">
         import './main.js';
+
+        const btn = document.querySelector('virto-button[loading]');
+  setTimeout(() => btn.removeAttribute('loading'), 3000);
+  
 </script>
 </body>
 </html>
