@@ -1,12 +1,13 @@
-import { html, css } from "./utils.js"
+import { html, css } from "./utils.js";
+import { globalStyles } from "./globalStyles.js";
 
 const avatarTp = html`
   <wa-avatar>
     <slot name="icon"></slot>
   </wa-avatar>
-`
+`;
 
-const avatarCss = css`
+const avatarCss = await css`
   :host {
     display: inline-block;
   }
@@ -18,6 +19,7 @@ const avatarCss = css`
     font-family: var(--font-primary);
     --border-radius: 50px;
     border-radius: var(--border-radius);
+    transition: transform 0.2s ease-out, background-color 0.2s ease-out;
   }
 
   wa-avatar::part(base) {
@@ -41,28 +43,14 @@ const avatarCss = css`
     border-radius: var(--border-radius);
   }
 
-  :host([shape="square"]) wa-avatar {
-    --border-radius: 0;
-    border-radius: var(--border-radius);
+  :host(:hover) wa-avatar:hover {
+    transform: scale(1.1);
+    --background-color: var(--whitish-green);
   }
-
-  :host(:hover) wa-avatar::part(base) {
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-  }
-
-  :host([size="small"]) wa-avatar {
-    --size: 32px;
-  }
-
-  :host([size="large"]) wa-avatar {
-    --size: 64px;
-  }
-`
+`;
 
 export class AvatarVirto extends HTMLElement {
-  static get TAG() {
-    return "virto-avatar";
-  }
+  static get TAG() { return "virto-avatar"; }
 
   static get observedAttributes() {
     return ["image", "label", "initials", "loading", "shape"];
@@ -72,51 +60,40 @@ export class AvatarVirto extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this.shadowRoot.appendChild(avatarTp.content.cloneNode(true));
-
-    const style = document.createElement("style");
-    style.textContent = avatarCss;
-    this.shadowRoot.appendChild(style);
+    this.shadowRoot.adoptedStyleSheets = [globalStyles, avatarCss];
 
     this.waAvatar = this.shadowRoot.querySelector("wa-avatar");
+    this.waAvatar.addEventListener("wa-error", this.#handleError);
     this.updateAvatar();
   }
 
   attributeChangedCallback(name, oldValue, newValue) {
-    if (oldValue !== newValue) {
-      this.updateAvatar();
-    }
+    if (oldValue === newValue || !this.waAvatar) return;
+    this.updateAvatar();
   }
 
   updateAvatar() {
-    if (this.waAvatar) {
-      ['image', 'label', 'initials', 'loading'].forEach(attr => {
-        if (this.hasAttribute(attr)) {
-          this.waAvatar.setAttribute(attr, this.getAttribute(attr));
-        } else {
-          this.waAvatar.removeAttribute(attr);
-        }
-      });
-    }
-  }
-
-
-  connectedCallback() {
-    this.waAvatar.addEventListener("wa-error", this.handleError.bind(this));
+    const attrs = ["image", "label", "initials", "loading"];
+    attrs.forEach(attr => {
+      const value = this.getAttribute(attr);
+      if (value !== null) this.waAvatar.setAttribute(attr, value);
+      else this.waAvatar.removeAttribute(attr);
+    });
   }
 
   disconnectedCallback() {
-    this.waAvatar.removeEventListener("wa-error", this.handleError.bind(this));
+    this.waAvatar.removeEventListener("wa-error", this.#handleError);
   }
 
-  handleError(event) {
+  #handleError = (event) => {
     this.dispatchEvent(
       new CustomEvent("virto-avatar-error", {
         bubbles: true,
         composed: true,
-        detail: event.detail,
-      }),
+        detail: event.detail || { message: "Image didn’t load", url: this.getAttribute("image") }
+      })
     );
-  }
+  };
 }
 
 if (!customElements.get(AvatarVirto.TAG)) {
