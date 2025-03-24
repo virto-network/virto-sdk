@@ -1,9 +1,9 @@
-import { html, css } from "./utils.js"
-import { globalStyles } from "./globalStyles.js"
+import { html, css } from "./utils.js";
+import { globalStyles } from "./globalStyles.js";
 
 const buttonTp = html`
   <wa-button></wa-button>
-`
+`;
 
 const buttonCss = await css`
   :host {
@@ -54,11 +54,9 @@ const buttonCss = await css`
 `;
 
 export class ButtonVirto extends HTMLElement {
-  static get TAG() {
-    return "virto-button"
-  }
-  static formAssociated = true
-  #internals
+  static get TAG() { return "virto-button" }
+  static formAssociated = true;
+  #internals;
 
   constructor() {
     super();
@@ -101,7 +99,6 @@ export class ButtonVirto extends HTMLElement {
     }
   }
 
-  //TODO: Check if this submit works (along with input)
   #handleClick = () => {
     if (this.getAttribute("type") === "submit" && this.#internals.form && !this.hasAttribute("disabled")) {
       this.#internals.form.requestSubmit();
