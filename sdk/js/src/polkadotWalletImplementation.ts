@@ -12,9 +12,11 @@ export class PolkadotWalletImplementation implements IWalletImplementation {
     private mnemonic: string = "";
     private isInitialized: boolean = false;
     private initPromise: Promise<void>;
+    private providerUrl: string;
 
-    constructor(mnemonic: string | null = null) {
+    constructor(mnemonic: string | null = null, providerUrl: string) {
         this.initPromise = this.initialize(mnemonic);
+        this.providerUrl = providerUrl;
     }
 
     private async initialize(mnemonic: string | null): Promise<void> {
@@ -55,7 +57,7 @@ export class PolkadotWalletImplementation implements IWalletImplementation {
             await this.unlock();
         }
 
-        const wsProvider = new WsProvider("ws://localhost:12281");
+        const wsProvider = new WsProvider(this.providerUrl);
         const api = await ApiPromise.create({ provider: wsProvider });
         console.log({ command })
         const extrinsic = api.tx(hexToU8a(command.hex));
