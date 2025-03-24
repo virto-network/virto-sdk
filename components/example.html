@@ -103,6 +103,14 @@
 
         .card-content {
             padding: 20px;
+            display: flex;
+            flex-direction: column;
+            min-height: 200px;
+            position: relative;
+        }
+
+        virto-switch {
+            margin-left: auto;
         }
 
         .space-y {
@@ -117,13 +125,6 @@
 
         li {
             margin-bottom: 5px;
-        }
-
-        .demo-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 15px;
         }
 
         .code-example {
@@ -147,21 +148,28 @@
             font-size: 0.9rem;
         }
 
-        .center {
-            text-align: center;
-        }
-
-        .server-config {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #f5f5f5;
-            border-radius: 4px;
-        }
-
-        .server-config h3 {
-            margin-bottom: 10px;
+        .demo-label {
+            text-align: left;
+            font-weight: 600;
             color: var(--dark-green);
-            font-size: 1.1rem;
+        }
+
+        .toggle-container {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            position: absolute;
+            top: 20px;
+            right: 20px;
+        }
+
+        .center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            flex-grow: 1;
+            gap: 15px;
         }
 
         .input-group {
@@ -171,36 +179,46 @@
             margin-bottom: 10px;
         }
 
-        .server-status {
-            font-size: 0.9rem;
-            color: #666;
-            margin-top: 10px;
+        .steps-list {
+            list-style: none;
+            padding-left: 0;
         }
 
-        .tabs {
+        .steps-list li {
             display: flex;
-            border-bottom: 1px solid var(--whitish-green);
+            align-items: center;
             margin-bottom: 15px;
         }
 
-        .tab {
-            padding: 10px 15px;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
+        .step-number {
+            width: 24px;
+            height: 24px;
+            background-color: var(--green);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-right: 8px;
         }
 
-        .tab.active {
-            border-bottom-color: var(--green);
-            color: var(--green);
+        .step-indicator {
+            width: 16px;
+            height: 16px;
+            background-color: #d32f2f;
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 10px;
+            vertical-align: middle;
+            transition: background-color 0.3s;
         }
 
-        .tab-content {
-            display: none;
+        .step-indicator.completed {
+            background-color: #4caf50;
         }
 
-        .tab-content.active {
-            display: block;
-        }
     </style>
 </head>
 <body>
@@ -230,19 +248,13 @@
                         <p>
                             <strong>Virto Connect</strong> is a customizable authentication component that allows users to easily sign up and sign in to applications built on the Virto Network.
                         </p>
-                        <p>
-                            The component provides a seamless authentication experience with:
-                        </p>
-                        <ul>
-                            <li>User registration with profile creation</li>
-                            <li>Simple sign-in process</li>
-                            <li>Customizable UI that matches your brand</li>
-                            <li>Integration with Virto Network's SDK</li>
-                            <li>Server configuration directly in the component</li>
+                        <p>Get started with these steps:</p>
+                        <ul class="steps-list">
+                            <li><span class="step-number">1</span>Enable the demo mode to connect to the server<span id="step1" class="step-indicator"></span></li>
+                            <li><span class="step-number">2</span>Click the connect button<span id="step2" class="step-indicator"></span></li>
+                            <li><span class="step-number">3</span>Sign up or sign in<span id="step3" class="step-indicator"></span></li>
+                            <li><span class="step-number">4</span>Enjoy the Virto Network<span id="step4" class="step-indicator"></span></li>
                         </ul>
-                        <p>
-                            Simply add the component to your page and configure it to start authenticating users.
-                        </p>
                     </div>
                 </div>
             </div>
@@ -261,46 +273,19 @@
                     </div>
                 </div>
                 <div class="card-content">
-                    <div class="tabs">
-                        <div class="tab active" data-tab="demo">Demo</div>
-                        <div class="tab" data-tab="config">Server Configuration</div>
+                    <div class="toggle-container">
+                        <span>Demo Mode</span>
+                        <virto-switch id="demo-switch"></virto-switch>
                     </div>
-
-                    <div class="tab-content active" id="demo-tab">
-                        <div class="demo-container">
-                            <p class="center">Click the button below to open the Virto Connect dialog</p>
-                            <virto-button label="Connect to Virto" id="connect-button">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M5 12h14"></path>
-                                    <path d="m12 5 7 7-7 7"></path>
-                                </svg>
-                            </virto-button>
-                            <p class="center">
-                                Current server: <span id="current-server">http://localhost:3000</span>
-                            </p>
-                        </div>
-                    </div>
-
-                    <div class="tab-content" id="config-tab">
-                        <div class="server-config">
-                            <h3>Server Configuration</h3>
-                            <div class="input-group">
-                                <virto-input 
-                                    label="Server URL"
-                                    type="text" 
-                                    id="server-url" 
-                                    placeholder="Enter server URL" 
-                                    value="http://localhost:3000" 
-                                ></virto-input>
-                                <virto-button 
-                                    label="Update"
-                                    id="update-server"
-                                ></virto-button>
-                            </div>
-                            <p class="server-status" id="server-status">
-                                Current server: <span id="current-server">http://localhost:3000</span>
-                            </p>
-                        </div>
+                    <div class="center">
+                        <div class="demo-label">Demo</div>
+                        <p>Click the button below to open the Virto Connect dialog</p>
+                        <virto-button label="Connect to Virto" id="connect-button">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M5 12h14"></path>
+                                <path d="m12 5 7 7-7 7"></path>
+                            </svg>
+                        </virto-button>
                     </div>
                 </div>
             </div>
@@ -335,56 +320,39 @@
     </div>
 
     <script>
-        // Tab switching. TODO: Replace with virto-component to take this code out from here
-        const tabs = document.querySelectorAll('.tab');
-        const tabContents = document.querySelectorAll('.tab-content');
-        
-        tabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                tabs.forEach(t => t.classList.remove('active'));
-                tabContents.forEach(c => c.classList.remove('active'));
-                
-                tab.classList.add('active');
-                const tabId = tab.getAttribute('data-tab') + '-tab';
-                document.getElementById(tabId).classList.add('active');
-            });
-        });
-
         document.getElementById('connect-button').addEventListener('click', function() {
             const virtoConnect = document.getElementById('virtoConnect');
             if (virtoConnect) {
                 virtoConnect.open();
             }
         });
-
-        document.getElementById('update-server').addEventListener('click', function() {
-            const serverUrl = document.getElementById('server-url').value.trim();
-            const virtoConnect = document.getElementById('virtoConnect');
-            
-            if (serverUrl && virtoConnect) {
-                virtoConnect.setAttribute('server', serverUrl);
-                
-                document.querySelectorAll('#current-server').forEach(el => {
-                    el.textContent = serverUrl;
-                });
-                
-                const statusElement = document.getElementById('server-status');
-                statusElement.innerHTML = 'Server URL updated successfully! Current server: <span id="current-server">' + serverUrl + '</span>';
-                statusElement.style.color = '#4caf50';
-                
-                setTimeout(() => {
-                    statusElement.innerHTML = 'Current server: <span id="current-server">' + serverUrl + '</span>';
-                    statusElement.style.color = '#666';
-                }, 3000);
-            }
-        });
-
-        document.querySelectorAll('#current-server').forEach(el => {
-            el.textContent = document.getElementById('virtoConnect').getAttribute('server') || 'http://localhost:3000';
-        });
         
-        document.getElementById('server-url').value = 
-            document.getElementById('virtoConnect').getAttribute('server') || 'http://localhost:3000';
+        // Step 1: Enable demo mode
+        const demoSwitch = document.getElementById('demo-switch');
+        const step1Indicator = document.getElementById('step1');
+        demoSwitch.addEventListener('change', function() {
+            step1Indicator.classList.toggle('completed', this.checked);
+        });
+
+        // Step 2: Register
+        const step2Indicator = document.getElementById('step2');
+        document.getElementById('connect-button').addEventListener('click', function() {
+            // TODO: Add validation logic here to confirm step 2 completion
+        });
+
+        // Step 3: Sign in
+        const virtoConnect = document.getElementById('virtoConnect');
+        const step3Indicator = document.getElementById('step3');
+        virtoConnect.addEventListener('register-success', function() {
+            // TODO: Add validation logic here to confirm registration completion
+        });
+        virtoConnect.addEventListener('login-success', function() {
+            // TODO: Add validation logic here to confirm login completion
+        });
+
+        // Step 4: Add later the extrinsic textarea
+        const step4Indicator = document.getElementById('step4');
+
     </script>
 </body>
 </html>
