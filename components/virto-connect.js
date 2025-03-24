@@ -102,11 +102,11 @@ export class VirtoConnect extends HTMLElement {
     this.currentFormType = "login";
   }
 
-  get serverUrl() {
-    return this.getAttribute('server') || PARAMS.get('server') || DEFAULT_SERVER;
+  static get serverUrl() {
+    return this.getAttribute('server') || DEFAULT_SERVER;
   }
 
-  set serverUrl(value) {
+  static set serverUrl(value) {
     this.setAttribute('server', value);
   }
 
