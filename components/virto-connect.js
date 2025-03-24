@@ -8,7 +8,7 @@ const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</templ
 const css = tagFn((s) => s)
 const SRC_URL = new URL(import.meta.url)
 const PARAMS = SRC_URL.searchParams
-const SERVER_URL = PARAMS.get('server') ?? 'http://localhost:3000'
+const DEFAULT_SERVER = 'http://localhost:3000'
 
 const dialogTp = html`
     <wa-dialog light-dismiss with-header with-footer>
@@ -90,13 +90,7 @@ export class VirtoConnect extends HTMLElement {
     super()
     this.attachShadow({ mode: "open" })
     this.shadowRoot.appendChild(dialogTp.content.cloneNode(true))
-    this.sdk = new SDK({
-      federate_server: SERVER_URL,
-      config: {
-        wallet: "polkadotjs"
-      }
-    });
-
+    
     const style = document.createElement("style")
     style.textContent = dialogCss
     this.shadowRoot.appendChild(style)
@@ -108,8 +102,28 @@ export class VirtoConnect extends HTMLElement {
     this.currentFormType = "login";
   }
 
+  get serverUrl() {
+    return this.getAttribute('server') || PARAMS.get('server') || DEFAULT_SERVER;
+  }
+
+  set serverUrl(value) {
+    this.setAttribute('server', value);
+  }
+
+  initSDK() {
+    this.sdk = new SDK({
+      federate_server: this.serverUrl,
+      config: {
+        wallet: "polkadotjs"
+      }
+    });
+    
+    console.log(`Virto SDK initialized with server: ${this.serverUrl}`);
+  }
+
   connectedCallback() {
     this.currentFormType = this.getAttribute("form-type") || "login";
+    this.initSDK();
     this.renderCurrentForm();
   }
   
@@ -329,6 +343,9 @@ export class VirtoConnect extends HTMLElement {
       if (this.shadowRoot) {
         this.renderCurrentForm();
       }
+    } else if (name === "server" && oldValue !== newValue) {
+      // Reinitialize SDK if the server attribute changes
+      this.initSDK();
     }
   }
 
@@ -351,7 +368,7 @@ export class VirtoConnect extends HTMLElement {
   }
 
   static get observedAttributes() {
-    return ["id", "logo", "form-type"]
+    return ["id", "logo", "form-type", "server"]
   }
 }
 
