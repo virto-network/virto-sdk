@@ -27,19 +27,16 @@
 <virto-avatar initials="JD" label="John Doe"></virto-avatar>
 <virto-avatar shape="rounded-square" label="Rounded Square Avatar"></virto-avatar>
 <virto-avatar shape="square" initials="JD" label="John Doe"></virto-avatar>
-<virto-avatar size="small" label="Small Avatar"></virto-avatar>
-<virto-avatar size="large" label="Large Avatar"></virto-avatar>
+<!-- Tests that the error when the image doesnt load works -->
+<virto-avatar image="https://picum.photos/id/237/200/300"></virto-avatar>
 
 <h2>Buttons</h2>
 
 <virto-button label="Primary Button" variant="primary"></virto-button>
-
 <virto-button label="Secondary Button" variant="secondary"></virto-button>
-
 <virto-button label="Small" variant="primary" size="small"></virto-button>
 <virto-button label="Medium" variant="primary" size="medium"></virto-button>
 <virto-button label="Large" variant="primary" size="large"></virto-button>
-
 <virto-button label="Disabled" variant="primary" disabled></virto-button>
 <virto-button label="Disabled Secondary" variant="secondary" disabled></virto-button>
 
@@ -71,10 +68,16 @@
 <virto-input label="Autofocus" placeholder="This input is focused on page load" autofocus></virto-input>
 
 <script type="module">
-        import './main.js';
+    import './main.js';
 
-        const btn = document.querySelector('virto-button[loading]');
-  setTimeout(() => btn.removeAttribute('loading'), 3000);
+    const btn = document.querySelector('virto-button[loading]');
+    setTimeout(() => btn.removeAttribute('loading'), 3000);
+
+    document.querySelectorAll("virto-avatar").forEach(avatar => {
+      avatar.addEventListener("virto-avatar-error", (e) => {
+        console.log("Avatar error:", e.detail);
+      });
+    });
   
 </script>
 </body>
