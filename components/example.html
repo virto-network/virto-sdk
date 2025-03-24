@@ -22,7 +22,7 @@
             --extra-light-green: #DDFBE0;
             --gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.5) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, rgba(86, 201, 96, 0.5) 0%, rgba(198, 235, 199, 0) 98.5%);
             --font-primary: Outfit, sans-serif;
-            --font-secondary: Plus Jakarta, sans-serif;       
+            --font-secondary: Plus Jakarta, sans-serif;  
         }
 
         * {
@@ -86,7 +86,6 @@
 
         .card-title {
             font-size: 1.5rem;
-            color: var(--darkslategray);
             display: flex;
             align-items: center;
             gap: 10px;
@@ -118,24 +117,6 @@
 
         li {
             margin-bottom: 5px;
-        }
-
-        button {
-            padding: 10px 20px;
-            background-color: var(--green);
-            color: white;
-            border: none;
-            border-radius: 4px;
-            font-family: var(--font-primary);
-            cursor: pointer;
-            font-size: 16px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        button:hover {
-            background-color: var(--dark-green);
         }
 
         .demo-container {
@@ -170,7 +151,6 @@
             text-align: center;
         }
 
-        /* New styles for server configuration */
         .server-config {
             margin-top: 20px;
             padding: 15px;
@@ -186,21 +166,9 @@
 
         .input-group {
             display: flex;
+            flex-direction: column;
             gap: 10px;
             margin-bottom: 10px;
-        }
-
-        input {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid var(--whitish-green);
-            border-radius: 4px;
-            font-family: var(--font-primary);
-        }
-
-        input:focus {
-            outline: none;
-            border-color: var(--green);
         }
 
         .server-status {
@@ -301,13 +269,12 @@
                     <div class="tab-content active" id="demo-tab">
                         <div class="demo-container">
                             <p class="center">Click the button below to open the Virto Connect dialog</p>
-                            <button id="connect-button">
-                                Connect to Virto
+                            <virto-button label="Connect to Virto" id="connect-button">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M5 12h14"></path>
                                     <path d="m12 5 7 7-7 7"></path>
                                 </svg>
-                            </button>
+                            </virto-button>
                             <p class="center">
                                 Current server: <span id="current-server">http://localhost:3000</span>
                             </p>
@@ -318,11 +285,20 @@
                         <div class="server-config">
                             <h3>Server Configuration</h3>
                             <div class="input-group">
-                                <input type="text" id="server-url" placeholder="Enter server URL" value="http://localhost:3000">
-                                <button id="update-server">Update</button>
+                                <virto-input 
+                                    label="Server URL"
+                                    type="text" 
+                                    id="server-url" 
+                                    placeholder="Enter server URL" 
+                                    value="http://localhost:3000" 
+                                ></virto-input>
+                                <virto-button 
+                                    label="Update"
+                                    id="update-server"
+                                ></virto-button>
                             </div>
-                            <p class="server-status">
-                                Update the server URL to connect to a different Virto Network server.
+                            <p class="server-status" id="server-status">
+                                Current server: <span id="current-server">http://localhost:3000</span>
                             </p>
                         </div>
                     </div>
@@ -359,24 +335,21 @@
     </div>
 
     <script>
-        // Handle tab switching
+        // Tab switching. TODO: Replace with virto-component to take this code out from here
         const tabs = document.querySelectorAll('.tab');
         const tabContents = document.querySelectorAll('.tab-content');
         
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                // Remove active class from all tabs and contents
                 tabs.forEach(t => t.classList.remove('active'));
                 tabContents.forEach(c => c.classList.remove('active'));
                 
-                // Add active class to clicked tab and corresponding content
                 tab.classList.add('active');
                 const tabId = tab.getAttribute('data-tab') + '-tab';
                 document.getElementById(tabId).classList.add('active');
             });
         });
 
-        // Connect button click handler
         document.getElementById('connect-button').addEventListener('click', function() {
             const virtoConnect = document.getElementById('virtoConnect');
             if (virtoConnect) {
@@ -384,39 +357,32 @@
             }
         });
 
-        // Server URL update handler
         document.getElementById('update-server').addEventListener('click', function() {
             const serverUrl = document.getElementById('server-url').value.trim();
             const virtoConnect = document.getElementById('virtoConnect');
             
             if (serverUrl && virtoConnect) {
-                // Update the server attribute on the component
                 virtoConnect.setAttribute('server', serverUrl);
                 
-                // Update the displayed current server
-                document.getElementById('current-server').textContent = serverUrl;
+                document.querySelectorAll('#current-server').forEach(el => {
+                    el.textContent = serverUrl;
+                });
                 
-                // Show a success message
-                const statusElement = document.querySelector('.server-status');
-                statusElement.textContent = 'Server URL updated successfully!';
+                const statusElement = document.getElementById('server-status');
+                statusElement.innerHTML = 'Server URL updated successfully! Current server: <span id="current-server">' + serverUrl + '</span>';
                 statusElement.style.color = '#4caf50';
                 
-                // Reset the message after a few seconds
                 setTimeout(() => {
-                    statusElement.textContent = 'Update the server URL to connect to a different Virto Network server.';
+                    statusElement.innerHTML = 'Current server: <span id="current-server">' + serverUrl + '</span>';
                     statusElement.style.color = '#666';
                 }, 3000);
-                
-                // Switch to the demo tab
-                document.querySelector('.tab[data-tab="demo"]').click();
             }
         });
 
-        // Initialize the current server display
-        document.getElementById('current-server').textContent = 
-            document.getElementById('virtoConnect').getAttribute('server') || 'http://localhost:3000';
+        document.querySelectorAll('#current-server').forEach(el => {
+            el.textContent = document.getElementById('virtoConnect').getAttribute('server') || 'http://localhost:3000';
+        });
         
-        // Initialize the server URL input
         document.getElementById('server-url').value = 
             document.getElementById('virtoConnect').getAttribute('server') || 'http://localhost:3000';
     </script>
