@@ -1,0 +1,64 @@
+on: 
+  pull_request:
+    paths: ['sdk/js/**']
+
+name: sdk
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: extractions/setup-just@v2
+      - name: Check
+        run: just -f sdk/js/justfile check
+
+  test:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v2
+      - uses: extractions/setup-just@v2
+      - name: Test
+        run: just -f sdk/js/justfile test
+  
+  publish:
+    runs-on: ubuntu-latest
+    needs: [check, test]
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 20
+          registry-url: 'https://npm.pkg.github.com/'
+      - name: Clean package-lock.json
+        run: npm run clean
+      
+      - name: Cache node modules
+        uses: actions/cache@v2
+        env:
+          cache-name: cache-node-modules
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ env.cache-name }}-
+            ${{ runner.os }}-build-
+            ${{ runner.os }}-
+      - name: Ensure access
+        run: npm whoami --registry https://npm.pkg.github.com/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.CF_GITHUB_TOKEN }}
+      - name: Config git user
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+      - name: Install
+        run: npm ci
+      - name: Publish
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: just -f sdk/js/justfile publish
+        env:
+          GH_TOKEN: ${{ secrets.CF_GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.CF_GITHUB_TOKEN }}
+  
