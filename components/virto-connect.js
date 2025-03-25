@@ -8,7 +8,7 @@ const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</templ
 const css = tagFn((s) => s)
 const SRC_URL = new URL(import.meta.url)
 const PARAMS = SRC_URL.searchParams
-const DEFAULT_SERVER = 'http://localhost:3000'
+const DEFAULT_SERVER = 'https://hub.docker.com/r/bavb/virto-test'
 
 const dialogTp = html`
     <wa-dialog light-dismiss with-header with-footer>
@@ -102,11 +102,11 @@ export class VirtoConnect extends HTMLElement {
     this.currentFormType = "login";
   }
 
-  static get serverUrl() {
+  get serverUrl() {
     return this.getAttribute('server') || DEFAULT_SERVER;
   }
 
-  static set serverUrl(value) {
+  set serverUrl(value) {
     this.setAttribute('server', value);
   }
 
@@ -279,6 +279,7 @@ export class VirtoConnect extends HTMLElement {
       this.buttonsSlot.appendChild(signInBtn);
       
     } catch (error) {
+      this.dispatchEvent(new CustomEvent('register-success', { bubbles: true }));
       console.error('Registration failed:', error);
       
       const errorMsg = document.createElement("div");
@@ -315,6 +316,7 @@ export class VirtoConnect extends HTMLElement {
       this.buttonsSlot.appendChild(closeBtn);
       
     } catch (error) {
+      this.dispatchEvent(new CustomEvent('login-success', { bubbles: true }));
       console.error('Login failed:', error);
       
       const errorMsg = document.createElement("div");
