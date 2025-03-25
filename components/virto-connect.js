@@ -1,14 +1,14 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
 import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
 
-import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.2/dist/esm/sdk.js";
+import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.3/dist/esm/sdk.js";
 
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
 const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'));
 const css = tagFn((s) => s)
 const SRC_URL = new URL(import.meta.url)
 const PARAMS = SRC_URL.searchParams
-const DEFAULT_SERVER = 'https://hub.docker.com/r/bavb/virto-test'
+const DEFAULT_SERVER = 'http://localhost:5000'
 
 const dialogTp = html`
     <wa-dialog light-dismiss with-header with-footer>
@@ -110,20 +110,20 @@ export class VirtoConnect extends HTMLElement {
     this.setAttribute('server', value);
   }
 
-  initSDK() {
-    this.sdk = new SDK({
-      federate_server: this.serverUrl,
-      config: {
-        wallet: "polkadotjs"
-      }
-    });
+  // initSDK() {
+  //   this.sdk = new SDK({
+  //     federate_server: this.serverUrl,
+  //     config: {
+  //       wallet: "polkadotjs"
+  //     }
+  //   });
     
-    console.log(`Virto SDK initialized with server: ${this.serverUrl}`);
-  }
+  //   console.log(`Virto SDK initialized with server: ${this.serverUrl}`);
+  // }
 
   connectedCallback() {
     this.currentFormType = this.getAttribute("form-type") || "login";
-    this.initSDK();
+    // this.initSDK();
     this.renderCurrentForm();
   }
   
