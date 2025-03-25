@@ -304,35 +304,16 @@
                 </div>
         </div>
 
-        <div class="code-example">
-            <h2>Implementation Example</h2>
-            <pre>
-&lt;!-- Add this to your HTML -->
-&lt;button onclick="virtoConnect.open()">Connect to Virto&lt;/button>
-
-&lt;!-- Configure the component with a custom server -->
-&lt;virto-connect 
-  id="virtoConnect"
-  form-type="login"
-  server="https://your-server.com">
-&lt;/virto-connect>
-
-&lt;!-- Import the script -->
-&lt;script type="module" async src="./virto-connect.js">&lt;/script>
-
-&lt;!-- Update server URL dynamically -->
-&lt;script>
-  const virtoConnect = document.getElementById('virtoConnect');
-  virtoConnect.serverUrl = 'https://new-server.com';
-  // OR
-  virtoConnect.setAttribute('server', 'https://new-server.com');
-&lt;/script></pre>
-        </div>
-
         <virto-connect id="virtoConnect"></virto-connect>
     </div>
 
-    <script>
+    <script type="module">
+        import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.3/dist/esm/sdk.js";
+        let sessionId = null;
+        let wsControl = null;
+
+        let sdk = null;
+
         document.getElementById('connect-button').addEventListener('click', function() {
             const virtoConnect = document.getElementById('virtoConnect');
             if (virtoConnect) {
@@ -343,20 +324,24 @@
         // Step 1: Enable demo mode
         const demoSwitch = document.getElementById('demo-switch');
         const step1Indicator = document.getElementById('step1');
-        demoSwitch.addEventListener('change', function() {
+        demoSwitch.addEventListener('change', async function() {
+            await startSession()
+
             step1Indicator.classList.toggle('completed', this.checked);
         });
 
         // Step 2: Register - Turn green when register-form is successfully submitted
         const step2Indicator = document.getElementById('step2');
         const virtoConnect = document.getElementById('virtoConnect');
-        virtoConnect.addEventListener('register-success', function() {
+        virtoConnect.addEventListener('register-success', async function() {
+            await register();
             step2Indicator.classList.add('completed');
         });
 
         // Step 3: Sign in - Turn green when login-form is successfully submitted
         const step3Indicator = document.getElementById('step3');
-        virtoConnect.addEventListener('login-success', function() {
+        virtoConnect.addEventListener('login-success', async function() {
+            await connect();
             step3Indicator.classList.add('completed');
             document.getElementById('connect-section').style.display = 'none';
             document.getElementById('extrinsic-section').style.display = 'flex';
@@ -365,16 +350,101 @@
         // Step 4: Sign a extrinsic
         const step4Indicator = document.getElementById('step4');
         const signExtrinsicButton = document.getElementById('sign-extrinsic-button');
-        signExtrinsicButton.addEventListener('click', function() {
-        const extrinsicInput = document.getElementById('extrinsic-input').value.trim();
-        if (extrinsicInput) {
-            // TODO: Add logic to sign the extrinsic using the SDK
-            console.log('Extrinsic to sign:', extrinsicInput);
-            step4Indicator.classList.add('completed');
-        } else {
-            alert('Please enter extrinsic data to sign.');
+        signExtrinsicButton.addEventListener('click', async function() {
+            const extrinsicInput = document.getElementById('extrinsic-input').value.trim();
+
+            if (extrinsicInput) {
+                // TODO: Add logic to sign the extrinsic using the SDK
+                console.log('Extrinsic to sign:', extrinsicInput);
+                await remark(extrinsicInput);
+                step4Indicator.classList.add('completed');
+            } else {
+                alert('Please enter extrinsic data to sign.');
+            }
+        });
+
+        async function startSession() {
+            try {
+                const resp = await fetch('http://localhost:3000/start-chopsticks', {
+                    method: 'POST'
+                });
+                if (!resp.ok) {
+                    throw new Error('Error al iniciar chopsticks');
+                }
+                const data = await resp.json();
+                // data.port = 10000 + data.port;
+                sessionId = data.sessionId;
+                console.log(`Sesión iniciada. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
+
+                
+                wsControl = new WebSocket(`ws://localhost:3000/?sessionId=${sessionId}`);
+                wsControl.onopen = () => console.log('WS control abierto');
+                wsControl.onclose = () => console.log('WS control cerrado');
+
+                sdk = new SDK({
+                    federate_server: "http://localhost:5000",
+                    provider_url: `ws://localhost:${data.port}`,
+                    config: {
+                        wallet: "polkadotjs"
+                    }
+                });
+
+            } catch (err) {
+                console.log('Error startSession: ' + err.message);
+            }
         }
-    });
+
+        async function register() {
+            if (!sessionId) {
+                console.log('No hay sesión. Primero inicia.');
+                return;
+            }
+            try {
+                const user = {
+                    profile: {
+                        id: sessionId,
+                        name: "John",
+                        displayName: sessionId,
+                    },
+                    metadata: {},
+                };
+                const result = await sdk.auth.register(user);
+                console.log("Result register", result)
+            } catch (err) {
+                console.log('Error membership: ' + err.message);
+            }
+        }
+
+        async function connect() {
+            if (!sessionId) {
+                console.log('No hay sesión. Primero inicia.');
+                return;
+            }
+            try {
+                const result = await sdk.auth.connect(sessionId);
+                console.log("Result connect", result)
+            } catch (err) {
+                console.log('Error connect: ' + err.message);
+            }
+        }
+
+        async function remark(extrinsicInput) {
+            if (!sessionId) {
+                console.log('No hay sesión. Primero inicia.');
+                return;
+            }
+            try {
+                const command = {
+                    "url":"ws://localhost:12281/system/remark",
+                    "body": "{}",
+                    "hex": extrinsicInput
+                }
+                const result = await sdk.auth.sign(sessionId, command);
+                console.log("Result sign", result)
+            } catch (err) {
+                console.log('Error remark: ' + err.message);
+            }
+        }
 
     </script>
 </body>
