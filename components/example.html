@@ -92,18 +92,22 @@
             margin-bottom: 5px;
         }
 
-        .card-title svg {
+        .card-title svg, a {
             color: var(--green);
         }
 
         .card-description {
             color: #666;
+            text-align: left;
             font-size: 0.9rem;
         }
 
         .card-content {
+            text-align: left;
             padding: 20px;
             display: flex;
+            align-items: space-around;
+            justify-content: space-around;
             flex-direction: column;
             min-height: 200px;
             position: relative;
@@ -156,7 +160,6 @@
 
         .toggle-container {
             display: flex;
-            align-items: flex-start;
             gap: 10px;
             position: absolute;
             top: 20px;
@@ -166,17 +169,17 @@
         .center {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: space-between;
+            align-items: flex-start;
             flex-grow: 1;
-            gap: 15px;
+            gap: 20px;
+            justify-content:space-between;
         }
 
-        .input-group {
+        #connect-section, #extrinsic-section {
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            margin-bottom: 10px;
+            width: 100%;
+            gap: 15px;
         }
 
         .steps-list {
@@ -208,6 +211,7 @@
             width: 16px;
             height: 16px;
             background-color: #d32f2f;
+            border: 1px solid var(--extra-light-green);
             border-radius: 50%;
             display: inline-block;
             margin-left: 10px;
@@ -217,6 +221,10 @@
 
         .step-indicator.completed {
             background-color: #4caf50;
+        }
+
+        h4 {
+            font-weight: 500;
         }
 
     </style>
@@ -250,12 +258,13 @@
                         </p>
                         <p>Get started with these steps:</p>
                         <ul class="steps-list">
-                            <li><span class="step-number">1</span>Enable the demo mode to connect to the server<span id="step1" class="step-indicator"></span></li>
-                            <li><span class="step-number">2</span>Click the connect button<span id="step2" class="step-indicator"></span></li>
-                            <li><span class="step-number">3</span>Sign up or sign in<span id="step3" class="step-indicator"></span></li>
-                            <li><span class="step-number">4</span>Enjoy the Virto Network<span id="step4" class="step-indicator"></span></li>
+                            <li><span class="step-number">1</span>Enable "Demo Mode" to connect to the server<span id="step1" class="step-indicator"></span></li>
+                            <li><span class="step-number">2</span>Register clicking on "Connect to Virto"<span id="step2" class="step-indicator"></span></li>
+                            <li><span class="step-number">3</span>Once you've registered, log in<span id="step3" class="step-indicator"></span></li>
+                            <li><span class="step-number">4</span>You can sign an extrinsic now!<strong>*</strong><span id="step4" class="step-indicator"></span></li>
                         </ul>
                     </div>
+                    <h4>If you are a developer and want to know more about what's behind all this, you can <a href="https://ailens-organization.gitbook.io/virto-connect">check our documentation!</a></h4>
                 </div>
             </div>
 
@@ -279,16 +288,20 @@
                     </div>
                     <div class="center">
                         <div class="demo-label">Demo</div>
-                        <p>Click the button below to open the Virto Connect dialog</p>
-                        <virto-button label="Connect to Virto" id="connect-button">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M5 12h14"></path>
-                                <path d="m12 5 7 7-7 7"></path>
-                            </svg>
-                        </virto-button>
+                        <div id="connect-section">
+                            <p>Click the button below to open the Virto Connect dialog</p>
+                            <div class="button-wrapper">
+                                <virto-button label="Connect to Virto" id="connect-button"></virto-button>
+                            </div>
+                        </div>
+                        <div id="extrinsic-section" style="display: none;">
+                            <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data" value="0x.."></virto-input>
+                            <div class="button-wrapper">
+                                <virto-button label="Sign Extrinsic" id="sign-extrinsic-button"></virto-button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
         </div>
 
         <div class="code-example">
@@ -316,7 +329,7 @@
 &lt;/script></pre>
         </div>
 
-        <virto-connect id="virtoConnect" server="http://localhost:3000"></virto-connect>
+        <virto-connect id="virtoConnect"></virto-connect>
     </div>
 
     <script>
@@ -334,24 +347,34 @@
             step1Indicator.classList.toggle('completed', this.checked);
         });
 
-        // Step 2: Register
+        // Step 2: Register - Turn green when register-form is successfully submitted
         const step2Indicator = document.getElementById('step2');
-        document.getElementById('connect-button').addEventListener('click', function() {
-            // TODO: Add validation logic here to confirm step 2 completion
-        });
-
-        // Step 3: Sign in
         const virtoConnect = document.getElementById('virtoConnect');
-        const step3Indicator = document.getElementById('step3');
         virtoConnect.addEventListener('register-success', function() {
-            // TODO: Add validation logic here to confirm registration completion
-        });
-        virtoConnect.addEventListener('login-success', function() {
-            // TODO: Add validation logic here to confirm login completion
+            step2Indicator.classList.add('completed');
         });
 
-        // Step 4: Add later the extrinsic textarea
+        // Step 3: Sign in - Turn green when login-form is successfully submitted
+        const step3Indicator = document.getElementById('step3');
+        virtoConnect.addEventListener('login-success', function() {
+            step3Indicator.classList.add('completed');
+            document.getElementById('connect-section').style.display = 'none';
+            document.getElementById('extrinsic-section').style.display = 'flex';
+        });
+
+        // Step 4: Sign a extrinsic
         const step4Indicator = document.getElementById('step4');
+        const signExtrinsicButton = document.getElementById('sign-extrinsic-button');
+        signExtrinsicButton.addEventListener('click', function() {
+        const extrinsicInput = document.getElementById('extrinsic-input').value.trim();
+        if (extrinsicInput) {
+            // TODO: Add logic to sign the extrinsic using the SDK
+            console.log('Extrinsic to sign:', extrinsicInput);
+            step4Indicator.classList.add('completed');
+        } else {
+            alert('Please enter extrinsic data to sign.');
+        }
+    });
 
     </script>
 </body>
