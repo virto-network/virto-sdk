@@ -4,6 +4,8 @@ import SDK from '../../src/sdk';
   const sdk = new SDK({
     // Should be a VOS implementation
     federate_server: "http://localhost:3000",
+    // Should be a local, test or production url
+    provider_url: "ws://localhost:12281",
     config: {
       wallet: "polkadotjs"
     }
