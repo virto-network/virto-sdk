@@ -1,6 +1,6 @@
 default: check
 
-check: check-sube check-scales check-libwallet
+check: check-sube check-scales check-libwallet check-sdk
 
 check-sube:
 	@just -f lib/sube/justfile check lint
@@ -10,3 +10,6 @@ check-scales:
 
 check-libwallet:
 	@just -f lib/libwallet/justfile check lint
+
+check-sdk:
+	@just -f sdk/js/justfile check

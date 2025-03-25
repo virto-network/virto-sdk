@@ -1,0 +1,17 @@
+default: check
+
+check:
+  npm ci
+  npm run build
+
+lint:
+  npm run lint
+
+test:
+  npm run test
+
+publish:
+  npm ci 
+  npm run build
+  npm version patch
+  npm publish
