@@ -1,6 +1,7 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
 import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
 
+// Prueba 1: Failed to fetch when trying to register
 import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.3/dist/esm/sdk.js";
 
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
@@ -8,7 +9,7 @@ const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</templ
 const css = tagFn((s) => s)
 const SRC_URL = new URL(import.meta.url)
 const PARAMS = SRC_URL.searchParams
-const DEFAULT_SERVER = 'http://localhost:5000'
+const DEFAULT_SERVER = 'http://virto-connect.connect-test.xyz:5000'
 
 const dialogTp = html`
     <wa-dialog light-dismiss with-header with-footer>
@@ -100,6 +101,7 @@ export class VirtoConnect extends HTMLElement {
     this.buttonsSlot = this.shadowRoot.querySelector("#buttons-slot")
     
     this.currentFormType = "login";
+    this.sdk = null;
   }
 
   get serverUrl() {
@@ -110,20 +112,36 @@ export class VirtoConnect extends HTMLElement {
     this.setAttribute('server', value);
   }
 
-  // initSDK() {
-  //   this.sdk = new SDK({
-  //     federate_server: this.serverUrl,
-  //     config: {
-  //       wallet: "polkadotjs"
-  //     }
-  //   });
+  get providerUrl() {
+    return this.getAttribute('provider-url') || null;
+  }
+
+  set providerUrl(value) {
+    this.setAttribute('provider-url', value);
+  }
+
+  async initSDK() {
+    if (!this.providerUrl) {
+      this.sdk = null;
+      return;
+    }
     
-  //   console.log(`Virto SDK initialized with server: ${this.serverUrl}`);
-  // }
+    try {
+      this.sdk = new SDK({
+        federate_server: this.serverUrl,
+        provider_url: this.providerUrl,
+        config: {
+          wallet: "polkadotjs"
+        }
+      });
+    } catch (error) {
+      console.error('Failed to initialize SDK:', error);
+      this.sdk = null;
+    }
+  }
 
   connectedCallback() {
     this.currentFormType = this.getAttribute("form-type") || "login";
-    // this.initSDK();
     this.renderCurrentForm();
   }
   
@@ -197,50 +215,60 @@ export class VirtoConnect extends HTMLElement {
     const formData = new FormData(form);
     const username = formData.get("username");
     
-    console.log("Name from FormData:", formData.get("name"));
-    console.log("Username from FormData:", username);
+    if (!this.sdk || !this.sdk.auth) {
+      const errorMsg = document.createElement("div");
+      errorMsg.textContent = "Please enable Demo Mode to initialize the connection.";
+      errorMsg.className = "error-message";
+      this.contentSlot.appendChild(errorMsg);
+      return;
+    }
 
     // Check if user is already registered
-    try {
-      const isRegistered = await this.sdk.auth.isRegistered(username);
+    // try {
+    //   console.log('Attempting to check registration for username:', username);
+    //   const isRegistered = await this.sdk.auth.isRegistered(username);
+    //   console.log('isRegistered response:', isRegistered);
       
-      if (isRegistered) {
-        console.log(`User ${username} is already registered`);
+    //   if (isRegistered) {
+    //     console.log(`User ${username} is already registered`);
+    //     this.buttonsSlot.innerHTML = "";
         
-        this.buttonsSlot.innerHTML = "";
+    //     const errorMsg = document.createElement("div");
+    //     errorMsg.textContent = "This user is already registered. Please sign in instead.";
         
-        const errorMsg = document.createElement("div");
-        errorMsg.textContent = "This user is already registered. Please sign in instead.";
-        errorMsg.style.color = "#d32f2f";
-        errorMsg.style.marginBottom = "10px";
+    //     const existingErrorMsg = this.contentSlot.querySelector(".error-message");
+    //     if (existingErrorMsg) {
+    //       existingErrorMsg.remove();
+    //     }
         
-        const existingErrorMsg = this.contentSlot.querySelector(".error-message");
-        if (existingErrorMsg) {
-          existingErrorMsg.remove();
-        }
+    //     errorMsg.className = "error-message";
+    //     this.contentSlot.appendChild(errorMsg);
         
-        errorMsg.className = "error-message";
-        this.contentSlot.appendChild(errorMsg);
-        
-        const cancelButton = document.createElement("virto-button");
-        cancelButton.setAttribute("label", "Cancel");
-        cancelButton.addEventListener("click", () => this.close());
-        this.buttonsSlot.appendChild(cancelButton);
+    //     const cancelButton = document.createElement("virto-button");
+    //     cancelButton.setAttribute("label", "Cancel");
+    //     cancelButton.addEventListener("click", () => this.close());
+    //     this.buttonsSlot.appendChild(cancelButton);
 
-        const loginButton = document.createElement("virto-button");
-        loginButton.setAttribute("label", "Continue with Sign In");
-        loginButton.addEventListener("click", () => {
-          errorMsg.remove();
-          this.currentFormType = "register";
-          this.renderCurrentForm();
-        });
-        this.buttonsSlot.appendChild(loginButton);
+    //     const loginButton = document.createElement("virto-button");
+    //     loginButton.setAttribute("label", "Continue with Sign In");
+    //     loginButton.addEventListener("click", () => {
+    //       errorMsg.remove();
+    //       this.currentFormType = "register";
+    //       this.renderCurrentForm();
+    //     });
+    //     this.buttonsSlot.appendChild(loginButton);
         
-        return;
-      }
-    } catch (error) {
-      console.error('Error checking registration status:', error);
-    }
+    //     return;
+    //   }
+    // } catch (error) {
+    //   console.error('Error checking registration status:', error);
+    //   console.log('Error message:', error.message);
+    //   console.log('Error stack:', error.stack);
+
+    //   if (error.response) {
+    //     console.log('Raw response from server:', error.response);
+    //   }
+    // }
 
     const user = {
       profile: {
@@ -252,13 +280,13 @@ export class VirtoConnect extends HTMLElement {
     };
 
     try {
+      console.log('Attempting to register user:', user);
       const result = await this.sdk.auth.register(user);
       console.log('Registration successful:', result);
+      this.dispatchEvent(new CustomEvent('register-success', { bubbles: true }));
       
       const successMsg = document.createElement("div");
       successMsg.textContent = "Registration successful! You can now sign in.";
-      successMsg.style.color = "#4caf50";
-      successMsg.style.marginBottom = "10px";
       
       this.contentSlot.innerHTML = "";
       this.contentSlot.appendChild(successMsg);
@@ -279,13 +307,9 @@ export class VirtoConnect extends HTMLElement {
       this.buttonsSlot.appendChild(signInBtn);
       
     } catch (error) {
-      this.dispatchEvent(new CustomEvent('register-success', { bubbles: true }));
       console.error('Registration failed:', error);
-      
       const errorMsg = document.createElement("div");
       errorMsg.textContent = "Registration failed. Please try again.";
-      errorMsg.style.color = "#d32f2f";
-      errorMsg.style.marginBottom = "10px";
       this.contentSlot.appendChild(errorMsg);
     }
   }
@@ -294,16 +318,22 @@ export class VirtoConnect extends HTMLElement {
     const form = this.shadowRoot.querySelector("#login-form");
     const formData = new FormData(form);
     const username = formData.get("username");
-    console.log("Username from FormData:", username);
+
+    if (!this.sdk || !this.sdk.auth) {
+      const errorMsg = document.createElement("div");
+      errorMsg.textContent = "Please enable Demo Mode to initialize the connection.";
+      errorMsg.className = "error-message";
+      this.contentSlot.appendChild(errorMsg);
+      return;
+    }
 
     try {
       const result = await this.sdk.auth.connect(username);
+      this.dispatchEvent(new CustomEvent('login-success', { bubbles: true }));
       console.log('Login successful:', result);
       
       const successMsg = document.createElement("div");
       successMsg.textContent = "Login successful!";
-      successMsg.style.color = "#4caf50";
-      successMsg.style.marginBottom = "10px";
       
       this.contentSlot.innerHTML = "";
       this.contentSlot.appendChild(successMsg);
@@ -316,13 +346,10 @@ export class VirtoConnect extends HTMLElement {
       this.buttonsSlot.appendChild(closeBtn);
       
     } catch (error) {
-      this.dispatchEvent(new CustomEvent('login-success', { bubbles: true }));
       console.error('Login failed:', error);
       
       const errorMsg = document.createElement("div");
       errorMsg.textContent = "Login failed. Please check your username and try again.";
-      errorMsg.style.color = "#d32f2f";
-      errorMsg.style.marginBottom = "10px";
       this.contentSlot.appendChild(errorMsg);
     }
   }
@@ -348,6 +375,8 @@ export class VirtoConnect extends HTMLElement {
     } else if (name === "server" && oldValue !== newValue) {
       // Reinitialize SDK if the server attribute changes
       this.initSDK();
+    } else if (name === "provider-url" && oldValue !== newValue) {
+      this.initSDK();
     }
   }
 
@@ -370,7 +399,7 @@ export class VirtoConnect extends HTMLElement {
   }
 
   static get observedAttributes() {
-    return ["id", "logo", "form-type", "server"]
+    return ["id", "logo", "form-type", "server", "provider-url"]
   }
 }
 
