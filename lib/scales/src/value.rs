@@ -259,11 +259,11 @@ fn sequence_size(data: &[u8]) -> (usize, usize) {
     (
         match len {
             1 => (data[0] >> 2).into(),
-            2 => u16::from(data[0] >> 2 | data[1] << 6).into(),
-            4 => ((data[0] as u32) >> 2
-                | (data[1] as u32) << 6
-                | (data[2] as u32) << 14
-                | (data[3] as u32) << 22)
+            2 => u16::from((data[0] >> 2) | (data[1] << 6)).into(),
+            4 => (((data[0] as u32) >> 2)
+                | ((data[1] as u32) << 6) 
+                | ((data[2] as u32) << 14)
+                | ((data[3] as u32) << 22))
                 .try_into()
                 .unwrap(),
             _ => todo!(),
