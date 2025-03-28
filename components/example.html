@@ -283,8 +283,7 @@
                 </div>
                 <div class="card-content">
                     <div class="toggle-container">
-                        <span>Demo Mode</span>
-                        <virto-switch id="demo-switch"></virto-switch>
+                        <span id="demo-label">Demo Mode</span>                        <virto-switch id="demo-switch"></virto-switch>
                     </div>
                     <div class="center">
                         <div class="demo-label">Demo</div>
@@ -308,18 +307,20 @@
     </div>
 
     <script type="module">
-        import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.3/dist/esm/sdk.js";
+       // import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.3/dist/esm/sdk.js";
         let sessionId = null;
         let wsControl = null;
 
-        let sdk = null;
+       const virtoConnect = document.getElementById('virtoConnect');
 
-        document.getElementById('connect-button').addEventListener('click', function() {
-            const virtoConnect = document.getElementById('virtoConnect');
-            if (virtoConnect) {
+       document.getElementById('connect-button').addEventListener('click', function() {
+            if (!sessionId) {
+                alert('Please enable Demo Mode first to connect to Virto.');
+                return;
+            } else if (virtoConnect) {
                 virtoConnect.open();
             }
-        });
+            });
         
         // Step 1: Enable demo mode
         const demoSwitch = document.getElementById('demo-switch');
@@ -332,7 +333,6 @@
 
         // Step 2: Register - Turn green when register-form is successfully submitted
         const step2Indicator = document.getElementById('step2');
-        const virtoConnect = document.getElementById('virtoConnect');
         virtoConnect.addEventListener('register-success', async function() {
             await register();
             step2Indicator.classList.add('completed');
@@ -354,7 +354,6 @@
             const extrinsicInput = document.getElementById('extrinsic-input').value.trim();
 
             if (extrinsicInput) {
-                // TODO: Add logic to sign the extrinsic using the SDK
                 console.log('Extrinsic to sign:', extrinsicInput);
                 await remark(extrinsicInput);
                 step4Indicator.classList.add('completed');
@@ -364,68 +363,32 @@
         });
 
         async function startSession() {
+            const demoLabel = document.getElementById('demo-label');
+            demoLabel.textContent = 'Initializing connection...';
+
             try {
-                const resp = await fetch('http://localhost:3000/start-chopsticks', {
+                const resp = await fetch('http://3.84.6.234:3000/start-chopsticks', {
                     method: 'POST'
                 });
                 if (!resp.ok) {
                     throw new Error('Error al iniciar chopsticks');
                 }
                 const data = await resp.json();
-                // data.port = 10000 + data.port;
+                data.port = 10000 + data.port;
                 sessionId = data.sessionId;
                 console.log(`Sesión iniciada. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
 
                 
-                wsControl = new WebSocket(`ws://localhost:3000/?sessionId=${sessionId}`);
+                wsControl = new WebSocket(`ws://3.84.6.234:3000/?sessionId=${sessionId}`);
                 wsControl.onopen = () => console.log('WS control abierto');
                 wsControl.onclose = () => console.log('WS control cerrado');
 
-                sdk = new SDK({
-                    federate_server: "http://localhost:5000",
-                    provider_url: `ws://localhost:${data.port}`,
-                    config: {
-                        wallet: "polkadotjs"
-                    }
-                });
-
+                virtoConnect.setAttribute('provider-url', `ws://3.84.6.234:${data.port}`);
+                console.log('Provider URL set to:', virtoConnect.getAttribute('provider-url'))
             } catch (err) {
                 console.log('Error startSession: ' + err.message);
             }
-        }
-
-        async function register() {
-            if (!sessionId) {
-                console.log('No hay sesión. Primero inicia.');
-                return;
-            }
-            try {
-                const user = {
-                    profile: {
-                        id: sessionId,
-                        name: "John",
-                        displayName: sessionId,
-                    },
-                    metadata: {},
-                };
-                const result = await sdk.auth.register(user);
-                console.log("Result register", result)
-            } catch (err) {
-                console.log('Error membership: ' + err.message);
-            }
-        }
-
-        async function connect() {
-            if (!sessionId) {
-                console.log('No hay sesión. Primero inicia.');
-                return;
-            }
-            try {
-                const result = await sdk.auth.connect(sessionId);
-                console.log("Result connect", result)
-            } catch (err) {
-                console.log('Error connect: ' + err.message);
-            }
+            demoLabel.textContent = 'Connection ready';
         }
 
         async function remark(extrinsicInput) {
@@ -435,11 +398,11 @@
             }
             try {
                 const command = {
-                    "url":"ws://localhost:12281/system/remark",
+                    "url":"ws://3.84.6.234:12281/system/remark",
                     "body": "{}",
                     "hex": extrinsicInput
                 }
-                const result = await sdk.auth.sign(sessionId, command);
+                const result = await virtoConnect.sdk.auth.sign(sessionId, command);
                 console.log("Result sign", result)
             } catch (err) {
                 console.log('Error remark: ' + err.message);
