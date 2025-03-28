@@ -9,10 +9,11 @@ export const signSendAndWait = (
 ) =>
   new Promise<ISubmittableResult>((resolve, reject) =>
     tx.signAndSend(signer, (result) => {
+      console.debug("SIGN SEND CALLBACK", result.toHuman());
       switch (true) {
         case result.isError:
           return reject(result.status);
-        case result.isInBlock:
+        case result.isFinalized:
           return resolve(result);
         case result.isWarning:
           console.warn(result.toHuman(true));
