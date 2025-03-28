@@ -1,0 +1,44 @@
+name: Sube Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sube/**'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Ensure access to npmjs
+        run: npm whoami --registry https://registry.npmjs.org/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Config git user
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Install dependencies
+        working-directory: lib/sube/sube-js
+        run: npm ci
+
+      - name: Build
+        working-directory: lib/sube/sube-js
+        run: npm run build
+
+      - name: Publish
+        working-directory: lib/sube/sube-js
+        run: |
+          npm version prerelease --preid=alpha
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
