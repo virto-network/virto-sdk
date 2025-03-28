@@ -21,7 +21,7 @@ pub struct SubeBuilder<'a, Body, Signer> {
     metadata: Option<Metadata>,
 }
 
-impl<'a> Default for SubeBuilder<'a, (), ()> {
+impl Default for SubeBuilder<'_, (), ()> {
     fn default() -> Self {
         SubeBuilder {
             url: None,
