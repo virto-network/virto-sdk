@@ -3,8 +3,7 @@ name: Libwallet Publish
 on:
   push:
     branches: [main]
-    paths:
-      - 'lib/libwallet/**'
+    paths: ['lib/libwallet/**']
 
 jobs:
   publish:
