@@ -8,6 +8,7 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-node@v2
@@ -46,7 +47,14 @@ jobs:
       - name: Publish
         working-directory: lib/libwallet/js
         run: |
-          npm version patch
+          VERSION_OUTPUT=$(npm version patch -m "chore: bump version to %s")
+
+          echo "New version: $VERSION_OUTPUT"
+
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to $VERSION_OUTPUT"
+          git push origin main
+
           npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
