@@ -1,6 +1,6 @@
 on: 
   pull_request:
-    paths: ['libwallet/**']
+    paths: ['lib/libwallet/**']
 
 name: Libwallet
 
