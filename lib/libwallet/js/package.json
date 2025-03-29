@@ -10,7 +10,7 @@
   "main": "./dist/pkg/libwallet_js.js",
   "types": "./dist/pkg/libwallet_js.d.ts",
   "files": [
-    "dist/pkg/"
+    "dist/"
   ],
   "exports": {
     ".": {
