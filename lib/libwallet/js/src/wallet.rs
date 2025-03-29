@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::from_value;
 use wasm_bindgen::prelude::*;
 
-
 use libwallet::{vault::Simple, Signer, Wallet, Account};
 
 #[derive(Serialize, Deserialize)]
