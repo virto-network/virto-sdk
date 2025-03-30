@@ -1,16 +1,16 @@
 {
   "name": "@virtonetwork/libwallet",
-  "version": "1.0.4",
+  "version": "1.0.2",
   "description": "Exposes libwallet to be used on Javascript environments",
   "type": "module",
   "scripts": {
-    "build": "wasm-pack build --target bundler --out-dir dist/pkg --features js,vault_simple",
+    "build": "wasm-pack build --target bundler --out-dir dist/pkg --features js,vault_simple && rm -f dist/pkg/.gitignore",
     "test": "node test/index.js"
   },
   "main": "./dist/pkg/libwallet_js.js",
   "types": "./dist/pkg/libwallet_js.d.ts",
   "files": [
-    "dist/pkg/"
+    "dist/"
   ],
   "exports": {
     ".": {
