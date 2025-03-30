@@ -3,13 +3,12 @@ name: SDK Publish
 on:
   push:
     branches: [main]
-    paths:
-      - 'sdk/**'
+    paths: ['sdk/**']
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-node@v2
@@ -50,9 +49,21 @@ jobs:
         working-directory: sdk/js
         run: npm ci
 
-      - name: Publish SDK
-        if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
         working-directory: sdk/js
-        run: just -f sdk/js/justfile publish
+        run: npm run build
+
+      - name: Publish SDK
+        working-directory: sdk/js
+        run: |
+          VERSION_OUTPUT=$(npm version prerelease --preid=alpha -m "chore: bump version to %s")
+
+          echo "New version: $VERSION_OUTPUT"
+
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to $VERSION_OUTPUT"
+          git push origin main
+          
+          npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

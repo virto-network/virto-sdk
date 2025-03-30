@@ -11,27 +11,6 @@ jobs:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
       
-      - name: Install Rust
-        run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Install wasm-pack
-        run: |
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Build libwallet
-        run: |
-          cd lib/libwallet/js
-          npm ci
-          npm run build
-
-      - name: Build sube
-        run: |
-          cd lib/sube/sube-js
-          npm ci
-          npm run build
-
       - name: Check SDK
         working-directory: sdk/js
         run: just check
@@ -42,15 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
-
-      - name: Install Rust
-        run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Install wasm-pack
-        run: |
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Install Puppeteer dependencies
         run: |
@@ -80,18 +50,6 @@ jobs:
             libappindicator3-1 \
             libu2f-udev \
             libvulkan1
-
-      - name: Build libwallet
-        run: |
-          cd lib/libwallet/js
-          npm ci
-          npm run build
-
-      - name: Build sube
-        run: |
-          cd lib/sube/sube-js
-          npm ci
-          npm run build
 
       - name: Test SDK
         working-directory: sdk/js
