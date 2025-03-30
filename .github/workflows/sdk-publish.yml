@@ -1,0 +1,69 @@
+name: SDK Publish
+
+on:
+  push:
+    branches: [main]
+    paths: ['sdk/**']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Clean package-lock.json (if exists)
+        working-directory: sdk/js
+        run: |
+          if [ -f package-lock.json ]; then
+            if npm run | grep -q 'clean'; then npm run clean; fi
+          fi
+
+      - name: Cache node modules
+        uses: actions/cache@v2
+        env:
+          cache-name: cache-node-modules
+        with:
+          path: sdk/js/node_modules
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('sdk/js/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ env.cache-name }}-
+            ${{ runner.os }}-build-
+            ${{ runner.os }}-
+
+      - name: Ensure access to npmjs
+        run: npm whoami --registry https://registry.npmjs.org/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Config git user
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Install dependencies
+        working-directory: sdk/js
+        run: npm ci
+
+      - name: Build
+        working-directory: sdk/js
+        run: npm run build
+
+      - name: Publish SDK
+        working-directory: sdk/js
+        run: |
+          VERSION_OUTPUT=$(npm version prerelease --preid=alpha -m "chore: bump version to %s")
+
+          echo "New version: $VERSION_OUTPUT"
+
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to $VERSION_OUTPUT"
+          git push origin main
+          
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
