@@ -11,6 +11,7 @@ npm install @virto-network/sdk
 ## Features
 
 - WebAuthn registration flow
+- Sign extrinsics
 - TypeScript support with generic types for user profiles and metadata
 
 ## Usage
