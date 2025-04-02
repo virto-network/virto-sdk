@@ -6,6 +6,7 @@ import { WalletType } from "./factory/walletFactory";
 
 interface SDKOptions {
     federate_server: string;
+    provider_url: string;
     config: {
         wallet: WalletType;
     };
@@ -19,7 +20,7 @@ export default class SDK {
         subeFn: SubeFn,
         jsWalletFn: JsWalletBuilder
     ) {
-        const factory = new SimpleWalletFactory(subeFn, jsWalletFn);
+        const factory = new SimpleWalletFactory(subeFn, jsWalletFn, options.provider_url);
         const manager = new SessionManager(factory);
         this._auth = new Auth(options.federate_server, manager, options.config.wallet);
     }

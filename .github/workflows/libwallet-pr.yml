@@ -1,6 +1,6 @@
 on: 
   pull_request:
-    paths: ['libwallet/**']
+    paths: ['lib/libwallet/**']
 
 name: Libwallet
 
@@ -10,7 +10,18 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
+
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          source "$HOME/.cargo/env"
+
       - name: Check
-        run: just -f lib/libwallet/justfile check
+        working-directory: lib/libwallet
+        run: just check
+
       - name: Lint
-        run: just -f lib/libwallet/justfile lint
+        working-directory: lib/libwallet
+        run: just lint
+

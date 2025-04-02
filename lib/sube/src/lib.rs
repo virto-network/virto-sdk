@@ -82,15 +82,15 @@ async fn query<'m>(
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
     let pallet = meta
         .pallet_by_name(&pallet)
-        .ok_or_else(|| Error::PalletNotFound(pallet))?;
+        .ok_or(Error::PalletNotFound(pallet))?;
 
     if item_or_call == "_constants" {
-        let const_name = keys.pop().ok_or_else(|| Error::MissingConstantName)?;
+        let const_name = keys.pop().ok_or(Error::MissingConstantName)?;
         let const_meta = pallet
             .constants
             .iter()
             .find(|c| c.name == const_name)
-            .ok_or_else(|| Error::ConstantNotFound(const_name))?;
+            .ok_or(Error::ConstantNotFound(const_name))?;
 
         return Ok(Response::Value(Value::new(
             const_meta.value.clone(),
@@ -132,8 +132,8 @@ async fn query<'m>(
                     })
                     .collect::<Vec<Value<'m>>>();
 
-                let value = data.map_or(None, |data| {
-                    Some(Value::new(data.to_vec(), key_res.ty, &meta.types))
+                let value = data.map(|data| {
+                    Value::new(data.to_vec(), key_res.ty, &meta.types)
                 });
                 (keys, value)
             })
@@ -183,7 +183,7 @@ where
     let (pallet, item_or_call, _keys) = parse_uri(path).ok_or(Error::BadInput)?;
     let pallet = meta
         .pallet_by_name(&pallet)
-        .ok_or_else(|| Error::PalletNotFound(pallet))?;
+        .ok_or(Error::PalletNotFound(pallet))?;
     let calls_ty = pallet.calls.as_ref().ok_or(Error::CallNotFound)?.ty.id;
 
     log::debug!("calls_ty: {:?}", calls_ty);

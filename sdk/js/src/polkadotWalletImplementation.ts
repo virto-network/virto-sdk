@@ -12,9 +12,11 @@ export class PolkadotWalletImplementation implements IWalletImplementation {
     private mnemonic: string = "";
     private isInitialized: boolean = false;
     private initPromise: Promise<void>;
+    private providerUrl: string;
 
-    constructor(mnemonic: string | null = null) {
+    constructor(mnemonic: string | null = null, providerUrl: string) {
         this.initPromise = this.initialize(mnemonic);
+        this.providerUrl = providerUrl;
     }
 
     private async initialize(mnemonic: string | null): Promise<void> {
@@ -22,9 +24,9 @@ export class PolkadotWalletImplementation implements IWalletImplementation {
             await cryptoWaitReady();
             
             const keyring = new Keyring({ type: "sr25519", ss58Format: 2 });
-            console.log({ mnemonic });
+            console.debug({ mnemonic });
             const m = mnemonic ? mnemonic : mnemonicGenerate();
-            console.log({ m });
+            console.debug({ m });
             this.mnemonic = m;
             this.signer = keyring.addFromUri(m);
             this.isInitialized = true;
@@ -55,12 +57,12 @@ export class PolkadotWalletImplementation implements IWalletImplementation {
             await this.unlock();
         }
 
-        const wsProvider = new WsProvider("ws://localhost:12281");
+        const wsProvider = new WsProvider(this.providerUrl);
         const api = await ApiPromise.create({ provider: wsProvider });
-        console.log({ command })
+        console.debug({ command })
         const extrinsic = api.tx(hexToU8a(command.hex));
 
-        console.log({ signer: this.getAddress() })
+        console.debug({ signer: await this.getAddress() })
         let result = await signSendAndWait(extrinsic, this.signer);
 
         if (!result) {

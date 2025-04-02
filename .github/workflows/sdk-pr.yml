@@ -1,0 +1,56 @@
+on: 
+  pull_request:
+    paths: ['sdk/js/**']
+
+name: sdk
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: extractions/setup-just@v2
+      
+      - name: Check SDK
+        working-directory: sdk/js
+        run: just check
+
+  test:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v2
+      - uses: extractions/setup-just@v2
+
+      - name: Install Puppeteer dependencies
+        run: |
+          apt-get update && apt-get install -y \
+            libnss3 \
+            libatk-bridge2.0-0 \
+            libatk1.0-0 \
+            libcups2 \
+            libdrm2 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxrandr2 \
+            libgbm1 \
+            libasound2 \
+            libpangocairo-1.0-0 \
+            libx11-xcb1 \
+            libgtk-3-0 \
+            libxshmfence1 \
+            libxfixes3 \
+            libxext6 \
+            libxcb1 \
+            libx11-6 \
+            libxss1 \
+            lsb-release \
+            wget \
+            fonts-liberation \
+            libappindicator3-1 \
+            libu2f-udev \
+            libvulkan1
+
+      - name: Test SDK
+        working-directory: sdk/js
+        run: just test

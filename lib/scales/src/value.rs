@@ -98,7 +98,7 @@ impl<'a> Value<'a> {
     }
 }
 
-impl<'a> Serialize for Value<'a> {
+impl Serialize for Value<'_> {
     fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -259,11 +259,11 @@ fn sequence_size(data: &[u8]) -> (usize, usize) {
     (
         match len {
             1 => (data[0] >> 2).into(),
-            2 => u16::from(data[0] >> 2 | data[1] << 6).into(),
-            4 => ((data[0] as u32) >> 2
-                | (data[1] as u32) << 6
-                | (data[2] as u32) << 14
-                | (data[3] as u32) << 22)
+            2 => u16::from((data[0] >> 2) | (data[1] << 6)).into(),
+            4 => (((data[0] as u32) >> 2)
+                | ((data[1] as u32) << 6) 
+                | ((data[2] as u32) << 14)
+                | ((data[3] as u32) << 22))
                 .try_into()
                 .unwrap(),
             _ => todo!(),
@@ -272,14 +272,14 @@ fn sequence_size(data: &[u8]) -> (usize, usize) {
     )
 }
 
-impl<'reg> AsRef<[u8]> for Value<'reg> {
+impl AsRef<[u8]> for Value<'_> {
     fn as_ref(&self) -> &[u8] {
         self.data.as_ref()
     }
 }
 
 #[cfg(feature = "codec")]
-impl<'reg> codec::Encode for Value<'reg> {
+impl codec::Encode for Value<'_> {
     fn size_hint(&self) -> usize {
         self.data.len()
     }
@@ -288,7 +288,7 @@ impl<'reg> codec::Encode for Value<'reg> {
     }
 }
 
-impl<'reg> core::fmt::Debug for Value<'reg> {
+impl core::fmt::Debug for Value<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -301,7 +301,7 @@ impl<'reg> core::fmt::Debug for Value<'reg> {
 }
 
 #[cfg(feature = "json")]
-impl<'reg> core::fmt::Display for Value<'reg> {
+impl core::fmt::Display for Value<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,

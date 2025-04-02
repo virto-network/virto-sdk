@@ -1,0 +1,60 @@
+name: Libwallet Publish
+
+on:
+  push:
+    branches: [main]
+    paths: ['lib/libwallet/**']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: Ensure access to npmjs
+        run: npm whoami --registry https://registry.npmjs.org/
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Config git user
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          source "$HOME/.cargo/env"
+
+      - name: Install dependencies
+        working-directory: lib/libwallet/js
+        run: npm ci
+
+      - name: Install wasm-pack
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build
+        working-directory: lib/libwallet/js
+        run: npm run build
+
+      - name: Publish
+        working-directory: lib/libwallet/js
+        run: |
+          VERSION_OUTPUT=$(npm version patch -m "chore: bump version to %s")
+
+          echo "New version: $VERSION_OUTPUT"
+
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to $VERSION_OUTPUT"
+          git push origin main
+
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

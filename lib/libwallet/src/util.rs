@@ -72,7 +72,7 @@ impl Pin {
 }
 
 // Use 4 chars long hex string as pin. i.e. "ABCD", "1234"
-impl<'a> From<&'a str> for Pin {
+impl From<&str> for Pin {
     fn from(s: &str) -> Self {
         let l = s.len().min(Pin::LEN);
         let chars = s
