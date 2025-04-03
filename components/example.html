@@ -283,7 +283,8 @@
                 </div>
                 <div class="card-content">
                     <div class="toggle-container">
-                        <span id="demo-label">Demo Mode</span>                        <virto-switch id="demo-switch"></virto-switch>
+                        <span id="demo-label">Demo Mode</span>
+                        <virto-switch id="demo-switch"></virto-switch>
                     </div>
                     <div class="center">
                         <div class="demo-label">Demo</div>
@@ -310,6 +311,7 @@
        // import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.3/dist/esm/sdk.js";
         let sessionId = null;
         let wsControl = null;
+        let sdk = null;
 
        const virtoConnect = document.getElementById('virtoConnect');
 
@@ -327,8 +329,6 @@
         const step1Indicator = document.getElementById('step1');
         demoSwitch.addEventListener('change', async function() {
             await startSession()
-
-            step1Indicator.classList.toggle('completed', this.checked);
         });
 
         // Step 2: Register - Turn green when register-form is successfully submitted
@@ -384,11 +384,14 @@
                 wsControl.onclose = () => console.log('WS control cerrado');
 
                 virtoConnect.setAttribute('provider-url', `ws://3.84.6.234:${data.port}`);
-                console.log('Provider URL set to:', virtoConnect.getAttribute('provider-url'))
+                console.log('Provider URL set to:', virtoConnect.getAttribute('provider-url'));
+                step1Indicator.classList.add('completed');
+                demoLabel.textContent = 'Connection ready';
             } catch (err) {
                 console.log('Error startSession: ' + err.message);
+                step1Indicator.classList.remove('completed');
+                demoLabel.textContent = 'Not able to connect.';
             }
-            demoLabel.textContent = 'Connection ready';
         }
 
         async function remark(extrinsicInput) {
