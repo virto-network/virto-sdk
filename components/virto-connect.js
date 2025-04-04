@@ -223,53 +223,6 @@ export class VirtoConnect extends HTMLElement {
       return;
     }
 
-    // Check if user is already registered
-    // try {
-    //   console.log('Attempting to check registration for username:', username);
-    //   const isRegistered = await this.sdk.auth.isRegistered(username);
-    //   console.log('isRegistered response:', isRegistered);
-      
-    //   if (isRegistered) {
-    //     console.log(`User ${username} is already registered`);
-    //     this.buttonsSlot.innerHTML = "";
-        
-    //     const errorMsg = document.createElement("div");
-    //     errorMsg.textContent = "This user is already registered. Please sign in instead.";
-        
-    //     const existingErrorMsg = this.contentSlot.querySelector(".error-message");
-    //     if (existingErrorMsg) {
-    //       existingErrorMsg.remove();
-    //     }
-        
-    //     errorMsg.className = "error-message";
-    //     this.contentSlot.appendChild(errorMsg);
-        
-    //     const cancelButton = document.createElement("virto-button");
-    //     cancelButton.setAttribute("label", "Cancel");
-    //     cancelButton.addEventListener("click", () => this.close());
-    //     this.buttonsSlot.appendChild(cancelButton);
-
-    //     const loginButton = document.createElement("virto-button");
-    //     loginButton.setAttribute("label", "Continue with Sign In");
-    //     loginButton.addEventListener("click", () => {
-    //       errorMsg.remove();
-    //       this.currentFormType = "register";
-    //       this.renderCurrentForm();
-    //     });
-    //     this.buttonsSlot.appendChild(loginButton);
-        
-    //     return;
-    //   }
-    // } catch (error) {
-    //   console.error('Error checking registration status:', error);
-    //   console.log('Error message:', error.message);
-    //   console.log('Error stack:', error.stack);
-
-    //   if (error.response) {
-    //     console.log('Raw response from server:', error.response);
-    //   }
-    // }
-
     const user = {
       profile: {
         id: username,
