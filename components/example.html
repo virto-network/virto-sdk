@@ -512,7 +512,7 @@
                                 <virto-button label="Connect to Virto" id="connect-button"></virto-button>
                             </div>
                         </div>
-                        <div id="extrinsic-section0" style="display: none;">
+                        <div id="extrinsic-section" style="display: none;">
                             <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data"
                                 value="0x5404060500073448656c6c6f2c20776f726c64210000"></virto-input>
                             <div id="remark-error"
@@ -538,6 +538,7 @@
             let sessionId = null;
             let username = null;
             let wsControl = null;
+            let host = window.location.host;
 
             document.getElementById('connect-button').addEventListener('click', function () {
                 const virtoConnect = document.getElementById('virtoConnect');
@@ -628,8 +629,6 @@
 
                     try {
                         const command = {
-                            "url": "wss://vc.connect-test.xyz:12281/system/remark",
-                            "body": "{}",
                             "hex": extrinsicInput
                         }
                         const result = await virtoConnect.sdk.auth.sign(username, command);
@@ -654,6 +653,7 @@
             });
 
             async function startSession() {
+                let rpcHost = `wss://${host}`
                 const resp = await fetch('/chopsticks/start-chopsticks', {
                     method: 'POST',
                     credentials: 'include',
@@ -667,7 +667,7 @@
                 console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
 
 
-                wsControl = new WebSocket(`wss://vc.connect-test.xyz:13000/?sessionId=${sessionId}`);
+                wsControl = new WebSocket(`${rpcHost}:13000/?sessionId=${sessionId}`);
                 wsControl.onopen = () => console.log('WS control open');
                 wsControl.onclose = () => console.log('WS control closed');
 
@@ -675,7 +675,7 @@
                 virtoConnect.setSessionId(sessionId);
 
                 // Set the provider URL with the port from the server
-                const providerUrl = `wss://vc.connect-test.xyz:${data.port}`;
+                const providerUrl = `${rpcHost}:${data.port}`;
                 virtoConnect.setAttribute('provider-url', providerUrl);
 
                 step1Indicator.classList.add('completed');
@@ -683,7 +683,7 @@
                 const explorerLink = document.getElementById('explorer-link');
                 const explorerUrl = document.getElementById('explorer-url');
                 if (explorerLink && explorerUrl) {
-                    explorerUrl.href = `https://polkadot.js.org/apps/?rpc=wss://vc.connect-test.xyz:${data.port}#/explorer`;
+                    explorerUrl.href = `https://polkadot.js.org/apps/?rpc=${rpcHost}:${data.port}#/explorer`;
                     explorerLink.style.display = 'block';
                 }
             }
