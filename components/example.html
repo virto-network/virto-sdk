@@ -1,8 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        (function () {
+            const originalFetch = window.fetch;
+            window.fetch = function (input, init = {}) {
+                init.credentials = 'include';
+                return originalFetch(input, init);
+            };
+        })();
+    </script>
     <script type="module" async src="./virto-connect.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +32,7 @@
             --extra-light-green: #DDFBE0;
             --gradient: linear-gradient(180deg, rgba(255, 255, 255, 0.745) 0%, rgba(255, 255, 255, 0.634) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, rgba(86, 201, 96, 0.646) 0%, rgba(198, 235, 199, 0.449) 98.5%);
             --font-primary: Outfit, sans-serif;
-            --font-secondary: Plus Jakarta, sans-serif;  
+            --font-secondary: Plus Jakarta, sans-serif;
         }
 
         * {
@@ -92,7 +102,8 @@
             margin-bottom: 5px;
         }
 
-        .card-title svg, a {
+        .card-title svg,
+        a {
             color: var(--green);
         }
 
@@ -172,10 +183,11 @@
             align-items: flex-start;
             flex-grow: 1;
             gap: 20px;
-            justify-content:space-between;
+            justify-content: space-between;
         }
 
-        #connect-section, #extrinsic-section {
+        #connect-section,
+        #extrinsic-section {
             display: flex;
             flex-direction: column;
             width: 100%;
@@ -227,6 +239,147 @@
             font-weight: 500;
         }
 
+        #spinner {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 9999;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            padding: 10px 15px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: var(--font-primary);
+        }
+
+        .spinner-icon {
+            width: 20px;
+            height: 20px;
+            border: 3px solid var(--green);
+            border-top: 3px solid transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        #spinner-text {
+            font-size: 0.9rem;
+            color: var(--darkslategray);
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 46px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked+.slider {
+            background-color: var(--green);
+        }
+
+        input:checked+.slider:before {
+            transform: translateX(22px);
+        }
+
+
+        @keyframes shake {
+            0% {
+                transform: translateX(0);
+            }
+
+            25% {
+                transform: translateX(-5px);
+            }
+
+            50% {
+                transform: translateX(5px);
+            }
+
+            75% {
+                transform: translateX(-5px);
+            }
+
+            100% {
+                transform: translateX(0);
+            }
+        }
+
+        .highlight-error {
+            animation: shake 0.4s ease;
+            box-shadow: 0 0 10px 2px red;
+            border-radius: 24px;
+        }
+
+        #demo-timer-card {
+            position: relative;
+
+            background-color: #fffbe6;
+            color: #8a4b00;
+            border: 1px solid #ffe58f;
+            border-radius: 8px;
+            padding: 12px 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            font-size: 0.9rem;
+            z-index: 9999;
+            line-height: 1.4;
+            animation: fade-in 0.4s ease-in-out;
+        }
+
+        @keyframes fade-in {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .step-indicator.completed {
+            background-color: #4caf50;
+        }
+
+        h4 {
+            font-weight: 500;
+        }
+
     </style>
 </head>
 <body>
@@ -254,17 +407,32 @@
                 <div class="card-content">
                     <div class="space-y">
                         <p>
-                            <strong>Virto Connect</strong> is a customizable authentication component that allows users to easily sign up and sign in to applications built on the Virto Network.
+                            <strong>Virto Connect</strong> is a customizable authentication component that allows users
+                            to easily sign up and sign in to applications built on the Virto Network.
                         </p>
                         <p>Get started with these steps:</p>
                         <ul class="steps-list">
-                            <li><span class="step-number">1</span>Enable "Demo Mode" to connect to the server<span id="step1" class="step-indicator"></span></li>
-                            <li><span class="step-number">2</span>Register clicking on "Connect to Virto"<span id="step2" class="step-indicator"></span></li>
-                            <li><span class="step-number">3</span>Once you've registered, log in<span id="step3" class="step-indicator"></span></li>
-                            <li><span class="step-number">4</span>You can sign an extrinsic now!<strong>*</strong><span id="step4" class="step-indicator"></span></li>
+                            <li><span class="step-number">1</span>Enable "Demo Mode" to connect to the server<span
+                                    id="step1" class="step-indicator"></span></li>
+                            <li><span class="step-number">2</span>Register clicking on "Connect to Virto"<span
+                                    id="step2" class="step-indicator"></span></li>
+                            <li><span class="step-number">3</span>Once you've registered, log in<span id="step3"
+                                    class="step-indicator"></span></li>
+                            <li><span class="step-number">4</span>You can sign an extrinsic now!<strong>*</strong><span
+                                    id="step4" class="step-indicator"></span></li>
                         </ul>
                     </div>
-                    <h4>If you are a developer and want to know more about what's behind all this, you can <a href="https://ailens-organization.gitbook.io/virto-connect">check our documentation!</a></h4>
+                    <ul class="steps-list">
+                        <li>
+                            <h4>If you are a developer and want to know more about what's behind all this, you can <a
+                                    href="https://ailens-organization.gitbook.io/virto-connect">check our
+                                    documentation!</a></h4>
+                        </li>
+                    </ul>
+                    <div id="demo-timer-card">
+                        ⚠️ This demo session will expire in less than 10 minutes.<br>
+                        All environments reset periodically to free resources.
+                    </div>
                 </div>
             </div>
 
@@ -283,8 +451,11 @@
                 </div>
                 <div class="card-content">
                     <div class="toggle-container">
-                        <span id="demo-label">Demo Mode</span>
-                        <virto-switch id="demo-switch"></virto-switch>
+                        <span>Demo Mode</span>
+                        <label class="switch">
+                            <input type="checkbox" id="demo-switch">
+                            <span class="slider"></span>
+                        </label>
                     </div>
                     <div class="center">
                         <div class="demo-label">Demo</div>
@@ -294,124 +465,201 @@
                                 <virto-button label="Connect to Virto" id="connect-button"></virto-button>
                             </div>
                         </div>
-                        <div id="extrinsic-section" style="display: none;">
-                            <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data" value="0x.."></virto-input>
+                        <div id="extrinsic-section0" style="display: none;">
+                            <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data"
+                                value="0x5404060500073448656c6c6f2c20776f726c64210000"></virto-input>
+                            <div id="remark-error"
+                                style="display: none; color: #d32f2f !important; margin-bottom: 10px;"></div>
                             <div class="button-wrapper">
                                 <virto-button label="Sign Extrinsic" id="sign-extrinsic-button"></virto-button>
                             </div>
                         </div>
+
+                        <h4 id="explorer-link" style="display: none;">If you want to check how this is working, you can
+                            <a id="explorer-url" target="_blank">see explorer!</a>
+                        </h4>
                     </div>
                 </div>
+            </div>
+            <div id="spinner" style="display: none;">
+                <div id="spinner-text">Processing...</div>
+                <div class="spinner-icon"></div>
+            </div>
+            <virto-connect id="virtoConnect" server="/api"></virto-connect>
         </div>
+        <script type="module">
+            let sessionId = null;
+            let username = null;
+            let wsControl = null;
 
-        <virto-connect id="virtoConnect"></virto-connect>
-    </div>
-
-    <script type="module">
-       // import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.3/dist/esm/sdk.js";
-        let sessionId = null;
-        let wsControl = null;
-        let sdk = null;
-
-       const virtoConnect = document.getElementById('virtoConnect');
-
-       document.getElementById('connect-button').addEventListener('click', function() {
-            if (!sessionId) {
-                alert('Please enable Demo Mode first to connect to Virto.');
-                return;
-            } else if (virtoConnect) {
-                virtoConnect.open();
-            }
+            document.getElementById('connect-button').addEventListener('click', function () {
+                const virtoConnect = document.getElementById('virtoConnect');
+                if (virtoConnect) {
+                    virtoConnect.open();
+                }
             });
-        
-        // Step 1: Enable demo mode
-        const demoSwitch = document.getElementById('demo-switch');
-        const step1Indicator = document.getElementById('step1');
-        demoSwitch.addEventListener('change', async function() {
-            await startSession()
-        });
 
-        // Step 2: Register - Turn green when register-form is successfully submitted
-        const step2Indicator = document.getElementById('step2');
-        virtoConnect.addEventListener('register-success', async function() {
-            await register();
-            step2Indicator.classList.add('completed');
-        });
+            // Step 1: Enable demo mode
+            const demoSwitch = document.getElementById('demo-switch');
+            const step1Indicator = document.getElementById('step1');
+            demoSwitch.addEventListener('change', async function () {
+                const isDemoEnable = demoSwitch.checked;
+                if (isDemoEnable) {
+                    try {
+                        showSpinner()
+                        await startSession();
+                        step1Indicator.classList.add('completed');
+                    } catch (error) {
+                        console.error("Failed to start session:", error);
+                        step1Indicator.classList.remove('completed');
+                        alert('Failed to enable the demo mode. Please try again.');
+                        demoSwitch.checked = false;
+                    } finally {
+                    }
+                } else {
+                    step1Indicator.classList.remove('completed');
+                    step2Indicator.classList.remove('completed');
+                    step3Indicator.classList.remove('completed');
+                    step4Indicator.classList.remove('completed');
+                }
+                hideSpinner()
+            });
 
-        // Step 3: Sign in - Turn green when login-form is successfully submitted
-        const step3Indicator = document.getElementById('step3');
-        virtoConnect.addEventListener('login-success', async function() {
-            await connect();
-            step3Indicator.classList.add('completed');
-            document.getElementById('connect-section').style.display = 'none';
-            document.getElementById('extrinsic-section').style.display = 'flex';
-        });
+            // Step 2: Register - Turn green when register-form is successfully submitted
+            const step2Indicator = document.getElementById('step2');
+            const virtoConnect = document.getElementById('virtoConnect');
 
-        // Step 4: Sign a extrinsic
-        const step4Indicator = document.getElementById('step4');
-        const signExtrinsicButton = document.getElementById('sign-extrinsic-button');
-        signExtrinsicButton.addEventListener('click', async function() {
-            const extrinsicInput = document.getElementById('extrinsic-input').value.trim();
+            virtoConnect.addEventListener('register-start', async function (event) {
+                showSpinner()
+            });
 
-            if (extrinsicInput) {
-                console.log('Extrinsic to sign:', extrinsicInput);
-                await remark(extrinsicInput);
-                step4Indicator.classList.add('completed');
-            } else {
-                alert('Please enter extrinsic data to sign.');
-            }
-        });
+            virtoConnect.addEventListener('login-start', async function (event) {
+                showSpinner()
+            });
 
-        async function startSession() {
-            const demoLabel = document.getElementById('demo-label');
-            demoLabel.textContent = 'Initializing connection...';
+            virtoConnect.addEventListener('register-error', async function (event) {
+                hideSpinner();
+                if (!demoSwitch.checked) {
+                    shakeDemoMode();
+                    virtoConnect.close();
+                }
+            });
 
-            try {
-                const resp = await fetch('http://3.84.6.234:3000/start-chopsticks', {
-                    method: 'POST'
+            virtoConnect.addEventListener('login-error', async function (event) {
+                hideSpinner();
+                if (!demoSwitch.checked) {
+                    shakeDemoMode();
+                    virtoConnect.close();
+                }
+            });
+
+            virtoConnect.addEventListener('register-success', async function () {
+                step2Indicator.classList.add('completed');
+                hideSpinner();
+            });
+
+            // Step 3: Sign in - Turn green when login-form is successfully submitted
+            const step3Indicator = document.getElementById('step3');
+            virtoConnect.addEventListener('login-success', async function (event) {
+                username = event.detail.username
+                step3Indicator.classList.add('completed');
+                document.getElementById('connect-section').style.display = 'none';
+                document.getElementById('extrinsic-section').style.display = 'flex';
+                hideSpinner();
+            });
+
+            // Step 4: Sign a extrinsic
+            const step4Indicator = document.getElementById('step4');
+            const signExtrinsicButton = document.getElementById('sign-extrinsic-button');
+            signExtrinsicButton.addEventListener('click', async function () {
+                const extrinsicInput = document.getElementById('extrinsic-input').value.trim();
+                const virtoConnect = document.getElementById('virtoConnect');
+
+                if (extrinsicInput) {
+                    // TODO: Add logic to sign the extrinsic using the SDK
+                    console.log('Extrinsic to sign:', extrinsicInput);
+
+                    try {
+                        const command = {
+                            "url": "wss://vc.connect-test.xyz:12281/system/remark",
+                            "body": "{}",
+                            "hex": extrinsicInput
+                        }
+                        const result = await virtoConnect.sdk.auth.sign(username, command);
+                        console.log("Result sign", result)
+                        step4Indicator.classList.add('completed');
+                    } catch (err) {
+                        const errorMsg = document.getElementById("remark-error");
+                        if (errorMsg) {
+                            errorMsg.textContent = "Signing failed. Please check your extrinsic and try again.";
+                            errorMsg.style.display = "block";
+                        }
+                        console.log('Error remark: ' + err.message);
+                    }
+
+                } else {
+                    const errorMsg = document.getElementById("remark-error");
+                    if (errorMsg) {
+                        errorMsg.textContent = "Please enter extrinsic data to sign.";
+                        errorMsg.style.display = "block";
+                    }
+                }
+            });
+
+            async function startSession() {
+                const resp = await fetch('/chopsticks/start-chopsticks', {
+                    method: 'POST',
+                    credentials: 'include',
                 });
                 if (!resp.ok) {
-                    throw new Error('Error al iniciar chopsticks');
+                    throw new Error('Error starting chopsticks');
                 }
                 const data = await resp.json();
                 data.port = 10000 + data.port;
                 sessionId = data.sessionId;
-                console.log(`Sesión iniciada. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
+                console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
 
-                
-                wsControl = new WebSocket(`ws://3.84.6.234:3000/?sessionId=${sessionId}`);
-                wsControl.onopen = () => console.log('WS control abierto');
-                wsControl.onclose = () => console.log('WS control cerrado');
 
-                virtoConnect.setAttribute('provider-url', `ws://3.84.6.234:${data.port}`);
-                console.log('Provider URL set to:', virtoConnect.getAttribute('provider-url'));
+                wsControl = new WebSocket(`wss://vc.connect-test.xyz:13000/?sessionId=${sessionId}`);
+                wsControl.onopen = () => console.log('WS control open');
+                wsControl.onclose = () => console.log('WS control closed');
+
+                const virtoConnect = document.getElementById('virtoConnect');
+                virtoConnect.setSessionId(sessionId);
+
+                // Set the provider URL with the port from the server
+                const providerUrl = `wss://vc.connect-test.xyz:${data.port}`;
+                virtoConnect.setAttribute('provider-url', providerUrl);
+
                 step1Indicator.classList.add('completed');
-                demoLabel.textContent = 'Connection ready';
-            } catch (err) {
-                console.log('Error startSession: ' + err.message);
-                step1Indicator.classList.remove('completed');
-                demoLabel.textContent = 'Not able to connect.';
-            }
-        }
 
-        async function remark(extrinsicInput) {
-            if (!sessionId) {
-                console.log('No hay sesión. Primero inicia.');
-                return;
-            }
-            try {
-                const command = {
-                    "url":"ws://3.84.6.234:12281/system/remark",
-                    "body": "{}",
-                    "hex": extrinsicInput
+                const explorerLink = document.getElementById('explorer-link');
+                const explorerUrl = document.getElementById('explorer-url');
+                if (explorerLink && explorerUrl) {
+                    explorerUrl.href = `https://polkadot.js.org/apps/?rpc=wss://vc.connect-test.xyz:${data.port}#/explorer`;
+                    explorerLink.style.display = 'block';
                 }
-                const result = await virtoConnect.sdk.auth.sign(sessionId, command);
-                console.log("Result sign", result)
-            } catch (err) {
-                console.log('Error remark: ' + err.message);
             }
-        }
 
-    </script>
+            function shakeDemoMode() {
+                const switchWrapper = document.querySelector('.switch');
+                if (switchWrapper) {
+                    switchWrapper.classList.add('highlight-error');
+                    setTimeout(() => {
+                        switchWrapper.classList.remove('highlight-error');
+                    }, 800);
+                }
+            }
+
+            function showSpinner() {
+                document.getElementById('spinner').style.display = 'flex';
+            }
+
+            function hideSpinner() {
+                document.getElementById('spinner').style.display = 'none';
+            }
+
+        </script>
 </body>
+
 </html>
