@@ -1,22 +1,15 @@
 import { VError } from "./utils/error";
-import { fromBase64 } from "./utils/base64";
-
-export type BaseProfile = {
-  id: string;
-  name: string;
-  displayName: string;
-};
-
-export type User<Profile, Metadata extends Record<string, unknown>> = {
-  profile: Profile;
-  metadata: Metadata;
-};
+import { arrayBufferToBase64Url, fromBase64Url, hexToUint8Array } from "./utils/base64";
+import SessionManager from "./manager";
+import { WalletType } from "./factory/walletFactory";
+import { BaseProfile, Command, User } from "./types";
 
 export default class Auth {
-  baseUrl: string;
-
-  constructor(baseUrl: string) {
-    this.baseUrl = baseUrl;
+  constructor(
+    private readonly baseUrl: string,
+    private readonly sessionManager: SessionManager,
+    private readonly defaultWalletType: WalletType
+  ) {
   }
 
   async register<Profile extends BaseProfile, Metadata extends Record<string, unknown>>(
@@ -31,20 +24,40 @@ export default class Auth {
     const attestation = await preRes.json();
     console.log("Pre-register response:", attestation);
 
-    attestation.publicKey.challenge = fromBase64(attestation.publicKey.challenge);
-    attestation.publicKey.user.id = fromBase64(attestation.publicKey.user.id);
+    attestation.publicKey.challenge = hexToUint8Array(attestation.publicKey.challenge);
+    attestation.publicKey.user.id = new Uint8Array(attestation.publicKey.user.id);
 
-    const response = await navigator.credentials.create(attestation);
-    console.log("Credential response:", response);
+    const attestationResponse = await navigator.credentials.create(attestation);
 
-    if (!response) {
+    if (!attestationResponse) {
       throw new VError("E_CANT_CREATE_CREDENTIAL", "Credential creation failed");
     }
+
+    const { id } = attestationResponse;
+    const rawId = (attestationResponse as PublicKeyCredential).rawId;
+    const response = (attestationResponse as PublicKeyCredential).response as AuthenticatorAttestationResponse;
+    const authenticatorData = response.getAuthenticatorData();
+    const clientDataJSON = response.clientDataJSON;
+    const publicKey = response.getPublicKey();
+
+    const credentialData = {
+      id,
+      rawId: arrayBufferToBase64Url(rawId),
+      type: attestationResponse.type,
+      response: {
+        authenticatorData: arrayBufferToBase64Url(authenticatorData),
+        clientDataJSON: arrayBufferToBase64Url(clientDataJSON),
+        publicKey: arrayBufferToBase64Url(publicKey),
+      }
+    };
 
     const postRes = await fetch(`${this.baseUrl}/post-register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: response.id }),
+      body: JSON.stringify({
+        userId: user.profile.id,
+        attestationResponse: credentialData
+      }),
     });
 
     const data = await postRes.json();
@@ -52,6 +65,89 @@ export default class Auth {
 
     return data;
   }
+
+  async connect(userId: string) {
+    const preRes = await fetch(`${this.baseUrl}/pre-connect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    });
+
+    const assertion = await preRes.json();
+    console.log("Connect response:", assertion);
+
+    assertion.publicKey.challenge = hexToUint8Array(assertion.publicKey.challenge);
+
+    if (assertion.publicKey.allowCredentials) {
+      for (const desc of assertion.publicKey.allowCredentials) {
+        desc.id = fromBase64Url(desc.id);
+      }
+    }
+
+    const assertionResponse = await navigator.credentials.get(assertion);
+    console.log("Credential response:", assertionResponse);
+
+    if (!assertionResponse) {
+      throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
+    }
+    const { id, rawId, response } = assertionResponse as PublicKeyCredential;
+    const { authenticatorData, clientDataJSON, signature } = response as AuthenticatorAssertionResponse;
+    const credentialData = {
+      id,
+      rawId: arrayBufferToBase64Url(rawId),
+      type: assertionResponse.type,
+      response: {
+        authenticatorData: arrayBufferToBase64Url(authenticatorData),
+        clientDataJSON: arrayBufferToBase64Url(clientDataJSON),
+        signature: arrayBufferToBase64Url(signature),
+      }
+    }
+
+    const sessionPreparationRes = await fetch(`${this.baseUrl}/pre-connect-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId,
+        assertionResponse: credentialData
+      }),
+    });
+
+    const data = await sessionPreparationRes.json();
+    console.log("Post-connect response:", data);
+
+    const sessionResult = await this.sessionManager.create(data.command, userId, this.defaultWalletType);
+
+    return {
+      ...data,
+      ...sessionResult
+    };
+  }
+
+  async isRegistered(userId: string) {
+    const res = await fetch(`${this.baseUrl}/check-user-registered?username=${encodeURIComponent(userId)}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const data = await res.json();
+    console.log("Is registered response:", data);
+
+    return data.ok;
+  }
+
+  async sign(userId: string, command: Command) {
+    const wallet = this.sessionManager.getWallet(userId);
+    console.log({ wallet })
+    if (!wallet) {
+      throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
+    }
+
+    const signedExtrinsic = await wallet.sign(command);
+
+    return {
+      userId,
+      signedExtrinsic,
+      originalExtrinsic: command.hex
+    };
+  }
 }
-
-

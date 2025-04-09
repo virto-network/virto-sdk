@@ -1,20 +1,21 @@
 {
-  "name": "@virto-network/sdk",
-  "version": "0.0.1",
+  "name": "@virtonetwork/sdk",
+  "version": "0.0.4-alpha.1",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "dev": "vite",
     "build": "npm run build:esm && npm run build:cjs && npm run build:umd",
-    "build:esm": "tsc --project tsconfig.esm.json",
+    "build:esm": "vite build --config vite.config.esm.mts",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:umd": "vite build --config vite.config.mts",
-    "test:e2e": "npm run build && jest --config=jest.config.js"
+    "test": "npm run build && jest --config=jest.config.js",
+    "test:watch": "npm run build && jest --config=jest.config.js --watch"
   },
   "exports": {
-    "require": "./dist/cjs/auth.js",
-    "import": "./dist/esm/auth.js",
-    "default": "./dist/umd/auth.umd.js"
+    "require": "./dist/cjs/sdk.js",
+    "import": "./dist/esm/sdk.js",
+    "default": "./dist/umd/sdk.umd.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
@@ -25,6 +26,17 @@
     "puppeteer": "^24.1.1",
     "ts-jest": "^29.2.5",
     "typescript": "^5.7.3",
-    "vite": "^6.0.11"
+    "vite": "^6.0.11",
+    "vite-plugin-wasm": "^3.4.1"
+  },
+  "dependencies": {
+    "@polkadot/api": "^15.7.2",
+    "@polkadot/keyring": "^13.4.3",
+    "@polkadot/util": "^13.4.3",
+    "@virtonetwork/libwallet": "^1.0.5",
+    "@virtonetwork/sube": "^1.0.0-alpha.2"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
   }
 }

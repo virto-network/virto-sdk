@@ -11,7 +11,6 @@ pub use os::*;
 pub use pass::*;
 pub use simple::*;
 
-
 use crate::account::Account;
 
 /// Abstraction for storage of private keys that are protected by some credentials.
@@ -54,7 +53,7 @@ mod utils {
         }
     }
 
-    impl<'a> Derive for &'a RootAccount {
+    impl Derive for &RootAccount {
         type Pair = any::Pair;
 
         fn derive(&self, path: &str) -> Self::Pair

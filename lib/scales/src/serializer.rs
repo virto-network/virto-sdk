@@ -409,7 +409,7 @@ where
     }
 }
 
-impl<'reg, B> Serializer<'reg, B>
+impl<B> Serializer<'_, B>
 where
     B: BufMut + Debug,
 {
@@ -561,7 +561,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> TypedSerializer<'a, 'reg, B>
+impl<'reg, B> TypedSerializer<'_, 'reg, B>
 where
     B: Debug,
 {
@@ -575,7 +575,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> ser::SerializeMap for TypedSerializer<'a, 'reg, B>
+impl<B> ser::SerializeMap for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
 {
@@ -639,7 +639,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> ser::SerializeSeq for TypedSerializer<'a, 'reg, B>
+impl<B> ser::SerializeSeq for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
 {
@@ -675,7 +675,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> ser::SerializeStruct for TypedSerializer<'a, 'reg, B>
+impl<B> ser::SerializeStruct for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
 {
@@ -694,7 +694,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> ser::SerializeStructVariant for TypedSerializer<'a, 'reg, B>
+impl<B> ser::SerializeStructVariant for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
 {
@@ -713,7 +713,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> ser::SerializeTuple for TypedSerializer<'a, 'reg, B>
+impl<B> ser::SerializeTuple for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
 {
@@ -732,7 +732,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> ser::SerializeTupleStruct for TypedSerializer<'a, 'reg, B>
+impl<B> ser::SerializeTupleStruct for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
 {
@@ -751,7 +751,7 @@ where
     }
 }
 
-impl<'a, 'reg, B> ser::SerializeTupleVariant for TypedSerializer<'a, 'reg, B>
+impl<B> ser::SerializeTupleVariant for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
 {
