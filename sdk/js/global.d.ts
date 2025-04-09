@@ -16,4 +16,3 @@ declare global {
     jsWalletFn(mnemonic?: string): any;
   }
 }
-
