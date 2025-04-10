@@ -54,7 +54,7 @@ const buttonCss = await css`
 `;
 
 export class ButtonVirto extends HTMLElement {
-  static get TAG() { return "virto-button" }
+  static TAG = "virto-button";
   static formAssociated = true;
   #internals;
 

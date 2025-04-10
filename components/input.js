@@ -36,7 +36,7 @@ const inputCss = await css`
 `;
 
 export class InputVirto extends HTMLElement {
-  static get TAG() { return "virto-input" }
+  static TAG = "virto-input";
   static formAssociated = true;
   #internals;
 

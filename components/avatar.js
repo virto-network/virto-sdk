@@ -50,7 +50,7 @@ const avatarCss = await css`
 `;
 
 export class AvatarVirto extends HTMLElement {
-  static get TAG() { return "virto-avatar"; }
+  static TAG = "virto-avatar";
 
   static get observedAttributes() {
     return ["image", "label", "initials", "loading", "shape"];
