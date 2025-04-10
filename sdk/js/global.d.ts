@@ -15,4 +15,7 @@ declare global {
     mockSube<T>(url: string, options?: SubeOptions): Promise<T>;
     jsWalletFn(mnemonic?: string): any;
   }
+  interface Uint8ArrayConstructor {
+    fromBase64(base64: string, options: Record<string, any>): Uint8Array;
+  }
 }

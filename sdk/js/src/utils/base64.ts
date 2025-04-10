@@ -1,5 +1,4 @@
-import fromBase64 from 'es-arraybuffer-base64/Uint8Array.fromBase64';
-
+import 'es-arraybuffer-base64/Uint8Array.fromBase64/auto';
 
 export function hexToUint8Array(hex: string): Uint8Array {
     if (hex.startsWith('0x')) {
@@ -28,5 +27,6 @@ export function toBase64(buffer: Uint8Array): string {
 }
 
 export function fromBase64Url(str: string): ArrayBuffer {
-    return fromBase64(str)
+    return Uint8Array.fromBase64(str, { alphabet: 'base64url' })
 }
+  
