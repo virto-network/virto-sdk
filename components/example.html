@@ -670,10 +670,6 @@
                 document.cookie = `sessionId=${data.sessionId}; path=/`;
 
 
-                wsControl = new WebSocket(`${rpcHost}:13000/?sessionId=${sessionId}`);
-                wsControl.onopen = () => console.log('WS control open');
-                wsControl.onclose = () => console.log('WS control closed');
-
                 const virtoConnect = document.getElementById('virtoConnect');
                 virtoConnect.setSessionId(sessionId);
 
