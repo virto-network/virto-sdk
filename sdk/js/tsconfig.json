@@ -32,6 +32,7 @@
       ]
     },
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "sourceMap": true,
     "typeRoots": [
@@ -49,6 +50,7 @@
     "checkJs": true
   },
   "include": [
+    "types",
     "src/**/*",
     "test/**/*",
     "global.d.ts",

@@ -34,7 +34,8 @@
     "@polkadot/keyring": "^13.4.3",
     "@polkadot/util": "^13.4.3",
     "@virtonetwork/libwallet": "^1.0.5",
-    "@virtonetwork/sube": "^1.0.0-alpha.2"
+    "@virtonetwork/sube": "^1.0.0-alpha.2",
+    "es-arraybuffer-base64": "^1.1.2"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
