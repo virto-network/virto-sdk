@@ -658,6 +658,9 @@
                 const resp = await fetch('/chopsticks/start-chopsticks', {
                     method: 'POST',
                     credentials: 'include',
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
                     body: JSON.stringify({ sessionId })
                 });
                 if (!resp.ok) {
@@ -667,7 +670,7 @@
                 data.port = 10000 + data.port;
                 sessionId = data.sessionId;
                 console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
-                document.cookie = `sessionId=${data.sessionId}; path=/`;
+                document.cookie = `sessionId=${data.sessionId}; path=/; SameSite=Lax`;
 
 
                 const virtoConnect = document.getElementById('virtoConnect');
