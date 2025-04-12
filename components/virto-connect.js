@@ -153,6 +153,7 @@ export class VirtoConnect extends HTMLElement {
           wallet: "polkadotjs"
         }
       });
+      
 
       console.log(`Virto SDK initialized with server: ${this.serverUrl} and provider: ${this.providerUrl}`);
     } catch (error) {

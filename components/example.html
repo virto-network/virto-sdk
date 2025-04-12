@@ -673,6 +673,7 @@
                 // Set the provider URL with the port from the server
                 const providerUrl = `${rpcHost}:${data.port}`;
                 virtoConnect.providerUrl = providerUrl;
+                virtoConnect.serverUrl = `${window.location.protocol}//${window.location.host}/`;
 
                 step1Indicator.classList.add('completed');
 
