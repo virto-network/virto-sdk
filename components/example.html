@@ -654,10 +654,12 @@
 
             async function startSession() {
                 let rpcHost = `wss://${host}`
-                const resp = await fetch('/chopsticks/start-chopsticks', {
+
+                const resp = await fetch('/chopsticks/start', {
                     method: 'POST',
                     credentials: 'include',
                 });
+
                 if (!resp.ok) {
                     throw new Error('Error starting chopsticks');
                 }
