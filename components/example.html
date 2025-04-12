@@ -655,7 +655,7 @@
             async function startSession() {
                 let rpcHost = `wss://${host}`
 
-                const resp = await fetch('/chopsticks/start-hello', {
+                const resp = await fetch('/chopsticks/start', {
                     method: 'POST',
                     credentials: 'include',
                 });
