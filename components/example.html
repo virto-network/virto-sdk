@@ -674,7 +674,7 @@
                 const providerUrl = `${rpcHost}:${data.port}`;
                 virtoConnect.providerUrl = providerUrl;
                 virtoConnect.serverUrl = `${window.location.protocol}//${window.location.host}`;
-
+                document.cookie = `sessionId=${sessionId}; path=/`;
                 step1Indicator.classList.add('completed');
 
                 const explorerLink = document.getElementById('explorer-link');
