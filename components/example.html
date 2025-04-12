@@ -665,7 +665,7 @@
             });
 
             async function startSession(sessionId) {
-                let rpcHost = `wss://${host}`
+                let rpcHost = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${host}`
 
                 const resp = await fetch('/chopsticks/start', {
                     method: 'POST',
