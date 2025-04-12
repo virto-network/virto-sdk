@@ -537,8 +537,8 @@
         <script type="module">
             let sessionId = null;
             let username = null;
-            let wsControl = null;
             let host = window.location.host;
+            console.log("host", host);
 
             document.getElementById('connect-button').addEventListener('click', function () {
                 const virtoConnect = document.getElementById('virtoConnect');
@@ -667,11 +667,6 @@
                 data.port = 10000 + data.port;
                 sessionId = data.sessionId;
                 console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
-
-
-                wsControl = new WebSocket(`${rpcHost}:13000/?sessionId=${sessionId}`);
-                wsControl.onopen = () => console.log('WS control open');
-                wsControl.onclose = () => console.log('WS control closed');
 
                 const virtoConnect = document.getElementById('virtoConnect');
                 virtoConnect.setSessionId(sessionId);
