@@ -549,12 +549,24 @@
             // Step 1: Enable demo mode
             const demoSwitch = document.getElementById('demo-switch');
             const step1Indicator = document.getElementById('step1');
+            // Check for sessionId in cookies on page load
+            const cookies = document.cookie.split(';');
+            for(let cookie of cookies) {
+                const [name, value] = cookie.trim().split('=');
+                if(name === 'sessionId' && value) {
+                    demoSwitch.checked = true;
+                    step1Indicator.classList.add('completed');
+                }
+            }
+
             demoSwitch.addEventListener('change', async function () {
                 const isDemoEnable = demoSwitch.checked;
+                
                 if (isDemoEnable) {
                     try {
                         showSpinner()
-                        await startSession();
+                        const sessionId = prompt("name for your session");
+                        await startSession(sessionId);
                         step1Indicator.classList.add('completed');
                     } catch (error) {
                         console.error("Failed to start session:", error);
@@ -564,6 +576,7 @@
                     } finally {
                     }
                 } else {
+                    document.cookie = "sessionId=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
                     step1Indicator.classList.remove('completed');
                     step2Indicator.classList.remove('completed');
                     step3Indicator.classList.remove('completed');
@@ -651,12 +664,18 @@
                 }
             });
 
-            async function startSession() {
+            async function startSession(sessionId) {
                 let rpcHost = `wss://${host}`
 
                 const resp = await fetch('/chopsticks/start', {
                     method: 'POST',
                     credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        sessionId
+                    })
                 });
 
                 if (!resp.ok) {
