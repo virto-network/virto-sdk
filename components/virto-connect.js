@@ -144,6 +144,9 @@ export class VirtoConnect extends HTMLElement {
     }
 
     try {
+
+      console.log("Initializing SDK with server:", this.serverUrl, "and provider:", this.providerUrl);
+
       this.sdk = new SDK({
         federate_server: this.serverUrl,
         provider_url: this.providerUrl,
