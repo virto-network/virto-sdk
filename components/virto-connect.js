@@ -107,7 +107,6 @@ export class VirtoConnect extends HTMLElement {
     this.buttonsSlot = this.shadowRoot.querySelector("#buttons-slot")
 
     this.currentFormType = "login";
-    this.sessionId = null;
     this.sdk = null;
   }
 
@@ -159,10 +158,6 @@ export class VirtoConnect extends HTMLElement {
     } catch (error) {
       console.error("Failed to initialize SDK:", error);
     }
-  }
-
-  setSessionId(sessionId) {
-    this.sessionId = sessionId;
   }
 
   connectedCallback() {

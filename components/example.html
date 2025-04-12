@@ -537,8 +537,7 @@
         <script type="module">
             let sessionId = null;
             let username = null;
-            let host = window.location.host;
-            console.log("host", host);
+            let host = window.location.hostname;
 
             document.getElementById('connect-button').addEventListener('click', function () {
                 const virtoConnect = document.getElementById('virtoConnect');
@@ -669,11 +668,11 @@
                 console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
 
                 const virtoConnect = document.getElementById('virtoConnect');
-                virtoConnect.setSessionId(sessionId);
+                // virtoConnect.setSessionId(sessionId);
 
                 // Set the provider URL with the port from the server
                 const providerUrl = `${rpcHost}:${data.port}`;
-                virtoConnect.setAttribute('provider-url', providerUrl);
+                virtoConnect.providerUrl = providerUrl;
 
                 step1Indicator.classList.add('completed');
 
