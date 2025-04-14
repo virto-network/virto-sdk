@@ -25,6 +25,8 @@ const dialogTp = html`
 const dialogCss = css`
 :host, wa-dialog {
     font-family: 'Outfit', sans-serif !important;
+    display: block;
+    width: 100%;
 }
 
 * {
@@ -32,36 +34,51 @@ const dialogCss = css`
 }
 
 wa-dialog::part(base) {
-    padding: 1em;
+    padding: 1rem;
     background: var(--gradient);
     border-radius: 12px;
-    box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08),
-                0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
+    box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08), 0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
+    width: min(90%, 500px);
+    margin: 50px auto;
+}
+
+#content-slot {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 0.5rem;
 }
 
 #buttons-slot {
     display: flex;
-    gap: .5em;
+    gap: 0.5rem;
+    margin-top: 1rem;
 }
 
 hr { 
     border-top: 1px solid var(--lightgreen);
+    margin: 1rem 0;
 }
 
 [slot="label"] {
     display: flex;
     align-items: center;
-    gap: 1em;
+    gap: 1rem;
 }
 
 fieldset {
-    border-color: transparent;
-    margin-bottom: 1em;
+    border: none;
+    margin-bottom: 1rem;
     padding: 0;
+    width: 100%;
+}
+
+virto-button {
+  //prevents the odd outline till we solve it from the component itself
+    border: 2px solid transparent;
 }
 
 virto-input:focus {
-  outline: none;
+    outline: none;
 }
 
 `
