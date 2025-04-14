@@ -69,10 +69,8 @@
     const btn = document.querySelector('virto-button[loading]');
     setTimeout(() => btn.removeAttribute('loading'), 3000);
 
-    document.querySelectorAll("virto-avatar").forEach(avatar => {
-      avatar.addEventListener("virto-avatar-error", (e) => {
-        console.log("Avatar error:", e.detail);
-      });
+    document.body.addEventListener("virto-avatar-error", (e) => {
+      console.log("Avatar error from:", e.target, "Details:", e.detail);
     });
   
 </script>
