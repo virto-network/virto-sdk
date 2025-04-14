@@ -410,6 +410,24 @@
         .steps-list li:hover::after {
             opacity: 1;
         }
+
+        .share-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+            color: var(--green);
+        }
+
+        .share-button:hover {
+            background-color: var(--extra-light-green);
+        }
+
+        .share-button svg {
+            vertical-align: middle;
+        }
     </style>
 </head>
 
@@ -503,6 +521,13 @@
                             <input type="checkbox" id="demo-switch">
                             <span class="slider"></span>
                         </label>
+                        <button id="share-session" class="share-button" style="display: none;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                                <polyline points="16 6 12 2 8 6"></polyline>
+                                <line x1="12" y1="2" x2="12" y2="15"></line>
+                            </svg>
+                        </button>
                     </div>
                     <div class="center">
                         <div class="demo-label">Demo</div>
@@ -540,6 +565,46 @@
             let wsControl = null;
             let host = window.location.host;
 
+            const demoSwitch = document.getElementById('demo-switch');
+            const shareButton = document.getElementById('share-session');
+            const step1Indicator = document.getElementById('step1');
+
+            // Step 1: Enable demo mode
+            demoSwitch.addEventListener('change', async function () {
+                const isDemoEnable = demoSwitch.checked;
+                if (isDemoEnable) {
+                    try {
+                        showSpinner()
+                        await startSession();
+                        step1Indicator.classList.add('completed');
+                        shareButton.style.display = 'block';
+                    } catch (error) {
+                        console.error("Failed to start session:", error);
+                        step1Indicator.classList.remove('completed');
+                        alert('Failed to enable the demo mode. Please try again.');
+                        demoSwitch.checked = false;
+                        shareButton.style.display = 'none';
+                    } finally {
+                        hideSpinner()
+                    }
+                } else {
+                    step1Indicator.classList.remove('completed');
+                    step2Indicator.classList.remove('completed');
+                    step3Indicator.classList.remove('completed');
+                    step4Indicator.classList.remove('completed');
+                    shareButton.style.display = 'none';
+                }
+            });
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const sharedSessionId = urlParams.get('sessionId');
+            console.log('Shared sessionId:', sharedSessionId);
+            if (sharedSessionId) {
+                document.cookie = `sessionId=${sharedSessionId}; path=/; SameSite=Lax`;
+                demoSwitch.checked = true;
+                demoSwitch.dispatchEvent(new Event('change'));
+            }
+
             document.getElementById('connect-button').addEventListener('click', function () {
                 const virtoConnect = document.getElementById('virtoConnect');
                 if (virtoConnect) {
@@ -547,31 +612,31 @@
                 }
             });
 
-            // Step 1: Enable demo mode
-            const demoSwitch = document.getElementById('demo-switch');
-            const step1Indicator = document.getElementById('step1');
-            demoSwitch.addEventListener('change', async function () {
-                const isDemoEnable = demoSwitch.checked;
-                if (isDemoEnable) {
-                    try {
-                        const sessionId = prompt("Enter the session ID");
-                        showSpinner()
-                        await startSession(sessionId);
-                        step1Indicator.classList.add('completed');
-                    } catch (error) {
-                        console.error("Failed to start session:", error);
-                        step1Indicator.classList.remove('completed');
-                        alert('Failed to enable the demo mode. Please try again.');
-                        demoSwitch.checked = false;
-                    } finally {
+            shareButton.addEventListener('click', async function() {
+                const currentUrl = new URL(window.location.href);
+                currentUrl.searchParams.set('sessionId', sessionId);
+                const shareUrl = currentUrl.toString();
+                
+                console.log('Sharing URL with sessionId:', shareUrl);
+                
+                const shareData = {
+                    title: 'Virto Connect Demo Session',
+                    text: 'Join my Virto Connect demo session',
+                    url: shareUrl
+                };
+
+                try {
+                    if (navigator.share) {
+                        await navigator.share(shareData);
+                    } else {
+                        await navigator.clipboard.writeText(shareUrl);
+                        alert('Session URL copied to clipboard!');
                     }
-                } else {
-                    step1Indicator.classList.remove('completed');
-                    step2Indicator.classList.remove('completed');
-                    step3Indicator.classList.remove('completed');
-                    step4Indicator.classList.remove('completed');
+                } catch (err) {
+                    console.error('Error sharing:', err);
+                    await navigator.clipboard.writeText(shareUrl);
+                    alert('Session URL copied to clipboard!');
                 }
-                hideSpinner()
             });
 
             // Step 2: Register - Turn green when register-form is successfully submitted
@@ -625,7 +690,6 @@
                 const virtoConnect = document.getElementById('virtoConnect');
 
                 if (extrinsicInput) {
-                    // TODO: Add logic to sign the extrinsic using the SDK
                     console.log('Extrinsic to sign:', extrinsicInput);
 
                     try {
@@ -653,30 +717,43 @@
                 }
             });
 
-            async function startSession(sessionId) {
-                let rpcHost = `wss://${host}`
+            async function startSession() {
+                let rpcHost = `wss://${host}`;
+                
+                const cookies = document.cookie.split(';');
+                const sessionCookie = cookies.find(cookie => cookie.trim().startsWith('sessionId='));
+                const cookieSessionId = sessionCookie ? sessionCookie.split('=')[1] : null;
+                
                 const resp = await fetch('/chopsticks/start-chopsticks', {
                     method: 'POST',
                     credentials: 'include',
                     headers: {
                         "Content-Type": "application/json",
                     },
-                    body: JSON.stringify({ sessionId })
+                    body: cookieSessionId ? JSON.stringify({ sessionId: cookieSessionId }) : undefined
                 });
+                
                 if (!resp.ok) {
                     throw new Error('Error starting chopsticks');
                 }
+                
                 const data = await resp.json();
                 data.port = 10000 + data.port;
-                sessionId = data.sessionId;
-                console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
-                document.cookie = `sessionId=${data.sessionId}; path=/; SameSite=Lax`;
 
+                console.log({data})
+                
+                if (!cookieSessionId) {
+                    sessionId = data.sessionId;
+                    document.cookie = `sessionId=${data.sessionId}; path=/; SameSite=Lax`;
+                } else {
+                    sessionId = cookieSessionId;
+                }
+                
+                console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
 
                 const virtoConnect = document.getElementById('virtoConnect');
                 virtoConnect.setSessionId(sessionId);
 
-                // Set the provider URL with the port from the server
                 const providerUrl = `${rpcHost}:${data.port}`;
                 virtoConnect.setAttribute('provider-url', providerUrl);
 
