@@ -40,13 +40,11 @@ export class InputVirto extends HTMLElement {
   static formAssociated = true;
   #internals;
 
-  static get observedAttributes() {
-    return [
-      "name", "type", "value", "label", "hint", "disabled", "placeholder",
-      "readonly", "required", "pattern", "minlength", "maxlength", "min",
-      "max", "step", "autocomplete", "autofocus"
-    ];
-  }
+  static observedAttributes = [
+    "name", "type", "value", "label", "hint", "disabled", "placeholder",
+    "readonly", "required", "pattern", "minlength", "maxlength", "min",
+    "max", "step", "autocomplete", "autofocus"
+  ];
 
   constructor() {
     super();
