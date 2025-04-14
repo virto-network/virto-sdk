@@ -74,9 +74,7 @@ export class ButtonVirto extends HTMLElement {
     this.waButton.addEventListener("click", this.#handleClick);
   }
 
-  static get observedAttributes() {
-    return ["label", "variant", "disabled", "type", "loading"];
-  }
+  static observedAttributes = ["label", "variant", "disabled", "type", "loading"];
 
   attributeChangedCallback(name, oldValue, newValue) {
     if (!this.waButton) return;
