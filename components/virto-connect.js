@@ -1,5 +1,5 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
-import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
+import("https://cdn.jsdelivr.net/npm/virto-components@0.1.11/dist/virto-components.min.js")
 
 import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@latest/dist/esm/sdk.js";
 
@@ -231,6 +231,7 @@ export class VirtoConnect extends HTMLElement {
     this.buttonsSlot.appendChild(closeButton);
 
     const actionButton = document.createElement("virto-button");
+    actionButton.id = "action-button";
 
     if (this.currentFormType === "register") {
       actionButton.setAttribute("label", "Sign In");
@@ -245,6 +246,7 @@ export class VirtoConnect extends HTMLElement {
 
   async submitFormRegister() {
     const form = this.shadowRoot.querySelector("#register-form");
+    const registerButton = this.shadowRoot.querySelector('#action-button');
     const formData = new FormData(form);
     const username = formData.get("username");
 
@@ -252,6 +254,7 @@ export class VirtoConnect extends HTMLElement {
     console.log("Username from FormData:", username);
 
     this.dispatchEvent(new CustomEvent('register-start', { bubbles: true }));
+    registerButton.setAttribute("loading", "");
 
     // Check if user is already registered
     try {
@@ -346,11 +349,16 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (registerButton) {
+         registerButton.removeAttribute("loading");
+      }
     }
   }
 
   async submitFormLogin() {
     const form = this.shadowRoot.querySelector("#login-form");
+    const loginButton = this.shadowRoot.querySelector("#action-button");
     const formData = new FormData(form);
     const username = formData.get("username");
 
@@ -363,8 +371,10 @@ export class VirtoConnect extends HTMLElement {
     }
 
     this.dispatchEvent(new CustomEvent('login-start', { bubbles: true }));
-
+    loginButton.setAttribute("loading", "");
+  
     try {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
       const result = await this.sdk.auth.connect(username);
       this.dispatchEvent(new CustomEvent('login-success', { bubbles: true }));
       console.log('Login successful:', result);
@@ -403,6 +413,10 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (loginButton) {
+        loginButton.removeAttribute('loading');
+      }
     }
   }
 
@@ -453,9 +467,7 @@ export class VirtoConnect extends HTMLElement {
     }
   }
 
-  static get observedAttributes() {
-    return ["id", "logo", "form-type", "server", "provider-url"]
-  }
+  static observedAttributes = ["id", "logo", "form-type", "server", "provider-url"];
 }
 
 await customElements.whenDefined("wa-dialog")

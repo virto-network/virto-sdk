@@ -539,9 +539,11 @@
             let username = null;
             let wsControl = null;
             let host = window.location.host;
+            const virtoConnect = document.getElementById('virtoConnect');
+            const connectButton = document.getElementById('connect-button');
+            connectButton.setAttribute("disabled", "");
 
             document.getElementById('connect-button').addEventListener('click', function () {
-                const virtoConnect = document.getElementById('virtoConnect');
                 if (virtoConnect) {
                     virtoConnect.open();
                 }
@@ -555,6 +557,7 @@
                 if (isDemoEnable) {
                     try {
                         showSpinner()
+                        connectButton.toggleAttribute("disabled");
                         await startSession();
                         step1Indicator.classList.add('completed');
                     } catch (error) {
@@ -562,6 +565,7 @@
                         step1Indicator.classList.remove('completed');
                         alert('Failed to enable the demo mode. Please try again.');
                         demoSwitch.checked = false;
+                        connectButton.toggleAttribute("disabled");
                     } finally {
                     }
                 } else {
@@ -575,7 +579,6 @@
 
             // Step 2: Register - Turn green when register-form is successfully submitted
             const step2Indicator = document.getElementById('step2');
-            const virtoConnect = document.getElementById('virtoConnect');
 
             virtoConnect.addEventListener('register-start', async function (event) {
                 showSpinner()
@@ -621,7 +624,6 @@
             const signExtrinsicButton = document.getElementById('sign-extrinsic-button');
             signExtrinsicButton.addEventListener('click', async function () {
                 const extrinsicInput = document.getElementById('extrinsic-input').value.trim();
-                const virtoConnect = document.getElementById('virtoConnect');
 
                 if (extrinsicInput) {
                     // TODO: Add logic to sign the extrinsic using the SDK
