@@ -248,7 +248,9 @@ export class VirtoConnect extends HTMLElement {
     this.buttonsSlot.appendChild(closeButton);
 
     const actionButton = document.createElement("virto-button");
-
+    actionButton.classList.add("action-button");
+    console.log(actionButton.classList)
+    
     if (this.currentFormType === "register") {
       actionButton.setAttribute("label", "Sign In");
       actionButton.addEventListener("click", async () => await this.submitFormLogin());
@@ -263,12 +265,15 @@ export class VirtoConnect extends HTMLElement {
   async submitFormRegister() {
     const form = this.shadowRoot.querySelector("#register-form");
     const formData = new FormData(form);
+    const registerButton = this.shadowRoot.querySelector('.action-button');
     const username = formData.get("username");
 
     console.log("Name from FormData:", formData.get("name"));
     console.log("Username from FormData:", username);
 
     this.dispatchEvent(new CustomEvent('register-start', { bubbles: true }));
+    registerButton.setAttribute("loading", "");
+    registerButton.setAttribute("disabled", "");
 
     // Check if user is already registered
     try {
@@ -363,12 +368,18 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (registerButton) {
+        registerButton.removeAttribute("loading");
+        registerButton.removeAttribute("disabled");
+      }  
     }
   }
 
   async submitFormLogin() {
     const form = this.shadowRoot.querySelector("#login-form");
     const formData = new FormData(form);
+    const loginButton = this.shadowRoot.querySelector(".action-button");
     const username = formData.get("username");
 
     if (!this.sdk || !this.sdk.auth) {
@@ -380,6 +391,8 @@ export class VirtoConnect extends HTMLElement {
     }
 
     this.dispatchEvent(new CustomEvent('login-start', { bubbles: true }));
+    loginButton.setAttribute("loading", "");
+    loginButton.setAttribute("disabled", "");
 
     try {
       const result = await this.sdk.auth.connect(username);
@@ -420,6 +433,11 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (loginButton) {
+        loginButton.removeAttribute('loading');
+        loginButton.removeAttribute('disabled');
+      }  
     }
   }
 
