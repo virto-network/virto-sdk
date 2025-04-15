@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Dropdown Example</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            font-family: Outfit, sans-serif;
+        }
+
+        body > *, body {
+            padding: 12px;
+        }
+
+    </style>
+</head>
+<body>
+
+<h2>Avatar</h2>
+
+<virto-avatar label="Default Avatar"></virto-avatar>
+<virto-avatar initials="JD" label="John Doe"></virto-avatar>
+<virto-avatar shape="rounded-square" label="Rounded Square Avatar"></virto-avatar>
+<virto-avatar shape="square" initials="JD" label="John Doe"></virto-avatar>
+<!-- Tests that the error when the image doesnt load works -->
+<virto-avatar image="https://picum.photos/id/237/200/300"></virto-avatar>
+
+<h2>Buttons</h2>
+
+<virto-button label="Primary Button" variant="primary"></virto-button>
+<virto-button label="Secondary Button" variant="secondary"></virto-button>
+<virto-button label="Disabled" variant="primary" disabled></virto-button>
+<virto-button label="Disabled Secondary" variant="secondary" disabled></virto-button>
+
+<!-- This checks the submit event and the custom error messages -->
+<form id="login" onsubmit="event.preventDefault(); console.log('Submitted:', Object.fromEntries(new FormData(this)));">
+    <virto-input name="username" pattern="[a-zA-Z0-9_]{3,}" required data-error-message="Use 3+ alphanumeric characters"></virto-input>
+    <virto-input name="email" type="email" required data-error-message="Please enter a valid email (e.g., user@domain.com)"></virto-input>
+    <virto-input name="password" minlength="8" required data-error-message="Password must be 8+ characters"></virto-input>
+    <virto-button label="Login" type="submit" name="submit" value="login"></virto-button>
+  </form>
+
+<virto-button label="Loading" variant="primary" loading></virto-button>
+
+<h2>Input</h2>
+
+<virto-input label="Name" placeholder="Enter your name"></virto-input>
+<virto-input label="Server" pattern="^@[a-zA-Z0-9_]+:[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}$" required></virto-input>
+<virto-input label="Email" type="email" placeholder="Enter your email" required></virto-input>
+<virto-input label="Password" type="password" minlength="8" placeholder="Enter your password"></virto-input>
+<virto-input label="Username" placeholder="Choose a username" required minlength="3" hint="Must be at least 3 characters long"></virto-input>
+<virto-input label="Age" type="number" min="0" max="120" step="1"></virto-input>
+<virto-input label="Birthday" type="date"></virto-input>
+<virto-input label="Bio" placeholder="Tell us about yourself" rows="4"></virto-input>
+<virto-input label="Read-only" value="This cannot be edited" readonly></virto-input>
+<virto-input label="Disabled" value="This input is disabled" disabled></virto-input>
+<virto-input label="Phone" type="tel" pattern="[0-9]{3}-[0-9]{3}-[0-9]{4}" placeholder="123-456-7890"></virto-input>
+<virto-input label="Comment" minlength="10" maxlength="100" placeholder="Enter 10-100 characters"></virto-input>
+<virto-input label="Country" autocomplete="country-name" placeholder="Start typing a country name"></virto-input>
+<virto-input label="Autofocus" placeholder="This input is focused on page load" autofocus></virto-input>
+
+<script type="module">
+    import './main.js';
+
+    const btn = document.querySelector('virto-button[loading]');
+    setTimeout(() => btn.removeAttribute('loading'), 3000);
+
+    document.body.addEventListener("virto-avatar-error", (e) => {
+      console.log("Avatar error from:", e.target, "Details:", e.detail);
+    });
+  
+</script>
+</body>
+</html>
