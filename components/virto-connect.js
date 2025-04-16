@@ -1,5 +1,5 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
-import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
+import("https://cdn.jsdelivr.net/npm/virto-components@0.1.11/dist/virto-components.min.js")
 
 import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@latest/dist/esm/sdk.js";
 
@@ -25,6 +25,8 @@ const dialogTp = html`
 const dialogCss = css`
 :host, wa-dialog {
     font-family: 'Outfit', sans-serif !important;
+    display: block;
+    width: 100%;
 }
 
 * {
@@ -32,36 +34,51 @@ const dialogCss = css`
 }
 
 wa-dialog::part(base) {
-    padding: 1em;
+    padding: 1rem;
     background: var(--gradient);
     border-radius: 12px;
-    box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08),
-                0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
+    box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08), 0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
+    width: min(90%, 500px);
+    margin: 50px auto;
+}
+
+#content-slot {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 0.5rem;
 }
 
 #buttons-slot {
     display: flex;
-    gap: .5em;
+    gap: 0.5rem;
+    margin-top: 1rem;
 }
 
 hr { 
     border-top: 1px solid var(--lightgreen);
+    margin: 1rem 0;
 }
 
 [slot="label"] {
     display: flex;
     align-items: center;
-    gap: 1em;
+    gap: 1rem;
 }
 
 fieldset {
-    border-color: transparent;
-    margin-bottom: 1em;
+    border: none;
+    margin-bottom: 1rem;
     padding: 0;
+    width: 100%;
+}
+
+virto-button {
+  //prevents the odd outline till we solve it from the component itself
+    border: 2px solid transparent;
 }
 
 virto-input:focus {
-  outline: none;
+    outline: none;
 }
 
 `
@@ -231,7 +248,8 @@ export class VirtoConnect extends HTMLElement {
     this.buttonsSlot.appendChild(closeButton);
 
     const actionButton = document.createElement("virto-button");
-
+    actionButton.classList.add("action-button");
+    
     if (this.currentFormType === "register") {
       actionButton.setAttribute("label", "Sign In");
       actionButton.addEventListener("click", async () => await this.submitFormLogin());
@@ -246,12 +264,15 @@ export class VirtoConnect extends HTMLElement {
   async submitFormRegister() {
     const form = this.shadowRoot.querySelector("#register-form");
     const formData = new FormData(form);
+    const registerButton = this.shadowRoot.querySelector('.action-button');
     const username = formData.get("username");
 
     console.log("Name from FormData:", formData.get("name"));
     console.log("Username from FormData:", username);
 
     this.dispatchEvent(new CustomEvent('register-start', { bubbles: true }));
+    registerButton.setAttribute("loading", "");
+    registerButton.setAttribute("disabled", "");
 
     // Check if user is already registered
     try {
@@ -346,12 +367,18 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (registerButton) {
+        registerButton.removeAttribute("loading");
+        registerButton.removeAttribute("disabled");
+      }  
     }
   }
 
   async submitFormLogin() {
     const form = this.shadowRoot.querySelector("#login-form");
     const formData = new FormData(form);
+    const loginButton = this.shadowRoot.querySelector(".action-button");
     const username = formData.get("username");
 
     if (!this.sdk || !this.sdk.auth) {
@@ -363,6 +390,8 @@ export class VirtoConnect extends HTMLElement {
     }
 
     this.dispatchEvent(new CustomEvent('login-start', { bubbles: true }));
+    loginButton.setAttribute("loading", "");
+    loginButton.setAttribute("disabled", "");
 
     try {
       const result = await this.sdk.auth.connect(username);
@@ -403,6 +432,11 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (loginButton) {
+        loginButton.removeAttribute('loading');
+        loginButton.removeAttribute('disabled');
+      }  
     }
   }
 
@@ -453,9 +487,7 @@ export class VirtoConnect extends HTMLElement {
     }
   }
 
-  static get observedAttributes() {
-    return ["id", "logo", "form-type", "server", "provider-url"]
-  }
+  static observedAttributes = ["id", "logo", "form-type", "server", "provider-url"];
 }
 
 await customElements.whenDefined("wa-dialog")

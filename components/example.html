@@ -539,9 +539,12 @@
             let username = null;
             let wsControl = null;
             let host = window.location.host;
+            const virtoConnect = document.getElementById('virtoConnect');
+            const connectButton = document.getElementById('connect-button');
+            connectButton.setAttribute("disabled", "");
+
 
             document.getElementById('connect-button').addEventListener('click', function () {
-                const virtoConnect = document.getElementById('virtoConnect');
                 if (virtoConnect) {
                     virtoConnect.open();
                 }
@@ -555,6 +558,7 @@
                 if (isDemoEnable) {
                     try {
                         showSpinner()
+                        connectButton.toggleAttribute("disabled");
                         await startSession();
                         step1Indicator.classList.add('completed');
                     } catch (error) {
@@ -562,6 +566,7 @@
                         step1Indicator.classList.remove('completed');
                         alert('Failed to enable the demo mode. Please try again.');
                         demoSwitch.checked = false;
+                        connectButton.toggleAttribute("disabled");
                     } finally {
                     }
                 } else {
@@ -569,14 +574,13 @@
                     step2Indicator.classList.remove('completed');
                     step3Indicator.classList.remove('completed');
                     step4Indicator.classList.remove('completed');
+                    connectButton.toggleAttribute("disabled");
                 }
                 hideSpinner()
             });
 
             // Step 2: Register - Turn green when register-form is successfully submitted
             const step2Indicator = document.getElementById('step2');
-            const virtoConnect = document.getElementById('virtoConnect');
-
             virtoConnect.addEventListener('register-start', async function (event) {
                 showSpinner()
             });
@@ -671,7 +675,6 @@
                 wsControl.onopen = () => console.log('WS control open');
                 wsControl.onclose = () => console.log('WS control closed');
 
-                const virtoConnect = document.getElementById('virtoConnect');
                 virtoConnect.setSessionId(sessionId);
 
                 // Set the provider URL with the port from the server
