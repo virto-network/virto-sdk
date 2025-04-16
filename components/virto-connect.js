@@ -249,7 +249,6 @@ export class VirtoConnect extends HTMLElement {
 
     const actionButton = document.createElement("virto-button");
     actionButton.classList.add("action-button");
-    console.log(actionButton.classList)
     
     if (this.currentFormType === "register") {
       actionButton.setAttribute("label", "Sign In");
