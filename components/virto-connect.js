@@ -1,5 +1,5 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
-import("https://cdn.jsdelivr.net/npm/virto-components@0.1.7/dist/virto-components.min.js")
+import("https://cdn.jsdelivr.net/npm/virto-components@0.1.11/dist/virto-components.min.js")
 
 import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.4-alpha.3/dist/esm/sdk.js";
 
