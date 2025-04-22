@@ -15,7 +15,7 @@ export default class Auth {
   async register<Profile extends BaseProfile, Metadata extends Record<string, unknown>>(
     user: User<Profile, Metadata>
   ) {
-    const preRes = await fetch(`${this.baseUrl}/pre-register`, {
+    const preRes = await fetch(`${this.baseUrl}/attestation`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(user),
@@ -51,7 +51,7 @@ export default class Auth {
       }
     };
 
-    const postRes = await fetch(`${this.baseUrl}/post-register`, {
+    const postRes = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -67,7 +67,7 @@ export default class Auth {
   }
 
   async connect(userId: string) {
-    const preRes = await fetch(`${this.baseUrl}/pre-connect`, {
+    const preRes = await fetch(`${this.baseUrl}/assertion`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId }),
@@ -103,7 +103,7 @@ export default class Auth {
       }
     }
 
-    const sessionPreparationRes = await fetch(`${this.baseUrl}/pre-connect-session`, {
+    const sessionPreparationRes = await fetch(`${this.baseUrl}/connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
