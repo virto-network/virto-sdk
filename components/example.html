@@ -183,7 +183,6 @@
             align-items: flex-start;
             flex-grow: 1;
             gap: 20px;
-            justify-content: space-between;
         }
 
         #connect-section,
@@ -410,6 +409,149 @@
         .steps-list li:hover::after {
             opacity: 1;
         }
+
+        .share-button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            transition: background-color 0.2s;
+            color: var(--green);
+        }
+
+        .share-button:hover {
+            background-color: var(--extra-light-green);
+        }
+
+        .share-button svg {
+            vertical-align: middle;
+        }
+
+        .success-notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: var(--white);
+            color: var(--dark-green);
+            border-left: 4px solid var(--green);
+            padding: 16px 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            max-width: 380px;
+            z-index: 10000;
+            animation: slide-in 0.4s ease-out, fade-out 0.5s ease-out 4s forwards;
+            font-family: var(--font-primary);
+        }
+
+        .error-notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: var(--white);
+            color: #d32f2f;
+            border-left: 4px solid #d32f2f;
+            padding: 16px 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            max-width: 380px;
+            z-index: 10000;
+            animation: slide-in 0.4s ease-out, fade-out 0.5s ease-out 4s forwards;
+            font-family: var(--font-primary);
+        }
+
+        .error-icon {
+            width: 24px;
+            height: 24px;
+            min-width: 24px;
+            background-color: #d32f2f;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .success-icon {
+            width: 24px;
+            height: 24px;
+            min-width: 24px;
+            background-color: var(--green);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .success-content {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .success-title {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .success-message {
+            font-size: 0.9rem;
+            color: var(--darkslategray);
+        }
+
+        @keyframes slide-in {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        @keyframes fade-out {
+            from {
+                opacity: 1;
+            }
+            to {
+                opacity: 0;
+            }
+        }
+
+        .help-button {
+            background-color: var(--white);
+            border: 1px solid var(--green);
+            color: var(--green);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .help-button:hover {
+            background-color: var(--extra-light-green);
+        }
+
+        #help-dialog::part(base) {
+            padding: 1rem;
+            background: var(--white);
+            border-radius: 12px;
+            box-shadow: 0px 2px 3px -1px rgba(26, 26, 26, 0.08), 0px 1px 0px 0px rgba(26, 26, 26, 0.08);
+            width: min(90%, 500px);
+            margin: 50px auto;
+        }
+
+        #help-dialog hr {
+            border: 1px solid var(--green);
+        }
     </style>
 </head>
 
@@ -503,6 +645,13 @@
                             <input type="checkbox" id="demo-switch">
                             <span class="slider"></span>
                         </label>
+                        <button id="share-session" class="share-button" style="display: none;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                                <polyline points="16 6 12 2 8 6"></polyline>
+                                <line x1="12" y1="2" x2="12" y2="15"></line>
+                            </svg>
+                        </button>
                     </div>
                     <div class="center">
                         <div class="demo-label">Demo</div>
@@ -513,18 +662,29 @@
                             </div>
                         </div>
                         <div id="extrinsic-section" style="display: none;">
-                            <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data"
-                                value="0x5404060500073448656c6c6f2c20776f726c64210000"></virto-input>
-                            <div id="remark-error"
-                                style="display: none; color: #d32f2f !important; margin-bottom: 10px;"></div>
+                            <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                                <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data"
+                                    value="0x5404060500073448656c6c6f2c20776f726c64210000" style="flex-grow: 1;"></virto-input>
+                                <button id="help-button" class="help-button" aria-label="Help with extrinsic">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                                        <path d="M12 17h.01"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div id="remark-error" style="display: none; color: #d32f2f !important; margin-bottom: 10px;"></div>
                             <div class="button-wrapper">
                                 <virto-button label="Sign Extrinsic" id="sign-extrinsic-button"></virto-button>
                             </div>
                         </div>
-
+                        
                         <h4 id="explorer-link" style="display: none;">If you want to check how this is working, you can
                             <a id="explorer-url" target="_blank">see explorer!</a>
                         </h4>
+                    <div id="address-info" style="display: none;">
+                        <p id="address-info-text" style="word-break: break-all; font-family: monospace;"></p>
+                    </div>
                     </div>
                 </div>
             </div>
@@ -534,11 +694,94 @@
             </div>
             <virto-connect id="virtoConnect" server="/api"></virto-connect>
         </div>
+        <wa-dialog id="help-dialog" light-dismiss with-header with-footer>
+            <header slot="label">
+                <h2>How to create a custom extrinsic</h2>
+            </header>
+            <hr>
+            <div style="padding: 1rem; max-height: 70vh; overflow-y: auto;">
+                <ol style="padding-left: 20px; line-height: 1.5;">
+                    <li>Click the "Edit in Polkadot.js" button below</li>
+                    <li>In the Polkadot.js interface, click on the <b style="color: var(--green);">Submission</b> tab</li>
+                    <li>Change the <b style="color: var(--green);">"Hello, world!"</b> text to your custom message</li>
+                    <li>Copy the <b style="color: var(--green);">"encoded call data"</b> field that appears at the bottom</li>
+                    <li>Return to this page and paste the code in the input field</li>
+                </ol>
+                <div style="margin-top: 20px;">
+                    <a id="polkadot-link"
+                       target="_blank" 
+                       style="display: inline-flex; align-items: center; gap: 6px; background-color: var(--green); color: white !important; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 500;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                            <polyline points="15 3 21 3 21 9"></polyline>
+                            <line x1="10" y1="14" x2="21" y2="3"></line>
+                        </svg>
+                        Edit in Polkadot.js
+                    </a>
+                </div>
+            </div>
+            <div slot="footer" style="display: flex; justify-content: flex-end;">
+                <virto-button label="Close" id="close-help-dialog"></virto-button>
+            </div>
+        </wa-dialog>
+        <canvas id="confetti-canvas" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 9999; display: none;"></canvas>
         <script type="module">
             let sessionId = null;
             let username = null;
+            let address = null;
             let wsControl = null;
-            let host = window.location.host;
+            let host = window.location.hostname;
+
+            const connectButton = document.getElementById('connect-button');
+            connectButton.setAttribute("disabled", "");
+
+            const demoSwitch = document.getElementById('demo-switch');
+            const shareButton = document.getElementById('share-session');
+            const step1Indicator = document.getElementById('step1');
+
+            // Step 1: Enable demo mode
+            demoSwitch.addEventListener('change', async function () {
+                const isDemoEnable = demoSwitch.checked;
+                if (isDemoEnable) {
+                    try {
+                        showSpinner()
+                        await startSession();
+                        connectButton.toggleAttribute("disabled");
+                        step1Indicator.classList.add('completed');
+                        shareButton.style.display = 'block';
+                    } catch (error) {
+                        console.error("Failed to start session:", error);
+                        step1Indicator.classList.remove('completed');
+                        alert('Failed to enable the demo mode. Please try again.');
+                        demoSwitch.checked = false;
+                        shareButton.style.display = 'none';
+                        connectButton.toggleAttribute("disabled");
+                    } finally {
+                        hideSpinner()
+                    }
+                } else {
+                    step1Indicator.classList.remove('completed');
+                    step2Indicator.classList.remove('completed');
+                    step3Indicator.classList.remove('completed');
+                    step4Indicator.classList.remove('completed');
+                    shareButton.style.display = 'none';
+                    
+                    const explorerLink = document.getElementById('explorer-link');
+                    explorerLink.style.display = 'none';
+
+                    const extrinsicSection = document.getElementById('extrinsic-section');
+                    extrinsicSection.style.display = 'none';
+                }
+            });
+
+            const urlParams = new URLSearchParams(window.location.search);
+            const sharedSessionId = urlParams.get('sessionId');
+            console.log('Shared sessionId:', sharedSessionId);
+            if (sharedSessionId) {
+                document.cookie = `sessionId=${sharedSessionId}; path=/; SameSite=Lax`;
+                demoSwitch.checked = true;
+                demoSwitch.dispatchEvent(new Event('change'));
+            }
 
             document.getElementById('connect-button').addEventListener('click', function () {
                 const virtoConnect = document.getElementById('virtoConnect');
@@ -547,30 +790,31 @@
                 }
             });
 
-            // Step 1: Enable demo mode
-            const demoSwitch = document.getElementById('demo-switch');
-            const step1Indicator = document.getElementById('step1');
-            demoSwitch.addEventListener('change', async function () {
-                const isDemoEnable = demoSwitch.checked;
-                if (isDemoEnable) {
-                    try {
-                        showSpinner()
-                        await startSession();
-                        step1Indicator.classList.add('completed');
-                    } catch (error) {
-                        console.error("Failed to start session:", error);
-                        step1Indicator.classList.remove('completed');
-                        alert('Failed to enable the demo mode. Please try again.');
-                        demoSwitch.checked = false;
-                    } finally {
+            shareButton.addEventListener('click', async function() {
+                const currentUrl = new URL(window.location.href);
+                currentUrl.searchParams.set('sessionId', sessionId);
+                const shareUrl = currentUrl.toString();
+                
+                console.log('Sharing URL with sessionId:', shareUrl);
+                
+                const shareData = {
+                    title: 'Virto Connect Demo Session',
+                    text: 'Join my Virto Connect demo session',
+                    url: shareUrl
+                };
+
+                try {
+                    if (navigator.share) {
+                        await navigator.share(shareData);
+                    } else {
+                        await navigator.clipboard.writeText(shareUrl);
+                        alert('Session URL copied to clipboard!');
                     }
-                } else {
-                    step1Indicator.classList.remove('completed');
-                    step2Indicator.classList.remove('completed');
-                    step3Indicator.classList.remove('completed');
-                    step4Indicator.classList.remove('completed');
+                } catch (err) {
+                    console.error('Error sharing:', err);
+                    await navigator.clipboard.writeText(shareUrl);
+                    alert('Session URL copied to clipboard!');
                 }
-                hideSpinner()
             });
 
             // Step 2: Register - Turn green when register-form is successfully submitted
@@ -601,7 +845,12 @@
                 }
             });
 
-            virtoConnect.addEventListener('register-success', async function () {
+            virtoConnect.addEventListener('register-success', async function (event) {
+                address = event.detail.address;
+                const addressInfo = document.getElementById('address-info');
+                addressInfo.style.display = 'block';
+                const addressInfoText = document.getElementById('address-info-text');
+                addressInfoText.innerHTML = `Address: ${address}`;
                 step2Indicator.classList.add('completed');
                 hideSpinner();
             });
@@ -624,16 +873,20 @@
                 const virtoConnect = document.getElementById('virtoConnect');
 
                 if (extrinsicInput) {
-                    // TODO: Add logic to sign the extrinsic using the SDK
                     console.log('Extrinsic to sign:', extrinsicInput);
 
                     try {
+                        signExtrinsicButton.setAttribute('label', 'Signing...');
+                        signExtrinsicButton.setAttribute('disabled', '');
+                        showSpinner();
+
                         const command = {
                             "hex": extrinsicInput
                         }
                         const result = await virtoConnect.sdk.auth.sign(username, command);
                         console.log("Result sign", result)
                         step4Indicator.classList.add('completed');
+                        showSuccessNotification();
                     } catch (err) {
                         const errorMsg = document.getElementById("remark-error");
                         if (errorMsg) {
@@ -641,6 +894,11 @@
                             errorMsg.style.display = "block";
                         }
                         console.log('Error remark: ' + err.message);
+                        showErrorNotification("Signing failed", "There was an error while signing your extrinsic. Please try again.");
+                    } finally {
+                        signExtrinsicButton.removeAttribute('disabled');
+                        signExtrinsicButton.setAttribute('label', 'Sign Extrinsic');
+                        hideSpinner();
                     }
 
                 } else {
@@ -653,29 +911,51 @@
             });
 
             async function startSession() {
-                let rpcHost = `wss://${host}`
-                const resp = await fetch('/chopsticks/start-chopsticks', {
+                let rpcHost = `wss://${host}`;
+                
+                const cookies = document.cookie.split(';');
+                const sessionCookie = cookies.find(cookie => cookie.trim().startsWith('sessionId='));
+                const cookieSessionId = sessionCookie ? sessionCookie.split('=')[1] : null;
+                
+                const resp = await fetch('/chopsticks/start', {
                     method: 'POST',
                     credentials: 'include',
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: cookieSessionId ? JSON.stringify({ sessionId: cookieSessionId }) : undefined
                 });
+                
                 if (!resp.ok) {
                     throw new Error('Error starting chopsticks');
                 }
+                
                 const data = await resp.json();
                 data.port = 10000 + data.port;
-                sessionId = data.sessionId;
+
+                console.log({data})
+                
+                if (!cookieSessionId) {
+                    sessionId = data.sessionId;
+                    document.cookie = `sessionId=${data.sessionId}; path=/; SameSite=Lax`;
+                } else {
+                    sessionId = cookieSessionId;
+                }
+                
                 console.log(`Session started. sessionId=${sessionId}. RPC Chopsticks=${data.port}`);
 
+                const currentUrl = new URL(window.location.href);
+                currentUrl.searchParams.set('sessionId', sessionId);
+                const newUrl = currentUrl.toString();
+                history.replaceState({}, '', newUrl);
 
-                wsControl = new WebSocket(`${rpcHost}:13000/?sessionId=${sessionId}`);
-                wsControl.onopen = () => console.log('WS control open');
-                wsControl.onclose = () => console.log('WS control closed');
+                await new Promise(resolve => setTimeout(resolve, 1000));
 
                 const virtoConnect = document.getElementById('virtoConnect');
                 virtoConnect.setSessionId(sessionId);
 
-                // Set the provider URL with the port from the server
                 const providerUrl = `${rpcHost}:${data.port}`;
+                wsControl = data.port;
                 virtoConnect.setAttribute('provider-url', providerUrl);
 
                 step1Indicator.classList.add('completed');
@@ -706,6 +986,160 @@
                 document.getElementById('spinner').style.display = 'none';
             }
 
+            const helpButton = document.getElementById('help-button');
+            const helpDialog = document.getElementById('help-dialog');
+            const closeHelpDialog = document.getElementById('close-help-dialog');
+            const polkadotLink = document.getElementById('polkadot-link');
+            
+            function updatePolkadotLink() {
+                if (wsControl) {
+                    const rpcUrl = `wss://${host}:${wsControl}`;
+                    console.log('rpcUrl', rpcUrl)
+                    const encodedRpc = encodeURIComponent(rpcUrl);
+                    const currentExtrinsic = document.getElementById('extrinsic-input').value.trim();
+
+                    polkadotLink.href = `https://polkadot.js.org/apps/?rpc=${encodedRpc}#/extrinsics/decode/${currentExtrinsic}`;
+                }
+            }
+            
+            helpButton.addEventListener('click', function() {
+                console.log('helpButton clicked')
+                updatePolkadotLink();
+                helpDialog.setAttribute('open', '');
+            });
+            
+            closeHelpDialog.addEventListener('click', function() {
+                helpDialog.removeAttribute('open');
+            });
+            
+            document.getElementById('extrinsic-input').addEventListener('input', function() {
+                updatePolkadotLink();
+            });
+
+            function showSuccessNotification() {
+                const notification = document.createElement('div');
+                notification.className = 'success-notification';
+                notification.innerHTML = `
+                    <div class="success-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                    </div>
+                    <div class="success-content">
+                        <div class="success-title">Extrinsic Signed Successfully!</div>
+                        <div class="success-message">Your extrinsic has been successfully signed and sent to the blockchain.</div>
+                    </div>
+                `;
+                document.body.appendChild(notification);
+                
+                showConfetti();
+
+                setTimeout(() => {
+                    notification.classList.add('fade-out');
+                    setTimeout(() => {
+                        document.body.removeChild(notification);
+                    }, 500);
+                }, 4000);
+            }
+
+            function showConfetti() {
+                const canvas = document.getElementById('confetti-canvas');
+                canvas.style.display = 'block';
+                const ctx = canvas.getContext('2d');
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                
+                const colors = ['#24AF37', '#006B0A', '#c6ebc7', '#DDFBE0'];
+                const particleCount = 150;
+                const particles = [];
+                
+                for (let i = 0; i < particleCount; i++) {
+                    particles.push({
+                        x: Math.random() * canvas.width,
+                        y: Math.random() * canvas.height - canvas.height,
+                        size: Math.random() * 8 + 5,
+                        color: colors[Math.floor(Math.random() * colors.length)],
+                        speed: Math.random() * 3 + 2,
+                        rotation: Math.random() * 360,
+                        rotationSpeed: (Math.random() - 0.5) * 2
+                    });
+                }
+                
+                function animate() {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    
+                    let activeParts = 0;
+                    
+                    particles.forEach(p => {
+                        if (p.y < canvas.height) {
+                            activeParts++;
+                            ctx.save();
+                            ctx.translate(p.x, p.y);
+                            ctx.rotate(p.rotation * Math.PI / 180);
+                            ctx.fillStyle = p.color;
+                            ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+                            ctx.restore();
+                            
+                            p.y += p.speed;
+                            p.rotation += p.rotationSpeed;
+                        }
+                    });
+                    
+                    if (activeParts > 0) {
+                        requestAnimationFrame(animate);
+                    } else {
+                        canvas.style.display = 'none';
+                    }
+                }
+                
+                animate();
+                
+                setTimeout(() => {
+                    canvas.style.display = 'none';
+                }, 5000);
+            }
+
+            function showErrorNotification(title, message) {
+                const notification = document.createElement('div');
+                notification.className = 'error-notification';
+                notification.innerHTML = `
+                    <div class="error-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </div>
+                    <div class="success-content">
+                        <div class="success-title">${title}</div>
+                        <div class="success-message">${message}</div>
+                    </div>
+                `;
+                document.body.appendChild(notification);
+
+                setTimeout(() => {
+                    notification.classList.add('fade-out');
+                    setTimeout(() => {
+                        document.body.removeChild(notification);
+                    }, 500);
+                }, 4000);
+            }
+
+            connectButton.addEventListener('mouseenter', function() {
+                const isDemoEnable = demoSwitch.checked;
+                if (!isDemoEnable) {
+                    const switchWrapper = document.querySelector('.switch');
+                    if (switchWrapper) {
+                        switchWrapper.classList.add('highlight-error');
+                    }
+                }
+            });
+
+            connectButton.addEventListener('mouseleave', function() {
+                const switchWrapper = document.querySelector('.switch');
+                if (switchWrapper) {
+                    switchWrapper.classList.remove('highlight-error');
+                }
+            });
         </script>
 </body>
 
