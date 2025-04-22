@@ -60,7 +60,8 @@ export class PolkadotWalletImplementation implements IWalletImplementation {
         const wsProvider = new WsProvider(this.providerUrl);
         const api = await ApiPromise.create({ provider: wsProvider });
         console.debug({ command })
-        const extrinsic = api.tx(hexToU8a(command.hex));
+        const call = api.createType('Call', command.hex); 
+        const extrinsic = api.tx(call);  
 
         console.debug({ signer: await this.getAddress() })
         let result = await signSendAndWait(extrinsic, this.signer);
