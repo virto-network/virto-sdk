@@ -25,6 +25,8 @@ const dialogTp = html`
 const dialogCss = css`
 :host, wa-dialog {
     font-family: 'Outfit', sans-serif !important;
+    display: block;
+    width: 100%;
 }
 
 * {
@@ -32,36 +34,51 @@ const dialogCss = css`
 }
 
 wa-dialog::part(base) {
-    padding: 1em;
+    padding: 1rem;
     background: var(--gradient);
     border-radius: 12px;
-    box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08),
-                0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
+    box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08), 0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
+    width: min(90%, 500px);
+    margin: 50px auto;
+}
+
+#content-slot {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 0.5rem;
 }
 
 #buttons-slot {
     display: flex;
-    gap: .5em;
+    gap: 0.5rem;
+    margin-top: 1rem;
 }
 
 hr { 
     border-top: 1px solid var(--lightgreen);
+    margin: 1rem 0;
 }
 
 [slot="label"] {
     display: flex;
     align-items: center;
-    gap: 1em;
+    gap: 1rem;
 }
 
 fieldset {
-    border-color: transparent;
-    margin-bottom: 1em;
+    border: none;
+    margin-bottom: 1rem;
     padding: 0;
+    width: 100%;
+}
+
+virto-button {
+  //prevents the odd outline till we solve it from the component itself
+    border: 2px solid transparent;
 }
 
 virto-input:focus {
-  outline: none;
+    outline: none;
 }
 
 `
@@ -69,8 +86,8 @@ virto-input:focus {
 const loginFormTemplate = html`
     <form id="register-form">
         <fieldset>
-            <virto-input value="John Doe" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
-            <virto-input value="johndoe" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
+            <virto-input value="" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
+            <virto-input value="" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
         </fieldset>
         <div id="register-error" style="display: none; color: #d32f2f !important; margin-bottom: 10px;"></div>
         <p style="font-size: 0.9rem; color: var(--darkslategray); margin-top: 10px;">
@@ -82,7 +99,7 @@ const loginFormTemplate = html`
 const registerFormTemplate = html`
     <form id="login-form">
         <fieldset>
-            <virto-input value="johndoe" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
+            <virto-input value="" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
         </fieldset>
         <div id="login-error" style="display: none; color: #d32f2f !important; margin-bottom: 10px;"></div>
         <p style="font-size: 0.9rem; color: var(--darkslategray); margin-top: 10px;">
@@ -229,8 +246,9 @@ export class VirtoConnect extends HTMLElement {
     closeButton.setAttribute("label", "Close");
     closeButton.addEventListener("click", () => this.close());
     this.buttonsSlot.appendChild(closeButton);
-
+    
     const actionButton = document.createElement("virto-button");
+    actionButton.id = "action-button";
 
     if (this.currentFormType === "register") {
       actionButton.setAttribute("label", "Sign In");
@@ -245,6 +263,8 @@ export class VirtoConnect extends HTMLElement {
 
   async submitFormRegister() {
     const form = this.shadowRoot.querySelector("#register-form");
+    const registerButton = this.shadowRoot.querySelector("#action-button");
+    console.log("Register button:", registerButton);
     const formData = new FormData(form);
     const username = formData.get("username");
 
@@ -252,6 +272,8 @@ export class VirtoConnect extends HTMLElement {
     console.log("Username from FormData:", username);
 
     this.dispatchEvent(new CustomEvent('register-start', { bubbles: true }));
+    registerButton.setAttribute("loading", "");
+    registerButton.setAttribute("disabled", "");
 
     // Check if user is already registered
     try {
@@ -332,7 +354,9 @@ export class VirtoConnect extends HTMLElement {
       });
       this.buttonsSlot.appendChild(signInBtn);
 
-      this.dispatchEvent(new CustomEvent('register-success', { bubbles: true }));
+      console.log("Address:", result.address);
+
+      this.dispatchEvent(new CustomEvent('register-success', { bubbles: true, detail: { address: result.address } }));
     } catch (error) {
       console.error('Registration failed:', error);
 
@@ -346,13 +370,23 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (registerButton) {
+        registerButton.removeAttribute("loading");
+        registerButton.removeAttribute("disabled");
+      }
     }
   }
 
   async submitFormLogin() {
     const form = this.shadowRoot.querySelector("#login-form");
+    const loginButton = this.shadowRoot.querySelector("#action-button");
+    console.log("Login button:", loginButton);
     const formData = new FormData(form);
     const username = formData.get("username");
+
+    loginButton.setAttribute("loading", "");
+    loginButton.setAttribute("disabled", "");
 
     if (!this.sdk || !this.sdk.auth) {
       const errorMsg = document.createElement("div");
@@ -366,7 +400,6 @@ export class VirtoConnect extends HTMLElement {
 
     try {
       const result = await this.sdk.auth.connect(username);
-      this.dispatchEvent(new CustomEvent('login-success', { bubbles: true }));
       console.log('Login successful:', result);
 
       const successMsg = document.createElement("div");
@@ -403,6 +436,11 @@ export class VirtoConnect extends HTMLElement {
         bubbles: true,
         detail: { error }
       }));
+    } finally {
+      if (loginButton) {
+        loginButton.removeAttribute("loading");
+        loginButton.removeAttribute("disabled");
+      }
     }
   }
 
