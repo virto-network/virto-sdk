@@ -15,12 +15,10 @@ export default class Auth {
   async register<Profile extends BaseProfile, Metadata extends Record<string, unknown>>(
     user: User<Profile, Metadata>
   ) {
-    const preRes = await fetch(`${this.baseUrl}/attestation`, {
-      method: "POST",
+    const preRes = await fetch(`${this.baseUrl}/api/attestation?user=${encodeURIComponent(JSON.stringify(user))}`, {
+      method: "GET",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(user),
     });
-
     const attestation = await preRes.json();
     console.log("Pre-register response:", attestation);
 
@@ -51,12 +49,13 @@ export default class Auth {
       }
     };
 
-    const postRes = await fetch(`${this.baseUrl}/register`, {
+    const postRes = await fetch(`${this.baseUrl}/api/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: user.profile.id,
-        attestationResponse: credentialData
+        attestationResponse: credentialData,
+        blockNumber: attestation.blockNumber
       }),
     });
 
@@ -67,10 +66,9 @@ export default class Auth {
   }
 
   async connect(userId: string) {
-    const preRes = await fetch(`${this.baseUrl}/assertion`, {
-      method: "POST",
+    const preRes = await fetch(`${this.baseUrl}/api/assertion?userId=${encodeURIComponent(userId)}`, {
+      method: "GET",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId }),
     });
 
     const assertion = await preRes.json();
@@ -103,12 +101,13 @@ export default class Auth {
       }
     }
 
-    const sessionPreparationRes = await fetch(`${this.baseUrl}/connect`, {
+    const sessionPreparationRes = await fetch(`${this.baseUrl}/api/connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId,
-        assertionResponse: credentialData
+        assertionResponse: credentialData,
+        blockNumber: assertion.blockNumber
       }),
     });
 
