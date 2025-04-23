@@ -12,15 +12,17 @@ export default class Auth {
   ) {
   }
 
-  async register<Profile extends BaseProfile, Metadata extends Record<string, unknown>>(
-    user: User<Profile, Metadata>
+  async register<Profile extends BaseProfile>(
+    user: User<Profile>
   ) {
-    const preRes = await fetch(`${this.baseUrl}/pre-register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(user),
+    const queryParams = new URLSearchParams({
+      id: user.profile.id,
+      ...(user.profile.name && { name: user.profile.name })
     });
-
+    const preRes = await fetch(`${this.baseUrl}/attestation?${queryParams}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
     const attestation = await preRes.json();
     console.log("Pre-register response:", attestation);
 
@@ -51,12 +53,13 @@ export default class Auth {
       }
     };
 
-    const postRes = await fetch(`${this.baseUrl}/post-register`, {
+    const postRes = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId: user.profile.id,
-        attestationResponse: credentialData
+        attestationResponse: credentialData,
+        blockNumber: attestation.blockNumber
       }),
     });
 
@@ -67,10 +70,9 @@ export default class Auth {
   }
 
   async connect(userId: string) {
-    const preRes = await fetch(`${this.baseUrl}/pre-connect`, {
-      method: "POST",
+    const preRes = await fetch(`${this.baseUrl}/assertion?userId=${userId}`, {
+      method: "GET",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId }),
     });
 
     const assertion = await preRes.json();
@@ -103,12 +105,13 @@ export default class Auth {
       }
     }
 
-    const sessionPreparationRes = await fetch(`${this.baseUrl}/pre-connect-session`, {
+    const sessionPreparationRes = await fetch(`${this.baseUrl}/connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId,
-        assertionResponse: credentialData
+        assertionResponse: credentialData,
+        blockNumber: assertion.blockNumber
       }),
     });
 
@@ -124,7 +127,7 @@ export default class Auth {
   }
 
   async isRegistered(userId: string) {
-    const res = await fetch(`${this.baseUrl}/check-user-registered?username=${encodeURIComponent(userId)}`, {
+    const res = await fetch(`${this.baseUrl}/check-user-registered?userId=${userId}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
