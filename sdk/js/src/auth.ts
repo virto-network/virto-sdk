@@ -19,7 +19,6 @@ export default class Auth {
       id: user.profile.id,
       ...(user.profile.name && { name: user.profile.name })
     });
-    console.log(`${this.baseUrl}/api/attestation?${queryParams}`);
     const preRes = await fetch(`${this.baseUrl}/api/attestation?${queryParams}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
