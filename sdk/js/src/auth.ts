@@ -70,7 +70,7 @@ export default class Auth {
   }
 
   async connect(userId: string) {
-    const preRes = await fetch(`${this.baseUrl}/api/assertion?userId=${encodeURIComponent(userId)}`, {
+    const preRes = await fetch(`${this.baseUrl}/api/assertion?userId=${userId}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
@@ -127,7 +127,7 @@ export default class Auth {
   }
 
   async isRegistered(userId: string) {
-    const res = await fetch(`${this.baseUrl}/check-user-registered?username=${encodeURIComponent(userId)}`, {
+    const res = await fetch(`${this.baseUrl}/check-user-registered?userId=${userId}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
