@@ -38,7 +38,7 @@ export class MockServiceRegister {
         return;
       }
 
-      if (url.includes("/api/attestation") && method === "GET") {
+      if (url.includes("/attestation") && method === "GET") {
         req.respond({
           status: 200,
           headers: this.getCorsHeaders(),
@@ -47,7 +47,7 @@ export class MockServiceRegister {
         return;
       }
 
-      if (url.includes("/api/register") && method === "POST") {
+      if (url.includes("/register") && method === "POST") {
         // Parse the JSON body so we can grab the credential ID
         const postData = req.postData() || "{}";
         try {
@@ -67,7 +67,7 @@ export class MockServiceRegister {
         return;
       }
 
-      if (url.includes("/api/assertion") && method === "GET") {
+      if (url.includes("/assertion") && method === "GET") {
         req.respond({
           status: 200,
           headers: this.getCorsHeaders(),
@@ -76,7 +76,7 @@ export class MockServiceRegister {
         return;
       }
 
-      if (url.includes("/api/connect") && method === "POST") {
+      if (url.includes("/connect") && method === "POST") {
         req.respond({
           status: 200,
           headers: this.getCorsHeaders(),
@@ -90,26 +90,6 @@ export class MockServiceRegister {
           status: 200,
           headers: this.getCorsHeaders(),
           body: JSON.stringify({ ok: true })
-        });
-        return;
-      }
-
-      if (url.endsWith("/pre-connect-session") && method === "POST") {
-        req.respond({
-          status: 200,
-          headers: this.getCorsHeaders(),
-          body: JSON.stringify({
-            success: true,
-            command: {
-              url: "https://kreivo.io/pass/authenticate",
-              body: {
-                deviceId: "0x01020304",
-                credential: {},
-                duration: null
-              },
-              hex: "0x01020304"
-            },
-          })
         });
         return;
       }

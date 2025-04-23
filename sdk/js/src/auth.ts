@@ -19,7 +19,7 @@ export default class Auth {
       id: user.profile.id,
       ...(user.profile.name && { name: user.profile.name })
     });
-    const preRes = await fetch(`${this.baseUrl}/api/attestation?${queryParams}`, {
+    const preRes = await fetch(`${this.baseUrl}/attestation?${queryParams}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
@@ -53,7 +53,7 @@ export default class Auth {
       }
     };
 
-    const postRes = await fetch(`${this.baseUrl}/api/register`, {
+    const postRes = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -70,7 +70,7 @@ export default class Auth {
   }
 
   async connect(userId: string) {
-    const preRes = await fetch(`${this.baseUrl}/api/assertion?userId=${userId}`, {
+    const preRes = await fetch(`${this.baseUrl}/assertion?userId=${userId}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
@@ -105,7 +105,7 @@ export default class Auth {
       }
     }
 
-    const sessionPreparationRes = await fetch(`${this.baseUrl}/api/connect`, {
+    const sessionPreparationRes = await fetch(`${this.baseUrl}/connect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
