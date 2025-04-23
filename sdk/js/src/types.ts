@@ -1,12 +1,10 @@
 export type BaseProfile = {
     id: string;
-    name: string;
-    displayName: string;
+    name?: string;
 };
 
-export type User<Profile, Metadata extends Record<string, unknown>> = {
+export type User<Profile> = {
     profile: Profile;
-    metadata: Metadata;
 };
 
 export type Command = {

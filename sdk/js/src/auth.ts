@@ -12,10 +12,15 @@ export default class Auth {
   ) {
   }
 
-  async register<Profile extends BaseProfile, Metadata extends Record<string, unknown>>(
-    user: User<Profile, Metadata>
+  async register<Profile extends BaseProfile>(
+    user: User<Profile>
   ) {
-    const preRes = await fetch(`${this.baseUrl}/api/attestation?user=${encodeURIComponent(JSON.stringify(user))}`, {
+    const queryParams = new URLSearchParams({
+      id: user.profile.id,
+      ...(user.profile.name && { name: user.profile.name })
+    });
+    console.log(`${this.baseUrl}/api/attestation?${queryParams}`);
+    const preRes = await fetch(`${this.baseUrl}/api/attestation?${queryParams}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
