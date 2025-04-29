@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Custom Dropdown Example</title>
+    <title>Virto Components</title>
+    <link rel="stylesheet" href="path/to/font-awesome/css/font-awesome.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@100..900&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap" rel="stylesheet">
     <style>
         * {
@@ -62,6 +63,32 @@
 <virto-input label="Comment" minlength="10" maxlength="100" placeholder="Enter 10-100 characters"></virto-input>
 <virto-input label="Country" autocomplete="country-name" placeholder="Start typing a country name"></virto-input>
 <virto-input label="Autofocus" placeholder="This input is focused on page load" autofocus></virto-input>
+
+<h3>Notifications</h3>
+
+<virto-notification variant="success" appearance="accent" size="small">
+  Your changes have been saved.
+</virto-notification>
+
+<virto-notification>
+  Default notification with inherited styles.
+</virto-notification>
+
+<virto-notification variant="warning">
+  Session expired.
+</virto-notification>
+
+<virto-notification variant="danger" size="large">
+  Account deleted.
+</virto-notification>
+
+<virto-notification variant="neutral" size="medium">
+  Neutral notification.
+</virto-notification>
+
+<virto-notification variant="brand" appearance="plain">
+  Welcome to our platform!
+</virto-notification>
 
 <script type="module">
     import './main.js';
