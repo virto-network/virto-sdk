@@ -4,7 +4,7 @@ import { globalStyles } from "./globalStyles.js";
 const notificationTp = html`
   <wa-callout>
     <wa-icon slot="icon" hidden></wa-icon>
-    <span slot="message"></span>
+    <slot></slot>
   </wa-callout>
 `;
 
@@ -80,38 +80,36 @@ const notificationCss = await css`
   }
 `;
 
-export class NotificationVirto extends HTMLElement {
-  static get TAG() { return "virto-notification"; }
+const variantToIcon = {
+    'brand': 'circle-info',
+    'neutral': 'gear',
+    'success': 'circle-check',
+    'warning': 'triangle-exclamation',
+    'danger': 'circle-exclamation',
+    'inherit': 'circle-info'
+  };
 
-  static get observedAttributes() {
-    return ["variant", "appearance", "size", "message", "icon"];
-  }
+export class NotificationVirto extends HTMLElement {
+  static TAG = "virto-notification";
+  static observedAttributes = ["variant", "appearance", "size", "message", "icon"];
 
   constructor() {
     super();
-    const shadow = this.attachShadow({ mode: "open" });
-    shadow.append(notificationTp.content.cloneNode(true));
-    shadow.adoptedStyleSheets = [globalStyles, notificationCss];
+    this.attachShadow({ mode: "open" });
+    this.shadowRoot.appendChild(notificationTp.content.cloneNode(true));
+    this.shadowRoot.adoptedStyleSheets = [globalStyles, notificationCss];
 
-    this.callout = shadow.querySelector("wa-callout");
-    this.icon = shadow.querySelector("wa-icon");
-    this.message = shadow.querySelector("span[slot='message']");
-    this.syncInitialAttributes();
+    this.callout = this.shadowRoot.querySelector("wa-callout");
+    this.icon = this.shadowRoot.querySelector("wa-icon");
+    //this.callout.textContent = this.getAttribute("message") || "Notification";
+    this.#syncAttributes();
   }
 
   attributeChangedCallback(name, oldValue, newValue) {
     if (oldValue === newValue || !this.callout) return;
 
-    if (name === "message") {
-      this.message.textContent = newValue || "Notification";
-    } else if (name === "icon") {
-      if (newValue) {
-        this.icon.removeAttribute("hidden");
-        this.icon.setAttribute("name", newValue);
-        this.icon.setAttribute("variant", "regular"); // Default to regular
-      } else {
-        this.icon.setAttribute("hidden", "");
-      }
+    if (name === "icon" || name === "variant") {
+      this.updateIcon();
     } else {
       if (newValue !== null) {
         this.callout.setAttribute(name, newValue);
@@ -121,8 +119,32 @@ export class NotificationVirto extends HTMLElement {
     }
   }
 
-  syncInitialAttributes() {
-    this.constructor.observedAttributes.forEach((name) => {
+  updateIcon() {
+    const iconAttr = this.getAttribute("icon");
+    const variant = this.getAttribute("variant") || 'inherit';
+    console.log(`Updating icon: variant=${variant}, iconAttr=${iconAttr}`);
+    if (iconAttr) {
+      console.log(`Setting icon to ${iconAttr}`);
+      this.icon.setAttribute("name", iconAttr);
+      this.icon.setAttribute("variant", "regular");
+      this.icon.removeAttribute("hidden");
+    } else {
+      const defaultIcon = variantToIcon[variant];
+      console.log(`Setting default icon to ${defaultIcon}`);
+      if (defaultIcon) {
+        this.icon.setAttribute("name", defaultIcon);
+        this.icon.setAttribute("variant", "regular");
+        this.icon.removeAttribute("hidden");
+      } else {
+        console.log("No icon set, hiding icon");
+        this.icon.setAttribute("hidden", "");
+      }
+    }
+  }
+
+  #syncAttributes() {
+    const attrs = ["variant", "appearance", "size", "message", "icon"];
+    attrs.forEach((name) => {
       const value = this.getAttribute(name);
       this.attributeChangedCallback(name, null, value);
     });
