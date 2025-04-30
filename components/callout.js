@@ -3,7 +3,6 @@ import { globalStyles } from "./globalStyles.js";
 
 const notificationTp = html`
   <wa-callout>
-    <wa-icon slot="icon" hidden></wa-icon>
     <slot></slot>
   </wa-callout>
 `;
@@ -80,18 +79,9 @@ const notificationCss = await css`
   }
 `;
 
-const variantToIcon = {
-    'brand': 'circle-info',
-    'neutral': 'gear',
-    'success': 'circle-check',
-    'warning': 'triangle-exclamation',
-    'danger': 'circle-exclamation',
-    'inherit': 'circle-info'
-  };
-
 export class NotificationVirto extends HTMLElement {
   static TAG = "virto-notification";
-  static observedAttributes = ["variant", "appearance", "size", "message", "icon"];
+  static observedAttributes = ["variant", "appearance", "size"];
 
   constructor() {
     super();
@@ -100,54 +90,6 @@ export class NotificationVirto extends HTMLElement {
     this.shadowRoot.adoptedStyleSheets = [globalStyles, notificationCss];
 
     this.callout = this.shadowRoot.querySelector("wa-callout");
-    this.icon = this.shadowRoot.querySelector("wa-icon");
-    //this.callout.textContent = this.getAttribute("message") || "Notification";
-    this.#syncAttributes();
-  }
-
-  attributeChangedCallback(name, oldValue, newValue) {
-    if (oldValue === newValue || !this.callout) return;
-
-    if (name === "icon" || name === "variant") {
-      this.updateIcon();
-    } else {
-      if (newValue !== null) {
-        this.callout.setAttribute(name, newValue);
-      } else {
-        this.callout.removeAttribute(name);
-      }
-    }
-  }
-
-  updateIcon() {
-    const iconAttr = this.getAttribute("icon");
-    const variant = this.getAttribute("variant") || 'inherit';
-    console.log(`Updating icon: variant=${variant}, iconAttr=${iconAttr}`);
-    if (iconAttr) {
-      console.log(`Setting icon to ${iconAttr}`);
-      this.icon.setAttribute("name", iconAttr);
-      this.icon.setAttribute("variant", "regular");
-      this.icon.removeAttribute("hidden");
-    } else {
-      const defaultIcon = variantToIcon[variant];
-      console.log(`Setting default icon to ${defaultIcon}`);
-      if (defaultIcon) {
-        this.icon.setAttribute("name", defaultIcon);
-        this.icon.setAttribute("variant", "regular");
-        this.icon.removeAttribute("hidden");
-      } else {
-        console.log("No icon set, hiding icon");
-        this.icon.setAttribute("hidden", "");
-      }
-    }
-  }
-
-  #syncAttributes() {
-    const attrs = ["variant", "appearance", "size", "message", "icon"];
-    attrs.forEach((name) => {
-      const value = this.getAttribute(name);
-      this.attributeChangedCallback(name, null, value);
-    });
   }
 }
 

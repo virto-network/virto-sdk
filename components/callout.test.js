@@ -32,8 +32,24 @@ describe('Rendering', () => {
     });
     
 
-    it('should create a Shadow DOM root')
-    it('Shadow DOM should contain the <wa-callout> element')
+    it('should create a Shadow DOM root', async () => {
+        const hasShadowRoot = await browser.execute(() => {
+            const component = document.querySelector('virto-notification');
+            return !!component.shadowRoot;
+        });
+    
+        expect(hasShadowRoot).toBe(true);
+    });
+
+    it('Shadow DOM should contain the <wa-callout> element', async () => {
+        const tagName = await browser.execute(() => {
+            const component = document.querySelector('virto-notification');
+            const callout = component.shadowRoot?.querySelector('wa-callout');
+            return callout?.tagName.toLowerCase() || null;
+        });
+    
+        expect(tagName).toBe('wa-callout');
+    });
 
     it('should test if the virto-notification component was defined', async () => {
         const isDefined = await browser.execute(() => {
