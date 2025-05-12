@@ -1,0 +1,26 @@
+{
+    "name": "virto-components",
+    "version": "1.0.0",
+    "description": "Base Components Library",
+    "main": "main.js",
+    "type": "module",
+    "scripts": {
+      "test": "echo \"Error: no test specified\" && exit 1",
+      "wdio": "wdio run ./wdio.conf.js"
+    },
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+      "@wdio/browser-runner": "^9.12.7",
+      "@wdio/cli": "^9.12.7",
+      "@wdio/local-runner": "^9.12.7",
+      "@wdio/mocha-framework": "^9.12.6",
+      "@wdio/spec-reporter": "^9.12.6",
+      "@wdio/visual-service": "^7.0.0"
+    },
+    "dependencies": {
+      "lodash.merge": "^4.6.2",
+      "p-iteration": "^1.1.8"
+    }
+  }
+  
