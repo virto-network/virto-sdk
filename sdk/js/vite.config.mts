@@ -7,6 +7,9 @@ export default defineConfig({
     port: 3000,
   },
   plugins: [wasm()],
+  ssr: {
+    external: ['jsonwebtoken']
+  },
   build: {
     outDir: "dist/umd",
     lib: {
@@ -14,6 +17,6 @@ export default defineConfig({
       name: "SDK",
       fileName: "sdk",
       formats: ["umd"]
-    },
+    }
   }
 });

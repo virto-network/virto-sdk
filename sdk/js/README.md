@@ -13,16 +13,23 @@ npm install @virto-network/sdk
 - WebAuthn registration flow
 - Sign extrinsics
 - TypeScript support with generic types for user profiles and metadata
+- Split client/server architecture support
 
 ## Usage
 
-### Registration Flow
+### Standard Registration Flow
 
 ```ts
-import Auth from '@virto-network/sdk';
+import { SDK } from '@virto-network/sdk';
 
-// Initialize the Auth client
-const auth = new Auth('https://your-api-endpoint');
+// Initialize the SDK
+const sdk = new SDK({
+  federate_server: 'https://your-api-endpoint',
+  provider_url: 'https://your-provider-url',
+  config: {
+    wallet: WalletType.POLKADOT
+  }
+}, subeFn, jsWalletBuilder);
 
 // Define your user object
 const user = {
@@ -39,11 +46,83 @@ const user = {
 
 // Register the user
 try {
-  const result = await auth.register(user);
+  const result = await sdk.auth.register(user);
   console.log('Registration successful:', result);
 } catch (error) {
   console.error('Registration failed:', error);
 }
+```
+
+### Split Client/Server Architecture
+
+For applications that need to split the registration process between client and server:
+
+#### Client-Side (Browser)
+
+```ts
+import { SDK } from '@virto-network/sdk';
+
+// Initialize the client SDK
+const sdk = new SDK({
+  federate_server: 'https://your-api-endpoint',
+  provider_url: 'https://your-provider-url',
+  config: {
+    wallet: WalletType.POLKADOT
+  }
+}, subeFn, jsWalletBuilder);
+
+// Prepare registration on client-side
+async function registerUser(user) {
+  try {
+    // This step uses WebAuthn (navigator.credentials) which only works in browser
+    const preparedData = await sdk.auth.prepareRegistration(user);
+    
+    // Send prepared data to your custom server endpoint
+    const response = await fetch('https://your-server/custom-register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(preparedData)
+    });
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Client-side registration preparation failed:', error);
+  }
+}
+```
+
+#### Server-Side (Node.js)
+
+```ts
+import { ServerSDK } from '@virto-network/sdk';
+
+// Initialize the server SDK
+const serverSdk = new ServerSDK({
+  federate_server: 'https://your-api-endpoint',
+  provider_url: 'https://your-provider-url',
+  config: {
+    wallet: WalletType.POLKADOT,
+    jwt: {
+      secret: process.env.JWT_SECRET || 'your-secret',
+      expiresIn: '10m'
+    }
+  }
+});
+
+// Express endpoint example
+app.post('/custom-register', async (req, res) => {
+  try {
+    // Complete registration process on server-side
+    const preparedData = req.body;
+    const result = await serverSdk.auth.completeRegistration(preparedData);
+    
+    // Return result to client
+    res.json(result);
+  } catch (error) {
+    console.error('Server-side registration completion failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 ```
 
 ## Development
@@ -80,28 +159,78 @@ npm run test:e2e
 
 ## API Reference
 
-### `Auth` Class
+### Client SDK Classes
 
-#### Constructor
+#### `SDK` Class
+
+Main class for browser environments.
+
+#### `Auth` Class
+
+Class for authentication operations in browser environments.
+
+##### Methods
+
+###### `register<Profile, Metadata>`
+
+Complete registration flow in a single call.
 
 ```ts
-constructor(baseUrl: string)
-```
-
-
-#### Methods
-
-##### `register<Profile, Metadata>`
-
-```ts
-async register<Profile extends BaseProfile, Metadata extends Record<string, unknown>>(
-  user: User<Profile, Metadata>
+async register<Profile extends BaseProfile>(
+  user: User<Profile>
 ): Promise<any>
 ```
 
-Parameters:
-- `user`: Object containing user profile and metadata
-  - `profile`: Must extend BaseProfile (id, name, displayName)
-  - `metadata`: Custom metadata object
+###### `prepareRegistration<Profile, Metadata>`
 
-Returns: Promise resolving to the registration response
+Prepares registration data on the client side using WebAuthn.
+
+```ts
+async prepareRegistration<Profile extends BaseProfile>(
+  user: User<Profile>
+): Promise<PreparedRegistrationData>
+```
+
+### Server SDK Classes
+
+#### `ServerSDK` Class
+
+Main class for server (Node.js) environments.
+
+#### `ServerAuth` Class
+
+Class for authentication operations in server environments.
+
+##### Methods
+
+###### `completeRegistration`
+
+Completes the registration process on the server side.
+
+```ts
+async completeRegistration(
+  preparedData: PreparedRegistrationData
+): Promise<any>
+```
+
+###### `isRegistered`
+
+Check if a user is registered.
+
+```ts
+async isRegistered(userId: string): Promise<boolean>
+```
+
+### Shared Types
+
+#### `PreparedRegistrationData`
+
+Data structure prepared by the client to be sent to the server.
+
+```ts
+interface PreparedRegistrationData {
+  userId: string;
+  attestationResponse: PreparedCredentialData;
+  blockNumber: number;
+}
+```

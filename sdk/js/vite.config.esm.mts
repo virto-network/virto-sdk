@@ -7,6 +7,9 @@ export default defineConfig({
     port: 3000,
   },
   plugins: [wasm()],
+  ssr: {
+    external: ['jsonwebtoken']
+  },
   build: {
     outDir: "dist/esm",
     lib: {

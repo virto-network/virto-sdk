@@ -1,5 +1,3 @@
-import 'es-arraybuffer-base64/Uint8Array.fromBase64/auto';
-
 export function hexToUint8Array(hex: string): Uint8Array {
     if (hex.startsWith('0x')) {
         hex = hex.slice(2);
@@ -16,7 +14,7 @@ export function arrayBufferToBase64Url(buffer: any) {
     const bytes = new Uint8Array(buffer);
     let str = btoa(String.fromCharCode(...bytes));
     return str.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-  }
+}
 
 export function toBase64(buffer: Uint8Array): string {
     let binary = "";
@@ -25,8 +23,3 @@ export function toBase64(buffer: Uint8Array): string {
     }
     return btoa(binary);
 }
-
-export function fromBase64Url(str: string): ArrayBuffer {
-    return Uint8Array.fromBase64(str, { alphabet: 'base64url' })
-}
-  

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cliente Virto SDK</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      color: #333;
+    }
+
+    .container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .card {
+      background-color: #f9f9f9;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      margin-bottom: 20px;
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+
+    input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+
+    button {
+      border: none;
+      padding: 10px 15px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 10px;
+      margin-bottom: 10px;
+    }
+
+    .logs {
+      background-color: #f5f5f5;
+      border: 1px solid #ddd;
+      padding: 15px;
+      height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 14px;
+      border-radius: 4px;
+    }
+
+    .logs div {
+      margin-bottom: 5px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 5px;
+    }
+
+    .success {
+      color: green;
+    }
+
+    .error {
+      color: red;
+    }
+
+    .steps {
+      margin-top: 20px;
+    }
+
+    .steps-header {
+      margin-bottom: 10px;
+      font-weight: bold;
+    }
+
+    .card-title {
+      font-size: 1.2em;
+      margin-bottom: 15px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Cliente Virto SDK</h1>
+  <p>Este ejemplo muestra cómo utilizar el SDK de Virto para registrar y conectar usuarios mediante WebAuthn.</p>
+  <div class="card">
+    <div class="card-title">Datos de configuración</div>
+    <div class="form-group">
+      <label for="userId">ID de Usuario:</label>
+      <input type="text" id="userId" placeholder="Ingrese el ID de usuario">
+    </div>
+    <div class="form-group">
+      <label for="userName">Nombre de Usuario (opcional):</label>
+      <input type="text" id="userName" placeholder="Ingrese el nombre de usuario">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Registro de usuario</div>
+    <div class="steps">
+      <div class="steps-header">Registro en dos pasos:</div>
+      <button id="prepareRegistrationButton">1. Preparar registro (cliente)</button>
+      <button id="completeRegistrationButton" disabled>2. Completar registro (servidor)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Conexión de usuario</div>
+
+    <div class="steps">
+      <div class="steps-header">Conexión en dos pasos:</div>
+      <button id="prepareConnectionButton">1. Preparar conexión (cliente)</button>
+      <button id="completeConnectionButton" disabled>2. Completar conexión (servidor)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Firma de comandos</div>
+    <div class="form-group">
+      <label for="commandHex">Comando (formato hexadecimal):</label>
+      <input type="text" id="commandHex" placeholder="0x..." value="0x060500073448656c6c6f2c20776f726c64210000">
+    </div>
+    <button id="signButton">Firmar Comando</button>
+  </div>
+  </div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+
+</html>
