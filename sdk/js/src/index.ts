@@ -6,6 +6,10 @@ export { default as Auth } from './auth';
 export { default as ServerSDK } from './serverSdk';
 export { default as ServerAuth } from './serverAuth';
 
+// Storage interfaces and implementations
+export type { IStorage } from './storage';
+export { LocalStorageImpl, InMemoryImpl } from './storage';
+
 // Shared types
 export type { PreparedCredentialData, PreparedRegistrationData } from './auth';
 export type { PreparedConnectionData } from './serverAuth';

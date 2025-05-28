@@ -283,7 +283,7 @@ export default class Auth {
    * @throws Will throw an error if the wallet cannot be retrieved from the session manager
    */
   async sign(userId: string, command: Command) {
-    const wallet = this.sessionManager.getWallet(userId);
+    const wallet = await this.sessionManager.getWallet(userId);
     console.log({ wallet })
     if (!wallet) {
       throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");

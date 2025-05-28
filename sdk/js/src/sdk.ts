@@ -3,6 +3,7 @@ import SessionManager from "./manager";
 import { SimpleWalletFactory } from "./factory/simpleWalletFactory";
 import { SubeFn, JsWalletBuilder } from "./wallet";
 import { WalletType } from "./factory/walletFactory";
+import { IStorage } from "./storage";
 
 interface SDKOptions {
     federate_server: string;
@@ -18,10 +19,11 @@ export default class SDK {
     constructor(
         options: SDKOptions,
         subeFn: SubeFn,
-        jsWalletFn: JsWalletBuilder
+        jsWalletFn: JsWalletBuilder,
+        storage?: IStorage<any>,
     ) {
         const factory = new SimpleWalletFactory(subeFn, jsWalletFn, options.provider_url);
-        const manager = new SessionManager(factory);
+        const manager = new SessionManager(factory, storage);
         this._auth = new Auth(options.federate_server, manager, options.config.wallet);
     }
 
