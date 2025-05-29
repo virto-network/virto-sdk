@@ -1,15 +1,20 @@
 import SDK from '../../src/sdk';
+import { IndexedDBStorage } from "./storage/IndexedDBStorage";
 
 (async () => {
+  const storage = new IndexedDBStorage('VirtoSessions', 'sessions');
   const sdk = new SDK({
     // Should be a VOS implementation
-    federate_server: "http://localhost:3000",
+    federate_server: "http://localhost:3000/api",
     // Should be a local, test or production url
     provider_url: "ws://localhost:12281",
     config: {
       wallet: "polkadotjs"
     }
-  });
+  }, 
+  () => { throw new Error("SubeFn not needed in polkadotjs"); }, // subeFn
+  () => { throw new Error("JsWalletFn not needed in polkadotjs"); }, // jsWalletFn
+  storage);
 
   document.getElementById('registerButton').addEventListener('click', async () => {
     const userName = document.getElementById('userName').value;

@@ -1,21 +1,25 @@
 import Wallet from "./wallet";
 import { WalletFactory } from "./factory/walletFactory";
 import { Command, WalletType } from "./types";
+import { IStorage, LocalStorageImpl } from "./storage";
 
-interface Session {
+export interface Session {
     userId: string;
     createdAt: number;
     address: string;
-    wallet: Wallet;
+    wallet: Wallet | null;
     walletType: WalletType;
     mnemonic: string;
 }
 
 export default class SessionManager {
-    private sessions: Map<string, Session> = new Map();
+    private storage: IStorage<Session>;
 
-    constructor(private walletFactory: WalletFactory) {
-        this.loadSessions();
+    constructor(
+        private walletFactory: WalletFactory, 
+        storage?: IStorage<Session>
+    ) {
+        this.storage = storage || new LocalStorageImpl<Session>("sessions");
     }
 
     async create(command: Command, userId: string, walletType: WalletType, mnemonic?: string) {
@@ -31,71 +35,50 @@ export default class SessionManager {
             userId,
             createdAt: Date.now(),
             address,
-            wallet,
+            wallet: null as any, // Don't store the wallet object, it will be reconstructed
             walletType,
             mnemonic: walletImpl.getMnemonic()
         };
 
-        this.sessions.set(JSON.stringify(userId), session);
-        this.persistSessions();
+        const key = JSON.stringify(userId);
+        await this.storage.store(key, session);
 
         return {
             ok: true,
-            session
+            session: {
+                ...session,
+                wallet
+            }
         };
     }
 
-    getWallet(userId: string): Wallet | null {
+    async getWallet(userId: string): Promise<Wallet | null> {
         console.log({ userId: JSON.stringify(userId) });
-        console.log({ this: this.sessions });
-        const session = this.sessions.get(JSON.stringify(userId));
+        const key = JSON.stringify(userId);
+        const session = await this.storage.get(key);
         console.log({ session });
-        return session?.wallet || null;
-    }
-
-    getSession(userId: string): Session | undefined {
-        return this.sessions.get(JSON.stringify(userId));
-    }
-
-    getAllSessions(): Session[] {
-        return Array.from(this.sessions.values());
-    }
-
-    removeSession(userId: string): boolean {
-        const removed = this.sessions.delete(JSON.stringify(userId));
-        if (removed) {
-            this.persistSessions();
+        
+        if (!session) {
+            return null;
         }
-        return removed;
+
+        const walletImpl = this.walletFactory.create(session.walletType, session.mnemonic);
+        const wallet = new Wallet(walletImpl);
+        
+        return wallet;
     }
 
-    private persistSessions() {
-        const entries = Array.from(this.sessions.entries());
-        localStorage.setItem("sessions", JSON.stringify(entries));
+    async getSession(userId: string): Promise<Session | null> {
+        const key = JSON.stringify(userId);
+        return await this.storage.get(key);
     }
 
-    private loadSessions() {
-        const saved = localStorage.getItem("sessions");
-        if (!saved) return;
+    async getAllSessions(): Promise<Session[]> {
+        return await this.storage.getAll();
+    }
 
-        const entries: [string, Session][] = JSON.parse(saved);
-
-        for (const [userId, s] of entries) {
-            const walletImpl = this.walletFactory.create(s.walletType, s.mnemonic);
-            const wallet = new Wallet(walletImpl);
-            console.log({ wallet })
-
-            const session: Session = {
-                userId: JSON.parse(userId),
-                createdAt: s.createdAt,
-                address: s.address,
-                wallet,
-                walletType: s.walletType,
-                mnemonic: s.mnemonic
-            };
-
-            const userIdString = JSON.stringify(JSON.parse(userId));
-            this.sessions.set(userIdString, session);
-        }
+    async removeSession(userId: string): Promise<boolean> {
+        const key = JSON.stringify(userId);
+        return await this.storage.remove(key);
     }
 }
