@@ -1,7 +1,8 @@
+import { openDB, IDBPDatabase } from 'idb';
 import { IStorage } from "../../../src/storage";
 
 /**
- * Example IndexedDB implementation for client-side session storage
+ * Example IndexedDB implementation for client-side session storage using the 'idb' package
  * 
  * Usage:
  * ```typescript
@@ -18,110 +19,64 @@ import { IStorage } from "../../../src/storage";
 export class IndexedDBStorage<T> implements IStorage<T> {
     private dbName: string;
     private storeName: string;
-    private db: IDBDatabase | null = null;
+    private dbConnection: IDBPDatabase | null = null;
 
     constructor(dbName: string = 'VirtoSessions', storeName: string = 'sessions') {
         this.dbName = dbName;
         this.storeName = storeName;
     }
 
-    private async openDB(): Promise<IDBDatabase> {
-        if (this.db) {
-            return this.db;
+    private async getDB(): Promise<IDBPDatabase> {
+        if (!this.dbConnection) {
+            const storeName = this.storeName;
+            this.dbConnection = await openDB(this.dbName, 1, {
+                upgrade(db) {
+                    if (!db.objectStoreNames.contains(storeName)) {
+                        db.createObjectStore(storeName, { keyPath: 'id' });
+                    }
+                },
+            });
         }
-
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.dbName, 1);
-
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                this.db = request.result;
-                resolve(request.result);
-            };
-
-            request.onupgradeneeded = (event) => {
-                const db = (event.target as IDBOpenDBRequest).result;
-                if (!db.objectStoreNames.contains(this.storeName)) {
-                    db.createObjectStore(this.storeName, { keyPath: 'id' });
-                }
-            };
-        });
-    }
-
-    private async getTransaction(mode: IDBTransactionMode = 'readonly'): Promise<IDBObjectStore> {
-        const db = await this.openDB();
-        const transaction = db.transaction([this.storeName], mode);
-        return transaction.objectStore(this.storeName);
+        return this.dbConnection;
     }
 
     async store(key: string, session: T): Promise<void> {
-        const store = await this.getTransaction('readwrite');
-        
-        return new Promise((resolve, reject) => {
-            const request = store.put({ id: key, data: session });
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => resolve();
-        });
+        const db = await this.getDB();
+        await db.put(this.storeName, { id: key, data: session });
     }
 
     async get(key: string): Promise<T | null> {
-        const store = await this.getTransaction('readonly');
-        
-        return new Promise((resolve, reject) => {
-            const request = store.get(key);
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                const result = request.result;
-                resolve(result ? result.data : null);
-            };
-        });
+        const db = await this.getDB();
+        const result = await db.get(this.storeName, key);
+        return result ? result.data : null;
     }
 
     async getAll(): Promise<T[]> {
-        const store = await this.getTransaction('readonly');
-        
-        return new Promise((resolve, reject) => {
-            const request = store.getAll();
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                const results = request.result;
-                resolve(results.map((item: any) => item.data));
-            };
-        });
+        const db = await this.getDB();
+        const results = await db.getAll(this.storeName);
+        return results.map((item: any) => item.data);
     }
 
     async remove(key: string): Promise<boolean> {
-        const store = await this.getTransaction('readwrite');
+        const db = await this.getDB();
+        const existing = await db.get(this.storeName, key);
         
-        return new Promise((resolve, reject) => {
-            const getRequest = store.get(key);
-            getRequest.onerror = () => reject(getRequest.error);
-            getRequest.onsuccess = () => {
-                if (getRequest.result) {
-                    const deleteRequest = store.delete(key);
-                    deleteRequest.onerror = () => reject(deleteRequest.error);
-                    deleteRequest.onsuccess = () => resolve(true);
-                } else {
-                    resolve(false);
-                }
-            };
-        });
+        if (existing) {
+            await db.delete(this.storeName, key);
+            return true;
+        }
+        return false;
     }
 
     async clear(): Promise<void> {
-        const store = await this.getTransaction('readwrite');
-        
-        return new Promise((resolve, reject) => {
-            const request = store.clear();
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => resolve();
-        });
+        const db = await this.getDB();
+        await db.clear(this.storeName);
     }
 
-    close(): void {
-        if (this.db) {
-            this.db.close();
-            this.db = null;
+    async close(): Promise<void> {
+        if (this.dbConnection) {
+            this.dbConnection.close();
+            this.dbConnection = null;
         }
     }
 } 
