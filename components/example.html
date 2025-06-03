@@ -41,45 +41,667 @@
             padding: 0;
         }
 
+        html {
+            scroll-behavior: smooth;
+        }
+
         body {
             font-family: var(--font-primary);
             background: linear-gradient(to bottom, white, var(--extra-light-green));
             color: var(--darkslategray);
             min-height: 100vh;
-            padding: 20px;
+            padding: 0;
+            overflow-x: hidden;
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
+            padding: 0 20px;
         }
 
-        header {
-            text-align: center;
+        .hero-section {
+            padding: 60px 20px 80px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 1;
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 60px;
+            align-items: center;
+        }
+
+        @media (min-width: 968px) {
+            .hero-content {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .hero-left {
+            text-align: left;
+        }
+
+        .hero-right {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 40px;
+        }
+
+        .hero-logo {
+            height: auto;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .hero-logo .hero-logo-phone {
+            height: 480px;
+            width: auto;
+            position: relative;
+            z-index: 1;
+            border-radius: 12px;
+            box-shadow: 260px 52px 260px 0px #E4F2E3;
+        }
+
+        .hero-logo .hero-logo-cube {
+            height: 180px;
+            width: auto;
+            position: absolute;
+            z-index: 10;
+            bottom: -60px;
+            right: -90px;
+        }
+
+        .hero-title {
+            font-size: 3.5rem;
+            font-weight: 900;
+            color: var(--dark-green);
+            margin-bottom: 20px;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+        }
+
+        .hero-subtitle {
+            font-size: 1.5rem;
+            color: var(--green);
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+
+        .hero-description {
+            font-size: 1.2rem;
+            color: var(--darkslategray);
+            margin-bottom: 40px;
+            line-height: 1.6;
+            opacity: 0.8;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 0;
+        }
+
+        .hero-button {
+            padding: 16px 32px;
+            border-radius: 12px;
+            font-family: var(--font-primary);
+            font-weight: 600;
+            font-size: 1.1rem;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 160px;
+            justify-content: center;
+        }
+
+        .hero-button.primary {
+            background: var(--green);
+            color: white;
+            box-shadow: 0 4px 16px rgba(36, 175, 55, 0.4);
+        }
+
+        .hero-button.primary:hover {
+            background: var(--dark-green);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(36, 175, 55, 0.5);
+        }
+
+        .hero-button.secondary {
+            background: white;
+            color: var(--green);
+            border: 2px solid var(--green);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+        }
+
+        .hero-button.secondary:hover {
+            background: var(--extra-light-green);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .hero-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            width: 100%;
+            max-width: 400px;
             margin-bottom: 40px;
         }
 
-        h1 {
-            color: var(--dark-green);
-            font-size: 2.5rem;
-            margin-bottom: 10px;
+        .hero-stat {
+            text-align: center;
+            background: white;
+            padding: 16px 12px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
         }
 
-        header p {
+        .hero-stat:hover {
+            transform: translateY(-4px);
+        }
+
+        .hero-stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
             color: var(--green);
-            font-size: 1.2rem;
+            display: block;
+            margin-bottom: 6px;
         }
 
-        .grid {
+        .hero-stat-label {
+            font-size: 0.8rem;
+            color: var(--darkslategray);
+            opacity: 0.8;
+            font-weight: 500;
+            line-height: 1.2;
+        }
+
+        @media (max-width: 968px) {
+            .hero-section {
+                padding: 40px 20px 60px;
+            }
+
+            .hero-content {
+                gap: 40px;
+                grid-template-columns: 1fr;
+            }
+
+            .hero-left {
+                text-align: center;
+                order: 2;
+            }
+
+            .hero-right {
+                order: 1;
+                gap: 30px;
+            }
+
+            .hero-logo .hero-logo-phone {
+                height: 400px;
+                box-shadow: 200px 40px 200px 0px #E4F2E3;
+            }
+
+            .hero-logo .hero-logo-cube {
+                height: 150px;
+                bottom: -50px;
+                right: -70px;
+            }
+
+            .hero-title {
+                font-size: 2.8rem;
+                margin-bottom: 16px;
+            }
+
+            .hero-subtitle {
+                font-size: 1.3rem;
+                margin-bottom: 14px;
+            }
+
+            .hero-description {
+                font-size: 1.1rem;
+                margin-bottom: 30px;
+            }
+
+            .hero-buttons {
+                justify-content: center;
+                gap: 16px;
+            }
+
+            .hero-button {
+                padding: 14px 28px;
+                font-size: 1rem;
+                min-width: 140px;
+            }
+
+            .hero-stats {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 12px;
+                max-width: 100%;
+                margin-bottom: 30px;
+            }
+
+            .hero-stat {
+                padding: 12px 8px;
+            }
+
+            .hero-stat-number {
+                font-size: 1.5rem;
+                margin-bottom: 4px;
+            }
+
+            .hero-stat-label {
+                font-size: 0.75rem;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .hero-section {
+                padding: 30px 20px 50px;
+            }
+
+            .hero-content {
+                gap: 30px;
+            }
+
+            .hero-right {
+                gap: 25px;
+            }
+
+            .hero-logo .hero-logo-phone {
+                height: 320px;
+                box-shadow: 150px 30px 150px 0px #E4F2E3;
+            }
+
+            .hero-logo .hero-logo-cube {
+                height: 120px;
+                bottom: -40px;
+                right: -60px;
+            }
+
+            .hero-title {
+                font-size: 2.5rem;
+                line-height: 1.1;
+                margin-bottom: 14px;
+            }
+
+            .hero-subtitle {
+                font-size: 1.2rem;
+                margin-bottom: 12px;
+            }
+
+            .hero-description {
+                font-size: 1rem;
+                margin-bottom: 25px;
+                line-height: 1.5;
+            }
+
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+                gap: 12px;
+            }
+
+            .hero-button {
+                width: 100%;
+                max-width: 280px;
+                padding: 12px 24px;
+                font-size: 0.95rem;
+            }
+
+            .hero-stats {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 8px;
+                max-width: 100%;
+                margin-bottom: 25px;
+            }
+
+            .hero-stat {
+                padding: 10px 6px;
+            }
+
+            .hero-stat-number {
+                font-size: 1.3rem;
+                margin-bottom: 3px;
+            }
+
+            .hero-stat-label {
+                font-size: 0.7rem;
+                line-height: 1.1;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .hero-section {
+                padding: 25px 15px 40px;
+            }
+
+            .hero-content {
+                gap: 25px;
+                padding: 0 5px;
+            }
+
+            .hero-right {
+                gap: 20px;
+            }
+
+            .hero-logo .hero-logo-phone {
+                height: 280px;
+                box-shadow: 120px 25px 120px 0px #E4F2E3;
+            }
+
+            .hero-logo .hero-logo-cube {
+                height: 100px;
+                bottom: -35px;
+                right: -50px;
+            }
+
+            .hero-title {
+                font-size: 2.2rem;
+                line-height: 1.1;
+                margin-bottom: 12px;
+            }
+
+            .hero-subtitle {
+                font-size: 1.1rem;
+                margin-bottom: 10px;
+            }
+
+            .hero-description {
+                font-size: 0.95rem;
+                margin-bottom: 20px;
+                line-height: 1.4;
+            }
+
+            .hero-button {
+                width: 100%;
+                max-width: 260px;
+                padding: 11px 20px;
+                font-size: 0.9rem;
+            }
+
+            .hero-stats {
+                gap: 6px;
+                margin-bottom: 20px;
+            }
+
+            .hero-stat {
+                padding: 8px 4px;
+            }
+
+            .hero-stat-number {
+                font-size: 1.1rem;
+                margin-bottom: 2px;
+            }
+
+            .hero-stat-label {
+                font-size: 0.65rem;
+                line-height: 1;
+            }
+        }
+
+        .content-section {
+            margin: 0 auto;
+            padding: 40px 20px;
+            display: none;
+        }
+
+        .content-section.active {
+            display: block;
+        }
+
+        .tab-navigation {
+            display: flex;
+            background: var(--extra-light-green);
+            border-radius: 12px;
+            padding: 4px;
+            margin-bottom: 30px;
+            gap: 4px;
+        }
+
+        .tab-button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            background: transparent;
+            color: var(--darkslategray);
+            font-family: var(--font-primary);
+            font-weight: 500;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .tab-button.active {
+            background: var(--green);
+            color: white;
+        }
+
+        .tab-button:hover:not(.active) {
+            background: var(--extra-light-green);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .demo-grid {
             display: grid;
             grid-template-columns: 1fr;
             gap: 20px;
         }
 
         @media (min-width: 768px) {
-            .grid {
+            .demo-grid {
                 grid-template-columns: 1fr 1fr;
             }
+        }
+
+        .developer-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        @media (min-width: 1024px) {
+            .developer-layout {
+                grid-template-columns: 2fr 1fr;
+            }
+        }
+
+        .customization-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            height: fit-content;
+        }
+
+        .preview-panel {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            min-height: 600px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 20px;
+        }
+
+        .customization-section {
+            margin-bottom: 24px;
+        }
+
+        .customization-section h3 {
+            color: var(--dark-green);
+            margin-bottom: 16px;
+            font-size: 1.2rem;
+            grid-column: 1 / -1;
+        }
+
+        .customization-section .section-content {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        @media (min-width: 768px) {
+            .customization-section .section-content {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 16px;
+            }
+        }
+
+        @media (min-width: 1200px) {
+            .customization-section .section-content {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 18px;
+            }
+        }
+
+        .control-group {
+            margin-bottom: 12px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            color: var(--darkslategray);
+        }
+
+        .color-input-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .color-picker {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            flex-shrink: 0;
+        }
+
+        .color-value {
+            flex: 1;
+            min-width: 0;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.9rem;
+        }
+
+        .range-input {
+            width: 100%;
+            margin: 8px 0;
+        }
+
+        .range-value {
+            display: inline-block;
+            margin-left: 8px;
+            font-weight: 500;
+            color: var(--green);
+        }
+
+        .font-select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-family: var(--font-primary);
+        }
+
+        .css-output {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .copy-button {
+            background: var(--green);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: var(--font-primary);
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: background-color 0.3s ease;
+            flex: 1;
+            min-width: 120px;
+        }
+
+        .copy-button:hover {
+            background: var(--dark-green);
+        }
+
+        .reset-button {
+            background: #f8f9fa;
+            color: var(--darkslategray);
+            border: 1px solid #ddd;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: var(--font-primary);
+            font-weight: 500;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            flex: 1;
+            min-width: 120px;
+        }
+
+        .reset-button:hover {
+            background: #e9ecef;
+            border-color: var(--green);
         }
 
         .card {
@@ -140,27 +762,6 @@
 
         li {
             margin-bottom: 5px;
-        }
-
-        .code-example {
-            margin-top: 40px;
-            padding: 20px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-
-        .code-example h2 {
-            color: var(--dark-green);
-            margin-bottom: 15px;
-        }
-
-        pre {
-            background: #f5f5f5;
-            padding: 15px;
-            border-radius: 4px;
-            overflow-x: auto;
-            font-size: 0.9rem;
         }
 
         .demo-label {
@@ -315,7 +916,6 @@
             transform: translateX(22px);
         }
 
-
         @keyframes shake {
             0% {
                 transform: translateX(0);
@@ -346,7 +946,6 @@
 
         #demo-timer-card {
             position: relative;
-
             background-color: #fffbe6;
             color: #8a4b00;
             border: 1px solid #ffe58f;
@@ -369,14 +968,6 @@
                 opacity: 1;
                 transform: translateY(0);
             }
-        }
-
-        .step-indicator.completed {
-            background-color: #4caf50;
-        }
-
-        h4 {
-            font-weight: 500;
         }
 
         .steps-list li {
@@ -552,148 +1143,1711 @@
         #help-dialog hr {
             border: 1px solid var(--green);
         }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.7;
+                transform: scale(1.1);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .footer-section {
+            background-color: var(--white);
+            padding: 40px 0;
+            overflow-x: hidden;
+            width: 100%;
+        }
+
+        .footer-content {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        .footer-top {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            margin-bottom: 40px;
+            width: 100%;
+        }
+
+        .footer-column {
+            flex: 1;
+            margin-right: 40px;
+            min-width: 200px;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+
+        .footer-column:last-child {
+            margin-right: 0;
+        }
+
+        .footer-brand {
+            margin-bottom: 20px;
+        }
+
+        .footer-brand h3 {
+            font-size: 1.5rem;
+            margin-bottom: 12px;
+            font-weight: 700;
+            color: var(--green);
+        }
+
+        .footer-brand p {
+            color: var(--darkslategray);
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        .social-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .social-links a {
+            color: var(--green);
+            transition: color 0.3s ease;
+        }
+
+        .social-links a:hover {
+            color: var(--dark-green);
+        }
+
+        .footer-heading {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .footer-links {
+            list-style: none;
+            padding: 0;
+        }
+
+        .footer-links li {
+            margin-bottom: 10px;
+        }
+
+        .footer-links a {
+            color: var(--darkslategray);
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+
+        .footer-links a:hover {
+            color: var(--green);
+        }
+
+        .footer-bottom {
+            border-top: 1px solid var(--extra-light-green);
+            padding-top: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-bottom-content {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .footer-bottom-left {
+            flex: 1;
+        }
+
+        .footer-bottom-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .footer-version {
+            font-size: 0.9rem;
+            color: var(--darkslategray);
+        }
+
+        .footer-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background-color: var(--green);
+            animation: pulse 2s infinite;
+        }
+
+        @media (max-width: 968px) {
+            .footer-section {
+                padding: 40px 0;
+                overflow-x: hidden;
+            }
+
+            .footer-content {
+                padding: 0 20px;
+                width: 100%;
+            }
+
+            .footer-top {
+                margin-bottom: 40px;
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 30px;
+                width: 100%;
+            }
+
+            .footer-column {
+                margin-right: 0;
+                margin-bottom: 0;
+                min-width: 0;
+                max-width: 100%;
+                word-wrap: break-word;
+            }
+
+            .footer-column:first-child {
+                grid-column: 1 / -1;
+                text-align: center;
+                margin-bottom: 30px;
+                padding-bottom: 30px;
+                border-bottom: 1px solid var(--extra-light-green);
+            }
+
+            .footer-brand {
+                margin-bottom: 20px;
+            }
+
+            .footer-brand h3 {
+                font-size: 1.4rem;
+                margin-bottom: 12px;
+                word-wrap: break-word;
+            }
+
+            .footer-brand p {
+                font-size: 1rem;
+                margin-bottom: 20px;
+                max-width: 500px;
+                margin-left: auto;
+                margin-right: auto;
+                word-wrap: break-word;
+            }
+
+            .social-links {
+                justify-content: center;
+                gap: 16px;
+            }
+
+            .footer-heading {
+                font-size: 1.1rem;
+                margin-bottom: 16px;
+                color: var(--green);
+                text-align: center;
+                word-wrap: break-word;
+            }
+
+            .footer-links {
+                text-align: center;
+            }
+
+            .footer-links li {
+                margin-bottom: 8px;
+            }
+
+            .footer-links a {
+                font-size: 0.95rem;
+                word-wrap: break-word;
+            }
+
+            .footer-bottom {
+                padding-top: 20px;
+                width: 100%;
+            }
+
+            .footer-bottom-content {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+                width: 100%;
+            }
+
+            .footer-bottom-right {
+                justify-content: center;
+                gap: 16px;
+            }
+
+            .footer-version {
+                font-size: 0.9rem;
+            }
+
+            .footer-status {
+                font-size: 0.9rem;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .footer-section {
+                padding: 40px 0;
+                overflow-x: hidden;
+                background: linear-gradient(135deg, var(--white) 0%, var(--extra-light-green) 100%);
+            }
+
+            .footer-content {
+                padding: 0 20px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .footer-top {
+                margin-bottom: 40px;
+                display: flex;
+                flex-direction: column;
+                gap: 24px;
+                width: 100%;
+            }
+
+            .footer-column {
+                margin-right: 0;
+                margin-bottom: 0;
+                text-align: center;
+                min-width: 0;
+                max-width: 100%;
+                word-wrap: break-word;
+                overflow-wrap: break-word;
+                background: white;
+                padding: 25px;
+                border-radius: 16px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+                transition: transform 0.3s ease, box-shadow 0.3s ease;
+            }
+
+            .footer-column:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+            }
+
+            .footer-column:first-child {
+                background: linear-gradient(135deg, var(--green) 0%, var(--dark-green) 100%);
+                color: white;
+                margin-bottom: 20px;
+            }
+
+            .footer-column:first-child .footer-brand h3,
+            .footer-column:first-child .footer-brand p {
+                color: white;
+            }
+
+            .footer-brand {
+                margin-bottom: 20px;
+            }
+
+            .footer-brand h3 {
+                font-size: 1.6rem;
+                margin-bottom: 15px;
+                word-wrap: break-word;
+                font-weight: 700;
+            }
+
+            .footer-brand p {
+                font-size: 1.1rem;
+                margin-bottom: 25px;
+                line-height: 1.6;
+                max-width: 400px;
+                margin-left: auto;
+                margin-right: auto;
+                word-wrap: break-word;
+                overflow-wrap: break-word;
+                opacity: 0.95;
+            }
+
+            .social-links {
+                justify-content: center;
+                gap: 20px;
+            }
+
+            .social-links a {
+                background: rgba(255, 255, 255, 0.2);
+                padding: 12px;
+                border-radius: 50%;
+                transition: all 0.3s ease;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .footer-column:first-child .social-links a {
+                color: white;
+            }
+
+            .social-links a:hover {
+                background: rgba(255, 255, 255, 0.3);
+                transform: translateY(-2px);
+            }
+
+            .social-links a svg {
+                width: 20px;
+                height: 20px;
+            }
+
+            .footer-heading {
+                font-size: 1.3rem;
+                margin-bottom: 20px;
+                color: var(--green);
+                font-weight: 600;
+                word-wrap: break-word;
+                position: relative;
+            }
+
+            .footer-heading::after {
+                content: '';
+                position: absolute;
+                bottom: -8px;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 40px;
+                height: 3px;
+                background: var(--green);
+                border-radius: 2px;
+            }
+
+            .footer-links {
+                text-align: center;
+            }
+
+            .footer-links li {
+                margin-bottom: 12px;
+            }
+
+            .footer-links a {
+                font-size: 1rem;
+                word-wrap: break-word;
+                overflow-wrap: break-word;
+                padding: 8px 16px;
+                border-radius: 8px;
+                transition: all 0.3s ease;
+                display: inline-block;
+            }
+
+            .footer-links a:hover {
+                background: var(--extra-light-green);
+                color: var(--dark-green);
+                transform: translateY(-1px);
+            }
+
+            .footer-bottom {
+                padding-top: 30px;
+                width: 100%;
+                overflow-x: hidden;
+                border-top: 1px solid var(--extra-light-green);
+                background: white;
+                border-radius: 16px;
+                padding: 25px;
+                margin-top: 20px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            }
+
+            .footer-bottom-content {
+                flex-direction: column;
+                gap: 20px;
+                text-align: center;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .footer-bottom-left p {
+                font-size: 0.95rem;
+                margin-bottom: 0;
+                word-wrap: break-word;
+                color: var(--darkslategray);
+            }
+
+            .footer-bottom-right {
+                flex-direction: row;
+                gap: 20px;
+                justify-content: center;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+
+            .footer-version {
+                font-size: 0.9rem;
+                background: var(--extra-light-green);
+                padding: 6px 12px;
+                border-radius: 20px;
+                color: var(--dark-green);
+                font-weight: 500;
+            }
+
+            .footer-status {
+                font-size: 0.9rem;
+                gap: 8px;
+                background: var(--extra-light-green);
+                padding: 6px 12px;
+                border-radius: 20px;
+                color: var(--dark-green);
+                font-weight: 500;
+            }
+
+            .status-indicator {
+                width: 12px;
+                height: 12px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            * {
+                box-sizing: border-box;
+            }
+
+            .container {
+                padding: 0 12px;
+                max-width: 100vw;
+                width: 100%;
+                overflow-x: hidden;
+            }
+
+            .content-section {
+                padding: 20px 8px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .demo-grid {
+                gap: 16px;
+                grid-template-columns: 1fr;
+                width: 100%;
+            }
+
+            .card {
+                margin: 0 4px;
+                border-radius: 8px;
+                width: calc(100% - 8px);
+                max-width: calc(100vw - 32px);
+            }
+
+            .card-header {
+                padding: 16px;
+                width: 100%;
+            }
+
+            .card-content {
+                padding: 16px;
+                width: 100%;
+            }
+
+            .developer-layout {
+                gap: 20px;
+                grid-template-columns: 1fr;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .customization-panel {
+                padding: 16px;
+                border-radius: 8px;
+                margin: 0 4px;
+                width: calc(100% - 8px);
+                max-width: calc(100vw - 24px);
+                min-width: 0;
+                overflow-x: hidden;
+                box-sizing: border-box;
+            }
+
+            .preview-panel {
+                padding: 16px;
+                border-radius: 8px;
+                margin: 0 4px;
+                width: calc(100% - 8px);
+                max-width: calc(100vw - 24px);
+                min-width: 0;
+                min-height: 400px;
+                box-sizing: border-box;
+            }
+
+            .customization-section {
+                margin-bottom: 20px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .customization-section h3 {
+                font-size: 1.1rem;
+                margin-bottom: 12px;
+                width: 100%;
+                word-wrap: break-word;
+            }
+
+            .customization-section .section-content {
+                gap: 10px;
+                width: 100%;
+                max-width: 100%;
+                grid-template-columns: 1fr;
+            }
+
+            .control-group {
+                margin-bottom: 10px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .control-group label {
+                font-size: 0.85rem;
+                margin-bottom: 4px;
+                width: 100%;
+                word-wrap: break-word;
+            }
+
+            .color-input-group {
+                gap: 8px;
+                width: 100%;
+                max-width: 100%;
+                display: flex;
+                flex-wrap: nowrap;
+            }
+
+            .color-picker {
+                width: 32px;
+                height: 32px;
+                flex-shrink: 0;
+            }
+
+            .color-value {
+                padding: 6px 8px;
+                font-size: 0.8rem;
+                flex: 1;
+                min-width: 0;
+                max-width: calc(100% - 40px);
+                word-break: break-all;
+            }
+
+            .font-select {
+                padding: 6px 8px;
+                font-size: 0.85rem;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .css-output {
+                padding: 12px;
+                font-size: 0.75rem;
+                max-height: 200px;
+                width: 100%;
+                max-width: 100%;
+                word-break: break-all;
+                overflow-wrap: break-word;
+            }
+
+            .copy-button,
+            .reset-button {
+                padding: 10px 16px;
+                font-size: 0.85rem;
+                min-width: 100px;
+                max-width: 100%;
+                width: 100%;
+                box-sizing: border-box;
+            }
+
+            .action-buttons {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .action-buttons .copy-button,
+            .action-buttons .reset-button {
+                width: 100%;
+                max-width: 100%;
+                justify-content: center;
+                box-sizing: border-box;
+            }
+
+            input[type="text"],
+            input[type="color"],
+            select,
+            textarea {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+
+            .customization-panel * {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+
+            .preview-panel * {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+        }
+
+        .footer-heading.collapsible {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            padding: 0;
+            margin-bottom: 20px;
+        }
+
+        .footer-heading.collapsible:hover {
+            color: var(--dark-green);
+        }
+
+        .chevron-icon {
+            transition: transform 0.3s ease;
+            margin-left: 8px;
+            flex-shrink: 0;
+            display: none;
+        }
+
+        .footer-heading.collapsible.expanded .chevron-icon {
+            transform: rotate(180deg);
+        }
+
+        .collapsible-content {
+            max-height: none;
+            overflow: visible;
+            transition: max-height 0.4s ease-out, opacity 0.3s ease-out;
+            opacity: 1;
+        }
+
+        .collapsible-content.collapsed {
+            max-height: 0;
+            opacity: 0;
+            margin-bottom: 0;
+            overflow: hidden;
+        }
+
+        @media (max-width: 768px) {
+            .chevron-icon {
+                display: block !important;
+            }
+
+            .footer-heading.collapsible {
+                background: rgba(255, 255, 255, 0.1);
+                padding: 12px 16px;
+                border-radius: 8px;
+                margin-bottom: 0;
+                transition: all 0.3s ease;
+            }
+
+            .footer-heading.collapsible:hover {
+                background: rgba(255, 255, 255, 0.2);
+            }
+
+            .footer-column:first-child .footer-heading {
+                background: rgba(255, 255, 255, 0.2);
+                color: white;
+                cursor: default;
+                pointer-events: none;
+            }
+
+            .footer-column:first-child .chevron-icon {
+                display: none !important;
+            }
+
+            .collapsible-content {
+                margin-top: 12px;
+                padding-left: 16px;
+                padding-right: 16px;
+            }
+
+            .footer-column:first-child .collapsible-content {
+                padding-left: 0;
+                padding-right: 0;
+                margin-top: 20px;
+            }
+        }
+
+        @media (max-width: 470px) {
+            * {
+                box-sizing: border-box;
+            }
+
+            .container {
+                padding: 0 12px;
+                max-width: 100vw;
+                width: 100%;
+                overflow-x: hidden;
+            }
+
+            .content-section {
+                padding: 20px 8px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .demo-grid {
+                gap: 16px;
+                grid-template-columns: 1fr;
+                width: 100%;
+            }
+
+            .card {
+                margin: 0 4px;
+                border-radius: 8px;
+                width: calc(100% - 8px);
+                max-width: calc(100vw - 32px);
+            }
+
+            .card-header {
+                padding: 16px;
+                width: 100%;
+            }
+
+            .card-content {
+                padding: 16px;
+                width: 100%;
+            }
+
+            .developer-layout {
+                gap: 20px;
+                grid-template-columns: 1fr;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .customization-panel {
+                padding: 16px;
+                border-radius: 8px;
+                margin: 0 4px;
+                width: calc(100% - 8px);
+                max-width: calc(100vw - 24px);
+                min-width: 0;
+                overflow-x: hidden;
+                box-sizing: border-box;
+            }
+
+            .preview-panel {
+                padding: 16px;
+                border-radius: 8px;
+                margin: 0 4px;
+                width: calc(100% - 8px);
+                max-width: calc(100vw - 24px);
+                min-width: 0;
+                min-height: 400px;
+                box-sizing: border-box;
+            }
+
+            .customization-section {
+                margin-bottom: 20px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .customization-section h3 {
+                font-size: 1.1rem;
+                margin-bottom: 12px;
+                width: 100%;
+                word-wrap: break-word;
+            }
+
+            .customization-section .section-content {
+                gap: 10px;
+                width: 100%;
+                max-width: 100%;
+                grid-template-columns: 1fr;
+            }
+
+            .control-group {
+                margin-bottom: 10px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .control-group label {
+                font-size: 0.85rem;
+                margin-bottom: 4px;
+                width: 100%;
+                word-wrap: break-word;
+            }
+
+            .color-input-group {
+                gap: 8px;
+                width: 100%;
+                max-width: 100%;
+                display: flex;
+                flex-wrap: nowrap;
+            }
+
+            .color-picker {
+                width: 32px;
+                height: 32px;
+                flex-shrink: 0;
+            }
+
+            .color-value {
+                padding: 6px 8px;
+                font-size: 0.8rem;
+                flex: 1;
+                min-width: 0;
+                max-width: calc(100% - 40px);
+                word-break: break-all;
+            }
+
+            .font-select {
+                padding: 6px 8px;
+                font-size: 0.85rem;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .css-output {
+                padding: 12px;
+                font-size: 0.75rem;
+                max-height: 200px;
+                width: 100%;
+                max-width: 100%;
+                word-break: break-all;
+                overflow-wrap: break-word;
+            }
+
+            .copy-button,
+            .reset-button {
+                padding: 10px 16px;
+                font-size: 0.85rem;
+                min-width: 100px;
+                max-width: 100%;
+                width: 100%;
+                box-sizing: border-box;
+            }
+
+            .action-buttons {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .action-buttons .copy-button,
+            .action-buttons .reset-button {
+                width: 100%;
+                max-width: 100%;
+                justify-content: center;
+                box-sizing: border-box;
+            }
+
+            input[type="text"],
+            input[type="color"],
+            select,
+            textarea {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+
+            .customization-panel * {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+
+            .preview-panel * {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+        }
+
+        .developer-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        @media (max-width: 1024px) {
+            .developer-layout {
+                grid-template-columns: 1fr;
+                gap: 30px;
+                padding: 0 15px;
+            }
+            
+            .customization-panel {
+                order: 1;
+            }
+            
+            .preview-panel {
+                order: 2;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .developer-layout {
+                gap: 20px;
+                padding: 0 10px;
+            }
+            
+            .customization-panel {
+                padding: 20px;
+                order: 1;
+            }
+            
+            .preview-panel {
+                order: 2;
+            }
+        }
+
+        @media (max-width: 470px) {
+            .developer-layout {
+                gap: 15px;
+                padding: 0 8px;
+            }
+            
+            .customization-panel {
+                padding: 16px;
+                margin: 0 4px;
+                order: 1;
+            }
+            
+            .preview-panel {
+                order: 2;
+            }
+            
+            .theme-preview-card {
+                max-width: 100%;
+                padding: 16px;
+            }
+            
+            .interactive-components {
+                max-width: 100%;
+            }
+            
+            .integration-section {
+                max-width: 100%;
+                padding: 16px;
+            }
+        }
+
+        .customization-panel h2 {
+            color: var(--dark-green);
+            margin-bottom: 24px;
+        }
+
+        .preview-panel {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .preview-panel h3 {
+            color: var(--dark-green);
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .theme-preview-card {
+            width: 100%;
+            max-width: 350px;
+            background: var(--extra-light-green);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+
+        .theme-preview-title {
+            color: var(--dark-green);
+            margin-bottom: 15px;
+            text-align: center;
+            font-size: 1.1rem;
+        }
+
+        .color-palette-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .color-palette-item {
+            text-align: center;
+        }
+
+        .color-swatch {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            margin: 0 auto 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .color-swatch.primary {
+            background: var(--green);
+        }
+
+        .color-swatch.dark {
+            background: var(--dark-green);
+        }
+
+        .color-swatch.light {
+            background: var(--extra-light-green);
+            border: 1px solid #ddd;
+        }
+
+        .color-label {
+            font-size: 0.75rem;
+            color: var(--darkslategray);
+        }
+
+        .typography-preview {
+            text-align: center;
+            margin-bottom: 15px;
+        }
+
+        .typography-primary {
+            font-family: var(--font-primary);
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--dark-green);
+            margin-bottom: 4px;
+        }
+
+        .typography-secondary {
+            font-family: var(--font-secondary);
+            font-size: 0.9rem;
+            color: var(--darkslategray);
+        }
+
+        .interactive-components {
+            width: 100%;
+            max-width: 350px;
+            margin-bottom: 25px;
+        }
+
+        .interactive-components h4 {
+            color: var(--dark-green);
+            margin-bottom: 15px;
+            text-align: center;
+            font-size: 1.1rem;
+        }
+
+        .button-variations {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+
+        .form-elements {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .form-elements virto-input {
+            width: 100%;
+        }
+
+        .integration-section {
+            width: 100%;
+            max-width: 350px;
+            background: var(--extra-light-green);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .integration-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 15px;
+            justify-content: center;
+        }
+
+        .integration-header svg {
+            stroke: var(--green);
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .integration-title {
+            color: var(--dark-green);
+            margin: 0;
+            font-size: 1.1rem;
+        }
+
+        .integration-description {
+            font-size: 0.85rem;
+            margin-bottom: 15px;
+            text-align: center;
+            color: var(--darkslategray);
+        }
+
+        .code-block {
+            background: white;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+        }
+
+        .code-block pre {
+            margin: 0;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            color: var(--darkslategray);
+            overflow-x: auto;
+        }
+
+        .integration-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .copy-code-btn {
+            flex: 1;
+            background: var(--green);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .docs-btn {
+            flex: 1;
+            background: white;
+            color: var(--green);
+            border: 1px solid var(--green);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .live-indicator {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .live-indicator-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            border: 1px solid var(--extra-light-green);
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--green);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .live-text {
+            font-size: 0.8rem;
+            color: var(--darkslategray);
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .css-buttons {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+        }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <header>
-            <h1>Virto Connect Demo</h1>
-            <p>A simple authentication solution for Virto Network</p>
-        </header>
-
-        <div class="grid">
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <path d="M12 16v-4"></path>
-                            <path d="M12 8h.01"></path>
-                        </svg>
-                        About Virto Connect
+        <!-- Hero -->
+        <div class="hero-section">
+            <div class="hero-content">
+                <div class="hero-left">
+                    <h1 class="hero-title">Virto Connect</h1>
+                    <p class="hero-subtitle">Effortless Access. Fully Yours</p>
+                    <p class="hero-description">
+                        Virto Connect is a plug-and-play authentication tool that makes it simple to sign up and sign in to modern applications — no blockchain knowledge required. It’s easy to integrate, fully customizable, and built to help anyone access new digital experiences with confidence.
+                    </p>
+                    <div class="hero-stats">
+                        <div class="hero-stat">
+                            <span class="hero-stat-number">5+</span>
+                            <span class="hero-stat-label">Customizable Variables</span>
+                        </div>
+                        <div class="hero-stat">
+                            <span class="hero-stat-number">100%</span>
+                            <span class="hero-stat-label">Real-time Preview</span>
+                        </div>
+                        <div class="hero-stat">
+                            <span class="hero-stat-number">Easy</span>
+                            <span class="hero-stat-label">Integration</span>
+                        </div>
                     </div>
-                    <div class="card-description">
-                        What is Virto Connect and how does it work?
-                    </div>
-                </div>
-                <div class="card-content">
-                    <div class="space-y">
-                        <p>
-                            <strong>Virto Connect</strong> is a customizable authentication component that allows users
-                            to easily sign up and sign in to applications built on the Virto Network.
-                        </p>
-                        <p>Get started with these steps:</p>
-                        <ul class="steps-list">
-                            <li data-tooltip="Starts a temporary test session.">
-                                <span class="step-number">1</span>
-                                Enable "Demo Mode" to connect to the server
-                                <span id="step1" class="step-indicator"></span>
-                            </li>
-                            <li data-tooltip="Opens a form to register your demo user.">
-                                <span class="step-number">2</span>
-                                Register clicking on "Connect to Virto"
-                                <span id="step2" class="step-indicator"></span>
-                            </li>
-                            <li data-tooltip="Use your registered username to log in.">
-                                <span class="step-number">3</span>
-                                Once you've registered, log in
-                                <span id="step3" class="step-indicator"></span>
-                            </li>
-                            <li data-tooltip="Sends a transaction to the blockchain for testing.">
-                                <span class="step-number">4</span>
-                                You can sign an extrinsic now!<strong>*</strong>
-                                <span id="step4" class="step-indicator"></span>
-                            </li>
-                        </ul>
-                    </div>
-                    <ul class="steps-list">
-                        <li>
-                            <h4>If you are a developer and want to know more about what's behind all this, you can <a
-                                    href="https://ailens-organization.gitbook.io/virto-connect">check our
-                                    documentation!</a></h4>
-                        </li>
-                    </ul>
-                    <div id="demo-timer-card">
-                        ⚠️ This demo session will expire in less than 10 minutes.<br>
-                        All environments reset periodically to free resources.
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path
-                                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z">
-                            </path>
-                            <circle cx="12" cy="12" r="3"></circle>
-                        </svg>
-                        Try It Out
-                    </div>
-                    <div class="card-description">
-                        Test the Virto Connect component
-                    </div>
-                </div>
-                <div class="card-content">
-                    <div class="toggle-container">
-                        <span>Demo Mode</span>
-                        <label class="switch">
-                            <input type="checkbox" id="demo-switch">
-                            <span class="slider"></span>
-                        </label>
-                        <button id="share-session" class="share-button" style="display: none;">
+                    <div class="hero-buttons">
+                        <button class="hero-button primary" id="hero-demo-btn">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
-                                <polyline points="16 6 12 2 8 6"></polyline>
-                                <line x1="12" y1="2" x2="12" y2="15"></line>
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
                             </svg>
+                            Demo
+                        </button>
+                        <button class="hero-button secondary" id="hero-developer-btn">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="16 18 22 12 16 6"></polyline>
+                                <polyline points="8 6 2 12 8 18"></polyline>
+                            </svg>
+                            Get Started
                         </button>
                     </div>
-                    <div class="center">
-                        <div class="demo-label">Demo</div>
-                        <div id="connect-section">
-                            <p>Click the button below to open the Virto Connect dialog</p>
-                            <div class="button-wrapper">
-                                <virto-button label="Connect to Virto" id="connect-button"></virto-button>
+                </div>
+                
+                <div class="hero-right">
+                    <div class="hero-logo">
+                        <img class="hero-logo-phone" src="virto-connect.gif" alt="Virto Connect Animation" width="120" height="120">
+                        <img class="hero-logo-cube" src="cube.png" alt="Cube" width="120" height="120">
+                    </div>
+                    
+                    
+                </div>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="content-section" id="content-section">
+            <div class="tab-navigation">
+                <button class="tab-button" data-tab="demo">Demo</button>
+                <button class="tab-button" data-tab="developer">Developer</button>
+            </div>
+
+            <div id="demo-tab" class="tab-content">
+                <div class="demo-grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M12 16v-4"></path>
+                                    <path d="M12 8h.01"></path>
+                                </svg>
+                                About Virto Connect
+                            </div>
+                            <div class="card-description">
+                                What is Virto Connect and how does it work?
                             </div>
                         </div>
-                        <div id="extrinsic-section" style="display: none;">
-                            <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
-                                <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data"
-                                    value="0x060500073448656c6c6f2c20776f726c64210000" style="flex-grow: 1;"></virto-input>
-                                <button id="help-button" class="help-button" aria-label="Help with extrinsic">
+                        <div class="card-content">
+                            <div class="space-y">
+                                <p>
+                                    <strong>Virto Connect</strong> is a customizable authentication component that allows users
+                                    to easily sign up and sign in to applications built on the Virto Network.
+                                </p>
+                                <p>Get started with these steps:</p>
+                                <ul class="steps-list">
+                                    <li data-tooltip="Starts a temporary test session.">
+                                        <span class="step-number">1</span>
+                                        Enable "Demo Mode" to connect to the server
+                                        <span id="step1" class="step-indicator"></span>
+                                    </li>
+                                    <li data-tooltip="Opens a form to register your demo user.">
+                                        <span class="step-number">2</span>
+                                        Register clicking on "Connect to Virto"
+                                        <span id="step2" class="step-indicator"></span>
+                                    </li>
+                                    <li data-tooltip="Use your registered username to log in.">
+                                        <span class="step-number">3</span>
+                                        Once you've registered, log in
+                                        <span id="step3" class="step-indicator"></span>
+                                    </li>
+                                    <li data-tooltip="Sends a transaction to the blockchain for testing.">
+                                        <span class="step-number">4</span>
+                                        You can sign an extrinsic now!<strong>*</strong>
+                                        <span id="step4" class="step-indicator"></span>
+                                    </li>
+                                </ul>
+                            </div>
+                            <ul class="steps-list">
+                                <li>
+                                    <h4>If you are a developer and want to know more about what's behind all this, you can <a
+                                            href="https://ailens-organization.gitbook.io/virto-connect">check our
+                                            documentation!</a></h4>
+                                </li>
+                            </ul>
+                            <div id="demo-timer-card">
+                                ⚠️ This demo session will expire in less than 10 minutes.<br>
+                                All environments reset periodically to free resources.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path
+                                        d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z">
+                                    </path>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
+                                Try It Out
+                            </div>
+                            <div class="card-description">
+                                Test the Virto Connect component
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <div class="toggle-container">
+                                <span>Demo Mode</span>
+                                <label class="switch">
+                                    <input type="checkbox" id="demo-switch">
+                                    <span class="slider"></span>
+                                </label>
+                                <button id="share-session" class="share-button" style="display: none;">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                        <circle cx="12" cy="12" r="10"></circle>
-                                        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
-                                        <path d="M12 17h.01"></path>
+                                        <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                                        <polyline points="16 6 12 2 8 6"></polyline>
+                                        <line x1="12" y1="2" x2="12" y2="15"></line>
                                     </svg>
                                 </button>
                             </div>
-                            <div id="remark-error" style="display: none; color: #d32f2f !important; margin-bottom: 10px;"></div>
-                            <div class="button-wrapper">
-                                <virto-button label="Sign Extrinsic" id="sign-extrinsic-button"></virto-button>
+                            <div class="center">
+                                <div class="demo-label">Demo</div>
+                                <div id="connect-section">
+                                    <p>Click the button below to open the Virto Connect dialog</p>
+                                    <div class="button-wrapper">
+                                        <virto-button label="Connect to Virto" id="connect-button"></virto-button>
+                                    </div>
+                                </div>
+                                <div id="extrinsic-section" style="display: none;">
+                                    <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                                        <virto-input type="text" id="extrinsic-input" placeholder="Enter extrinsic data"
+                                            value="0x060500073448656c6c6f2c20776f726c64210000" style="flex-grow: 1;"></virto-input>
+                                        <button id="help-button" class="help-button" aria-label="Help with extrinsic">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                                <circle cx="12" cy="12" r="10"></circle>
+                                                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                                                <path d="M12 17h.01"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    <div id="remark-error" style="display: none; color: #d32f2f !important; margin-bottom: 10px;"></div>
+                                    <div class="button-wrapper">
+                                        <virto-button label="Sign Extrinsic" id="sign-extrinsic-button"></virto-button>
+                                    </div>
+                                </div>
+                                
+                                <h4 id="explorer-link" style="display: none;">If you want to check how this is working, you can
+                                    <a id="explorer-url" target="_blank">see explorer!</a>
+                                </h4>
+                            <div id="address-info" style="display: none;">
+                                <p id="address-info-text" style="word-break: break-all; font-family: monospace;"></p>
+                            </div>
                             </div>
                         </div>
-                        
-                        <h4 id="explorer-link" style="display: none;">If you want to check how this is working, you can
-                            <a id="explorer-url" target="_blank">see explorer!</a>
-                        </h4>
-                    <div id="address-info" style="display: none;">
-                        <p id="address-info-text" style="word-break: break-all; font-family: monospace;"></p>
-                    </div>
                     </div>
                 </div>
             </div>
-            <div id="spinner" style="display: none;">
-                <div id="spinner-text">Processing...</div>
-                <div class="spinner-icon"></div>
+
+            <div id="developer-tab" class="tab-content">
+                <div class="developer-layout">
+                    <div class="customization-panel">
+                        <h2>Customize Virto Connect</h2>
+                        
+                        <div class="customization-section">
+                            <h3>Colors</h3>
+                            <div class="section-content">
+                                <div class="control-group">
+                                    <label>Primary Green Color</label>
+                                    <div class="color-input-group">
+                                        <input type="color" class="color-picker" id="green-color" value="#24AF37">
+                                        <input type="text" class="color-value" id="green-color-value" value="#24AF37">
+                                    </div>
+                                </div>
+
+                                <div class="control-group">
+                                    <label>Dark Green Color</label>
+                                    <div class="color-input-group">
+                                        <input type="color" class="color-picker" id="dark-green-color" value="#006B0A">
+                                        <input type="text" class="color-value" id="dark-green-color-value" value="#006B0A">
+                                    </div>
+                                </div>
+
+                                <div class="control-group">
+                                    <label>Light Green Color</label>
+                                    <div class="color-input-group">
+                                        <input type="color" class="color-picker" id="light-green-color" value="#lightgreen">
+                                        <input type="text" class="color-value" id="light-green-color-value" value="lightgreen">
+                                    </div>
+                                </div>
+
+                                <div class="control-group">
+                                    <label>Extra Light Green Color</label>
+                                    <div class="color-input-group">
+                                        <input type="color" class="color-picker" id="extra-light-green-color" value="#DDFBE0">
+                                        <input type="text" class="color-value" id="extra-light-green-color-value" value="#DDFBE0">
+                                    </div>
+                                </div>
+
+                                <div class="control-group">
+                                    <label>Text Color</label>
+                                    <div class="color-input-group">
+                                        <input type="color" class="color-picker" id="text-color" value="darkslategray">
+                                        <input type="text" class="color-value" id="text-color-value" value="darkslategray">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="customization-section">
+                            <h3>Typography</h3>
+                            <div class="section-content">
+                                <div class="control-group">
+                                    <label>Primary Font Family</label>
+                                    <select class="font-select" id="primary-font">
+                                        <option value="Outfit, sans-serif">Outfit</option>
+                                        <option value="Inter, sans-serif">Inter</option>
+                                        <option value="Roboto, sans-serif">Roboto</option>
+                                        <option value="Arial, sans-serif">Arial</option>
+                                        <option value="Georgia, serif">Georgia</option>
+                                        <option value="'Times New Roman', serif">Times New Roman</option>
+                                    </select>
+                                </div>
+
+                                <div class="control-group">
+                                    <label>Secondary Font Family</label>
+                                    <select class="font-select" id="secondary-font">
+                                        <option value="Plus Jakarta, sans-serif">Plus Jakarta</option>
+                                        <option value="Inter, sans-serif">Inter</option>
+                                        <option value="Roboto, sans-serif">Roboto</option>
+                                        <option value="Arial, sans-serif">Arial</option>
+                                        <option value="Georgia, serif">Georgia</option>
+                                        <option value="'Times New Roman', serif">Times New Roman</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="customization-section">
+                            <h3>CSS Variables</h3>
+                            <div class="css-output" id="css-output"></div>
+                            <div class="css-buttons">
+                                <button class="copy-button" id="copy-css">Copy CSS</button>
+                                <button class="reset-button" id="reset-customization">Reset to Default</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="preview-panel">
+                        <h3>Live Preview</h3>
+                        
+                        <div class="theme-preview-card">
+                            <h4 class="theme-preview-title">Current Theme</h4>
+                            
+                            <div class="color-palette-grid">
+                                <div class="color-palette-item">
+                                    <div class="color-swatch primary"></div>
+                                    <span class="color-label">Primary</span>
+                                </div>
+                                <div class="color-palette-item">
+                                    <div class="color-swatch dark"></div>
+                                    <span class="color-label">Dark</span>
+                                </div>
+                                <div class="color-palette-item">
+                                    <div class="color-swatch light"></div>
+                                    <span class="color-label">Light</span>
+                                </div>
+                            </div>
+                            
+                            <div class="typography-preview">
+                                <p class="typography-primary">Primary Font</p>
+                                <p class="typography-secondary">Secondary Font Preview</p>
+                            </div>
+                        </div>
+                        
+                        <div class="interactive-components">
+                            <h4>Interactive Components</h4>
+                            
+                            <div class="button-variations">
+                                <virto-button label="Primary Button" id="preview-button-primary"></virto-button>
+                                <virto-button label="Connect Dialog" id="preview-connect-button"></virto-button>
+                            </div>
+                            
+                            <div class="form-elements">
+                                <virto-input type="text" placeholder="Username"></virto-input>
+                            </div>
+                        </div>
+                        
+                        <div class="integration-section">
+                            <div class="integration-header">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 32 32" fill="currentColor">
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M16 32C24.8365 32 32 24.8365 32 16C32 7.16346 24.8365 0 16 0C7.16346 0 0 7.16346 0 16C0 24.8365 7.16346 32 16 32Z"/>
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M13.0781 7.45456C13.0781 6.8087 13.6028 6.28516 14.25 6.28516C18.6364 6.28516 22.1923 9.83367 22.1923 14.211C22.1923 14.8568 21.6676 15.3804 21.0205 15.3804C20.3733 15.3804 19.8486 14.8568 19.8486 14.211C19.8486 11.1254 17.342 8.62396 14.25 8.62396C13.6028 8.62396 13.0781 8.10039 13.0781 7.45456Z" fill="white"/>
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M24.5439 13.043C25.1911 13.043 25.7157 13.5665 25.7157 14.2124C25.7157 18.5897 22.1598 22.1382 17.7734 22.1382C17.1262 22.1382 16.6016 21.6147 16.6016 20.9688C16.6016 20.323 17.1262 19.7994 17.7734 19.7994C20.8655 19.7994 23.3721 17.298 23.3721 14.2124C23.3721 13.5665 23.8967 13.043 24.5439 13.043Z" fill="white"/>
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M18.9423 24.543C18.9423 25.1889 18.4176 25.7124 17.7705 25.7124C13.384 25.7124 9.82812 22.1639 9.82812 17.7866C9.82812 17.1407 10.3528 16.6172 11 16.6172C11.6471 16.6172 12.1718 17.1407 12.1718 17.7866C12.1718 20.8722 14.6784 23.3736 17.7705 23.3736C18.4176 23.3736 18.9423 23.8972 18.9423 24.543Z" fill="white"/>
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M7.46086 18.9585C6.81369 18.9585 6.28906 18.435 6.28906 17.7891C6.28903 13.4118 9.84495 9.86328 14.2314 9.86328C14.8786 9.86328 15.4032 10.3869 15.4032 11.0327C15.4032 11.6785 14.8786 12.2021 14.2314 12.2021C11.1393 12.2021 8.63269 14.7035 8.63269 17.7891C8.63269 18.435 8.10806 18.9585 7.46086 18.9585Z" fill="white"/>
+                                </svg>
+                                <h4 class="integration-title">Integration Code</h4>
+                            </div>
+                            
+                            <p class="integration-description">Copy and paste this code into your HTML:</p>
+                            
+                            <div class="code-block">
+                                <pre>&lt;virto-connect id="virtoConnect"&gt;&lt;/virto-connect&gt;</pre>
+                            </div>
+                            
+                            <div class="integration-buttons">
+                                <button class="copy-code-btn" onclick="navigator.clipboard.writeText('<virto-connect id=&quot;virtoConnect&quot;></virto-connect>')">
+                                    Copy Code
+                                </button>
+                                <button class="docs-btn" onclick="window.open('https://ailens-organization.gitbook.io/virto-connect', '_blank')">
+                                    Documentation
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="live-indicator">
+                            <div class="live-indicator-badge">
+                                <div class="live-dot"></div>
+                                <span class="live-text">Live Preview Active</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <virto-connect id="virtoConnect" server="/api"></virto-connect>
         </div>
+        </div> 
+
+        <footer class="footer-section">
+            <div class="footer-content">
+                <div class="footer-top">
+                    <div class="footer-column">
+                        <div class="footer-brand">
+                            <h3>Virto Connect</h3>
+                            <p>
+                                Helps you add secure login and registration to your app in minutes. 
+                                Build secure, decentralized applications with ease.
+                            </p>
+                            <div class="social-links">
+                                <a href="https://github.com/virto-network" target="_blank" aria-label="GitHub">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                                    </svg>
+                                </a>
+                                <a href="https://twitter.com/virtonetwork" target="_blank" aria-label="Twitter">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z"/>
+                                    </svg>
+                                </a>
+                                <a href="https://matrix.to/#/#dev:virto.community" target="_blank" aria-label="Element">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 32 32" fill="currentColor">
+                                        <path fill-rule="evenodd" clip-rule="evenodd" d="M16 32C24.8365 32 32 24.8365 32 16C32 7.16346 24.8365 0 16 0C7.16346 0 0 7.16346 0 16C0 24.8365 7.16346 32 16 32Z"/>
+                                        <path fill-rule="evenodd" clip-rule="evenodd" d="M13.0781 7.45456C13.0781 6.8087 13.6028 6.28516 14.25 6.28516C18.6364 6.28516 22.1923 9.83367 22.1923 14.211C22.1923 14.8568 21.6676 15.3804 21.0205 15.3804C20.3733 15.3804 19.8486 14.8568 19.8486 14.211C19.8486 11.1254 17.342 8.62396 14.25 8.62396C13.6028 8.62396 13.0781 8.10039 13.0781 7.45456Z" fill="white"/>
+                                        <path fill-rule="evenodd" clip-rule="evenodd" d="M24.5439 13.043C25.1911 13.043 25.7157 13.5665 25.7157 14.2124C25.7157 18.5897 22.1598 22.1382 17.7734 22.1382C17.1262 22.1382 16.6016 21.6147 16.6016 20.9688C16.6016 20.323 17.1262 19.7994 17.7734 19.7994C20.8655 19.7994 23.3721 17.298 23.3721 14.2124C23.3721 13.5665 23.8967 13.043 24.5439 13.043Z" fill="white"/>
+                                        <path fill-rule="evenodd" clip-rule="evenodd" d="M18.9423 24.543C18.9423 25.1889 18.4176 25.7124 17.7705 25.7124C13.384 25.7124 9.82812 22.1639 9.82812 17.7866C9.82812 17.1407 10.3528 16.6172 11 16.6172C11.6471 16.6172 12.1718 17.1407 12.1718 17.7866C12.1718 20.8722 14.6784 23.3736 17.7705 23.3736C18.4176 23.3736 18.9423 23.8972 18.9423 24.543Z" fill="white"/>
+                                        <path fill-rule="evenodd" clip-rule="evenodd" d="M7.46086 18.9585C6.81369 18.9585 6.28906 18.435 6.28906 17.7891C6.28903 13.4118 9.84495 9.86328 14.2314 9.86328C14.8786 9.86328 15.4032 10.3869 15.4032 11.0327C15.4032 11.6785 14.8786 12.2021 14.2314 12.2021C11.1393 12.2021 8.63269 14.7035 8.63269 17.7891C8.63269 18.435 8.10806 18.9585 7.46086 18.9585Z" fill="white"/>
+                                    </svg>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="footer-column">
+                        <h4 class="footer-heading collapsible" data-target="product-links">
+                            Product
+                            <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </h4>
+                        <ul class="footer-links collapsible-content" id="product-links">
+                            <li><a href="#demo">Demo</a></li>
+                            <li><a href="https://ailens-organization.gitbook.io/virto-connect" target="_blank">Documentation</a></li>
+                            <li><a href="https://github.com/virto-network/virto-sdk" target="_blank">Releases</a></li>
+                        </ul>
+                    </div>
+
+                    <div class="footer-column">
+                        <h4 class="footer-heading collapsible" data-target="resources-links">
+                            Resources
+                            <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </h4>
+                        <ul class="footer-links collapsible-content" id="resources-links">
+                            <li><a href="https://virto.network" target="_blank">Virto Network</a></li>
+                            <li><a href="https://ailens-organization.gitbook.io/virto-connect/api/vos-mock" target="_blank">API Reference</a></li>
+                            <li><a href="https://github.com/virto-network/virto-sdk/issues" target="_blank">Support</a></li>
+                            <li><a href="https://virto.network/blog" target="_blank">Blog</a></li>
+                        </ul>
+                    </div>
+
+                    <div class="footer-column">
+                        <h4 class="footer-heading collapsible" data-target="community-links">
+                            Community
+                            <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </h4>
+                        <ul class="footer-links collapsible-content" id="community-links">
+                            <li><a href="https://github.com/virto-network" target="_blank">GitHub</a></li>
+                            <li><a href="https://matrix.to/#/#dev:virto.community" target="_blank">Element</a></li>
+                            <li><a href="https://twitter.com/virtonetwork" target="_blank">Twitter</a></li>
+                            <li><a href="https://t.me/virtonetwork" target="_blank">Telegram</a></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="footer-bottom">
+                    <div class="footer-bottom-content">
+                        <div class="footer-bottom-left">
+                            <p>&copy; 2025 Virto Network.</p>
+                        </div>
+                        <div class="footer-bottom-right">
+                            <span class="footer-version">v0.0.0</span>
+                            <div class="footer-status">
+                                <div class="status-indicator"></div>
+                                <span>All systems operational</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+        </div>
+
+        <div id="spinner" style="display: none;">
+            <div id="spinner-text">Processing...</div>
+            <div class="spinner-icon"></div>
+        </div>
+        
+        <virto-connect id="virtoConnect" server="/api"></virto-connect>
+        <virto-connect id="previewVirtoConnect" server="/api"></virto-connect>
+        
         <wa-dialog id="help-dialog" light-dismiss with-header with-footer>
             <header slot="label">
                 <h2>How to create a custom extrinsic</h2>
@@ -731,6 +2885,175 @@
             let address = null;
             let wsControl = null;
             let host = window.location.hostname;
+
+            function initTabs() {
+                const tabButtons = document.querySelectorAll('.tab-button');
+                const tabContents = document.querySelectorAll('.tab-content');
+                const contentSection = document.getElementById('content-section');
+
+                tabButtons.forEach(button => {
+                    button.addEventListener('click', () => {
+                        const targetTab = button.getAttribute('data-tab');
+                        
+                        tabButtons.forEach(btn => btn.classList.remove('active'));
+                        tabContents.forEach(content => content.classList.remove('active'));
+                        
+                        button.classList.add('active');
+                        document.getElementById(`${targetTab}-tab`).classList.add('active');
+                    });
+                });
+
+                const heroDemoBtn = document.getElementById('hero-demo-btn');
+                const heroDeveloperBtn = document.getElementById('hero-developer-btn');
+
+                if (heroDemoBtn) {
+                    heroDemoBtn.addEventListener('click', () => {
+                        contentSection.classList.add('active');
+                        
+                        tabButtons.forEach(btn => btn.classList.remove('active'));
+                        tabContents.forEach(content => content.classList.remove('active'));
+                        
+                        document.querySelector('[data-tab="demo"]').classList.add('active');
+                        document.getElementById('demo-tab').classList.add('active');
+                        
+                        contentSection.scrollIntoView({ 
+                            behavior: 'smooth' 
+                        });
+                    });
+                }
+
+                if (heroDeveloperBtn) {
+                    heroDeveloperBtn.addEventListener('click', () => {
+                        contentSection.classList.add('active');
+                        
+                        tabButtons.forEach(btn => btn.classList.remove('active'));
+                        tabContents.forEach(content => content.classList.remove('active'));
+                        
+                        document.querySelector('[data-tab="developer"]').classList.add('active');
+                        document.getElementById('developer-tab').classList.add('active');
+                        
+                        contentSection.scrollIntoView({ 
+                            behavior: 'smooth' 
+                        });
+                    });
+                }
+            }
+
+            function initCustomization() {
+                const customizationControls = {
+                    'green-color': '--green',
+                    'dark-green-color': '--dark-green',
+                    'light-green-color': '--lightgreen',
+                    'extra-light-green-color': '--extra-light-green',
+                    'text-color': '--darkslategray',
+                    'primary-font': '--font-primary',
+                    'secondary-font': '--font-secondary'
+                };
+
+                Object.keys(customizationControls).forEach(controlId => {
+                    const control = document.getElementById(controlId);
+                    const valueInput = document.getElementById(`${controlId}-value`);
+                    
+                    if (control && control.type === 'color' && valueInput) {
+                        control.addEventListener('input', (e) => {
+                            valueInput.value = e.target.value;
+                            updateCSSVariable(customizationControls[controlId], e.target.value);
+                            updateCSSOutput();
+                        });
+
+                        valueInput.addEventListener('input', (e) => {
+                            if (isValidColor(e.target.value)) {
+                                control.value = e.target.value;
+                                updateCSSVariable(customizationControls[controlId], e.target.value);
+                                updateCSSOutput();
+                            }
+                        });
+                    } else if (control && control.tagName === 'SELECT') {
+                        control.addEventListener('change', (e) => {
+                            updateCSSVariable(customizationControls[controlId], e.target.value);
+                            updateCSSOutput();
+                        });
+                    }
+                });
+
+                updateCSSOutput();
+
+                document.getElementById('copy-css').addEventListener('click', () => {
+                    const cssOutput = document.getElementById('css-output').textContent;
+                    navigator.clipboard.writeText(cssOutput).then(() => {
+                        showSuccessNotification('CSS Copied!', 'The CSS variables have been copied to your clipboard.');
+                    });
+                });
+
+                document.getElementById('reset-customization').addEventListener('click', () => {
+                    const defaults = {
+                        'green-color': '#24AF37',
+                        'dark-green-color': '#006B0A',
+                        'light-green-color': 'lightgreen',
+                        'extra-light-green-color': '#DDFBE0',
+                        'text-color': 'darkslategray',
+                        'primary-font': 'Outfit, sans-serif',
+                        'secondary-font': 'Plus Jakarta, sans-serif'
+                    };
+
+                    Object.keys(defaults).forEach(controlId => {
+                        const control = document.getElementById(controlId);
+                        const valueInput = document.getElementById(`${controlId}-value`);
+                        
+                        if (control) {
+                            control.value = defaults[controlId];
+                            
+                            if (valueInput) {
+                                valueInput.value = defaults[controlId];
+                            }
+                            
+                            const cssVar = customizationControls[controlId];
+                            if (cssVar) {
+                                updateCSSVariable(cssVar, defaults[controlId]);
+                            }
+                        }
+                    });
+
+                    updateCSSOutput();
+                    
+                    showSuccessNotification('Settings Reset!', 'All customization settings have been restored to their default values.');
+                });
+
+                document.getElementById('preview-connect-button').addEventListener('click', () => {
+                    const previewConnect = document.getElementById('previewVirtoConnect');
+                    if (previewConnect) {
+                        previewConnect.open();
+                    }
+                });
+            }
+
+            function isValidColor(color) {
+                const s = new Option().style;
+                s.color = color;
+                return s.color !== '';
+            }
+
+            function updateCSSVariable(variable, value) {
+                document.documentElement.style.setProperty(variable, value);
+            }
+
+            function updateCSSOutput() {
+                const cssVariables = {
+                    '--green': document.getElementById('green-color').value,
+                    '--dark-green': document.getElementById('dark-green-color').value,
+                    '--lightgreen': document.getElementById('light-green-color').value,
+                    '--extra-light-green': document.getElementById('extra-light-green-color').value,
+                    '--darkslategray': document.getElementById('text-color').value,
+                    '--font-primary': document.getElementById('primary-font').value,
+                    '--font-secondary': document.getElementById('secondary-font').value
+                };
+
+                const cssOutput = `:root {\n${Object.entries(cssVariables)
+                    .map(([key, value]) => `  ${key}: ${value};`)
+                    .join('\n')}\n}`;
+
+                document.getElementById('css-output').textContent = cssOutput;
+            }
 
             const connectButton = document.getElementById('connect-button');
             connectButton.setAttribute("disabled", "");
@@ -886,7 +3209,8 @@
                         const result = await virtoConnect.sdk.auth.sign(username, command);
                         console.log("Result sign", result)
                         step4Indicator.classList.add('completed');
-                        showSuccessNotification();
+                        showSuccessNotification("Extrinsic Signed Successfully!", "Your extrinsic has been successfully signed and sent to the blockchain.");
+                        showConfetti();
                     } catch (err) {
                         const errorMsg = document.getElementById("remark-error");
                         if (errorMsg) {
@@ -911,7 +3235,7 @@
             });
 
             async function startSession() {
-                let rpcHost = `wss://${host}`;
+                let rpcHost = `ws://${host}`;
                 
                 const cookies = document.cookie.split(';');
                 const sessionCookie = cookies.find(cookie => cookie.trim().startsWith('sessionId='));
@@ -931,7 +3255,6 @@
                 }
                 
                 const data = await resp.json();
-                data.port = 10000 + data.port;
 
                 console.log({data})
                 
@@ -957,6 +3280,10 @@
                 const providerUrl = `${rpcHost}:${data.port}`;
                 wsControl = data.port;
                 virtoConnect.setAttribute('provider-url', providerUrl);
+
+                const previewConnect = document.getElementById('previewVirtoConnect');
+                previewConnect.setSessionId(sessionId);
+                previewConnect.setAttribute('provider-url', providerUrl);
 
                 step1Indicator.classList.add('completed');
 
@@ -993,7 +3320,7 @@
             
             function updatePolkadotLink() {
                 if (wsControl) {
-                    const rpcUrl = `wss://${host}:${wsControl}`;
+                    const rpcUrl = `ws://${host}:${wsControl}`;
                     console.log('rpcUrl', rpcUrl)
                     const encodedRpc = encodeURIComponent(rpcUrl);
                     const currentExtrinsic = document.getElementById('extrinsic-input').value.trim();
@@ -1016,7 +3343,7 @@
                 updatePolkadotLink();
             });
 
-            function showSuccessNotification() {
+            function showSuccessNotification(title, message) {
                 const notification = document.createElement('div');
                 notification.className = 'success-notification';
                 notification.innerHTML = `
@@ -1026,13 +3353,11 @@
                         </svg>
                     </div>
                     <div class="success-content">
-                        <div class="success-title">Extrinsic Signed Successfully!</div>
-                        <div class="success-message">Your extrinsic has been successfully signed and sent to the blockchain.</div>
+                        <div class="success-title">${title}</div>
+                        <div class="success-message">${message}</div>
                     </div>
                 `;
                 document.body.appendChild(notification);
-                
-                showConfetti();
 
                 setTimeout(() => {
                     notification.classList.add('fade-out');
@@ -1140,6 +3465,82 @@
                     switchWrapper.classList.remove('highlight-error');
                 }
             });
+
+            document.addEventListener('DOMContentLoaded', function() {
+                initTabs();
+                initCustomization();
+                initFooterAccordion();
+            });
+
+            function initFooterAccordion() {
+                console.log('Initializing footer accordion...');
+                
+                const collapsibleHeaders = document.querySelectorAll('.footer-heading.collapsible');
+                
+                collapsibleHeaders.forEach((header, index) => {
+                    console.log(`Header ${index}:`, header.textContent);
+                    
+                    header.addEventListener('click', function(e) {
+                        console.log('Header clicked:', this.textContent);
+                        
+                        const isMobile = window.innerWidth <= 768;
+                        
+                        if (!isMobile) {
+                            console.warn('Not mobile, ignoring click');
+                            return;
+                        }
+                        
+                        const parentColumn = this.closest('.footer-column');
+                        const allColumns = document.querySelectorAll('.footer-column');
+                        const isFirstColumn = parentColumn === allColumns[0];
+                        
+                        if (isFirstColumn) {
+                            console.warn('First column clicked, ignoring');
+                            return;
+                        }
+                        
+                        const targetId = this.getAttribute('data-target');
+                        const content = document.getElementById(targetId);
+                        
+                        console.log('Target ID:', targetId);
+                        console.log('Content element:', content);
+                        
+                        if (!content) {
+                            console.warn('Content not found!');
+                            return;
+                        }
+                        
+                        const isCollapsed = content.classList.contains('collapsed');
+                        console.log('Is collapsed:', isCollapsed);
+                        
+                        if (isCollapsed) {
+                            this.classList.add('expanded');
+                            content.classList.remove('collapsed');
+                        } else {
+                            this.classList.remove('expanded');
+                            content.classList.add('collapsed');
+                        }
+                    });
+                });
+                
+                function handleResize() {
+                    const isMobile = window.innerWidth <= 768;
+                    
+                    if (!isMobile) {
+                        collapsibleHeaders.forEach(header => {
+                            const targetId = header.getAttribute('data-target');
+                            const content = document.getElementById(targetId);
+                            if (content) {
+                                header.classList.remove('expanded');
+                                content.classList.remove('collapsed');
+                            }
+                        });
+                    }
+                }
+                
+                window.addEventListener('resize', handleResize);
+                handleResize();
+            }
         </script>
 </body>
 
