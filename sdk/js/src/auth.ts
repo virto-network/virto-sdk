@@ -3,6 +3,17 @@ import { arrayBufferToBase64Url, hexToUint8Array } from "./utils/base64";
 import SessionManager from "./manager";
 import { WalletType } from "./factory/walletFactory";
 import { BaseProfile, Command, User } from "./types";
+import { Blake2256 } from "@polkadot-api/substrate-bindings";
+import { mergeUint8 } from "polkadot-api/utils";
+import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
+import { Binary, PolkadotClient } from "polkadot-api";
+import {
+  CredentialsHandler,
+  WebAuthn as PasskeysAuthenticator,
+} from "@virtonetwork/authenticators-webauthn";
+import { KreivoPassSigner } from "@virtonetwork/signer";
+import { ss58Encode } from "@polkadot-labs/hdkd-helpers";
+import { getPolkadotSigner } from "polkadot-api/dist/reexports/signer";
 
 let base64Module: typeof import("./utils/base64.browser") | null = null;
 
@@ -31,8 +42,12 @@ export interface PreparedRegistrationData {
 }
 
 export default class Auth {
+  private _client: PolkadotClient | null = null;
+
   constructor(
     private readonly baseUrl: string,
+    private readonly credentialsHandler: CredentialsHandler,
+    private readonly clientFactory: () => Promise<PolkadotClient>,
     private readonly sessionManager: SessionManager,
     private readonly defaultWalletType: WalletType
   ) {
@@ -41,6 +56,14 @@ export default class Auth {
       loadBase64Module();
     }
   }
+
+  private async getClient(): Promise<PolkadotClient> {
+    if (!this._client) {
+      this._client = await this.clientFactory();
+    }
+    return this._client;
+  }
+
   /**
    * This method is only available in browser environments as it uses WebAuthn APIs.
    * It performs the complete registration process by:
@@ -54,8 +77,42 @@ export default class Auth {
   async register<Profile extends BaseProfile>(
     user: User<Profile>
   ) {
-    const preparedData = await this.prepareRegistration(user);
-    return this.completeRegistration(preparedData);
+    const passkeysAuthenticator = await new PasskeysAuthenticator(
+      user.profile.id,
+      this.blockHashChallenge.bind(this),
+      this.credentialsHandler
+    ).setup();
+    const passSigner = new KreivoPassSigner(passkeysAuthenticator);
+    const passAccountAddress = ss58Encode(passSigner.publicKey);
+
+    /// Registers Charlotte (esto viene en VOS)
+    const client = await this.getClient();
+    const finalizedBlock = await client.getFinalizedBlock();
+    const attestation = await passkeysAuthenticator.register(finalizedBlock.number);
+
+    const attestationJSON = {
+      authenticatorData: attestation.authenticator_data.asHex(),
+      clientData: attestation.client_data.asText(),
+      publicKey: attestation.public_key.asHex(),
+      meta: {
+        deviceId: attestation.meta.device_id.asHex(),
+        context: attestation.meta.context,
+        authorityId: attestation.meta.authority_id.asHex(),
+      },
+    };
+
+    const postRes = await fetch(`${this.baseUrl}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(), attestationResponse: attestationJSON, blockNumber: finalizedBlock.number }),
+    });
+
+    const data = await postRes.json();
+    console.log("Post-register response:", data);
+
+    return data;
+    // const preparedData = await this.prepareRegistration(user);
+    // return this.completeRegistration(preparedData);
   }
 
   /**
@@ -155,8 +212,37 @@ export default class Auth {
    * @returns Promise with the connection result
    */
   async connect(userId: string) {
-    const preparedData = await this.prepareConnection(userId);
-    return this.completeConnection(preparedData);
+    const passkeysAuthenticator = await new PasskeysAuthenticator(
+      userId,
+      this.blockHashChallenge.bind(this),
+      this.credentialsHandler
+    ).setup();
+    const passSigner = new KreivoPassSigner(passkeysAuthenticator);
+    const passAccountAddress = ss58Encode(passSigner.publicKey);
+
+    const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+    // Adds a session
+    const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
+    const MINUTES = 10; // 10 blocks in a minute
+    const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
+      session: MultiAddress.Id(sessionKey),
+      duration: 15 * MINUTES,
+    });
+
+    const tx3Res = await charlotteStartsASession.signAndSubmit(sessionSigner);
+    console.log(tx3Res);
+
+    // // With a session key: Remarks with event
+    const charlotteRemarksWithEvent = kreivoApi.tx.System.remark_with_event({
+      remark: Binary.fromText(
+        "Hi, I'm Charlotte, and I signed this using a Session Key"
+      ),
+    });
+
+    const tx4Res = await charlotteRemarksWithEvent.signAndSubmit(sessionSigner);
+    console.log(tx4Res);
+    // const preparedData = await this.prepareConnection(userId);
+    // return this.completeConnection(preparedData);
   }
 
   /**
@@ -296,5 +382,13 @@ export default class Auth {
       signedExtrinsic,
       originalExtrinsic: command.hex
     };
+  }
+
+  private blockHashChallenge = async (ctx: number, xtc: Uint8Array) => {
+    const client = await this.getClient();
+    const hash = await client._request("chain_getBlockHash", [ctx]);
+    const blockHash = Binary.fromHex(hash);
+
+    return Blake2256(mergeUint8(blockHash.asBytes(), xtc));
   }
 }

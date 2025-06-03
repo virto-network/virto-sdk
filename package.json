@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@polkadot-api/substrate-bindings": "^0.14.0"
+  }
+}
