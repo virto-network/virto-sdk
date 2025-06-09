@@ -34,7 +34,7 @@ jobs:
             libxdamage1 \
             libxrandr2 \
             libgbm-dev \
-            libasound2 \
+            libasound2t64 \
             libgtk-3-0 \
             libxfixes3 \
             libxkbcommon-dev \
