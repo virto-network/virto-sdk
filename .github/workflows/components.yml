@@ -1,0 +1,39 @@
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org/'
+
+      - name: 🏗️ Install Dependencies
+        run: npm ci
+        working-directory: ./components
+
+      - name: Install minimal Chrome dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnss3 \
+            libatk1.0-0 \
+            libxss1 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxrandr2 \
+            libgbm-dev \
+            libasound2 \
+            libgtk-3-0 \
+            libxfixes3 \
+            libxkbcommon-dev \
+            libdbus-1-3 \
+            fonts-liberation \
+            xdg-utils \
+            xvfb
+        working-directory: ./components
+
+      - name: 🧪 Run Web Test Runner Tests
+        run: xvfb-run --auto-servernum npx web-test-runner
+        working-directory: ./components
