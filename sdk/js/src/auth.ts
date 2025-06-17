@@ -2,7 +2,8 @@ import { VError } from "./utils/error";
 import { arrayBufferToBase64Url, hexToUint8Array } from "./utils/base64";
 import SessionManager from "./manager";
 import { WalletType } from "./factory/walletFactory";
-import { BaseProfile, Command, User } from "./types";
+import { BaseProfile, Command, User, PepperData } from "./types";
+import { PepperManager } from "./pepper";
 
 let base64Module: typeof import("./utils/base64.browser") | null = null;
 
@@ -28,19 +29,34 @@ export interface PreparedRegistrationData {
   userId: string;
   attestationResponse: PreparedCredentialData;
   blockNumber: number;
+  pepper?: PepperData;
 }
 
 export default class Auth {
   constructor(
     private readonly baseUrl: string,
     private readonly sessionManager: SessionManager,
-    private readonly defaultWalletType: WalletType
+    private readonly defaultWalletType: WalletType,
+    private readonly pepperManager: PepperManager
   ) {
     // Preload the module if we're in a browser environment
     if (typeof window !== "undefined") {
       loadBase64Module();
     }
   }
+
+  /**
+   * Gets information about the required pepper type for registration
+   * @returns Object containing pepper configuration information
+   */
+  getPepperInfo() {
+    return {
+      required: this.pepperManager.isPepperRequired(),
+      type: this.pepperManager.getConfiguredPepperType(),
+      supportedTypes: this.pepperManager.getSupportedPepperTypes()
+    };
+  }
+
   /**
    * This method is only available in browser environments as it uses WebAuthn APIs.
    * It performs the complete registration process by:
@@ -49,12 +65,14 @@ export default class Auth {
    * 
    * @throws {VError} If credential creation fails
    * @param user - The user object containing profile and metadata
+   * @param pepper - Optional pepper data for additional privacy
    * @returns Promise with the registration result
    */
   async register<Profile extends BaseProfile>(
-    user: User<Profile>
+    user: User<Profile>,
+    pepper?: PepperData
   ) {
-    const preparedData = await this.prepareRegistration(user);
+    const preparedData = await this.prepareRegistration(user, pepper);
     return this.completeRegistration(preparedData);
   }
 
@@ -64,20 +82,31 @@ export default class Auth {
    * the WebAuthn API (navigator.credentials).
    * 
    * The method:
-   * 1. Fetches attestation options from the server
-   * 2. Creates a new credential using WebAuthn
-   * 3. Formats the credential data for server submission
+   * 1. Validates pepper if provided
+   * 2. Fetches attestation options from the server
+   * 3. Creates a new credential using WebAuthn
+   * 4. Formats the credential data for server submission
    * 
-   * @throws {VError} If credential creation fails
+   * @throws {VError} If credential creation fails or pepper validation fails
    * @param user - The user object containing profile and metadata
+   * @param pepper - Optional pepper data for additional privacy
    * @returns Promise with the prepared registration data
    */
   async prepareRegistration<Profile extends BaseProfile>(
-    user: User<Profile>
+    user: User<Profile>,
+    pepper?: PepperData
   ): Promise<PreparedRegistrationData> {
+    let validatedPepper: PepperData | undefined;
+    if (pepper) {
+      validatedPepper = this.pepperManager.preparePepper(pepper);
+    } else if (this.pepperManager.isPepperRequired()) {
+      throw new VError("E_PEPPER_REQUIRED", `Pepper is required for registration.`);
+    }
+
     const queryParams = new URLSearchParams({
       id: user.profile.id,
-      ...(user.profile.name && { name: user.profile.name })
+      ...(user.profile.name && { name: user.profile.name }),
+      ...(validatedPepper && { pepper: JSON.stringify(validatedPepper) })
     });
     const preRes = await fetch(`${this.baseUrl}/attestation?${queryParams}`, {
       method: "GET",
@@ -116,7 +145,8 @@ export default class Auth {
     return {
       userId: user.profile.id,
       attestationResponse: credentialData,
-      blockNumber: attestation.blockNumber
+      blockNumber: attestation.blockNumber,
+      ...(validatedPepper && { pepper: validatedPepper })
     };
   }
 

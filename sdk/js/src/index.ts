@@ -9,5 +9,8 @@ export { default as ServerAuth } from './serverAuth';
 // Shared types
 export type { PreparedCredentialData, PreparedRegistrationData } from './auth';
 export type { PreparedConnectionData } from './serverAuth';
-export type { Command, BaseProfile, User } from './types';
-export { WalletType } from './types'; 
+export type { Command, BaseProfile, User, PepperData, PepperConfig, PepperHandler, CodePepperConfig } from './types';
+export { WalletType, PepperType } from './types';
+
+// Pepper system exports
+export { PepperManager, CodePepperHandler } from './pepper'; 
