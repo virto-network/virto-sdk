@@ -13,7 +13,9 @@ import {
 } from "@virtonetwork/authenticators-webauthn";
 import { KreivoPassSigner } from "@virtonetwork/signer";
 import { ss58Encode } from "@polkadot-labs/hdkd-helpers";
+import { decodeAddress } from "@polkadot/util-crypto";
 import { getPolkadotSigner } from "polkadot-api/dist/reexports/signer";
+import { polkadotSigner } from "./signer";
 
 let base64Module: typeof import("./utils/base64.browser") | null = null;
 
@@ -74,6 +76,7 @@ export default class Auth {
    * @param user - The user object containing profile and metadata
    * @returns Promise with the registration result
    */
+
   async register<Profile extends BaseProfile>(
     user: User<Profile>
   ) {
@@ -90,27 +93,61 @@ export default class Auth {
     const finalizedBlock = await client.getFinalizedBlock();
     const attestation = await passkeysAuthenticator.register(finalizedBlock.number);
 
-    const attestationJSON = {
-      authenticatorData: attestation.authenticator_data.asHex(),
-      clientData: attestation.client_data.asText(),
-      publicKey: attestation.public_key.asHex(),
-      meta: {
-        deviceId: attestation.meta.device_id.asHex(),
-        context: attestation.meta.context,
-        authorityId: attestation.meta.authority_id.asHex(),
-      },
-    };
+    const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
 
-    const postRes = await fetch(`${this.baseUrl}/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(), attestationResponse: attestationJSON, blockNumber: finalizedBlock.number }),
+    const registerCharlotte = kreivoApi.tx.Pass.register({
+      user: Binary.fromBytes(passkeysAuthenticator.hashedUserId),
+      attestation: {
+        type: "WebAuthn",
+        value: attestation,
+      },
     });
 
-    const data = await postRes.json();
-    console.log("Post-register response:", data);
+    const tx1Res = await registerCharlotte.signAndSubmit(polkadotSigner);
+    console.log({ tx1Res });
 
-    return data;
+    console.log("passAccountAddress", passAccountAddress);
+
+    // // Transfers 1 KSM to Charlotte (easier as of now than buying a membership, sorry :'v)
+    // const transferToCharlotte = kreivoApi.tx.Balances.transfer_keep_alive({
+    //   dest: MultiAddress.Id(passAccountAddress),
+    //   value: 1_000_000_000_000n,
+    // });
+
+    // const tx2Res = await transferToCharlotte.signAndSubmit(polkadotSigner);
+    // console.log(tx2Res);
+
+    const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
+    const MINUTES = 10; // 10 blocks in a minute
+    const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
+      session: MultiAddress.Id(sessionKey),
+      duration: 15 * MINUTES,
+    });
+
+    const tx3Res = await charlotteStartsASession.signAndSubmit(sessionSigner);
+    console.log(tx3Res);
+
+    // // With a session key: Remarks with event
+    const charlotteRemarksWithEvent = kreivoApi.tx.System.remark_with_event({
+      remark: Binary.fromText(
+        "Hi, I'm Charlotte, and I signed this using a Session Key"
+      ),
+    });
+
+    const tx4Res = await charlotteRemarksWithEvent.signAndSubmit(sessionSigner);
+    console.log(tx4Res);
+
+    // const postRes = await fetch(`${this.baseUrl}/register`, {
+    //   method: "POST",
+    //   headers: { "Content-Type": "application/json" },
+    //   body: JSON.stringify({ userId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(), attestationResponse: attestationJSON, blockNumber: finalizedBlock.number }),
+    // });
+
+    // const data = await postRes.json();
+    // console.log("Post-register response:", data);
+
+    
+    return tx3Res;
     // const preparedData = await this.prepareRegistration(user);
     // return this.completeRegistration(preparedData);
   }
@@ -212,6 +249,7 @@ export default class Auth {
    * @returns Promise with the connection result
    */
   async connect(userId: string) {
+    console.log("Connecting to user:", userId);
     const passkeysAuthenticator = await new PasskeysAuthenticator(
       userId,
       this.blockHashChallenge.bind(this),
