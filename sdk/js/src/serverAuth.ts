@@ -115,7 +115,7 @@ export default class ServerAuth {
   async signWithToken(token: string, command: Command) {
     const payload = this.verifyToken(token);
 
-    const session = this.sessionManager.getSession(payload.userId);
+    const session = await this.sessionManager.getSession(payload.userId);
     if (!session) {
       throw new VError("E_SESSION_NOT_FOUND", "Session not found for this token");
     }
@@ -244,7 +244,7 @@ export default class ServerAuth {
    * @throws {VError} If the wallet cannot be retrieved from the session manager
    */
   private async sign(userId: string, command: Command) {
-    const wallet = this.sessionManager.getWallet(userId);
+    const wallet = await this.sessionManager.getWallet(userId);
     console.log({ wallet })
 
     if (!wallet) {

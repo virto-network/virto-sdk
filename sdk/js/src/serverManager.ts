@@ -1,20 +1,26 @@
 import Wallet from "./wallet";
 import { WalletFactory } from "./factory/walletFactory";
 import { Command, WalletType } from "./types";
+import { IStorage, InMemoryImpl } from "./storage";
 
-interface ServerSession {
+export interface ServerSession {
     userId: string;
     createdAt: number;
     address: string;
-    wallet: Wallet;
+    wallet: Wallet | null;
     walletType: WalletType;
     mnemonic: string;
 }
 
 export default class ServerManager {
-    private sessions: Map<string, ServerSession> = new Map();
+    private storage: IStorage<ServerSession>;
 
-    constructor(private walletFactory: WalletFactory) { }
+    constructor(
+        private walletFactory: WalletFactory,
+        storage?: IStorage<ServerSession>
+    ) {
+        this.storage = storage || new InMemoryImpl<ServerSession>();
+    }
 
     async create(command: Command, userId: string, walletType: WalletType, mnemonic?: string) {
         const walletImpl = this.walletFactory.create(walletType, mnemonic);
@@ -29,33 +35,48 @@ export default class ServerManager {
             userId,
             createdAt: Date.now(),
             address,
-            wallet,
+            wallet: null,
             walletType,
             mnemonic: walletImpl.getMnemonic()
         };
 
-        this.sessions.set(JSON.stringify(userId), session);
+        const key = JSON.stringify(userId);
+        await this.storage.store(key, session);
 
         return {
             ok: true,
-            session
+            session: {
+                ...session,
+                wallet
+            }
         };
     }
 
-    getWallet(userId: string): Wallet | null {
-        const session = this.sessions.get(JSON.stringify(userId));
-        return session?.wallet || null;
+    async getWallet(userId: string): Promise<Wallet | null> {
+        const key = JSON.stringify(userId);
+        const session = await this.storage.get(key);
+        
+        if (!session) {
+            return null;
+        }
+
+        const walletImpl = this.walletFactory.create(session.walletType, session.mnemonic);
+        const wallet = new Wallet(walletImpl);
+        
+        return wallet;
     }
 
-    getSession(userId: string): ServerSession | undefined {
-        return this.sessions.get(JSON.stringify(userId));
+    async getSession(userId: string): Promise<ServerSession | null> {
+        const key = JSON.stringify(userId);
+        return await this.storage.get(key);
     }
 
-    getAllSessions(): ServerSession[] {
-        return Array.from(this.sessions.values());
+    async getAllSessions(): Promise<ServerSession[]> {
+        return await this.storage.getAll();
     }
 
-    removeSession(userId: string): boolean {
-        return this.sessions.delete(JSON.stringify(userId));
+    async removeSession(userId: string): Promise<boolean> {
+        const key = JSON.stringify(userId);
+        return await this.storage.remove(key);
     }
 } 
