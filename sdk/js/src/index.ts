@@ -1,6 +1,7 @@
 // Client SDK Exports (Browser)
 export { default as SDK } from './sdk';
 export { default as Auth } from './auth';
+export { default as Transfer } from './transfer';
 
 // Server SDK Exports (Node.js)
 export { default as ServerSDK } from './serverSdk';
@@ -13,5 +14,6 @@ export { LocalStorageImpl, InMemoryImpl } from './storage';
 // Shared types
 export type { PreparedCredentialData, PreparedRegistrationData } from './auth';
 export type { PreparedConnectionData } from './serverAuth';
+export type { TransferOptions, SendAllOptions, BalanceInfo, TransferResult } from './transfer';
 export type { Command, BaseProfile, User } from './types';
 export { WalletType } from './types'; 

@@ -19,7 +19,7 @@ export default defineConfig({
     }
   },
   server: {
-    port: 3017,
+    port: 3000,
     fs: {
       allow: ['../dist', '.']
     }

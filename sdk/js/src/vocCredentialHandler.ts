@@ -1,94 +1,150 @@
 import {
     CredentialsHandler,
 } from "@virtonetwork/authenticators-webauthn";
-import { arrayBufferToBase64Url, hexToUint8Array } from "./utils/base64";
-
-const RP_NAME = 'Example RP';
-
-async function hashUserId(userId: string): Promise<Uint8Array> {
-    try {
-        return new Uint8Array(
-            await crypto.subtle.digest(
-                "SHA-256",
-                new TextEncoder().encode(userId)
-            )
-        );
-    } catch (error) {
-        console.error('Error hashing user ID:', error);
-        throw new Error('Failed to hash user ID');
-    }
-}
+import { arrayBufferToBase64Url } from "./utils/base64";
+import { fromBase64Url } from "./utils/base64.browser";
 
 export class VOSCredentialsHandler implements CredentialsHandler {
+    private static readonly STORAGE_KEY = "vos_credentials";
+    
+    private static userCredentials: Record<string, Record<string, any>> = {};
+
     constructor(private baseURL: string) {
         console.log(this.baseURL);
+        this.loadCredentialsFromStorage();
+    }
+
+    private loadCredentialsFromStorage(): void {
+        try {
+            const stored = localStorage.getItem(VOSCredentialsHandler.STORAGE_KEY);
+            if (stored) {
+                const parsed = JSON.parse(stored);
+                for (const [userId, credentialId] of Object.entries(parsed)) {
+                    if (typeof credentialId === 'string') {
+                        const rawId = fromBase64Url(credentialId);
+                        VOSCredentialsHandler.userCredentials[userId] = {
+                            [credentialId]: {
+                                id: credentialId,
+                                rawId: rawId,
+                                type: "public-key"
+                            }
+                        };
+                    }
+                }
+                console.log("Loaded credentials from localStorage");
+            }
+            console.log("userCredentials", VOSCredentialsHandler.userCredentials);
+        } catch (error) {
+            console.error("Failed to load credentials:", error);
+        }
+    }
+
+    private static saveCredentialsToStorage(): void {
+        try {
+            const simple: Record<string, string> = {};
+            for (const [userId, credentials] of Object.entries(this.userCredentials)) {
+                const credentialEntries = Object.keys(credentials);
+                if (credentialEntries.length > 0 && credentialEntries[0]) {
+                    simple[userId] = credentialEntries[0]; // Take first credential
+                }
+            }
+            localStorage.setItem(this.STORAGE_KEY, JSON.stringify(simple));
+        } catch (error) {
+            console.error("Failed to save credentials:", error);
+        }
+    }
+
+    private static tryMutate(userId: string, f: (credentials: Record<string, any>) => void): void {
+        try {
+            let map = this.userCredentials[userId] ?? {};
+            f(map);
+            this.userCredentials[userId] = map;
+        } catch {
+            /* on error, no-op */
+        }
+    }
+
+    static credentialIds(userId: string): ArrayBufferLike[] {
+        const credentials = this.userCredentials[userId] ?? {};
+        return Object.entries(credentials).map(([, credential]) => credential.rawId);
+    }
+
+    async onCreatedCredentials(userId: string, credential: PublicKeyCredential): Promise<void> {
+        VOSCredentialsHandler.tryMutate(userId, (credentials) => {
+            credentials[credential.id] = credential;
+        });
+        
+        VOSCredentialsHandler.saveCredentialsToStorage();
+        
+        console.log("Saved credential for user:", userId);
     }
 
     publicKeyCreateOptions = async (
         challenge: Uint8Array,
         user: PublicKeyCredentialUserEntity
     ): Promise<CredentialCreationOptions["publicKey"]> => {
-        // const queryParams = new URLSearchParams({
-        //     id: arrayBufferToBase64Url(user.id),
-        //     challenge: arrayBufferToBase64Url(challenge),
-        //     ...(user.name && { name: user.name })
-        // });
-        // console.log(arrayBufferToBase64Url(challenge));
-        // const res = await fetch(`${this.baseURL}/attestation?${queryParams}`, {
-        //     method: "GET",
-        //     headers: { "Content-Type": "application/json" },
-        // });
-        // const response = await res.json();
-        // console.log("Server response:", response);
+        console.log("user", user);
+        const queryParams = new URLSearchParams({
+            id: user.name,
+            challenge: arrayBufferToBase64Url(challenge),
+            ...(user.name && { name: user.name })
+        });
+        console.log("challenge array buffer", arrayBufferToBase64Url(challenge));
+        const res = await fetch(`${this.baseURL}/attestation?${queryParams}`, {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+        });
+        const response = await res.json();
+        console.log("Server response:", response);
 
-        // const publicKeyOptions = response.publicKey;
-
-        // publicKeyOptions.challenge = challenge;
-        // if (Array.isArray(publicKeyOptions.user.id)) {
-        //     publicKeyOptions.user.id = new Uint8Array(publicKeyOptions.user.id);
-        // }
-        const hashedUserId = await hashUserId(user.id.toString());
-        const userIdArray = Array.from(hashedUserId);
-        const publicKey = {
-            rp: {
-                name: RP_NAME,
-            },
-            user: {
-                id: new Uint8Array(userIdArray),
-                name: user.id.toString(),
-                displayName: user.name as string ?? user.id.toString(),
-            },
-            challenge,
-            pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-            authenticatorSelection: { userVerification: "preferred" },
-            timeout: 60000,
-            attestation: "none",
-        } as unknown as PublicKeyCredentialCreationOptions;
-
-        console.log(publicKey);
-
+        const publicKey = response;
+        publicKey.challenge = challenge;
+        publicKey.user.id = new Uint8Array(publicKey.user.id);
+        
         return publicKey;
     }
-
-    onCreatedCredentials = async (
-        _userId: string,
-        _credentials: PublicKeyCredential
-    ): Promise<void> => { }
 
     publicKeyRequestOptions = async (
         userId: string,
         challenge: Uint8Array
     ): Promise<CredentialRequestOptions["publicKey"]> => {
+        console.log("userId", userId);
+        console.log("userId base64", arrayBufferToBase64Url(userId));
+
         const queryParams = new URLSearchParams({
-            userId: userId,
+            userId,
             challenge: arrayBufferToBase64Url(challenge),
         });
-        return fetch(`${this.baseURL}/assertion?${queryParams}`, {
-            body: JSON.stringify({
-                challenge: arrayBufferToBase64Url(challenge),
-            }),
-        }).then((response) => {
-            return response.json() as Promise<CredentialRequestOptions["publicKey"]>;
+
+        const res = await fetch(`${this.baseURL}/assertion?${queryParams}`, {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
         });
+        const response = await res.json();
+        console.log("Server response:", response);
+
+        const publicKey = response;
+
+        publicKey.allowCredentials[0].id = fromBase64Url(response.allowCredentials[0].id);
+        publicKey.challenge = challenge;
+
+        console.log("publicKey", publicKey);
+
+        return publicKey;
+    }
+
+    getCredentialIdForUser(userId: string): string | null {
+        console.log("Getting credential for user:", userId);
+        const credentials = VOSCredentialsHandler.userCredentials[userId] ?? {};
+        const credentialIds = Object.keys(credentials);
+        
+        if (credentialIds.length > 0) {
+            const credentialId = credentialIds[0];
+            console.log("Found credential ID:", credentialId);
+            return credentialId || null;
+        }
+        
+        console.log("No credential found for user");
+        return null;
     }
 }

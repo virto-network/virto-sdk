@@ -1,8 +1,4 @@
-import { VError } from "./utils/error";
-import { arrayBufferToBase64Url, hexToUint8Array } from "./utils/base64";
-import SessionManager from "./manager";
-import { WalletType } from "./factory/walletFactory";
-import { BaseProfile, Command, User } from "./types";
+import { BaseProfile, User } from "./types";
 import { Blake2256 } from "@polkadot-api/substrate-bindings";
 import { mergeUint8 } from "polkadot-api/utils";
 import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
@@ -13,9 +9,7 @@ import {
 } from "@virtonetwork/authenticators-webauthn";
 import { KreivoPassSigner } from "@virtonetwork/signer";
 import { ss58Encode } from "@polkadot-labs/hdkd-helpers";
-import { decodeAddress } from "@polkadot/util-crypto";
-import { getPolkadotSigner } from "polkadot-api/dist/reexports/signer";
-import { polkadotSigner } from "./signer";
+import { VOSCredentialsHandler } from "./vocCredentialHandler";
 
 let base64Module: typeof import("./utils/base64.browser") | null = null;
 
@@ -45,13 +39,13 @@ export interface PreparedRegistrationData {
 
 export default class Auth {
   private _client: PolkadotClient | null = null;
+  private _passkeysAuthenticator: PasskeysAuthenticator | null = null;
+  private _sessionSigner: any | null = null;
 
   constructor(
     private readonly baseUrl: string,
     private readonly credentialsHandler: CredentialsHandler,
     private readonly clientFactory: () => Promise<PolkadotClient>,
-    private readonly sessionManager: SessionManager,
-    private readonly defaultWalletType: WalletType
   ) {
     // Preload the module if we're in a browser environment
     if (typeof window !== "undefined") {
@@ -76,7 +70,7 @@ export default class Auth {
    * @param user - The user object containing profile and metadata
    * @returns Promise with the registration result
    */
-
+  
   async register<Profile extends BaseProfile>(
     user: User<Profile>
   ) {
@@ -85,157 +79,96 @@ export default class Auth {
       this.blockHashChallenge.bind(this),
       this.credentialsHandler
     ).setup();
+    
+    // Store the PasskeysAuthenticator for reuse in connect
+    this._passkeysAuthenticator = passkeysAuthenticator;
+    
     const passSigner = new KreivoPassSigner(passkeysAuthenticator);
     const passAccountAddress = ss58Encode(passSigner.publicKey);
+
+    console.log("before get client")
 
     /// Registers Charlotte (esto viene en VOS)
     const client = await this.getClient();
     const finalizedBlock = await client.getFinalizedBlock();
     const attestation = await passkeysAuthenticator.register(finalizedBlock.number);
 
-    const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+    console.log("attestation", attestation);
 
-    const registerCharlotte = kreivoApi.tx.Pass.register({
-      user: Binary.fromBytes(passkeysAuthenticator.hashedUserId),
-      attestation: {
-        type: "WebAuthn",
-        value: attestation,
+    const attestationJSON = {
+      authenticator_data: attestation.authenticator_data.asHex(),
+      client_data: attestation.client_data.asText(),
+      public_key: attestation.public_key.asHex(),
+      meta: {
+        deviceId: attestation.meta.device_id.asHex(),
+        context: attestation.meta.context,
+        authority_id: attestation.meta.authority_id.asHex(),
       },
-    });
-
-    const tx1Res = await registerCharlotte.signAndSubmit(polkadotSigner);
-    console.log({ tx1Res });
-
-    console.log("passAccountAddress", passAccountAddress);
-
-    // // Transfers 1 KSM to Charlotte (easier as of now than buying a membership, sorry :'v)
-    // const transferToCharlotte = kreivoApi.tx.Balances.transfer_keep_alive({
-    //   dest: MultiAddress.Id(passAccountAddress),
-    //   value: 1_000_000_000_000n,
-    // });
-
-    // const tx2Res = await transferToCharlotte.signAndSubmit(polkadotSigner);
-    // console.log(tx2Res);
-
-    const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
-    const MINUTES = 10; // 10 blocks in a minute
-    const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
-      session: MultiAddress.Id(sessionKey),
-      duration: 15 * MINUTES,
-    });
-
-    const tx3Res = await charlotteStartsASession.signAndSubmit(sessionSigner);
-    console.log(tx3Res);
-
-    // // With a session key: Remarks with event
-    const charlotteRemarksWithEvent = kreivoApi.tx.System.remark_with_event({
-      remark: Binary.fromText(
-        "Hi, I'm Charlotte, and I signed this using a Session Key"
-      ),
-    });
-
-    const tx4Res = await charlotteRemarksWithEvent.signAndSubmit(sessionSigner);
-    console.log(tx4Res);
-
-    // const postRes = await fetch(`${this.baseUrl}/register`, {
-    //   method: "POST",
-    //   headers: { "Content-Type": "application/json" },
-    //   body: JSON.stringify({ userId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(), attestationResponse: attestationJSON, blockNumber: finalizedBlock.number }),
-    // });
-
-    // const data = await postRes.json();
-    // console.log("Post-register response:", data);
-
-    
-    return tx3Res;
-    // const preparedData = await this.prepareRegistration(user);
-    // return this.completeRegistration(preparedData);
-  }
-
-  /**
-   * Prepares registration data on the client side using WebAuthn APIs.
-   * This method can only be called from a browser environment as it uses
-   * the WebAuthn API (navigator.credentials).
-   * 
-   * The method:
-   * 1. Fetches attestation options from the server
-   * 2. Creates a new credential using WebAuthn
-   * 3. Formats the credential data for server submission
-   * 
-   * @throws {VError} If credential creation fails
-   * @param user - The user object containing profile and metadata
-   * @returns Promise with the prepared registration data
-   */
-  async prepareRegistration<Profile extends BaseProfile>(
-    user: User<Profile>
-  ): Promise<PreparedRegistrationData> {
-    const queryParams = new URLSearchParams({
-      id: user.profile.id,
-      ...(user.profile.name && { name: user.profile.name })
-    });
-    const preRes = await fetch(`${this.baseUrl}/attestation?${queryParams}`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-    const attestation = await preRes.json();
-    console.log("Pre-register response:", attestation);
-
-    attestation.publicKey.challenge = hexToUint8Array(attestation.publicKey.challenge);
-    attestation.publicKey.user.id = new Uint8Array(attestation.publicKey.user.id);
-
-    const attestationResponse = await navigator.credentials.create(attestation);
-
-    if (!attestationResponse) {
-      throw new VError("E_CANT_CREATE_CREDENTIAL", "Credential creation failed");
-    }
-
-    const { id } = attestationResponse;
-    const rawId = (attestationResponse as PublicKeyCredential).rawId;
-    const response = (attestationResponse as PublicKeyCredential).response as AuthenticatorAttestationResponse;
-    const authenticatorData = response.getAuthenticatorData();
-    const clientDataJSON = response.clientDataJSON;
-    const publicKey = response.getPublicKey();
-
-    const credentialData: PreparedCredentialData = {
-      id,
-      rawId: arrayBufferToBase64Url(rawId),
-      type: attestationResponse.type,
-      response: {
-        authenticatorData: arrayBufferToBase64Url(authenticatorData),
-        clientDataJSON: arrayBufferToBase64Url(clientDataJSON),
-        publicKey: arrayBufferToBase64Url(publicKey),
-      }
     };
 
-    return {
-      userId: user.profile.id,
-      attestationResponse: credentialData,
-      blockNumber: attestation.blockNumber
-    };
-  }
-
-  /**
-   * Completes the registration process on the server side
-   * This method is designed to run in a Node.js environment as it doesn't use any browser APIs
-   * 
-   * @param preparedData - The registration data prepared by the client, including:
-   *   - userId: The unique identifier for the user
-   *   - attestationResponse: The WebAuthn credential data
-   *   - blockNumber: The blockchain block number for registration
-   * @returns Promise with the server's response to the registration
-   * @throws Will throw an error if the server request fails
-   */
-  async completeRegistration(preparedData: PreparedRegistrationData) {
+    console.log("hashedUserId", passkeysAuthenticator.hashedUserId);
+    console.log("credentialId", (this.credentialsHandler as VOSCredentialsHandler).getCredentialIdForUser(user.profile.id));
     const postRes = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(preparedData),
+      body: JSON.stringify({ 
+        userId: user.profile.id, 
+        hashedUserId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(), 
+        credentialId: (this.credentialsHandler as VOSCredentialsHandler).getCredentialIdForUser(user.profile.id),
+        address: passAccountAddress,
+        attestationResponse: attestationJSON
+      }),
     });
 
     const data = await postRes.json();
     console.log("Post-register response:", data);
 
     return data;
+  }
+  
+  /**
+   * Resets the Auth state, clearing any stored PasskeysAuthenticator and session signer
+   * This is useful when switching between different users or starting fresh
+   */
+  reset() {
+    this._passkeysAuthenticator = null;
+    this._sessionSigner = null;
+  }
+
+  /**
+   * Checks if a PasskeysAuthenticator is available for use
+   * 
+   * @returns true if a PasskeysAuthenticator is available, false otherwise
+   */
+  isAuthenticated(): boolean {
+    return this._passkeysAuthenticator !== null;
+  }
+
+  /**
+   * Checks if a session signer is available for use
+   * 
+   * @returns true if a session signer is available, false otherwise
+   */
+  hasSessionSigner(): boolean {
+    return this._sessionSigner !== null;
+  }
+
+  /**
+   * Gets the stored PasskeysAuthenticator instance
+   * 
+   * @returns The PasskeysAuthenticator instance or null if not available
+   */
+  get passkeysAuthenticator(): PasskeysAuthenticator | null {
+    return this._passkeysAuthenticator;
+  }
+
+  /**
+   * Gets the stored session signer
+   * 
+   * @returns The session signer or null if not available
+   */
+  get sessionSigner(): any | null {
+    return this._sessionSigner;
   }
 
   /**
@@ -246,133 +179,47 @@ export default class Auth {
    * 
    * @throws {VError} If credential retrieval fails
    * @param userId - The user ID to connect
-   * @returns Promise with the connection result
-   */
-  async connect(userId: string) {
+   /**
+    * Connects a user using WebAuthn and sets up a session key.
+    * @param userId - The user ID to connect
+    * @returns Promise<{ sessionKey: string, sessionSigner: any, transaction: any }>
+    */
+   async connect(userId: string): Promise<{ sessionKey: string, sessionSigner: any, transaction: any }> {
     console.log("Connecting to user:", userId);
+    
     const passkeysAuthenticator = await new PasskeysAuthenticator(
       userId,
       this.blockHashChallenge.bind(this),
       this.credentialsHandler
     ).setup();
-    const passSigner = new KreivoPassSigner(passkeysAuthenticator);
-    const passAccountAddress = ss58Encode(passSigner.publicKey);
 
+    this._passkeysAuthenticator = passkeysAuthenticator;
+    
+    const passSigner = new KreivoPassSigner(passkeysAuthenticator);
+
+    console.log("before get client");
     const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+    console.log("before make session key signer");
     // Adds a session
     const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
     const MINUTES = 10; // 10 blocks in a minute
+
+    console.log("sessionKey", sessionKey);
     const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
       session: MultiAddress.Id(sessionKey),
       duration: 15 * MINUTES,
     });
 
-    const tx3Res = await charlotteStartsASession.signAndSubmit(sessionSigner);
+    const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner);
     console.log(tx3Res);
-
-    // // With a session key: Remarks with event
-    const charlotteRemarksWithEvent = kreivoApi.tx.System.remark_with_event({
-      remark: Binary.fromText(
-        "Hi, I'm Charlotte, and I signed this using a Session Key"
-      ),
-    });
-
-    const tx4Res = await charlotteRemarksWithEvent.signAndSubmit(sessionSigner);
-    console.log(tx4Res);
-    // const preparedData = await this.prepareConnection(userId);
-    // return this.completeConnection(preparedData);
-  }
-
-  /**
-   * Prepares connection data on the client side using WebAuthn APIs.
-   * This method can only be called from a browser environment as it uses
-   * the WebAuthn API (navigator.credentials).
-   * 
-   * The method:
-   * 1. Fetches assertion options from the server
-   * 2. Gets existing credential using WebAuthn
-   * 3. Formats the credential data for server submission
-   * 
-   * @throws {VError} If credential retrieval fails
-   * @param userId - The user ID to connect
-   * @returns Promise with the prepared connection data
-   */
-  async prepareConnection(userId: string) {
-    const base64 = await loadBase64Module();
-
-    if (!base64) {
-      throw new VError("E_ENVIRONMENT", "This method can only be called in a browser environment");
-    }
-
-    const preRes = await fetch(`${this.baseUrl}/assertion?userId=${userId}`, {
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-
-    const assertion = await preRes.json();
-    console.log("Connect response:", assertion);
-
-    assertion.publicKey.challenge = hexToUint8Array(assertion.publicKey.challenge);
-
-    if (assertion.publicKey.allowCredentials) {
-      for (const desc of assertion.publicKey.allowCredentials) {
-        desc.id = base64.fromBase64Url(desc.id);
-      }
-    }
-
-    const assertionResponse = await navigator.credentials.get(assertion);
-    console.log("Credential response:", assertionResponse);
-
-    if (!assertionResponse) {
-      throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
-    }
-    const { id, rawId, response } = assertionResponse as PublicKeyCredential;
-    const { authenticatorData, clientDataJSON, signature } = response as AuthenticatorAssertionResponse;
-    const credentialData = {
-      id,
-      rawId: arrayBufferToBase64Url(rawId),
-      type: assertionResponse.type,
-      response: {
-        authenticatorData: arrayBufferToBase64Url(authenticatorData),
-        clientDataJSON: arrayBufferToBase64Url(clientDataJSON),
-        signature: arrayBufferToBase64Url(signature),
-      }
-    }
-
+    
+    // Store the session signer for later use
+    this._sessionSigner = sessionSigner;
+    
     return {
-      userId,
-      assertionResponse: credentialData,
-      blockNumber: assertion.blockNumber
-    };
-  }
-
-  /**
-   * Completes the connection process on the server side
-   * This method sends the prepared connection data to the server and establishes a session
-   * 
-   * @param preparedData - The connection data prepared by the client
-   * @returns Promise with the server's response and session information
-   * @throws Will throw an error if the server request fails
-   */
-  async completeConnection(preparedData: {
-    userId: string;
-    assertionResponse: any;
-    blockNumber: number;
-  }) {
-    const sessionPreparationRes = await fetch(`${this.baseUrl}/connect`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(preparedData),
-    });
-
-    const data = await sessionPreparationRes.json();
-    console.log("Post-connect response:", data);
-
-    const sessionResult = await this.sessionManager.create(data.command, preparedData.userId, this.defaultWalletType);
-
-    return {
-      ...data,
-      ...sessionResult
+      sessionKey,
+      sessionSigner,
+      transaction: tx3Res
     };
   }
 
@@ -395,31 +242,6 @@ export default class Auth {
     console.log("Is registered response:", data);
 
     return data.ok;
-  }
-
-  /**
-   * Signs a command using the user's wallet
-   * This method retrieves the user's wallet from the session manager and uses it to sign the provided command
-   * 
-   * @param userId - The ID of the user whose wallet will be used to sign
-   * @param command - The command object containing the data to be signed
-   * @returns Promise with the signed extrinsic and original command data
-   * @throws Will throw an error if the wallet cannot be retrieved from the session manager
-   */
-  async sign(userId: string, command: Command) {
-    const wallet = await this.sessionManager.getWallet(userId);
-    console.log({ wallet })
-    if (!wallet) {
-      throw new VError("E_CANT_GET_CREDENTIAL", "Credential retrieval failed");
-    }
-
-    const signedExtrinsic = await wallet.sign(command);
-
-    return {
-      userId,
-      signedExtrinsic,
-      originalExtrinsic: command.hex
-    };
   }
 
   private blockHashChallenge = async (ctx: number, xtc: Uint8Array) => {

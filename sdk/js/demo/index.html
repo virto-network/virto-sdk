@@ -28,6 +28,20 @@
          }</textarea>
         <button id="signButton">Sign</button>
       </div>
+      <div>
+        <h2>Transfer Balance</h2>
+        <input value="5HVWHfX8RoYqLzFiZvQFiuVGdo9HcEBSc3rE5wf7FXBUmwPg" id="transferDest" placeholder="Destination Address" style="width: 400px;" />
+        <input value="0.001" id="transferAmount" placeholder="Amount (e.g., 0.001)" />
+        <button id="transferButton">Send Transfer</button>
+        <button id="balanceButton">Check Balance</button>
+      </div>
+      <div>
+        <h2>Batch Demo (Transfer + Remark)</h2>
+        <input value="5HVWHfX8RoYqLzFiZvQFiuVGdo9HcEBSc3rE5wf7FXBUmwPg" id="batchDest" placeholder="Destination Address" style="width: 400px;" />
+        <input value="0.001" id="batchAmount" placeholder="Amount (e.g., 0.001)" />
+        <input value="Hello from batch!" id="batchMessage" placeholder="Remark Message" style="width: 300px;" />
+        <button id="batchButton">Execute Batch (Transfer + Remark)</button>
+      </div>
     </div>
     <script type="module" src="/src/demo.js"></script>
   </body>

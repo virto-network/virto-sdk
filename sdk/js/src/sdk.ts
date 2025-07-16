@@ -1,8 +1,7 @@
 import Auth from "./auth";
-import SessionManager from "./manager";
-import { SimpleWalletFactory } from "./factory/simpleWalletFactory";
-import { SubeFn, JsWalletBuilder } from "./wallet";
-import { WalletType } from "./factory/walletFactory";
+import Transfer, { DefaultUserService } from "./transfer";
+import System from "./system";
+import Utility from "./utility";
 import { IStorage } from "./storage";
 import { getWsProvider } from "polkadot-api/ws-provider/web";
 
@@ -12,9 +11,6 @@ import { VOSCredentialsHandler } from "./vocCredentialHandler";
 interface SDKOptions {
     federate_server: string;
     provider_url: string;
-    config: {
-        wallet: WalletType;
-    };
 }
 
 // Función para obtener el proveedor WebSocket correcto según el entorno
@@ -32,16 +28,16 @@ interface SDKOptions {
 
 export default class SDK {
     private _auth: Auth;
+    private _transfer: Transfer;
+    private _system: System;
+    private _utility: Utility;
 
     constructor(
         options: SDKOptions,
-        subeFn: SubeFn,
-        jsWalletFn: JsWalletBuilder,
         storage?: IStorage<any>,
     ) {
-        const factory = new SimpleWalletFactory(subeFn, jsWalletFn, options.provider_url);
-        const manager = new SessionManager(factory, storage);
         console.log(options.federate_server);
+        
         const credentialsHandler = new VOSCredentialsHandler(options.federate_server);
         
         // Crear una función que cree el cliente de forma lazy con el proveedor correcto
@@ -49,11 +45,28 @@ export default class SDK {
             const provider = getWsProvider(options.provider_url);
             return createClient(provider);
         };
+
+        const userService = new DefaultUserService(options.federate_server);
         
-        this._auth = new Auth(options.federate_server, credentialsHandler, getClient, manager, options.config.wallet);
+        this._auth = new Auth(options.federate_server, credentialsHandler, getClient);
+        this._transfer = new Transfer(getClient, userService);
+        this._system = new System(getClient);
+        this._utility = new Utility(getClient);
     }
 
     public get auth() {
         return this._auth;
+    }
+
+    public get transfer() {
+        return this._transfer;
+    }
+
+    public get system() {
+        return this._system;
+    }
+
+    public get utility() {
+        return this._utility;
     }
 }
