@@ -5,6 +5,40 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Virto Network SDK Demo</title>
+    <style>
+      .transaction-history {
+        margin-top: 20px;
+        border: 1px solid #ccc;
+        padding: 15px;
+        border-radius: 5px;
+      }
+      .transaction-item {
+        padding: 8px;
+        margin: 5px 0;
+        border-radius: 3px;
+        font-family: monospace;
+        font-size: 12px;
+      }
+      .tx-pending { background-color: #fff3cd; }
+      .tx-included { background-color: #d1ecf1; }
+      .tx-finalized { background-color: #d4edda; }
+      .tx-failed { background-color: #f8d7da; }
+      
+      button:disabled {
+        background-color: #6c757d;
+        color: #fff;
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+      
+      .processing {
+        position: relative;
+      }
+      
+      .processing::after {
+        font-weight: bold;
+      }
+    </style>
   </head>
   <body>
     <div id="app">
@@ -12,7 +46,7 @@
       <div>
         <h2>Register User</h2>
         <input value="testuser" id="userName" placeholder="User Name" />
-        <input value="Test User" id="userDisplayName" placeholder="Display Name" />
+        <input value="testuser" id="userDisplayName" placeholder="Display Name" />
         <button id="registerButton">Register</button>
       </div>
       <div>
@@ -42,6 +76,15 @@
         <input value="Hello from batch!" id="batchMessage" placeholder="Remark Message" style="width: 300px;" />
         <button id="batchButton">Execute Batch (Transfer + Remark)</button>
       </div>
+      
+      <div class="transaction-history">
+        <h2>Transaction History</h2>
+        <div id="transactionList">
+          <p>No transactions yet...</p>
+        </div>
+        <button id="clearHistoryButton">Clear History</button>
+      </div>
+      
     </div>
     <script type="module" src="/src/demo.js"></script>
   </body>

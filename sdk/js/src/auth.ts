@@ -172,6 +172,20 @@ export default class Auth {
   }
 
   /**
+   * Get the public key from a PasskeysAuthenticator as an SS58 address
+   * 
+   * @param sessionSigner - The session signer instance
+   * @returns The SS58 encoded address
+   * 
+   * @example
+   * const address = auth.getAddressFromAuthenticator(auth.passkeysAuthenticator);
+   * console.log("User address:", address);
+   */
+  getAddressFromAuthenticator(sessionSigner: any): string {
+    return ss58Encode(sessionSigner.publicKey);
+  }
+
+  /**
    * This method is only available in browser environments as it uses WebAuthn APIs.
    * It performs the complete connection process by:
    * 1. Preparing connection data on the client side using WebAuthn
@@ -197,14 +211,11 @@ export default class Auth {
     
     const passSigner = new KreivoPassSigner(passkeysAuthenticator);
 
-    console.log("before get client");
     const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
-    console.log("before make session key signer");
     // Adds a session
     const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
     const MINUTES = 10; // 10 blocks in a minute
 
-    console.log("sessionKey", sessionKey);
     const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
       session: MultiAddress.Id(sessionKey),
       duration: 15 * MINUTES,

@@ -1,27 +1,28 @@
 import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
 import { PolkadotClient } from "polkadot-api";
-import { WebAuthn as PasskeysAuthenticator } from "@virtonetwork/authenticators-webauthn";
-import { KreivoPassSigner } from "@virtonetwork/signer";
-import { ss58Encode, ss58Decode } from "@polkadot-labs/hdkd-helpers";
+import { ss58Decode } from "@polkadot-labs/hdkd-helpers";
+import TransactionQueue from "./transactionQueue";
+import { TransactionResult } from "./types";
+import { UserService } from "./services/userService";
 
 export interface TransferOptions {
-  dest: string; // SS58 address
-  value: bigint; // Amount in units
+  dest: string;
+  value: bigint;
 }
 
 export interface TransferByUsernameOptions {
-  username: string; // Username to resolve to address
-  value: bigint; // Amount in units
+  username: string;
+  value: bigint;
 }
 
 export interface SendAllOptions {
-  dest: string; // SS58 address
-  keepAlive?: boolean; // Whether to keep account alive (default: true)
+  dest: string;
+  keepAlive?: boolean;
 }
 
 export interface SendAllByUsernameOptions {
-  username: string; // Username to resolve to address
-  keepAlive?: boolean; // Whether to keep account alive (default: true)
+  username: string;
+  keepAlive?: boolean;
 }
 
 export interface BalanceInfo {
@@ -32,67 +33,20 @@ export interface BalanceInfo {
   transferable: bigint;
 }
 
-export interface TransferResult {
-  hash: string;
-  blockHash?: string;
-  success: boolean;
-  error?: string;
-}
-
 export interface UserInfo {
   address: string;
   username: string;
 }
 
-// Type for unsigned extrinsics from transfer module
 export type TransferExtrinsic = any;
-
-export interface UserService {
-  getUserAddress(username: string): Promise<string>;
-}
-
-export class DefaultUserService implements UserService {
-  constructor(private baseURL: string) {}
-
-  async getUserAddress(username: string): Promise<string> {
-    try {
-      const queryParams = new URLSearchParams({
-        userId: username,
-      });
-
-      const res = await fetch(`${this.baseURL}/get-user-address?${queryParams}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
-
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
-      }
-
-      const response = await res.json();
-      
-      if (!response.address) {
-        throw new Error("User address not found in response");
-      }
-
-      return response.address;
-    } catch (error) {
-      console.error("Failed to get user address:", error);
-      throw new Error(
-        `Failed to resolve username "${username}" to address: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  }
-}
 
 export default class Transfer {
   private userService: UserService | null = null;
 
   constructor(
     private readonly clientFactory: () => Promise<PolkadotClient>,
-    userService?: UserService
+    userService?: UserService,
+    private readonly transactionQueue?: TransactionQueue
   ) {
     this.userService = userService || null;
   }
@@ -113,168 +67,163 @@ export default class Transfer {
   }
 
   /**
-   * Transfer a specific amount to a destination address
+   * Transfer a specific amount to a destination address (WAITS FOR INCLUSION)
+   * Returns when transaction is included in block
    * 
    * @param sessionSigner - Optional session signer for faster transactions
    * @param options - Transfer options including destination and amount
-   * @returns Promise with the transaction result
+   * @returns Promise with transaction result including hash
    * 
    * @example
-   * // Using session key (faster, no WebAuthn prompt)
-   * await transfer.send(auth.sessionSigner, {
+   * const result = await transfer.sendAsync(auth.sessionSigner, {
    *   dest: "5Gq2VNFP4yqK1bk5zt552hBxU68Q3ABewGN99zY7qGbpVTFc",
    *   value: 100_000_000_000n // 0.1 KSM
    * });
+   * console.log("Transaction included:", result.hash);
    */
-  async send(
+  async sendAsync(
     sessionSigner: any | null,
     options: TransferOptions,
-  ): Promise<TransferResult> {
+  ): Promise<TransactionResult> {
+    if (!this.transactionQueue) {
+      throw new Error("TransactionQueue not configured");
+    }
+
     try {
+      if (!sessionSigner) {
+        throw new Error("Session signer is required for sendAsync");
+      }
+      
       const client = await this.getClient();
       const kreivoApi = client.getTypedApi(kreivo);
-      
-      const transferTx = kreivoApi.tx.Balances.transfer_keep_alive({
+      const transaction = kreivoApi.tx.Balances.transfer_keep_alive({
         dest: MultiAddress.Id(options.dest),
         value: options.value,
       });
+      
+      const transactionId = await this.transactionQueue.addTransaction(
+        transaction,
+        sessionSigner
+      );
 
-      const txRes = await transferTx.signAndSubmit(sessionSigner);
-
-      console.log("Transfer result:", txRes);
+      const result = await this.transactionQueue.executeTransaction(transactionId, sessionSigner);
 
       return {
-        hash: txRes.txHash,
-        blockHash: txRes.block?.hash,
-        success: true
+        ok: result.included,
+        hash: result.hash,
+        error: result.error
       };
     } catch (error) {
-      console.error("Transfer failed:", error);
       return {
-        hash: "",
-        success: false,
+        ok: false,
         error: error instanceof Error ? error.message : String(error)
       };
     }
   }
 
   /**
-   * Transfer a specific amount to a destination address by username
+   * Transfer a specific amount to a destination address by username (WAITS FOR INCLUSION)
    * 
    * @param sessionSigner - Optional session signer for faster transactions
    * @param options - Transfer options including username and amount
-   * @returns Promise with the transaction result
+   * @returns Promise with transaction result including hash
    * 
    * @example
-   * // Using session key (faster, no WebAuthn prompt)
-   * await transfer.sendByUsername(auth.sessionSigner, {
+   * const result = await transfer.sendByUsernameAsync(auth.sessionSigner, {
    *   username: "alice",
    *   value: 100_000_000_000n // 0.1 KSM
    * });
    */
-  async sendByUsername(
+  async sendByUsernameAsync(
     sessionSigner: any | null,
     options: TransferByUsernameOptions,
-  ): Promise<TransferResult> {
+  ): Promise<TransactionResult> {
+    if (!this.transactionQueue) {
+      throw new Error("TransactionQueue not configured");
+    }
+
     try {
+      if (!sessionSigner) {
+        throw new Error("Session signer is required for sendByUsernameAsync");
+      }
+      
       const destAddress = await this.resolveUsernameToAddress(options.username);
       
-      return await this.send(
-        sessionSigner,
-        {
-          dest: destAddress,
-          value: options.value,
-        },
+      const client = await this.getClient();
+      const kreivoApi = client.getTypedApi(kreivo);
+      const transaction = kreivoApi.tx.Balances.transfer_keep_alive({
+        dest: MultiAddress.Id(destAddress),
+        value: options.value,
+      });
+      
+      const transactionId = await this.transactionQueue.addTransaction(
+        transaction,
+        sessionSigner
       );
-    } catch (error) {
-      console.error("Transfer by username failed:", error);
+
+      const result = await this.transactionQueue.executeTransaction(transactionId, sessionSigner);
+
       return {
-        hash: "",
-        success: false,
+        ok: result.included,
+        hash: result.hash,
+        error: result.error
+      };
+    } catch (error) {
+      return {
+        ok: false,
         error: error instanceof Error ? error.message : String(error)
       };
     }
   }
 
   /**
-   * Transfer all available balance to a destination address
+   * Transfer all available balance to a destination address (WAITS FOR INCLUSION)
    * 
    * @param sessionSigner - Optional session signer for faster transactions  
    * @param options - SendAll options including destination
-   * @returns Promise with the transaction result
+   * @returns Promise with transaction result including hash
    * 
    * @example
-   * await transfer.sendAll(auth.sessionSigner, {
+   * const result = await transfer.sendAllAsync(auth.sessionSigner, {
    *   dest: "5Gq2VNFP4yqK1bk5zt552hBxU68Q3ABewGN99zY7qGbpVTFc"
    * });
+   * console.log("Transaction included:", result.hash);
    */
-  async sendAll(
+  async sendAllAsync(
     sessionSigner: any | null,
     options: SendAllOptions,
-  ): Promise<TransferResult> {
+  ): Promise<TransactionResult> {
+    if (!this.transactionQueue) {
+      throw new Error("TransactionQueue not configured");
+    }
+
     try {
+      if (!sessionSigner) {
+        throw new Error("Session signer is required for sendAllAsync");
+      }
+      
       const client = await this.getClient();
       const kreivoApi = client.getTypedApi(kreivo);
-      
-      const transferMethod = options.keepAlive !== false 
-        ? kreivoApi.tx.Balances.transfer_all 
-        : kreivoApi.tx.Balances.transfer_all;
-
-      const transferTx = transferMethod({
+      const transaction = kreivoApi.tx.Balances.transfer_all({
         dest: MultiAddress.Id(options.dest),
         keep_alive: options.keepAlive !== false,
       });
-
-      const txRes = await transferTx.signAndSubmit(sessionSigner);
-
-      console.log("SendAll result:", txRes);
-
-      return {
-        hash: txRes.txHash,
-        blockHash: txRes.block?.hash,
-        success: true
-      };
-    } catch (error) {
-      console.error("SendAll failed:", error);
-      return {
-        hash: "",
-        success: false,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  }
-
-  /**
-   * Transfer all available balance to a destination address by username
-   * 
-   * @param sessionSigner - Optional session signer for faster transactions  
-   * @param options - SendAll options including username
-   * @returns Promise with the transaction result
-   * 
-   * @example
-   * await transfer.sendAllByUsername(auth.sessionSigner, {
-   *   username: "alice"
-   * });
-   */
-  async sendAllByUsername(
-    sessionSigner: any | null,
-    options: SendAllByUsernameOptions,
-  ): Promise<TransferResult> {
-    try {
-      const destAddress = await this.resolveUsernameToAddress(options.username);
       
-      return await this.sendAll(
-        sessionSigner,
-        {
-          dest: destAddress,
-          keepAlive: options.keepAlive,
-        },
+      const transactionId = await this.transactionQueue.addTransaction(
+        transaction,
+        sessionSigner
       );
-    } catch (error) {
-      console.error("SendAll by username failed:", error);
+
+      const result = await this.transactionQueue.executeTransaction(transactionId, sessionSigner);
+
       return {
-        hash: "",
-        success: false,
+        ok: result.included,
+        hash: result.hash,
+        error: result.error
+      };
+    } catch (error) {
+      return {
+        ok: false,
         error: error instanceof Error ? error.message : String(error)
       };
     }
@@ -374,7 +323,6 @@ export default class Transfer {
    * transfer.parseAmount("0.001")   // 1_000_000_000n
    */
   parseAmount(amount: string, decimals: number = 12): bigint {
-    console.log("parseAmount", amount);
     const [whole = "0", decimal = ""] = amount.split(".");
     const paddedDecimal = decimal.padEnd(decimals, "0").slice(0, decimals);
     
@@ -404,21 +352,6 @@ export default class Transfer {
   }
 
   /**
-   * Get the public key from a PasskeysAuthenticator as an SS58 address
-   * 
-   * @param passkeysAuthenticator - The PasskeysAuthenticator instance
-   * @returns The SS58 encoded address
-   * 
-   * @example
-   * const address = transfer.getAddressFromAuthenticator(auth.passkeysAuthenticator);
-   * console.log("User address:", address);
-   */
-  getAddressFromAuthenticator(passkeysAuthenticator: PasskeysAuthenticator): string {
-    const passSigner = new KreivoPassSigner(passkeysAuthenticator);
-    return ss58Encode(passSigner.publicKey);
-  }
-
-  /**
    * Creates an unsigned transfer extrinsic for batch operations
    * 
    * @param options - Transfer options including destination and amount
@@ -434,10 +367,12 @@ export default class Transfer {
     const client = await this.getClient();
     const kreivoApi = client.getTypedApi(kreivo);
     
-    return kreivoApi.tx.Balances.transfer_keep_alive({
+    const extrinsic = kreivoApi.tx.Balances.transfer_keep_alive({
       dest: MultiAddress.Id(options.dest),
       value: options.value,
     });
+
+    return extrinsic;
   }
 
   /**
@@ -476,10 +411,12 @@ export default class Transfer {
     const client = await this.getClient();
     const kreivoApi = client.getTypedApi(kreivo);
     
-    return kreivoApi.tx.Balances.transfer_all({
+    const extrinsic = kreivoApi.tx.Balances.transfer_all({
       dest: MultiAddress.Id(options.dest),
       keep_alive: options.keepAlive !== false,
     });
+
+    return extrinsic;
   }
 
   /**
