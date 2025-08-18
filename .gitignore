@@ -2,4 +2,6 @@ target/
 Cargo.lock
 .vscode/
 **/*.rs.bk
-node_modules
+dist/
+.vscode/
+node_modules/

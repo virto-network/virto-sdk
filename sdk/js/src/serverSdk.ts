@@ -3,6 +3,8 @@ import ServerManager from "./serverManager";
 import { SubeFn, JsWalletBuilder } from "./wallet";
 import { SimpleWalletFactory } from "./factory/simpleWalletFactory";
 import { WalletType } from "./types";
+import { IStorage } from "./storage";
+import { Session } from "./manager";
 
 interface ServerSDKOptions {
     federate_server: string;
@@ -28,17 +30,19 @@ export default class ServerSDK {
      * Creates a new ServerSDK instance
      * 
      * @param options - Configuration options for the server SDK
+     * @param storage - Optional storage implementation for sessions
      * @param subeFn - The sube function (not used in server environments)
      * @param jsWalletFn - The JavaScript wallet builder function (not used in server environments)
      */
     constructor(
         options: ServerSDKOptions,
         subeFn: SubeFn,
-        jsWalletFn: JsWalletBuilder
+        jsWalletFn: JsWalletBuilder,
+        storage?: IStorage<Session>,
     ) {
         const factory = new SimpleWalletFactory(subeFn, jsWalletFn, options.provider_url);
 
-        const manager = new ServerManager(factory);
+        const manager = new ServerManager(factory, storage);
 
         const defaultWallet = options.config?.wallet || WalletType.POLKADOT;
 

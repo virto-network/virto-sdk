@@ -5,6 +5,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "dev": "vite",
+    "postinstall": "papi",
     "build": "npm run build:esm && npm run build:cjs && npm run build:umd",
     "build:esm": "vite build --config vite.config.esm.mts",
     "build:cjs": "tsc --project tsconfig.cjs.json",
@@ -31,13 +32,20 @@
     "vite-plugin-wasm": "^3.4.1"
   },
   "dependencies": {
+    "@polkadot-api/descriptors": "file:.papi/descriptors",
+    "@polkadot-api/substrate-bindings": "^0.14.0",
+    "@polkadot-labs/hdkd-helpers": "^0.0.19",
     "@polkadot/api": "^15.7.2",
     "@polkadot/keyring": "^13.4.3",
     "@polkadot/util": "^13.4.3",
+    "@virtonetwork/authenticators-webauthn": "^1.0.8",
     "@virtonetwork/libwallet": "^1.0.5",
+    "@virtonetwork/signer": "^1.0.15",
     "@virtonetwork/sube": "^1.0.0-alpha.2",
     "es-arraybuffer-base64": "^1.1.2",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "nid-webauthn-emulator": "^0.2.4",
+    "polkadot-api": "^1.13.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
