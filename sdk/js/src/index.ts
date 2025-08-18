@@ -34,8 +34,7 @@ import { UserService, DefaultUserService } from "./services/userService";
 import { 
   SDKOptions, 
   TransactionConfirmationLevel,
-  TransactionResult,
-  TransactionSubmission,
+  TransactionResult
 } from "./types";
 
 export {
@@ -43,7 +42,6 @@ export {
   SDKOptions,
   TransactionConfirmationLevel,
   TransactionResult,
-  TransactionSubmission,
 
   Auth,
 
