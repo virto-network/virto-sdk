@@ -123,6 +123,11 @@ export default class Auth {
     const data = await postRes.json();
     console.log("Post-register response:", data);
 
+    if (!postRes.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${postRes.status} ${postRes.statusText}`;
+      throw new Error(`Registration failed: ${errorMessage}`);
+    }
+
     return data;
   }
   
@@ -251,6 +256,11 @@ export default class Auth {
 
     const data = await res.json();
     console.log("Is registered response:", data);
+
+    if (!res.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${res.status} ${res.statusText}`;
+      throw new Error(`Failed to check registration status: ${errorMessage}`);
+    }
 
     return data.ok;
   }
