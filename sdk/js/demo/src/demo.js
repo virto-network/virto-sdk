@@ -9,10 +9,24 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
     federate_server: "http://localhost:3000/api",
     // Should be a local, test or production url
     provider_url: "ws://localhost:21000",
-    confirmation_level: 'submitted'
-
-  },
-    storage);
+    confirmation_level: 'submitted',
+    onProviderStatusChange: (status) => {
+      switch (status.type) {
+        case 0: // CONNECTING
+          console.log(`Connecting to ${status.uri}...`);
+          break;
+        case 1: // CONNECTED
+          console.log(`Connected to ${status.uri}!`);
+          break;
+        case 2: // ERROR
+          console.log(`Connection error:`, status.event);
+          break;
+        case 3: // CLOSE
+          console.log(`Connection closed`);
+          break;
+      }
+    }
+  }, storage);
 
   // Configure transaction event listeners
   sdk.onTransactionUpdate((event) => {
@@ -29,7 +43,7 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
       console.log(`Transaction failed: ${event.transaction.error}`);
       enableButtons();
     }
-    
+
     updateTransactionHistory();
   });
 
@@ -37,15 +51,15 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
     const transferButton = document.getElementById('transferButton');
     const batchButton = document.getElementById('batchButton');
     const signButton = document.getElementById('signButton');
-    
+
     transferButton.disabled = true;
     batchButton.disabled = true;
     signButton.disabled = true;
-    
+
     transferButton.classList.add('processing');
     batchButton.classList.add('processing');
     signButton.classList.add('processing');
-    
+
     transferButton.textContent = 'Processing Transfer...';
     batchButton.textContent = 'Processing Batch...';
     signButton.textContent = 'Processing Sign...';
@@ -55,29 +69,29 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
     const transferButton = document.getElementById('transferButton');
     const batchButton = document.getElementById('batchButton');
     const signButton = document.getElementById('signButton');
-    
+
     transferButton.disabled = false;
     batchButton.disabled = false;
     signButton.disabled = false;
-    
+
     transferButton.classList.remove('processing');
     batchButton.classList.remove('processing');
     signButton.classList.remove('processing');
-    
+
     transferButton.textContent = 'Send Transfer';
     batchButton.textContent = 'Execute Batch (Transfer + Remark)';
     signButton.textContent = 'Sign Message';
   }
-  
+
   function updateTransactionHistory() {
     const transactionList = document.getElementById('transactionList');
     const history = sdk.getTransactionHistory();
-    
+
     if (history.length === 0) {
       transactionList.innerHTML = '<p>No transactions yet...</p>';
       return;
     }
-    
+
     transactionList.innerHTML = history.map(tx => {
       const time = new Date(tx.timestamp).toLocaleTimeString();
       const shortHash = tx.hash ? tx.hash.slice(0, 10) + '...' : 'pending';
@@ -181,7 +195,7 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
         console.error('Transfer failed:', result.error);
         console.log(`Transfer failed: ${result.error}`);
       }
-      
+
       enableButtons();
     } catch (error) {
       console.error('Transfer failed:', error);
@@ -199,7 +213,7 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
 
       const userAddress = sdk.auth.getAddressFromAuthenticator(sdk.auth.passkeysAuthenticator);
       console.log(`Checking balance for address: ${userAddress}`);
-      
+
       const balance = await sdk.transfer.getBalance(userAddress);
 
       console.log('Balance Info:', balance);

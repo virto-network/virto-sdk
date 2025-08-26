@@ -38,4 +38,5 @@ export interface SDKOptions {
   federate_server: string;
   provider_url: string;
   confirmation_level?: TransactionConfirmationLevel;
+  onProviderStatusChange?: (status: any) => void;
 }

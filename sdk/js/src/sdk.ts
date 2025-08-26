@@ -37,6 +37,8 @@ export default class SDK {
     private _transactionQueue: TransactionQueue;
     private _nonceManager: NonceManager;
     private _confirmationLevel: TransactionConfirmationLevel;
+    private _client: any = null;
+    private _provider: any = null;
 
     constructor(
         options: SDKOptions,
@@ -49,9 +51,18 @@ export default class SDK {
         this._transactionQueue = new TransactionQueue();
         const credentialsHandler = new VOSCredentialsHandler(options.federate_server);
         
+        // Create provider with status monitoring using the official WS provider
+        const onStatusChanged = (status: any) => {
+            if (options.onProviderStatusChange) {
+                options.onProviderStatusChange(status);
+            }
+        };
+        
+        this._provider = getWsProvider(options.provider_url, onStatusChanged);
+        this._client = createClient(this._provider);
+        
         const getClient = async () => {
-            const provider = getWsProvider(options.provider_url);
-            return createClient(provider);
+            return this._client;
         };
 
         const userService = new DefaultUserService(options.federate_server);
