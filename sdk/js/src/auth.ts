@@ -270,6 +270,8 @@ export default class Auth {
     const hash = await client._request("chain_getBlockHash", [ctx]);
     const blockHash = Binary.fromHex(hash);
 
-    return Blake2256(mergeUint8(blockHash.asBytes(), xtc));
+    console.log(`BlockHashChallenger::generate(${ctx}, ${[...JSON.stringify(xtc)]})`);
+    console.log("\t-> ", `${JSON.stringify([...Blake2256(mergeUint8([blockHash.asBytes(), xtc]))])}`);
+    return Blake2256(mergeUint8([blockHash.asBytes(), xtc]));
   }
 }
