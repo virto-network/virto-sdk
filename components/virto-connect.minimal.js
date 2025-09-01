@@ -82,7 +82,7 @@ virto-input:focus {
 
 `
 
-const loginFormTemplate = html`
+const registerFormTemplate = html`
     <form id="register-form">
         <fieldset>
             <virto-input value="" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
@@ -95,7 +95,7 @@ const loginFormTemplate = html`
     </form>
 `;
 
-const registerFormTemplate = html`
+const loginFormTemplate = html`
     <form id="login-form">
         <fieldset>
             <virto-input value="" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
@@ -163,9 +163,6 @@ export class VirtoConnect extends HTMLElement {
             this.sdk = new SDK({
                 federate_server: this.serverUrl,
                 provider_url: this.providerUrl,
-                config: {
-                    wallet: "polkadotjs"
-                }
             });
 
             console.log(`Virto SDK initialized with server: ${this.serverUrl} and provider: ${this.providerUrl}`);
@@ -222,7 +219,7 @@ export class VirtoConnect extends HTMLElement {
         if (goToLogin) {
             goToLogin.addEventListener("click", (e) => {
                 e.preventDefault();
-                this.currentFormType = "register";
+                this.currentFormType = "login";
                 this.renderCurrentForm();
             });
         }
@@ -231,7 +228,7 @@ export class VirtoConnect extends HTMLElement {
         if (goToRegister) {
             goToRegister.addEventListener("click", (e) => {
                 e.preventDefault();
-                this.currentFormType = "login";
+                this.currentFormType = "register";
                 this.renderCurrentForm();
             });
         }

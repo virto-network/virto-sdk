@@ -1,7 +1,7 @@
 import "https://early.webawesome.com/webawesome@3.0.0-alpha.11/dist/components/dialog/dialog.js"
 import("https://cdn.jsdelivr.net/npm/virto-components@0.1.11/dist/virto-components.min.js")
 
-import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.4-alpha.3/dist/esm/sdk.js";
+import SDK from "https://cdn.jsdelivr.net/npm/@virtonetwork/sdk@0.0.4-alpha.13/dist/esm/sdk.js";
 
 const tagFn = (fn) => (strings, ...parts) => fn(parts.reduce((tpl, value, i) => `${tpl}${strings[i]}${value}`, "").concat(strings[parts.length]))
 const html = tagFn((s) => new DOMParser().parseFromString(`<template>${s}</template>`, 'text/html').querySelector('template'));
@@ -35,7 +35,7 @@ const dialogCss = css`
 
 wa-dialog::part(base) {
     padding: 1rem;
-    background: var(--gradient);
+    background: linear-gradient(180deg, rgba(255,255,255,0.745) 0%, rgba(255,255,255,0.634) 100%), radial-gradient(84.04% 109.28% at 10.3% 12.14%, color-mix(in srgb, var(--green) 64.6%, transparent) 0%, color-mix(in srgb, var(--lightgreen) 44.9%, transparent) 98.5%);
     border-radius: 12px;
     box-shadow: 0px 2px var(--Blurblur-3, 3px) -1px rgba(26, 26, 26, 0.08), 0px 1px var(--Blurblur-0, 0px) 0px rgba(26, 26, 26, 0.08);
     width: min(90%, 500px);
@@ -83,7 +83,7 @@ virto-input:focus {
 
 `
 
-const loginFormTemplate = html`
+const registerFormTemplate = html`
     <form id="register-form">
         <fieldset>
             <virto-input value="" label="Name" placeholder="Enter your name" name="name" type="text" required></virto-input>
@@ -96,7 +96,7 @@ const loginFormTemplate = html`
     </form>
 `;
 
-const registerFormTemplate = html`
+const loginFormTemplate = html`
     <form id="login-form">
         <fieldset>
             <virto-input value="" label="Username" placeholder="Enter your username" name="username" type="text" required></virto-input>
@@ -123,8 +123,7 @@ export class VirtoConnect extends HTMLElement {
     this.contentSlot = this.shadowRoot.querySelector("#content-slot")
     this.buttonsSlot = this.shadowRoot.querySelector("#buttons-slot")
 
-    this.currentFormType = "login";
-    this.sessionId = null;
+    this.currentFormType = "register";
     this.sdk = null;
   }
 
@@ -164,8 +163,37 @@ export class VirtoConnect extends HTMLElement {
       this.sdk = new SDK({
         federate_server: this.serverUrl,
         provider_url: this.providerUrl,
-        config: {
-          wallet: "polkadotjs"
+        confirmation_level: 'submitted',
+        onProviderStatusChange: (status) => {
+          // Dispatch custom event for React components to listen to
+          const customEvent = new CustomEvent('providerStatusChange', {
+            detail: status,
+            bubbles: true,
+            composed: true
+          });
+          document.dispatchEvent(customEvent);
+        }
+      });
+
+      this.sdk.onTransactionUpdate((event) => {
+        console.log('event', event);
+        
+        // Dispatch custom event for React components to listen to
+        const customEvent = new CustomEvent('transactionUpdate', {
+          detail: event,
+          bubbles: true,
+          composed: true
+        });
+        document.dispatchEvent(customEvent);
+        
+        if (event.type === 'included') {
+          console.log('Transaction included:', event.transaction);
+        }
+        if (event.type === 'finalized') {
+          console.log('Transaction finalized:', event.transaction);
+        }
+        if (event.type === 'failed') {
+          console.log('Transaction failed:', event.transaction);
         }
       });
 
@@ -175,12 +203,17 @@ export class VirtoConnect extends HTMLElement {
     }
   }
 
-  setSessionId(sessionId) {
-    this.sessionId = sessionId;
-  }
-
   connectedCallback() {
-    this.currentFormType = this.getAttribute("form-type") || "login";
+    this.currentFormType = this.getAttribute("form-type") || "register";
+    
+    const lastUserId = localStorage.getItem('lastUserId');
+    console.log('lastUserId', lastUserId);
+    if (lastUserId && lastUserId.trim() !== '') {
+      this.currentFormType = "login";
+    }
+
+    console.log('currentFormType', this.currentFormType);
+    
     this.renderCurrentForm();
   }
 
@@ -199,6 +232,17 @@ export class VirtoConnect extends HTMLElement {
     }
 
     this.contentSlot.appendChild(formTemplate.content.cloneNode(true));
+    
+    const lastUserId = localStorage.getItem('lastUserId');
+    if (lastUserId && lastUserId.trim() !== '') {
+      const usernameInput = this.shadowRoot.querySelector('virto-input[name="username"]');
+      if (usernameInput) {
+        customElements.whenDefined('virto-input').then(() => {
+          usernameInput.value = lastUserId;
+        });
+      }
+    }
+    
     this.attachFormLinkEvents();
     this.updateButtons();
 
@@ -223,7 +267,7 @@ export class VirtoConnect extends HTMLElement {
     if (goToLogin) {
       goToLogin.addEventListener("click", (e) => {
         e.preventDefault();
-        this.currentFormType = "register";
+        this.currentFormType = "login";
         this.renderCurrentForm();
       });
     }
@@ -232,7 +276,7 @@ export class VirtoConnect extends HTMLElement {
     if (goToRegister) {
       goToRegister.addEventListener("click", (e) => {
         e.preventDefault();
-        this.currentFormType = "login";
+        this.currentFormType = "register";
         this.renderCurrentForm();
       });
     }
@@ -330,6 +374,8 @@ export class VirtoConnect extends HTMLElement {
       console.log('Attempting to register user:', user);
       const result = await this.sdk.auth.register(user);
       console.log('Registration successful:', result);
+      
+      localStorage.setItem('lastUserId', username);
 
       const successMsg = document.createElement("div");
       successMsg.textContent = "Registration successful! You can now sign in.";
@@ -348,6 +394,7 @@ export class VirtoConnect extends HTMLElement {
 
       const signInBtn = document.createElement("virto-button");
       signInBtn.setAttribute("label", "Sign In Now");
+      signInBtn.id = "sign-in-button";
       signInBtn.addEventListener("click", () => {
         this.currentFormType = "register";
         this.renderCurrentForm();
@@ -397,7 +444,9 @@ export class VirtoConnect extends HTMLElement {
     }
 
     this.dispatchEvent(new CustomEvent('login-start', { bubbles: true }));
-
+    
+    localStorage.setItem('lastUserId', username);
+    
     try {
       const result = await this.sdk.auth.connect(username);
       console.log('Login successful:', result);
