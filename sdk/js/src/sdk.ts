@@ -79,6 +79,8 @@ export default class SDK {
             return this._auth.getAddressFromAuthenticator(sessionSigner);
         });
         
+        this._transactionQueue.setAuthModule(this._auth);
+        
         this._transfer = new Transfer(getClient, userService, this._transactionQueue);
         this._system = new System(getClient, this._transactionQueue);
         this._utility = new Utility(getClient, this._transactionQueue);
