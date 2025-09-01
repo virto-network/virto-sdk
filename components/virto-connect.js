@@ -250,7 +250,7 @@ export class VirtoConnect extends HTMLElement {
   }
 
   updateDialogTitle() {
-    const title = this.currentFormType === "login" ? "Sign Up" : "Sign In";
+    const title = this.currentFormType === "register" ? "Sign Up" : "Sign In";
     const existingTitle = this.querySelector('[slot="title"]');
     if (existingTitle) {
       existingTitle.textContent = title;
@@ -295,11 +295,11 @@ export class VirtoConnect extends HTMLElement {
     actionButton.id = "action-button";
 
     if (this.currentFormType === "register") {
-      actionButton.setAttribute("label", "Sign In");
-      actionButton.addEventListener("click", async () => await this.submitFormLogin());
-    } else {
       actionButton.setAttribute("label", "Register");
       actionButton.addEventListener("click", async () => await this.submitFormRegister());
+    } else {
+      actionButton.setAttribute("label", "Sign In");
+      actionButton.addEventListener("click", async () => await this.submitFormLogin());
     }
 
     this.buttonsSlot.appendChild(actionButton);
