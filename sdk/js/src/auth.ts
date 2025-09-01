@@ -226,7 +226,9 @@ export default class Auth {
       duration: 15 * MINUTES,
     });
 
-    const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner);
+    const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner, { 
+      mortality: { mortal: true, period: 60 }
+    });
     console.log(tx3Res);
     
     // Store the session signer for later use
