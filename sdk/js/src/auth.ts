@@ -177,6 +177,10 @@ export default class Auth {
     return this._sessionSigner;
   }
 
+  get currentUserId(): string | null {
+    return this._currentUserId;
+  }
+
   /**
    * Get the public key from a PasskeysAuthenticator as an SS58 address
    * 
