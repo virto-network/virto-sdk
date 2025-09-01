@@ -22,6 +22,10 @@ export default class TransactionExecutor {
     this.confirmationLevel = options.confirmationLevel;
   }
 
+  private isSessionExpiredError(error: string): boolean {
+    return error.toLowerCase().includes('payment');
+  }
+
   async executeTransaction(id: string, transaction: any, sessionSigner: any | null): Promise<{ included: boolean; hash?: string; error?: string }> {
     try {
       let nonce: number | undefined;
@@ -37,52 +41,85 @@ export default class TransactionExecutor {
       return this.handleIncludedOrFinalizedLevel(id, transaction, sessionSigner, nonce);
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
       console.error(`Transaction execution failed:`, { 
         id, 
-        error: error instanceof Error ? error.message : String(error)
+        error: errorMessage
       });
-      this.transactionQueue.updateTransactionFailed(
-        id,
-        error instanceof Error ? error.message : String(error)
-      );
+
+      if (this.isSessionExpiredError(errorMessage)) {
+        console.log(`Session expiration detected in transaction ${id}: ${errorMessage}`);
+        throw error;
+      }
+      
+      this.transactionQueue.updateTransactionFailed(id, errorMessage);
       return { 
         included: false, 
         hash: undefined,
-        error: error instanceof Error ? error.message : String(error)
+        error: errorMessage
       };
     }
   }
 
   private async handleSubmittedLevel(id: string, transaction: any, sessionSigner: any | null, nonce?: number): Promise<{ included: boolean; hash?: string; error?: string }> {
-    const submission = await transaction.signAndSubmit(sessionSigner, nonce ? { nonce } : undefined);
-    
-    const blockHash = submission.block?.hash;
-    this.transactionQueue.updateTransactionSubmitted(id, submission.txHash, blockHash);
+    try {
+      const submission = await transaction.signAndSubmit(sessionSigner, nonce ? { nonce } : undefined);
+      
+      const blockHash = submission.block?.hash;
+      this.transactionQueue.updateTransactionSubmitted(id, submission.txHash, blockHash);
 
-    this.startBackgroundProcessing(id, submission);
+      this.startBackgroundProcessing(id, submission);
 
-    return { included: true, hash: submission.txHash };
+      return { included: true, hash: submission.txHash };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      if (this.isSessionExpiredError(errorMessage)) {
+        console.log(`Session expiration detected during submission of transaction ${id}`);
+        throw error;
+      }
+      
+      throw error;
+    }
   }
 
   private async handleIncludedOrFinalizedLevel(id: string, transaction: any, sessionSigner: any | null, nonce?: number): Promise<{ included: boolean; hash?: string; error?: string }> {
-    const txSubmission = await transaction.signAndSubmit(sessionSigner, nonce ? { nonce } : undefined);
+    try {
+      const txSubmission = await transaction.signAndSubmit(sessionSigner, nonce ? { nonce } : undefined);
 
-    const blockHash = txSubmission.block?.hash;
-    this.transactionQueue.updateTransactionSubmitted(id, txSubmission.txHash, blockHash);
+      const blockHash = txSubmission.block?.hash;
+      this.transactionQueue.updateTransactionSubmitted(id, txSubmission.txHash, blockHash);
 
-    if (this.confirmationLevel === 'included' || this.confirmationLevel === 'finalized') {
-      const inclusionResult = await this.waitForInclusion(id, txSubmission);
-      if (!inclusionResult.success) {
-        return {
-          included: false,
-          hash: inclusionResult.hash,
-          error: inclusionResult.error
-        };
+      if (this.confirmationLevel === 'included' || this.confirmationLevel === 'finalized') {
+        const inclusionResult = await this.waitForInclusion(id, txSubmission);
+        if (!inclusionResult.success) {
+          return {
+            included: false,
+            hash: inclusionResult.hash,
+            error: inclusionResult.error
+          };
+        }
+
+        if (this.confirmationLevel === 'included') {
+          this.waitForFinalization(id, txSubmission).catch(error => {
+            console.error(`Background finalization failed:`, { id, error });
+          });
+
+          return {
+            included: true,
+            hash: txSubmission.txHash,
+          };
+        }
       }
 
-      if (this.confirmationLevel === 'included') {
-        this.waitForFinalization(id, txSubmission).catch(error => {
-          console.error(`Background finalization failed:`, { id, error });
+      if (this.confirmationLevel === 'finalized') {
+        const finalizedResult = await txSubmission.finalized;
+        
+        this.transactionQueue.updateTransactionFinalized(id, {
+          hash: txSubmission.txHash,
+          blockHash: finalizedResult?.block?.hash,
+          success: true
         });
 
         return {
@@ -90,24 +127,18 @@ export default class TransactionExecutor {
           hash: txSubmission.txHash,
         };
       }
-    }
 
-    if (this.confirmationLevel === 'finalized') {
-      const finalizedResult = await txSubmission.finalized;
+      throw new Error(`Invalid confirmation level: ${this.confirmationLevel}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+
+      if (this.isSessionExpiredError(errorMessage)) {
+        console.log(`Session expiration detected in transaction ${id} execution`);
+        throw error;
+      }
       
-      this.transactionQueue.updateTransactionFinalized(id, {
-        hash: txSubmission.txHash,
-        blockHash: finalizedResult?.block?.hash,
-        success: true
-      });
-
-      return {
-        included: true,
-        hash: txSubmission.txHash,
-      };
+      throw error;
     }
-
-    throw new Error(`Invalid confirmation level: ${this.confirmationLevel}`);
   }
 
   private async waitForInclusion(id: string, txSubmission: any): Promise<{ success: boolean; hash?: string; error?: string }> {

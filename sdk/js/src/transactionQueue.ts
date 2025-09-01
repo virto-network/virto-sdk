@@ -33,6 +33,7 @@ export default class TransactionQueue {
   private nonceManager?: NonceManager;
   private confirmationLevel: TransactionConfirmationLevel = 'included';
   private getAddressFromAuthenticator?: (sessionSigner: any) => string;
+  private authModule?: any;
   
   constructor() {}
 
@@ -50,6 +51,100 @@ export default class TransactionQueue {
 
   setAddressHelper(getAddressFromAuthenticator: (sessionSigner: any) => string): void {
     this.getAddressFromAuthenticator = getAddressFromAuthenticator;
+  }
+
+  setAuthModule(authModule: any): void {
+    this.authModule = authModule;
+  }
+
+  private isSessionExpiredError(error: string): boolean {
+    return error.toLowerCase().includes('payment');
+  }
+
+  private async handleSessionExpiredAndRetry(
+    transactionId: string, 
+    error: string,
+    retryCount: number = 0
+  ): Promise<{ included: boolean; hash?: string; error?: string } | null> {
+    
+    if (retryCount >= 2) {
+      console.error(`Max retry attempts reached for transaction ${transactionId}`);
+      return null;
+    }
+
+    if (!this.authModule) {
+      console.error('Auth module or user ID not available for reconnection');
+      return null;
+    }
+
+    try {
+      console.log(`Session expired for transaction ${transactionId}, attempting reconnection...`);
+      
+      const connectionResult = await this.authModule.connect();
+      console.log('Reconnection successful, refreshing nonces and retrying transaction...');
+      
+      const transaction = this.transactions.get(transactionId);
+      if (!transaction) {
+        console.error(`Transaction ${transactionId} not found for retry`);
+        return null;
+      }
+
+      let newNonce: number;
+      if (this.nonceManager && connectionResult.sessionSigner && this.getAddressFromAuthenticator) {
+        try {
+          const address = this.getAddressFromAuthenticator(connectionResult.sessionSigner);
+          
+          await this.nonceManager.syncNonceFromChain(address);
+          newNonce = await this.nonceManager.getAndIncrementNonce(address);
+          console.log(`Updated nonce for address ${address}: ${newNonce}`);
+        } catch (nonceError) {
+          console.error(`Error getting fresh nonce:`, nonceError);
+          newNonce = Date.now();
+        }
+      } else {
+        newNonce = Date.now();
+      }
+
+      transaction.params.nonce = newNonce;
+      transaction.params.sessionSigner = connectionResult.sessionSigner;
+      
+      const newTransactionId = newNonce.toString();
+      transaction.id = newTransactionId;
+      
+      this.transactions.delete(transactionId);
+      this.transactions.set(newTransactionId, transaction);
+
+      this.emitEvent('failed', {
+        ...transaction,
+        id: transactionId,
+        status: 'failed',
+        error: 'Transaction replaced due to session expiration'
+      });
+
+      this.emitEvent('submitted', transaction);
+
+      if (this.executor) {
+        const retryResult = await this.executor.executeTransaction(
+          newTransactionId, 
+          transaction.params._preBuiltTransaction, 
+          connectionResult.sessionSigner
+        );
+        
+        console.log(`Transaction ${newTransactionId} (previously ${transactionId}) retry result:`, retryResult);
+        return retryResult;
+      }
+      
+    } catch (reconnectError) {
+      console.error(`Reconnection failed for transaction ${transactionId}:`, reconnectError);
+      
+      const reconnectErrorMsg = reconnectError instanceof Error ? reconnectError.message : String(reconnectError);
+      if (this.isSessionExpiredError(reconnectErrorMsg) && retryCount < 1) {
+        console.log(`Reconnection also failed with session error, retrying once more...`);
+        return this.handleSessionExpiredAndRetry(transactionId, reconnectErrorMsg, retryCount + 1);
+      }
+    }
+    
+    return null;
   }
 
   async addTransaction(
@@ -108,7 +203,16 @@ export default class TransactionQueue {
           await this.executor!.executeTransaction(id, preBuiltTransaction, sessionSigner);
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
-          this.updateTransactionFailed(id, errorMessage);
+          
+          // Check if this is a session expiration error and handle it
+          if (this.isSessionExpiredError(errorMessage)) {
+            const retryResult = await this.handleSessionExpiredAndRetry(id, errorMessage);
+            if (!retryResult) {
+              this.updateTransactionFailed(id, errorMessage);
+            }
+          } else {
+            this.updateTransactionFailed(id, errorMessage);
+          }
         }
       })();
 
@@ -120,6 +224,15 @@ export default class TransactionQueue {
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Check if this is a session expiration error and handle it
+      if (this.isSessionExpiredError(errorMessage)) {
+        const retryResult = await this.handleSessionExpiredAndRetry(id, errorMessage);
+        if (retryResult) {
+          return retryResult;
+        }
+      }
+      
       this.updateTransactionFailed(id, errorMessage);
       throw error;
     }

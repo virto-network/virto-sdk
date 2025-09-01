@@ -41,6 +41,7 @@ export default class Auth {
   private _client: PolkadotClient | null = null;
   private _passkeysAuthenticator: PasskeysAuthenticator | null = null;
   private _sessionSigner: any | null = null;
+  private _currentUserId: string | null = null;
 
   constructor(
     private readonly baseUrl: string,
@@ -70,7 +71,7 @@ export default class Auth {
    * @param user - The user object containing profile and metadata
    * @returns Promise with the registration result
    */
-  
+
   async register<Profile extends BaseProfile>(
     user: User<Profile>
   ) {
@@ -79,10 +80,10 @@ export default class Auth {
       this.blockHashChallenge.bind(this),
       this.credentialsHandler
     ).setup();
-    
+
     // Store the PasskeysAuthenticator for reuse in connect
     this._passkeysAuthenticator = passkeysAuthenticator;
-    
+
     const passSigner = new KreivoPassSigner(passkeysAuthenticator);
     const passAccountAddress = ss58Encode(passSigner.publicKey);
 
@@ -111,9 +112,9 @@ export default class Auth {
     const postRes = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        userId: user.profile.id, 
-        hashedUserId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(), 
+      body: JSON.stringify({
+        userId: user.profile.id,
+        hashedUserId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(),
         credentialId: (this.credentialsHandler as VOSCredentialsHandler).getCredentialIdForUser(user.profile.id),
         address: passAccountAddress,
         attestationResponse: attestationJSON
@@ -130,7 +131,7 @@ export default class Auth {
 
     return data;
   }
-  
+
   /**
    * Resets the Auth state, clearing any stored PasskeysAuthenticator and session signer
    * This is useful when switching between different users or starting fresh
@@ -203,17 +204,24 @@ export default class Auth {
     * @param userId - The user ID to connect
     * @returns Promise<{ sessionKey: string, sessionSigner: any, transaction: any }>
     */
-   async connect(userId: string): Promise<{ sessionKey: string, sessionSigner: any, transaction: any }> {
-    console.log("Connecting to user:", userId);
-    
+  async connect(userId?: string): Promise<{ sessionKey: string, sessionSigner: any, transaction: any }> {
+    if (userId) {
+      this._currentUserId = userId;
+    }
+
+    console.log("Connecting to user:", this._currentUserId);
+    if (!this._currentUserId) {
+      throw new Error("User ID is required");
+    }
+
     const passkeysAuthenticator = await new PasskeysAuthenticator(
-      userId,
+      this._currentUserId,
       this.blockHashChallenge.bind(this),
       this.credentialsHandler
     ).setup();
 
     this._passkeysAuthenticator = passkeysAuthenticator;
-    
+
     const passSigner = new KreivoPassSigner(passkeysAuthenticator);
 
     const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
@@ -223,17 +231,17 @@ export default class Auth {
 
     const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
       session: MultiAddress.Id(sessionKey),
-      duration: 15 * MINUTES,
+      duration: 10,
     });
 
-    const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner, { 
+    const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner, {
       mortality: { mortal: true, period: 60 }
     });
     console.log(tx3Res);
-    
+
     // Store the session signer for later use
     this._sessionSigner = sessionSigner;
-    
+
     return {
       sessionKey,
       sessionSigner,
