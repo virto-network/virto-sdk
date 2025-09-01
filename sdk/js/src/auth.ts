@@ -235,7 +235,7 @@ export default class Auth {
 
     const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
       session: MultiAddress.Id(sessionKey),
-      duration: 10,
+      duration: 15 * MINUTES,
     });
 
     const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner, {
