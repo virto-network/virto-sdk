@@ -288,4 +288,41 @@ export default class Auth {
     console.log("\t-> ", `${JSON.stringify([...Blake2256(mergeUint8([blockHash.asBytes(), xtc]))])}`);
     return Blake2256(mergeUint8([blockHash.asBytes(), xtc]));
   }
+
+  public async addMember(userId: string) {
+    const res = await fetch(`${this.baseUrl}/add-member`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    });
+
+    const data = await res.json();
+    console.log("Add member response:", data);
+
+    if (!res.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${res.status} ${res.statusText}`;
+      throw new Error(`Failed to add member: ${errorMessage}`);
+    }
+
+    return data;
+  }
+
+  public async isMember(address: string) {
+    const res = await fetch(`${this.baseUrl}/is-member?address=${address}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const data = await res.json();
+    console.log("Is member response:", data);
+
+    if (!res.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${res.status} ${res.statusText}`;
+      throw new Error(`Failed to check member status: ${errorMessage}`);
+    }
+
+    return data.ok;
+  }
+
+
 }
