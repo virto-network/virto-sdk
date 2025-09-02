@@ -14,6 +14,7 @@ import { createClient } from "polkadot-api";
 import { VOSCredentialsHandler } from "./vocCredentialHandler";
 
 import { SDKOptions, TransactionConfirmationLevel } from './types';
+import Membership from "./membership";
 
 // Función para obtener el proveedor WebSocket correcto según el entorno
 // async function getWebSocketProvider(url: string) {
@@ -36,6 +37,7 @@ export default class SDK {
     private _custom: CustomModule;
     private _transactionQueue: TransactionQueue;
     private _nonceManager: NonceManager;
+    private _memberships: Membership;
     private _confirmationLevel: TransactionConfirmationLevel;
     private _client: any = null;
     private _provider: any = null;
@@ -73,6 +75,7 @@ export default class SDK {
         this._transactionQueue.setConfirmationLevel(this._confirmationLevel);
         
         this._auth = new Auth(options.federate_server, credentialsHandler, getClient);
+        this._memberships = new Membership(options.federate_server);
         
         // Configure the address helper in transaction queue
         this._transactionQueue.setAddressHelper((sessionSigner) => {
