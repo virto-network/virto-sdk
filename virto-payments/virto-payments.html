@@ -1,0 +1,1184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Virto Payments Demo</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --virto-primary: #4caf50;
+      --virto-primary-dark: #388e3c;
+      --virto-primary-light: #a5d6a7;
+      --virto-secondary: #2196f3;
+      --virto-secondary-dark: #1976d2;
+      --virto-secondary-light: #bbdefb;
+      --virto-dark: #333333;
+      --virto-light: #f5f5f5;
+      --virto-gray: #9e9e9e;
+      --virto-light-gray: #e0e0e0;
+      --virto-error: #f44336;
+      --virto-success: #4caf50;
+      --virto-warning: #ff9800;
+      --virto-border-radius: 12px;
+      --virto-shadow: 0px 2px 3px -1px rgba(26, 26, 26, 0.08),
+                      0px 1px 0px 0px rgba(26, 26, 26, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      color: var(--virto-dark);
+      background-color: #f0f0f0;
+      line-height: 1.5;
+    }
+
+    /* Demo styles - not part of the component */
+    .demo-container {
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      text-align: center;
+    }
+
+    .demo-button {
+      background-color: var(--virto-primary);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      margin: 10px;
+      border-radius: var(--virto-border-radius);
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .demo-button:hover {
+      background-color: var(--virto-primary-dark);
+    }
+
+    /* Virto Payments Component */
+    .virto-payments {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      z-index: 1000;
+    }
+
+    .virto-payments.active {
+      display: block;
+    }
+
+    .virto-payments-backdrop {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+    }
+
+    .virto-payments-modal {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 90%;
+      max-width: 450px;
+      background: linear-gradient(145deg, #ffffff, #f8f8f8);
+      border-radius: var(--virto-border-radius);
+      box-shadow: var(--virto-shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      max-height: 90vh;
+    }
+
+    /* Header */
+    .virto-payments-header {
+      display: flex;
+      align-items: center;
+      padding: 16px;
+      position: relative;
+    }
+
+    .virto-payments-logo {
+      margin-right: 12px;
+    }
+
+    .logo-placeholder {
+      width: 32px;
+      height: 32px;
+      background-color: var(--virto-primary);
+      border-radius: 50%;
+    }
+
+    .virto-payments-title {
+      flex-grow: 1;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+
+    .virto-payments-close {
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: var(--virto-dark);
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+    }
+
+    .virto-payments-close:hover {
+      background-color: var(--virto-light-gray);
+    }
+
+    .virto-payments-divider {
+      border: none;
+      height: 1px;
+      background-color: var(--virto-light-gray);
+      margin: 0;
+    }
+
+    /* Content */
+    .virto-payments-content {
+      padding: 16px;
+      overflow-y: auto;
+      flex-grow: 1;
+    }
+
+    .virto-payments-step {
+      margin-bottom: 16px;
+    }
+
+    .virto-payments-step.hidden {
+      display: none;
+    }
+
+    .step-title {
+      font-size: 1.1rem;
+      font-weight: 500;
+      margin-bottom: 16px;
+    }
+
+    /* Item Details */
+    .item-details {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      background-color: white;
+      border-radius: var(--virto-border-radius);
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    .item-image {
+      width: 60px;
+      height: 60px;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-right: 12px;
+      background-color: var(--virto-light-gray);
+    }
+
+    .item-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .item-info {
+      flex-grow: 1;
+    }
+
+    .item-info h3 {
+      font-size: 1rem;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+
+    .item-info p {
+      font-size: 0.875rem;
+      color: var(--virto-gray);
+    }
+
+    .item-price {
+      font-weight: 600;
+      font-size: 1.1rem;
+    }
+
+    /* Purchase Summary */
+    .purchase-summary {
+      background-color: #fffdf5;
+      border-radius: var(--virto-border-radius);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .purchase-total {
+      display: flex;
+      justify-content: space-between;
+      font-weight: 600;
+      font-size: 1.1rem;
+      margin-bottom: 12px;
+    }
+
+    .purchase-details {
+      display: none;
+      margin-bottom: 12px;
+      border-top: 1px solid var(--virto-light-gray);
+      padding-top: 12px;
+    }
+
+    .purchase-details.visible {
+      display: block;
+    }
+
+    .purchase-detail {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+    }
+
+    .toggle-details {
+      background: none;
+      border: none;
+      color: var(--virto-secondary);
+      font-size: 0.9rem;
+      cursor: pointer;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .toggle-details:hover {
+      text-decoration: underline;
+    }
+
+    /* Payment Methods */
+    .payment-methods {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .payment-method {
+      display: flex;
+      align-items: center;
+      padding: 16px;
+      background-color: white;
+      border: 1px solid var(--virto-light-gray);
+      border-radius: var(--virto-border-radius);
+      cursor: pointer;
+      font-family: 'Outfit', sans-serif;
+      font-size: 1rem;
+      transition: border-color 0.2s, background-color 0.2s;
+    }
+
+    .payment-method:hover {
+      background-color: var(--virto-light);
+      border-color: var(--virto-gray);
+    }
+
+    .payment-method.selected {
+      border-color: var(--virto-primary);
+      background-color: rgba(76, 175, 80, 0.05);
+    }
+
+    .payment-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      margin-right: 12px;
+      background-color: var(--virto-light-gray);
+    }
+
+    .crypto-icon {
+      background-color: #f0b90b;
+    }
+
+    .card-icon {
+      background-color: #1a73e8;
+    }
+
+    .wallet-icon {
+      background-color: #ff9800;
+    }
+
+    /* Crypto Payment */
+    .crypto-options {
+      margin-bottom: 24px;
+    }
+
+    .crypto-option {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      background-color: white;
+      border-radius: var(--virto-border-radius);
+      margin-bottom: 12px;
+    }
+
+    .crypto-option input {
+      margin-right: 12px;
+    }
+
+    .crypto-option label {
+      display: flex;
+      align-items: center;
+      flex-grow: 1;
+      cursor: pointer;
+    }
+
+    .crypto-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      margin-right: 8px;
+    }
+
+    .usdc-icon {
+      background-color: #2775ca;
+    }
+
+    .dusd-icon {
+      background-color: #26a17b;
+    }
+
+    .crypto-balance {
+      font-size: 0.875rem;
+      color: var(--virto-gray);
+    }
+
+    .transaction-preview {
+      background-color: var(--virto-light);
+      border-radius: var(--virto-border-radius);
+      padding: 16px;
+    }
+
+    .transaction-detail {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+    }
+
+    .transaction-detail:last-child {
+      margin-bottom: 0;
+    }
+
+    /* Card Payment */
+    .card-form {
+      margin-bottom: 24px;
+    }
+
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 16px;
+    }
+
+    .form-row .form-group {
+      flex: 1;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 0.9rem;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid var(--virto-light-gray);
+      border-radius: var(--virto-border-radius);
+      font-family: 'Outfit', sans-serif;
+      font-size: 1rem;
+    }
+
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--virto-primary);
+    }
+
+    .card-providers {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .card-provider {
+      width: 40px;
+      height: 24px;
+      background-color: var(--virto-light-gray);
+      border-radius: 4px;
+    }
+
+    /* Wallet Connect */
+    .wallet-options {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .wallet-option {
+      display: flex;
+      align-items: center;
+      padding: 16px;
+      background-color: white;
+      border: 1px solid var(--virto-light-gray);
+      border-radius: var(--virto-border-radius);
+      cursor: pointer;
+      font-family: 'Outfit', sans-serif;
+      font-size: 1rem;
+      transition: border-color 0.2s, background-color 0.2s;
+    }
+
+    .wallet-option:hover {
+      background-color: var(--virto-light);
+      border-color: var(--virto-gray);
+    }
+
+    .wallet-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      margin-right: 12px;
+      background-color: var(--virto-light-gray);
+    }
+
+    .metamask-icon {
+      background-color: #f6851b;
+    }
+
+    .walletconnect-icon {
+      background-color: #3b99fc;
+    }
+
+    .polkadot-icon {
+      background-color: #e6007a;
+    }
+
+    /* Processing */
+    .processing-container {
+      text-align: center;
+      padding: 32px 16px;
+    }
+
+    .processing-spinner {
+      width: 48px;
+      height: 48px;
+      border: 4px solid var(--virto-light-gray);
+      border-top: 4px solid var(--virto-primary);
+      border-radius: 50%;
+      margin: 0 auto 24px;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .processing-container h3 {
+      margin-bottom: 12px;
+    }
+
+    .processing-container p {
+      color: var(--virto-gray);
+    }
+
+    /* Success */
+    .success-container {
+      text-align: center;
+      padding: 32px 16px;
+    }
+
+    .success-icon {
+      width: 64px;
+      height: 64px;
+      background-color: var(--virto-success);
+      border-radius: 50%;
+      margin: 0 auto 24px;
+      position: relative;
+    }
+
+    .success-icon:before,
+    .success-icon:after {
+      content: '';
+      position: absolute;
+      background-color: white;
+    }
+
+    .success-icon:before {
+      width: 32px;
+      height: 6px;
+      transform: rotate(45deg);
+      top: 34px;
+      left: 12px;
+    }
+
+    .success-icon:after {
+      width: 16px;
+      height: 6px;
+      transform: rotate(-45deg);
+      top: 30px;
+      left: 22px;
+    }
+
+    .success-container h3 {
+      margin-bottom: 12px;
+    }
+
+    .success-container p {
+      color: var(--virto-gray);
+      margin-bottom: 24px;
+    }
+
+    .transaction-info {
+      background-color: var(--virto-light);
+      border-radius: var(--virto-border-radius);
+      padding: 16px;
+      text-align: left;
+    }
+
+    /* Footer */
+    .virto-payments-footer {
+      padding: 16px;
+      border-top: 1px solid var(--virto-light-gray);
+    }
+
+    .footer-buttons {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .virto-button {
+      padding: 12px 24px;
+      border-radius: var(--virto-border-radius);
+      font-family: 'Outfit', sans-serif;
+      font-weight: 500;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background-color 0.2s;
+      border: none;
+      flex: 1;
+    }
+
+    .virto-button.primary {
+      background-color: var(--virto-primary);
+      color: white;
+    }
+
+    .virto-button.primary:hover {
+      background-color: var(--virto-primary-dark);
+    }
+
+    .virto-button.secondary {
+      background-color: var(--virto-light);
+      color: var(--virto-dark);
+      border: 1px solid var(--virto-light-gray);
+    }
+
+    .virto-button.secondary:hover {
+      background-color: var(--virto-light-gray);
+    }
+  </style>
+</head>
+<body>
+  <!-- Demo buttons to trigger the payment component -->
+  <div class="demo-container">
+    <h1>Virto Payments Demo</h1>
+    <!-- TODO: Change for virto-button -->
+    <button id="buy-nft" class="demo-button">Pay</button>
+  </div>
+
+  <!-- Virto Payments Component -->
+   <!-- TODO: Change modal for virto-modal (if thats the method we'll be using) -->
+  <div id="virto-payments" class="virto-payments">
+    <div class="virto-payments-backdrop"></div>
+    <div class="virto-payments-modal">
+      <!-- Header -->
+      <div class="virto-payments-header">
+        <div class="virto-payments-logo">
+          <div class="logo-placeholder"></div>
+        </div>
+        <h2 class="virto-payments-title">Complete Purchase</h2>
+        <button class="virto-payments-close" id="close-modal">&times;</button>
+      </div>
+      <hr class="virto-payments-divider">
+
+      <!-- Content -->
+      <div class="virto-payments-content">
+        <!-- Step 1: Item Details -->
+        <div class="virto-payments-step" id="step-item-details">
+          <div class="item-details">
+            <div class="item-image">
+              <img src="https://via.placeholder.com/60" alt="Item" id="item-image">
+            </div>
+            <div class="item-info">
+              <h3 id="item-name">Legendary Sword</h3>
+              <p id="item-description">NFT Digital Item</p>
+            </div>
+            <div class="item-price">
+              <span id="item-price">$20.00</span>
+            </div>
+          </div>
+
+          <div class="purchase-summary">
+            <div class="purchase-total">
+              <span>Purchase total</span>
+              <span id="purchase-total">$21.10</span>
+            </div>
+            <div class="purchase-details" id="purchase-details">
+              <div class="purchase-detail">
+                <span>Item price</span>
+                <span id="detail-price">$20.00</span>
+              </div>
+              <div class="purchase-detail">
+                <span>Network fee</span>
+                <span id="detail-fee">$1.10</span>
+              </div>
+            </div>
+            <button class="toggle-details" id="toggle-details">Show details</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Payment Method -->
+        <div class="virto-payments-step" id="step-payment-method">
+          <h3 class="step-title">Select Payment Method</h3>
+          
+          <div class="payment-methods">
+            <button class="payment-method" data-method="crypto">
+              <div class="payment-icon crypto-icon"></div>
+              <span>Pay with Crypto</span>
+            </button>
+            <button class="payment-method" data-method="card">
+              <div class="payment-icon card-icon"></div>
+              <span>Credit/Debit Card</span>
+            </button>
+            <button class="payment-method" data-method="wallet">
+              <div class="payment-icon wallet-icon"></div>
+              <span>Connect Wallet</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 3: Crypto Payment -->
+        <div class="virto-payments-step hidden" id="step-crypto-payment">
+          <h3 class="step-title">Pay with Crypto</h3>
+          
+          <div class="crypto-options">
+            <div class="crypto-option">
+              <input type="radio" name="crypto" id="crypto-usdc" checked>
+              <label for="crypto-usdc">
+                <div class="crypto-icon usdc-icon"></div>
+                <span>USDC</span>
+              </label>
+              <span class="crypto-balance">Balance: 125.00</span>
+            </div>
+            <div class="crypto-option">
+              <input type="radio" name="crypto" id="crypto-dusd">
+              <label for="crypto-dusd">
+                <div class="crypto-icon dusd-icon"></div>
+                <span>dUSD</span>
+              </label>
+              <span class="crypto-balance">Balance: 50.00</span>
+            </div>
+          </div>
+
+          <div class="transaction-preview">
+            <div class="transaction-detail">
+              <span>You pay</span>
+              <span id="crypto-amount">21.10 USDC</span>
+            </div>
+            <div class="transaction-detail">
+              <span>Network</span>
+              <span id="crypto-network">Ethereum</span>
+            </div>
+            <div class="transaction-detail">
+              <span>Estimated gas</span>
+              <span id="crypto-gas">~$1.10</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: Card Payment -->
+        <div class="virto-payments-step hidden" id="step-card-payment">
+          <h3 class="step-title">Pay with Card</h3>
+          
+          <div class="card-form">
+            <div class="form-group">
+              <label for="card-number">Card Number</label>
+              <input type="text" id="card-number" placeholder="1234 5678 9012 3456">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="card-expiry">Expiry Date</label>
+                <input type="text" id="card-expiry" placeholder="MM/YY">
+              </div>
+              <div class="form-group">
+                <label for="card-cvc">CVC</label>
+                <input type="text" id="card-cvc" placeholder="123">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="card-name">Name on Card</label>
+              <input type="text" id="card-name" placeholder="John Doe">
+            </div>
+          </div>
+
+          <div class="card-providers">
+            <div class="card-provider visa"></div>
+            <div class="card-provider mastercard"></div>
+            <div class="card-provider amex"></div>
+            <div class="card-provider discover"></div>
+          </div>
+        </div>
+
+        <!-- Step 5: Connect Wallet -->
+        <div class="virto-payments-step hidden" id="step-connect-wallet">
+          <h3 class="step-title">Connect Your Wallet</h3>
+          
+          <div class="wallet-options">
+            <button class="wallet-option" data-wallet="metamask">
+              <div class="wallet-icon metamask-icon"></div>
+              <span>MetaMask</span>
+            </button>
+            <button class="wallet-option" data-wallet="walletconnect">
+              <div class="wallet-icon walletconnect-icon"></div>
+              <span>WalletConnect</span>
+            </button>
+            <button class="wallet-option" data-wallet="polkadot">
+              <div class="wallet-icon polkadot-icon"></div>
+              <span>Polkadot.js</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 6: Processing Payment -->
+        <div class="virto-payments-step hidden" id="step-processing">
+          <div class="processing-container">
+            <div class="processing-spinner"></div>
+            <h3>Processing Payment</h3>
+            <p>Please wait while we process your payment...</p>
+          </div>
+        </div>
+
+        <!-- Step 7: Payment Success -->
+        <div class="virto-payments-step hidden" id="step-success">
+          <div class="success-container">
+            <div class="success-icon"></div>
+            <h3>Payment Successful!</h3>
+            <p>Your transaction has been completed successfully.</p>
+            <div class="transaction-info">
+              <div class="transaction-detail">
+                <span>Transaction ID</span>
+                <span id="transaction-id">0x1234...5678</span>
+              </div>
+              <div class="transaction-detail">
+                <span>Amount</span>
+                <span id="transaction-amount">$21.10</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="virto-payments-footer">
+        <div class="footer-buttons" id="footer-buttons">
+          <button class="virto-button secondary" id="btn-back">Back</button>
+          <button class="virto-button primary" id="btn-continue">Continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Simple logger function that only logs to console
+    const log = (message) => {
+      console.log(`[${new Date().toLocaleTimeString()}] ${message}`);
+    };
+    
+    // Log that JavaScript is running
+    log('JavaScript is enabled and running');
+
+    // Simple payment component (non-custom element version for compatibility)
+    const VirtoPayments = {
+      currentStep: 'step-item-details',
+      paymentMethod: null,
+      itemData: {
+        name: 'Legendary Sword',
+        description: 'NFT Digital Item',
+        price: 20.00,
+        fee: 1.10,
+        total: 21.10,
+        image: 'https://via.placeholder.com/60'
+      },
+      
+      init: function() {
+        log('Initializing VirtoPayments');
+        this.initializeComponent();
+        this.attachEventListeners();
+        log('VirtoPayments initialized successfully');
+      },
+
+      initializeComponent: function() {
+        // Set up the modal
+        this.modal = document.getElementById('virto-payments');
+        if (!this.modal) {
+          log('ERROR: Modal element not found');
+          return;
+        }
+        
+        this.backdrop = document.querySelector('.virto-payments-backdrop');
+        this.closeButton = document.getElementById('close-modal');
+        
+        // Navigation buttons
+        this.backButton = document.getElementById('btn-back');
+        this.continueButton = document.getElementById('btn-continue');
+        
+        // Steps
+        this.steps = {
+          'step-item-details': document.getElementById('step-item-details'),
+          'step-payment-method': document.getElementById('step-payment-method'),
+          'step-crypto-payment': document.getElementById('step-crypto-payment'),
+          'step-card-payment': document.getElementById('step-card-payment'),
+          'step-connect-wallet': document.getElementById('step-connect-wallet'),
+          'step-processing': document.getElementById('step-processing'),
+          'step-success': document.getElementById('step-success')
+        };
+        
+        // Check if all steps were found
+        for (const [key, element] of Object.entries(this.steps)) {
+          if (!element) {
+            log(`ERROR: Step element ${key} not found`);
+          }
+        }
+        
+        // Purchase details toggle
+        this.purchaseDetails = document.getElementById('purchase-details');
+        this.toggleDetailsButton = document.getElementById('toggle-details');
+        
+        // Payment methods
+        this.paymentMethods = document.querySelectorAll('.payment-method');
+        
+        // Initialize with item details
+        this.updateItemDetails(this.itemData);
+      },
+
+      attachEventListeners: function() {
+        log('Attaching event listeners');
+        
+        // Demo buttons
+        const buyNftButton = document.getElementById('buy-nft');
+        if (buyNftButton) {
+          buyNftButton.addEventListener('click', () => {
+            log('Buy NFT button clicked');
+            this.updateItemDetails({
+              name: 'Legendary Sword',
+              description: 'NFT Digital Item',
+              price: 20.00,
+              fee: 1.10,
+              total: 21.10,
+              image: 'https://via.placeholder.com/60'
+            });
+            this.open();
+          });
+        } else {
+          log('ERROR: Buy NFT button not found');
+        }
+        
+        // Close modal
+        if (this.closeButton) {
+          this.closeButton.addEventListener('click', () => {
+            log('Close button clicked');
+            this.close();
+          });
+        }
+        
+        if (this.backdrop) {
+          this.backdrop.addEventListener('click', () => {
+            log('Backdrop clicked');
+            this.close();
+          });
+        }
+        
+        // Toggle purchase details
+        if (this.toggleDetailsButton && this.purchaseDetails) {
+          this.toggleDetailsButton.addEventListener('click', () => {
+            log('Toggle details button clicked');
+            this.purchaseDetails.classList.toggle('visible');
+            this.toggleDetailsButton.textContent = 
+              this.purchaseDetails.classList.contains('visible') ? 'Hide details' : 'Show details';
+          });
+        }
+        
+        // Payment method selection
+        this.paymentMethods.forEach(method => {
+          method.addEventListener('click', () => {
+            log(`Payment method selected: ${method.dataset.method}`);
+            this.paymentMethods.forEach(m => m.classList.remove('selected'));
+            method.classList.add('selected');
+            this.paymentMethod = method.dataset.method;
+            this.updateNavigationButtons();
+          });
+        });
+        
+        // Navigation buttons
+        if (this.backButton) {
+          this.backButton.addEventListener('click', () => {
+            log('Back button clicked');
+            this.navigateBack();
+          });
+        }
+        
+        if (this.continueButton) {
+          this.continueButton.addEventListener('click', () => {
+            log('Continue button clicked');
+            this.navigateForward();
+          });
+        }
+        
+        // Wallet options
+        const walletOptions = document.querySelectorAll('.wallet-option');
+        walletOptions.forEach(wallet => {
+          wallet.addEventListener('click', () => {
+            log(`Wallet option selected: ${wallet.dataset.wallet}`);
+            this.processWalletConnection(wallet.dataset.wallet);
+          });
+        });
+        
+        log('All event listeners attached successfully');
+      },
+
+      updateItemDetails: function(itemData) {
+        log(`Updating item details: ${itemData.name}`);
+        this.itemData = itemData;
+        
+        // Update UI elements
+        document.getElementById('item-name').textContent = itemData.name;
+        document.getElementById('item-description').textContent = itemData.description;
+        document.getElementById('item-price').textContent = `$${itemData.price.toFixed(2)}`;
+        document.getElementById('purchase-total').textContent = `$${itemData.total.toFixed(2)}`;
+        document.getElementById('detail-price').textContent = `$${itemData.price.toFixed(2)}`;
+        document.getElementById('detail-fee').textContent = `$${itemData.fee.toFixed(2)}`;
+        document.getElementById('item-image').src = itemData.image;
+        
+        // Update crypto amount
+        document.getElementById('crypto-amount').textContent = `${itemData.total.toFixed(2)} USDC`;
+        
+        // Reset to first step
+        this.goToStep('step-item-details');
+      },
+
+      open: function() {
+        log('Opening payment modal');
+        this.modal.classList.add('active');
+        document.body.style.overflow = 'hidden';
+      },
+
+      close: function() {
+        log('Closing payment modal');
+        this.modal.classList.remove('active');
+        document.body.style.overflow = '';
+        
+        // Reset state
+        setTimeout(() => {
+          this.goToStep('step-item-details');
+          this.paymentMethod = null;
+          this.paymentMethods.forEach(m => m.classList.remove('selected'));
+          this.purchaseDetails.classList.remove('visible');
+          this.toggleDetailsButton.textContent = 'Show details';
+        }, 300);
+      },
+
+      goToStep: function(stepId) {
+        log(`Going to step: ${stepId}`);
+        // Hide all steps
+        Object.values(this.steps).forEach(step => {
+          if (step) step.classList.add('hidden');
+        });
+        
+        // Show the target step
+        if (this.steps[stepId]) {
+          this.steps[stepId].classList.remove('hidden');
+          this.currentStep = stepId;
+          
+          // Update navigation buttons
+          this.updateNavigationButtons();
+        } else {
+          log(`ERROR: Step ${stepId} not found`);
+        }
+      },
+
+      updateNavigationButtons: function() {
+        // Reset buttons
+        if (this.backButton) this.backButton.style.display = '';
+        if (this.continueButton) this.continueButton.style.display = '';
+        
+        // Customize based on current step
+        switch(this.currentStep) {
+          case 'step-item-details':
+            if (this.backButton) this.backButton.style.display = 'none';
+            if (this.continueButton) {
+              this.continueButton.textContent = 'Continue';
+              this.continueButton.disabled = false;
+            }
+            break;
+          case 'step-payment-method':
+            if (this.backButton) this.backButton.textContent = 'Back';
+            if (this.continueButton) {
+              this.continueButton.textContent = 'Continue';
+              this.continueButton.disabled = !this.paymentMethod;
+            }
+            break;
+          case 'step-crypto-payment':
+            if (this.backButton) this.backButton.textContent = 'Back';
+            if (this.continueButton) {
+              this.continueButton.textContent = 'Pay Now';
+              this.continueButton.disabled = false;
+            }
+            break;
+          case 'step-card-payment':
+            if (this.backButton) this.backButton.textContent = 'Back';
+            if (this.continueButton) {
+              this.continueButton.textContent = 'Pay Now';
+              this.continueButton.disabled = false;
+            }
+            break;
+          case 'step-connect-wallet':
+            if (this.backButton) this.backButton.textContent = 'Back';
+            if (this.continueButton) {
+              this.continueButton.textContent = 'Connect';
+              this.continueButton.disabled = false;
+            }
+            break;
+          case 'step-processing':
+            if (this.backButton) this.backButton.style.display = 'none';
+            if (this.continueButton) this.continueButton.style.display = 'none';
+            break;
+          case 'step-success':
+            if (this.backButton) this.backButton.style.display = 'none';
+            if (this.continueButton) {
+              this.continueButton.textContent = 'Done';
+              this.continueButton.disabled = false;
+            }
+            break;
+        }
+      },
+
+      navigateBack: function() {
+        log(`Navigating back from ${this.currentStep}`);
+        switch(this.currentStep) {
+          case 'step-payment-method':
+            this.goToStep('step-item-details');
+            break;
+          case 'step-crypto-payment':
+          case 'step-card-payment':
+          case 'step-connect-wallet':
+            this.goToStep('step-payment-method');
+            break;
+        }
+      },
+
+      navigateForward: function() {
+        log(`Navigating forward from ${this.currentStep}`);
+        switch(this.currentStep) {
+          case 'step-item-details':
+            this.goToStep('step-payment-method');
+            break;
+          case 'step-payment-method':
+            if (this.paymentMethod === 'crypto') {
+              this.goToStep('step-crypto-payment');
+            } else if (this.paymentMethod === 'card') {
+              this.goToStep('step-card-payment');
+            } else if (this.paymentMethod === 'wallet') {
+              this.goToStep('step-connect-wallet');
+            } else {
+              log('ERROR: No payment method selected');
+            }
+            break;
+          case 'step-crypto-payment':
+          case 'step-card-payment':
+          case 'step-connect-wallet':
+            this.processPayment();
+            break;
+          case 'step-success':
+            this.close();
+            break;
+        }
+      },
+
+      processPayment: function() {
+        log('Processing payment');
+        // Show processing step
+        this.goToStep('step-processing');
+        
+        // Simulate payment processing
+        setTimeout(() => {
+          // Generate random transaction ID
+          const txId = '0x' + Math.random().toString(16).substr(2, 8) + '...' + Math.random().toString(16).substr(2, 4);
+          document.getElementById('transaction-id').textContent = txId;
+          document.getElementById('transaction-amount').textContent = `$${this.itemData.total.toFixed(2)}`;
+          
+          log(`Payment successful, transaction ID: ${txId}`);
+          
+          // Show success step
+          this.goToStep('step-success');
+          
+          // Dispatch success event
+          const successEvent = new CustomEvent('payment-success', {
+            bubbles: true,
+            detail: {
+              transactionId: txId,
+              amount: this.itemData.total,
+              item: this.itemData.name
+            }
+          });
+          this.modal.dispatchEvent(successEvent);
+        }, 2000);
+      },
+
+      processWalletConnection: function(walletType) {
+        log(`Connecting to ${walletType} wallet...`);
+        // In a real implementation, this would connect to the actual wallet
+        this.processPayment();
+      }
+    };
+
+    // Initialize the component when the DOM is fully loaded
+    document.addEventListener('DOMContentLoaded', function() {
+      log('DOM fully loaded');
+      VirtoPayments.init();
+    });
+    
+    // Also try to initialize immediately in case DOMContentLoaded already fired
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      log('Document already loaded, initializing immediately');
+      VirtoPayments.init();
+    }
+  </script>
+</body>
+</html>
