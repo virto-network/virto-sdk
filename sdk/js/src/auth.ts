@@ -238,6 +238,11 @@ export default class Auth {
       duration: 15 * MINUTES,
     });
 
+    const connectSignTx = await charlotteStartsASession.sign(passSigner, {
+      mortality: { mortal: true, period: 60 }
+    });
+    console.log("connectSignTx", connectSignTx);
+    
     const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner, {
       mortality: { mortal: true, period: 60 }
     });
@@ -284,6 +289,7 @@ export default class Auth {
     const hash = await client._request("chain_getBlockHash", [ctx]);
     const blockHash = Binary.fromHex(hash);
 
+    console.log("blockHash", blockHash.asHex());
     console.log(`BlockHashChallenger::generate(${ctx}, ${[...JSON.stringify(xtc)]})`);
     console.log("\t-> ", `${JSON.stringify([...Blake2256(mergeUint8([blockHash.asBytes(), xtc]))])}`);
     return Blake2256(mergeUint8([blockHash.asBytes(), xtc]));
