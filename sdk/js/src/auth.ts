@@ -10,6 +10,7 @@ import {
 import { KreivoPassSigner } from "@virtonetwork/signer";
 import { ss58Encode } from "@polkadot-labs/hdkd-helpers";
 import { VOSCredentialsHandler } from "./vocCredentialHandler";
+import NonceManager from "./nonceManager";
 
 let base64Module: typeof import("./utils/base64.browser") | null = null;
 
@@ -42,16 +43,29 @@ export default class Auth {
   private _passkeysAuthenticator: PasskeysAuthenticator | null = null;
   private _sessionSigner: any | null = null;
   private _currentUserId: string | null = null;
+  private _nonceManager: NonceManager | null = null;
 
   constructor(
     private readonly baseUrl: string,
     private readonly credentialsHandler: CredentialsHandler,
     private readonly clientFactory: () => Promise<PolkadotClient>,
+    nonceManager?: NonceManager,
   ) {
+    this._nonceManager = nonceManager || null;
     // Preload the module if we're in a browser environment
     if (typeof window !== "undefined") {
       loadBase64Module();
     }
+  }
+
+  /**
+   * Set the NonceManager instance for this Auth instance
+   * This allows the Auth to increment nonces after successful connections
+   * 
+   * @param nonceManager - The NonceManager instance to use
+   */
+  setNonceManager(nonceManager: NonceManager): void {
+    this._nonceManager = nonceManager;
   }
 
   private async getClient(): Promise<PolkadotClient> {
@@ -228,33 +242,70 @@ export default class Auth {
 
     const passSigner = new KreivoPassSigner(passkeysAuthenticator);
 
+    // Sync nonce from blockchain before starting the connection
+    if (this._nonceManager) {
+      try {
+        const passSignerAddress = ss58Encode(passSigner.publicKey);
+        const currentNonce = await this._nonceManager.syncNonceFromChain(passSignerAddress);
+        console.log(`Synced nonce for address ${passSignerAddress} before connect: ${currentNonce}`);
+      } catch (error) {
+        console.warn('Failed to sync nonce before connect, continuing anyway:', error);
+      }
+    }
+
     const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
     // Adds a session
     const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
     const MINUTES = 10; // 10 blocks in a minute
 
-    const charlotteStartsASession = kreivoApi.tx.Pass.add_session_key({
+    const userStartsASession = kreivoApi.tx.Pass.add_session_key({
       session: MultiAddress.Id(sessionKey),
       duration: 15 * MINUTES,
     });
 
-    const connectSignTx = await charlotteStartsASession.sign(passSigner, {
+    // Store the session signer for later use
+    this._sessionSigner = sessionSigner;
+
+    const connectSignTx = await userStartsASession.sign(passSigner, {
       mortality: { mortal: true, period: 60 }
     });
     console.log("connectSignTx", connectSignTx);
     
-    const tx3Res = await charlotteStartsASession.signAndSubmit(passSigner, {
-      mortality: { mortal: true, period: 60 }
+    const userSessionRes = await new Promise((resolve, reject) => {
+      userStartsASession.signSubmitAndWatch(passSigner, {
+        mortality: { mortal: true, period: 60 }
+      })
+        .subscribe({
+          next: async (event) => {
+            console.info('Session transaction event:', event.type);
+            if (event.type === 'txBestBlocksState') {
+              // Increment nonce in NonceManager after transaction is included
+              if (this._nonceManager) {
+                try {
+                  const passSignerAddress = ss58Encode(passSigner.publicKey);
+                  console.log("nonce before", await this._nonceManager.getCurrentNonce(passSignerAddress));
+                  this._nonceManager.incrementNonce(passSignerAddress);
+                  console.log("nonce after", await this._nonceManager.getCurrentNonce(passSignerAddress));
+                  console.log(`Incremented nonce for address ${passSignerAddress} after connect transaction inclusion`);
+                } catch (error) {
+                  console.warn('Failed to increment nonce after connect transaction:', error);
+                }
+              }
+              resolve({ ok: true, txHash: event.txHash, blockHash: event.found });
+            }
+          },
+          error: (error) => {
+            console.error('Session transaction error:', error);
+            reject(error);
+          }
+        });
     });
-    console.log(tx3Res);
-
-    // Store the session signer for later use
-    this._sessionSigner = sessionSigner;
+    console.log(userSessionRes);
 
     return {
       sessionKey,
       sessionSigner,
-      transaction: tx3Res
+      transaction: userSessionRes
     };
   }
 

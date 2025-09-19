@@ -74,7 +74,7 @@ export default class SDK {
         this._transactionQueue.setNonceManager(this._nonceManager);
         this._transactionQueue.setConfirmationLevel(this._confirmationLevel);
         
-        this._auth = new Auth(options.federate_server, credentialsHandler, getClient);
+        this._auth = new Auth(options.federate_server, credentialsHandler, getClient, this._nonceManager);
         this._memberships = new Membership(options.federate_server);
         
         // Configure the address helper in transaction queue

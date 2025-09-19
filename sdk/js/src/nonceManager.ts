@@ -25,6 +25,7 @@ export default class NonceManager {
     const kreivoApi = client.getTypedApi(kreivo);
     
     const accountInfo = await kreivoApi.query.System.Account.getValue(address);
+    console.log("Account info getting Nonce:", accountInfo);
     return accountInfo.nonce;
   }
 

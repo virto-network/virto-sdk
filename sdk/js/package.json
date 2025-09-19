@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@polkadot-api/descriptors": "file:.papi/descriptors",
-    "@polkadot-api/substrate-bindings": "^0.14.0",
+    "@polkadot-api/substrate-bindings": "^0.16.3",
     "@polkadot-labs/hdkd-helpers": "^0.0.19",
     "@polkadot/api": "^15.7.2",
     "@polkadot/keyring": "^13.4.3",
@@ -45,7 +45,7 @@
     "es-arraybuffer-base64": "^1.1.2",
     "jsonwebtoken": "^9.0.2",
     "nid-webauthn-emulator": "^0.2.4",
-    "polkadot-api": "^1.13.0"
+    "polkadot-api": "^1.17.2"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
