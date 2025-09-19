@@ -127,7 +127,9 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
 
     try {
       const result = await sdk.auth.register(user);
+      const membershipResult = await sdk.auth.addMember(user.profile.id);
       console.log('Registration successful:', result);
+      console.log('Membership successful:', membershipResult);
     } catch (error) {
       console.error('Registration failed:', error);
     }
@@ -136,6 +138,7 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
   document.getElementById('connectButton').addEventListener('click', async () => {
     try {
       const userName = document.getElementById('userName').value;
+      console.log('Connecting user:', userName);
       const result = await sdk.auth.connect(userName);
       console.log('Connection successful:', result);
     } catch (error) {
