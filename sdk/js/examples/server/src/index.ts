@@ -1,7 +1,7 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { MongoDBStorage } from './storage/MongoDBStorage';
-import { IStorage } from '../../../src/storage';
+import { IStorage, SerializableSignerData } from '../../../src/storage';
 import ServerSDK from '../../../src/serverSdk';
 
 export interface AttestationData {
@@ -33,7 +33,7 @@ app.use(express.json());
 const mongoUrl = process.env.MONGODB_URL || 'mongodb://localhost:27017';
 const dbName = process.env.MONGODB_DB_NAME || 'virto_sessions';
 
-async function createStorage(): Promise<IStorage<any>> {
+async function createStorage(): Promise<IStorage<SerializableSignerData>> {
   console.log('Initializing MongoDB storage...');
   const mongoDbStorage = new MongoDBStorage({
     url: mongoUrl,
@@ -49,7 +49,7 @@ async function createStorage(): Promise<IStorage<any>> {
     await mongoDbStorage.get('test');
     await mongoDbStorage.remove('test');
 
-    return mongoDbStorage as IStorage<any>;
+    return mongoDbStorage as IStorage<SerializableSignerData>;
   } catch (error) {
     console.error('Failed to connect to MongoDB:', error);
     throw error;
