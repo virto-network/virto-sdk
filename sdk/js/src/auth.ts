@@ -1,8 +1,8 @@
-import { BaseProfile, User } from "./types";
+import { BaseProfile, AttestationData, User, SignFn, TransactionResult } from "./types";
 import { Blake2256 } from "@polkadot-api/substrate-bindings";
 import { mergeUint8 } from "polkadot-api/utils";
 import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
-import { Binary, PolkadotClient } from "polkadot-api";
+import { Binary, PolkadotClient, PolkadotSigner } from "polkadot-api";
 import {
   CredentialsHandler,
   WebAuthn as PasskeysAuthenticator,
@@ -21,27 +21,12 @@ async function loadBase64Module() {
   return base64Module;
 }
 
-export interface PreparedCredentialData {
-  id: string;
-  rawId: string;
-  type: string;
-  response: {
-    authenticatorData: string;
-    clientDataJSON: string;
-    publicKey: string;
-  }
-}
-
-export interface PreparedRegistrationData {
-  userId: string;
-  attestationResponse: PreparedCredentialData;
-  blockNumber: number;
-}
-
 export default class Auth {
   private _client: PolkadotClient | null = null;
   private _passkeysAuthenticator: PasskeysAuthenticator | null = null;
-  private _sessionSigner: any | null = null;
+  private _sessionSigner: PolkadotSigner & {
+    sign: SignFn;
+  } | null = null;
   private _currentUserId: string | null = null;
   private _nonceManager: NonceManager | null = null;
 
@@ -75,6 +60,18 @@ export default class Auth {
     return this._client;
   }
 
+  async register(user: User<BaseProfile>) {
+    const preparedData = await this.prepareRegistration(user);
+    const result = await this.completeRegistration(
+      preparedData.attestation,
+      preparedData.hashedUserId,
+      preparedData.credentialId,
+      preparedData.userId,
+      preparedData.passAccountAddress
+    );
+    return result;
+  }
+
   /**
    * This method is only available in browser environments as it uses WebAuthn APIs.
    * It performs the complete registration process by:
@@ -86,9 +83,7 @@ export default class Auth {
    * @returns Promise with the registration result
    */
 
-  async register<Profile extends BaseProfile>(
-    user: User<Profile>
-  ) {
+  async prepareRegistration(user: User<BaseProfile>) {
     const passkeysAuthenticator = await new PasskeysAuthenticator(
       user.profile.id,
       this.blockHashChallenge.bind(this),
@@ -101,8 +96,6 @@ export default class Auth {
     const passSigner = new KreivoPassSigner(passkeysAuthenticator);
     const passAccountAddress = ss58Encode(passSigner.publicKey);
 
-    console.log("before get client")
-
     /// Registers Charlotte (esto viene en VOS)
     const client = await this.getClient();
     const finalizedBlock = await client.getFinalizedBlock();
@@ -110,7 +103,7 @@ export default class Auth {
 
     console.log("attestation", attestation);
 
-    const attestationJSON = {
+    const attestationJSON: AttestationData = {
       authenticator_data: attestation.authenticator_data.asHex(),
       client_data: attestation.client_data.asText(),
       public_key: attestation.public_key.asHex(),
@@ -121,17 +114,38 @@ export default class Auth {
       },
     };
 
-    console.log("hashedUserId", passkeysAuthenticator.hashedUserId);
-    console.log("credentialId", (this.credentialsHandler as VOSCredentialsHandler).getCredentialIdForUser(user.profile.id));
+    const credentialId = (this.credentialsHandler as VOSCredentialsHandler).getCredentialIdForUser(user.profile.id);
+
+    if (!credentialId) {
+      throw new Error("Credential ID not found");
+    }
+
+    return {
+      attestation: attestationJSON,
+      hashedUserId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(),
+      credentialId: credentialId,
+      userId: user.profile.id,
+      passAccountAddress
+    };
+  }
+
+  async completeRegistration(
+    attestation: AttestationData,
+    hashedUserId: string,
+    credentialId: string,
+    userId: string,
+    address: string
+  ) {
+    console.log("hashedUserId", hashedUserId);
     const postRes = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        userId: user.profile.id,
-        hashedUserId: Binary.fromBytes(passkeysAuthenticator.hashedUserId).asHex(),
-        credentialId: (this.credentialsHandler as VOSCredentialsHandler).getCredentialIdForUser(user.profile.id),
-        address: passAccountAddress,
-        attestationResponse: attestationJSON
+        userId: userId,
+        hashedUserId,
+        credentialId: credentialId,
+        address,
+        attestationResponse: attestation
       }),
     });
 
@@ -209,29 +223,23 @@ export default class Auth {
     return ss58Encode(sessionSigner.publicKey);
   }
 
-  /**
-   * This method is only available in browser environments as it uses WebAuthn APIs.
-   * It performs the complete connection process by:
-   * 1. Preparing connection data on the client side using WebAuthn
-   * 2. Completing the connection on the server side
-   * 
-   * @throws {VError} If credential retrieval fails
-   * @param userId - The user ID to connect
-   /**
-    * Connects a user using WebAuthn and sets up a session key.
-    * @param userId - The user ID to connect
-    * @returns Promise<{ sessionKey: string, sessionSigner: any, transaction: any }>
-    */
-  async connect(userId?: string): Promise<{ sessionKey: string, sessionSigner: any, transaction: any }> {
+  async connect(userId: string) {
+    await this.prepareConnection(userId);
+    const result = await this.completeConnection();
+    return result;
+  }
+
+  async prepareConnection(userId: string) {
+    console.log("Connecting to user:", userId);
+
     if (userId) {
       this._currentUserId = userId;
     }
 
-    console.log("Connecting to user:", this._currentUserId);
+    console.log("Connecting to current user:", this._currentUserId);
     if (!this._currentUserId) {
       throw new Error("User ID is required");
     }
-
     const passkeysAuthenticator = await new PasskeysAuthenticator(
       this._currentUserId,
       this.blockHashChallenge.bind(this),
@@ -240,7 +248,19 @@ export default class Auth {
 
     this._passkeysAuthenticator = passkeysAuthenticator;
 
-    const passSigner = new KreivoPassSigner(passkeysAuthenticator);
+    const hashedUserId = passkeysAuthenticator.hashedUserId;
+
+    return {
+      hashedUserId: hashedUserId,
+      userId: this._currentUserId,
+    }
+  }
+
+  async completeConnection() {
+    if (!this._passkeysAuthenticator) {
+      throw new Error("PasskeysAuthenticator is not available");
+    }
+    const passSigner = new KreivoPassSigner(this._passkeysAuthenticator);
 
     // Sync nonce from blockchain before starting the connection
     if (this._nonceManager) {
@@ -263,14 +283,18 @@ export default class Auth {
       duration: 15 * MINUTES,
     });
 
-    // Store the session signer for later use
+    const tx3Res = await userStartsASession.signAndSubmit(passSigner, {
+      mortality: { mortal: true, period: 60 }
+    });
+    console.log(tx3Res);
+
     this._sessionSigner = sessionSigner;
 
     const connectSignTx = await userStartsASession.sign(passSigner, {
       mortality: { mortal: true, period: 60 }
     });
     console.log("connectSignTx", connectSignTx);
-    
+
     const userSessionRes = await new Promise((resolve, reject) => {
       userStartsASession.signSubmitAndWatch(passSigner, {
         mortality: { mortal: true, period: 60 }
@@ -308,7 +332,6 @@ export default class Auth {
       transaction: userSessionRes
     };
   }
-
   /**
    * Signs a command using the user's wallet
    * This method retrieves the user's wallet from the session manager and uses it to sign the provided command
@@ -381,5 +404,37 @@ export default class Auth {
     return data.ok;
   }
 
+  async sign(extrinsic: string): Promise<TransactionResult> {
+    if (!this._currentUserId) {
+      throw new Error("User ID is not set");
+    }
 
+    try {
+
+      const passkeysAuthenticator = await new PasskeysAuthenticator(
+        this._currentUserId,
+        this.blockHashChallenge.bind(this),
+        this.credentialsHandler
+      ).setup();
+      
+      this._passkeysAuthenticator = passkeysAuthenticator;
+
+      const passSigner = new KreivoPassSigner(this._passkeysAuthenticator);
+      
+      const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+
+      const transaction = await kreivoApi.txFromCallData(Binary.fromHex(extrinsic));
+      const result = await transaction.signAndSubmit(passSigner);
+
+      return {
+        ok: result.ok,
+        hash: result.txHash,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
 }

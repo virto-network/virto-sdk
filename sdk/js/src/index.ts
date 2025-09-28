@@ -34,11 +34,15 @@ import { UserService, DefaultUserService } from "./services/userService";
 import { 
   SDKOptions, 
   TransactionConfirmationLevel,
-  TransactionResult
+  TransactionResult,
+  AttestationData,
+  PreparedRegistrationData,
 } from "./types";
+import ServerSDK from "./serverSdk";
 
 export {
   SDK,
+  ServerSDK,
   SDKOptions,
   TransactionConfirmationLevel,
   TransactionResult,
