@@ -1,7 +1,7 @@
 import { BaseProfile, AttestationData, User, SignFn, TransactionResult } from "./types";
 import { Blake2256 } from "@polkadot-api/substrate-bindings";
 import { mergeUint8 } from "polkadot-api/utils";
-import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
+import { kreivo, MultiAddress } from "@virtonetwork/sdk/descriptors";
 import { Binary, PolkadotClient, PolkadotSigner } from "polkadot-api";
 import {
   CredentialsHandler,
@@ -261,11 +261,11 @@ export default class Auth {
       throw new Error("PasskeysAuthenticator is not available");
     }
     const passSigner = new KreivoPassSigner(this._passkeysAuthenticator);
+    const passSignerAddress = ss58Encode(passSigner.publicKey);
 
     // Sync nonce from blockchain before starting the connection
     if (this._nonceManager) {
       try {
-        const passSignerAddress = ss58Encode(passSigner.publicKey);
         const currentNonce = await this._nonceManager.syncNonceFromChain(passSignerAddress);
         console.log(`Synced nonce for address ${passSignerAddress} before connect: ${currentNonce}`);
       } catch (error) {
@@ -300,7 +300,7 @@ export default class Auth {
         mortality: { mortal: true, period: 60 }
       })
         .subscribe({
-          next: async (event) => {
+          next: async (event: any) => {
             console.info('Session transaction event:', event.type);
             if (event.type === 'txBestBlocksState') {
               // Increment nonce in NonceManager after transaction is included
@@ -318,7 +318,7 @@ export default class Auth {
               resolve({ ok: true, txHash: event.txHash, blockHash: event.found });
             }
           },
-          error: (error) => {
+          error: (error: unknown) => {
             console.error('Session transaction error:', error);
             reject(error);
           }
@@ -329,6 +329,7 @@ export default class Auth {
     return {
       sessionKey,
       sessionSigner,
+      address: passSignerAddress,
       transaction: userSessionRes
     };
   }

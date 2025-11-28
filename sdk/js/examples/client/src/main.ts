@@ -1,7 +1,5 @@
-
-// @ts-ignore: No declaration file for SDK module
-import SDK from '../../../dist/esm/sdk.js';
-import type { PreparedRegistrationData, PreparedConnectionData } from '../../../src/types';
+import {SDK} from '../../../dist/web/index.js';
+import type { PreparedRegistrationData } from '../../../src/types';
 
 const JWT_TOKEN_KEY = 'virto_jwt_token';
 const CONNECTED_USER_KEY = 'virto_connected_user';
@@ -22,7 +20,6 @@ function loadFromLocalStorage() {
 }
 
 let preparedRegistrationData: PreparedRegistrationData | null = null;
-let preparedConnectionData: PreparedConnectionData | null = null;
 let connectedUserId: string | null = null;
 let authToken: string | null = null;
 
@@ -111,7 +108,7 @@ async function completeRegistration() {
 
     completeRegistrationButton.disabled = true;
 
-    const response = await fetch(`http://localhost:14000/custom-register`, {
+    const response = await fetch(`http://localhost:4000/auth/custom-register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -151,10 +148,9 @@ async function prepareConnection() {
 
     console.log(`Preparing connection for user with ID: ${userId.value}...`);
 
-    preparedConnectionData = await sdk.auth.prepareConnection(userId.value);
+    await sdk.auth.prepareConnection(userId.value);
 
     console.log('Connection data prepared successfully:', 'success');
-    console.log(JSON.stringify(preparedConnectionData, null, 2));
 
     completeConnectionButton.disabled = false;
   } catch (error) {
@@ -168,18 +164,18 @@ async function completeConnection() {
   try {
     console.log('Sending data to the server to complete connection...');
 
-    if (!preparedConnectionData) {
+    if (!userId.value) {
       console.log('Error: No prepared connection data. Run Step 1 first.', 'error');
       return;
     }
 
-    const response = await fetch(`http://localhost:14000/custom-connect`, {
+    const response = await fetch(`http://localhost:4000/auth/custom-connect`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        userId: preparedConnectionData.userId
+        userId: userId.value
       })
     });
 
@@ -198,7 +194,7 @@ async function completeConnection() {
     const resultCustom = await sdk.auth.sign(result.extrinsic);
     console.log("resultCustom", resultCustom);
 
-    connectedUserId = preparedConnectionData.userId;
+    connectedUserId = userId.value;
 
     authToken = result.token || null;
 
@@ -209,18 +205,17 @@ async function completeConnection() {
       console.log('Warning: No JWT token received from server', 'warning');
     }
 
-    preparedConnectionData = null;
     completeConnectionButton.disabled = true;
   } catch (error) {
     console.log(`Error completing connection: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
   } finally {
-    completeConnectionButton.disabled = !preparedConnectionData;
+    completeConnectionButton.disabled = !userId.value;
   }
 }
 
 async function signCommand() {
   console.log("signing transaction", commandHex.value);
-  const response = await fetch(`http://localhost:14000/sign`, {
+  const response = await fetch(`http://localhost:4000/auth/sign`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -248,7 +243,7 @@ completeConnectionButton.addEventListener('click', completeConnection);
 signButton.addEventListener('click', signCommand);
 
 completeRegistrationButton.disabled = !preparedRegistrationData;
-completeConnectionButton.disabled = !preparedConnectionData;
+completeConnectionButton.disabled = !userId.value;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadFromLocalStorage();

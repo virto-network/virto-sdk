@@ -10,6 +10,7 @@ export interface SerializableSignerData {
   miniSecret: string;
   derivationPath: string;
   hashedUserId?: string;
+  address?: string;
 }
 
 /**
@@ -28,13 +29,15 @@ export class SignerSerializer {
       derivationPath: string;
       originalPublicKey: Uint8Array;
       hashedUserId?: Uint8Array;
+      address?: string;
     }
   ): SerializableSignerData {
     return {
       publicKey: Buffer.from(recreationData.originalPublicKey).toString('hex'),
       miniSecret: Buffer.from(recreationData.miniSecret).toString('hex'),
       derivationPath: recreationData.derivationPath,
-      hashedUserId: recreationData.hashedUserId ? Buffer.from(recreationData.hashedUserId).toString('hex') : undefined
+      hashedUserId: recreationData.hashedUserId ? Buffer.from(recreationData.hashedUserId).toString('hex') : undefined,
+      address: recreationData.address
     };
   }
 
@@ -66,6 +69,16 @@ export class SignerSerializer {
       );
     } else {
       signer.publicKey = originalPublicKey;
+    }
+
+    // Restore the server address if it exists
+    if (data.address) {
+      Object.defineProperty(signer, "_serverAddress", {
+        value: data.address,
+        writable: false,
+        enumerable: false,
+        configurable: false,
+      });
     }
 
     return signer as PolkadotSigner & { sign: SignFn };

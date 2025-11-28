@@ -1,7 +1,5 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import { MongoDBStorage } from './storage/MongoDBStorage';
-import { IStorage, SerializableSignerData } from '../../../src/storage';
 import ServerSDK from '../../../src/serverSdk';
 
 export interface AttestationData {
@@ -33,33 +31,8 @@ app.use(express.json());
 const mongoUrl = process.env.MONGODB_URL || 'mongodb://localhost:27017';
 const dbName = process.env.MONGODB_DB_NAME || 'virto_sessions';
 
-async function createStorage(): Promise<IStorage<SerializableSignerData>> {
-  console.log('Initializing MongoDB storage...');
-  const mongoDbStorage = new MongoDBStorage({
-    url: mongoUrl,
-    dbName: dbName,
-    collectionName: 'user_sessions'
-  });
-
-  try {
-    await mongoDbStorage.connect();
-
-    // Test MongoDB connection
-    await mongoDbStorage.store('test', { message: 'MongoDB connection test' });
-    await mongoDbStorage.get('test');
-    await mongoDbStorage.remove('test');
-
-    return mongoDbStorage as IStorage<SerializableSignerData>;
-  } catch (error) {
-    console.error('Failed to connect to MongoDB:', error);
-    throw error;
-  }
-}
-
 (async () => {
   try {
-    // Initialize MongoDB and ServerSDK
-    const mongoStorage = await createStorage();
 
     //@ts-ignore
     const serverSdk = new ServerSDK({
@@ -71,7 +44,7 @@ async function createStorage(): Promise<IStorage<SerializableSignerData>> {
           expiresIn: '10m'
         }
       }
-    }, mongoStorage);
+    });
 
     app.get('/check-registered/:userId', async (req: Request, res: Response) => {
       try {
@@ -159,7 +132,13 @@ async function createStorage(): Promise<IStorage<SerializableSignerData>> {
           return res.status(400).json({ error: 'No extrinsic provided' });
         }
 
+        console.log('[Sign Request] Processing transaction...');
         const signResult = await serverSdk.auth.signWithToken(token, extrinsic);
+
+        console.log('[Sign Result]:', {
+          ok: signResult.ok,
+          hash: signResult.hash,
+        });
 
         res.json({
           ...signResult,

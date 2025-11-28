@@ -67,6 +67,7 @@ export interface PreparedConnectionData {
 export interface JWTPayload {
   userId: string;
   publicKey: string;
+  address: string;
   exp: number;
   iat: number;
 }

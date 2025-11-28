@@ -1,4 +1,4 @@
-import { kreivo } from "@polkadot-api/descriptors";
+import { kreivo } from "@virtonetwork/sdk/descriptors";
 import { PolkadotClient } from "polkadot-api";
 import TransactionQueue from "./transactionQueue";
 import { TransactionResult } from "./types";

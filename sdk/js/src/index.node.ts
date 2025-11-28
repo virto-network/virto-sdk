@@ -8,6 +8,7 @@ import TransactionQueue from "./transactionQueue";
 import TransactionExecutor from "./transactionExecutor";
 import { DefaultUserService } from "./services/userService";
 import ServerSDK from "./serverSdk";
+import ServerAuth from "./serverAuth";
 
 export type {
   TransferOptions,
@@ -35,11 +36,14 @@ export type {
 } from "./transactionQueue";
 
 export type { 
-  SDKOptions, 
+  SDKOptions,
+  ServerSDKOptions,
   TransactionConfirmationLevel,
   TransactionResult,
   AttestationData,
   PreparedRegistrationData,
+  PreparedConnectionData,
+  JWTPayload,
 } from "./types";
 
 export type {
@@ -49,6 +53,7 @@ export type {
 export {
   SDK,
   ServerSDK,
+  ServerAuth,
   Auth,
   Transfer,
   System,
@@ -59,4 +64,5 @@ export {
   DefaultUserService,
 };
 
-export default SDK; 
+export default SDK;
+

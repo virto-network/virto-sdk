@@ -1,4 +1,4 @@
-import { kreivo } from "@polkadot-api/descriptors";
+import { kreivo } from "@virtonetwork/sdk/descriptors";
 import { PolkadotClient } from "polkadot-api";
 
 export default class NonceManager {

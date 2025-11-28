@@ -1,7 +1,7 @@
 import { JWTPayload, AttestationData, SignFn } from "./types";
 import { VError } from "./utils/error";
 import jwt, { Secret, SignOptions } from 'jsonwebtoken';
-import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
+import { kreivo, MultiAddress } from "@virtonetwork/sdk/descriptors";
 import { Binary, PolkadotClient } from "polkadot-api";
 import { Blake2256 } from '@polkadot-api/substrate-bindings';
 import { mergeUint8 } from "polkadot-api/utils";
@@ -18,6 +18,7 @@ import { getPolkadotSigner } from "polkadot-api/signer";
 import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
 import { IStorage } from "./storage";
 import { SerializableSignerData, SignerSerializer } from "./storage/SignerSerializer";
+
 /**
  * Server version of the Auth class
  * This class only contains methods that DO NOT depend on browser APIs
@@ -35,8 +36,8 @@ export default class ServerAuth {
    * Creates a new ServerAuth instance
    * 
    * @param baseUrl - The base URL of the federate server
-   * @param sessionManager - The server session manager for handling user sessions
-   * @param defaultWalletType - The default wallet type to use when creating new sessions
+   * @param clientFactory - Factory function to get the Polkadot client
+   * @param storage - Storage implementation for sessions
    * @param jwtConfig - JWT configuration for token generation and verification
    */
   constructor(
@@ -64,13 +65,13 @@ export default class ServerAuth {
    * @returns The generated JWT token
    * @throws Error if JWT configuration is not available
    */
-  private generateToken(userId: string, publicKey: string): string {
+  private generateToken(userId: string, publicKey: string, address: string): string {
     if (!this._jwtSecret) {
       throw new VError("E_NO_JWT_CONFIG", "JWT configuration not provided");
     }
 
     return jwt.sign(
-      { userId, publicKey },
+      { userId, publicKey, address },
       this._jwtSecret,
       { expiresIn: this._jwtExpiresIn } as SignOptions
     );
@@ -81,6 +82,20 @@ export default class ServerAuth {
       this._client = await this.clientFactory();
     }
     return this._client;
+  }
+
+  /**
+   * Static method to extract the server address from a session signer
+   * This is used by the NonceManager to get the correct address for nonce calculation
+   * 
+   * @param sessionSigner - The session signer with the stored address
+   * @returns The original address of the session signer
+   */
+  static getServerSignerAddress(sessionSigner: any): string {
+    if (sessionSigner && (sessionSigner as any)._serverAddress) {
+      return (sessionSigner as any)._serverAddress;
+    }
+    throw new Error("Session signer does not have a stored address");
   }
 
   /**
@@ -108,11 +123,37 @@ export default class ServerAuth {
   }
 
   /**
+   * Decodes a JWT token without verifying its signature
+   * This method extracts the payload information without validation
+   * 
+   * @param token - The JWT token to decode
+   * @returns The decoded token payload
+   * @throws VError if the token format is invalid
+   */
+  public decodeToken(token: string): JWTPayload {
+    try {
+      const decoded = jwt.decode(token) as JWTPayload;
+      
+      if (!decoded) {
+        throw new VError("E_JWT_INVALID_FORMAT", "Token format is invalid");
+      }
+
+      return decoded;
+    } catch (error: any) {
+      if (error instanceof VError) {
+        throw error;
+      }
+      throw new VError("E_JWT_DECODE_FAILED", "Failed to decode token");
+    }
+  }
+
+  /**
    * Signs a command after verifying the JWT token
+   * Signs directly without using the transaction queue
    * 
    * @param token - The JWT token to verify
    * @param extrinsic - The extrinsic to sign
-   * @returns The signed command
+   * @returns The signed command result
    * @throws VError if the token is invalid or expired
    */
   async signWithToken(token: string, extrinsic: string) {
@@ -134,14 +175,13 @@ export default class ServerAuth {
     }
 
     const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
-
     const transaction = await kreivoApi.txFromCallData(Binary.fromHex(extrinsic));
     const result = await transaction.signAndSubmit(this._sessionSigner);
 
     return {
       ok: result.ok,
       hash: result.txHash,
-      blockHash: result.block.hash
+      blockHash: result.block?.hash
     };
   }
 
@@ -243,6 +283,7 @@ export default class ServerAuth {
     );
 
     console.log("s.publicKey", s.publicKey);
+    console.log("address", address);
 
     const MINUTES = 10; // 10 blocks in a minute
 
@@ -260,7 +301,8 @@ export default class ServerAuth {
         miniSecret,
         derivationPath,
         originalPublicKey: keypair.publicKey,
-        hashedUserId
+        hashedUserId,
+        address
       });
 
       await this.storage.store(userId, serializableData);
@@ -272,7 +314,8 @@ export default class ServerAuth {
       try {
         token = this.generateToken(
           userId,
-          Binary.fromBytes(s.publicKey).asHex()
+          Binary.fromBytes(s.publicKey).asHex(),
+          address
         );
       } catch (error) {
         console.warn("Token generation failed, continuing without JWT:", error);

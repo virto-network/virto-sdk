@@ -7,19 +7,17 @@ export default defineConfig({
     port: 3000,
   },
   plugins: [wasm()],
-  ssr: {
-    external: ['jsonwebtoken']
-  },
   build: {
-    outDir: "dist/esm",
+    outDir: "dist/node",
     lib: {
-      entry: resolve(__dirname, "src/index.web.ts"),
+      entry: resolve(__dirname, "src/index.node.ts"),
       name: "SDK",
       fileName: "index",
-      formats: ["es"]
+      formats: ["es", "cjs"]
     },
     rollupOptions: {
       external: [
+        // Keep Node.js modules external but don't exclude them
         'jsonwebtoken',
         'ws',
         'crypto',
@@ -30,10 +28,17 @@ export default defineConfig({
         'path',
         'os'
       ],
-      output: {
-        entryFileNames: "index.js",
-        format: "es"
-      }
+      output: [
+        {
+          format: "es",
+          entryFileNames: "index.mjs"
+        },
+        {
+          format: "cjs", 
+          entryFileNames: "index.cjs"
+        }
+      ]
     }
   }
 });
+

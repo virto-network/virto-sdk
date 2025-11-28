@@ -1,27 +1,59 @@
 {
   "name": "@virtonetwork/sdk",
-  "version": "0.0.4-alpha.17",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "version": "0.0.4-alpha.36",
+  "main": "dist/cjs/index.js",
+  "types": "dist/cjs/index.d.ts",
   "scripts": {
     "dev": "vite",
-    "postinstall": "papi",
-    "build": "npm run build:esm && npm run build:cjs && npm run build:umd",
-    "build:esm": "vite build --config vite.config.esm.mts",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && npm run build:web && npm run build:node && npm run build:cjs && npm run build:esm && npm run build:umd && npm run copy:papi",
+    "copy:papi": "cp -r .papi dist/",
+    "build:web": "vite build --config vite.config.web.mts && tsc --project tsconfig.web.json",
+    "build:node": "vite build --config vite.config.node.mts && tsc --project tsconfig.node.json",
+    "build:esm": "vite build --config vite.config.esm.mts && tsc --project tsconfig.esm.json",
     "build:cjs": "tsc --project tsconfig.cjs.json",
     "build:umd": "vite build --config vite.config.mts",
     "test": "npm run build && jest --config=jest.config.js",
     "test:watch": "npm run build && jest --config=jest.config.js --watch"
   },
   "exports": {
-    "require": "./dist/cjs/sdk.js",
-    "import": "./dist/esm/sdk.js",
-    "default": "./dist/umd/sdk.umd.js"
+    ".": {
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      },
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "default": "./dist/umd/index.umd.js"
+    },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "default": "./dist/web/index.js"
+    },
+    "./node": {
+      "require": {
+        "types": "./dist/node/index.d.ts",
+        "default": "./dist/node/index.cjs"
+      },
+      "import": {
+        "types": "./dist/node/index.d.ts",
+        "default": "./dist/node/index.mjs"
+      }
+    },
+    "./descriptors": {
+      "types": "./.papi/descriptors/dist/index.d.ts",
+      "module": "./.papi/descriptors/dist/index.mjs",
+      "import": "./.papi/descriptors/dist/index.mjs",
+      "require": "./.papi/descriptors/dist/index.js"
+    }
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.12.0",
+    "@polkadot-api/descriptors": "file:../.papi/descriptors",
     "jest": "^29.7.0",
     "jest-environment-puppeteer": "^11.0.0",
     "jest-puppeteer": "^11.0.0",
@@ -32,7 +64,6 @@
     "vite-plugin-wasm": "^3.4.1"
   },
   "dependencies": {
-    "@polkadot-api/descriptors": "file:.papi/descriptors",
     "@polkadot-api/substrate-bindings": "^0.16.3",
     "@polkadot-labs/hdkd-helpers": "^0.0.19",
     "@virtonetwork/authenticators-webauthn": "^1.1.3",
@@ -42,6 +73,12 @@
     "nid-webauthn-emulator": "^0.2.4",
     "polkadot-api": "^1.17.2"
   },
+  "files": [
+    "dist",
+    ".papi",
+    "README.md",
+    "LICENSE"
+  ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   }
