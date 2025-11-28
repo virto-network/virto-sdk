@@ -1,14 +1,19 @@
 {
   "compilerOptions": {
+    "lib": ["ES2020", "DOM"],
     "target": "ES2020",
     "module": "commonjs",
+    "moduleResolution": "node",
     "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@virtonetwork/sdk/descriptors": ["../../.papi/descriptors/dist/index.d.ts"]
+    },
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../../src/**/*"],
   "exclude": ["node_modules"]
 }

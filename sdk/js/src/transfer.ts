@@ -1,4 +1,4 @@
-import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
+import { kreivo, MultiAddress } from "@virtonetwork/sdk/descriptors";
 import { PolkadotClient } from "polkadot-api";
 import { ss58Decode } from "@polkadot-labs/hdkd-helpers";
 import TransactionQueue from "./transactionQueue";
@@ -247,7 +247,7 @@ export default class Transfer {
     
     const { free, reserved, frozen } = accountInfo.data;
     const total = free + reserved;
-    const transferable = free - frozen;
+    const transferable: bigint = free - frozen;
 
     return {
       free,

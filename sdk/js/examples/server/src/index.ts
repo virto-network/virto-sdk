@@ -1,11 +1,28 @@
-import express, { Request, Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import cors from 'cors';
-import { ServerSDK, PreparedRegistrationData, PreparedConnectionData, WalletType, Command, IStorage } from '../../../src/index';
-import { MongoDBStorage } from './storage/MongoDBStorage';
-import { Session } from '../../../src/manager';
+import ServerSDK from '../../../src/serverSdk';
+
+export interface AttestationData {
+  authenticator_data: string;
+  client_data: string;
+  public_key: string;
+  meta: {
+    deviceId: string;
+    context: number;
+    authority_id: string;
+  }
+}
+
+export interface PreparedRegistrationData {
+  attestation: AttestationData;
+  hashedUserId: string;
+  credentialId: string;
+  userId: string;
+  passAccountAddress: string;
+}
 
 const app = express();
-const port = process.env.PORT || 9000;
+const port = process.env.PORT || 14000;
 
 app.use(cors());
 app.use(express.json());
@@ -14,50 +31,20 @@ app.use(express.json());
 const mongoUrl = process.env.MONGODB_URL || 'mongodb://localhost:27017';
 const dbName = process.env.MONGODB_DB_NAME || 'virto_sessions';
 
-async function createStorage(): Promise<IStorage<Session>> {
-  console.log('Initializing MongoDB storage...');
-  const mongoDbStorage = new MongoDBStorage({
-    url: mongoUrl,
-    dbName: dbName,
-    collectionName: 'user_sessions'
-  });
-
-  try {
-    await mongoDbStorage.connect();
-
-    // Test MongoDB connection
-    await mongoDbStorage.store('test', { message: 'MongoDB connection test' });
-    await mongoDbStorage.get('test');
-    await mongoDbStorage.remove('test');
-
-    return mongoDbStorage as IStorage<Session>;
-  } catch (error) {
-    console.error('Failed to connect to MongoDB:', error);
-    throw error;
-  }
-}
-
 (async () => {
   try {
-    // Initialize MongoDB and ServerSDK
-    const mongoStorage = await createStorage();
 
     //@ts-ignore
     const serverSdk = new ServerSDK({
       federate_server: 'http://localhost:3000/api',
-      provider_url: 'ws://localhost:12281',
+      provider_url: 'ws://localhost:21000',
       config: {
-        wallet: WalletType.POLKADOT,
         jwt: {
           secret: process.env.JWT_SECRET || 'virto-server-example-secret-key-change-in-production',
           expiresIn: '10m'
         }
       }
-    },
-      () => { throw new Error("SubeFn not needed in server environment"); }, // subeFn
-      () => { throw new Error("JsWalletFn not needed in server environment"); }, // jsWalletFn
-      mongoStorage
-    );
+    });
 
     app.get('/check-registered/:userId', async (req: Request, res: Response) => {
       try {
@@ -81,13 +68,19 @@ async function createStorage(): Promise<IStorage<Session>> {
       try {
         const preparedData: PreparedRegistrationData = req.body;
 
-        if (!preparedData.userId || !preparedData.attestationResponse || !preparedData.blockNumber) {
-          return res.status(400).json({ error: 'Incomplete registration data' });
-        }
 
         console.log('Data received from client:', JSON.stringify(preparedData, null, 2));
 
-        const result = await serverSdk.auth.completeRegistration(preparedData);
+        const result = await serverSdk.auth.completeRegistration(
+          preparedData.attestation,
+          preparedData.hashedUserId,
+          preparedData.credentialId,
+          preparedData.userId,
+          preparedData.passAccountAddress
+        );
+
+        const membership = await serverSdk.auth.addMember(preparedData.userId);
+        console.log('Membership result:', membership);
 
         res.json({
           success: true,
@@ -106,24 +99,11 @@ async function createStorage(): Promise<IStorage<Session>> {
 
     app.post('/custom-connect', async (req: Request, res: Response) => {
       try {
-        const preparedData: PreparedConnectionData = req.body;
+        const { userId } = req.body;
+        const response = await serverSdk.auth.completeConnection(userId);
+        console.log("Connect response on server side SDK:", response);
 
-        if (!preparedData.userId || !preparedData.assertionResponse || !preparedData.blockNumber) {
-          return res.status(400).json({ error: 'Incomplete connection data' });
-        }
-
-        console.log('Connection data received from client:', JSON.stringify(preparedData, null, 2));
-
-        const result = await serverSdk.auth.completeConnection(preparedData);
-
-        res.json({
-          success: true,
-          message: 'Connection completed successfully',
-          sessionId: result.session.userId,
-          address: result.session.address,
-          createdAt: result.session.createdAt,
-          token: result.token
-        });
+        res.json(response);
       } catch (error: any) {
         console.error('Error in connection process:', error);
         res.status(500).json({
@@ -146,18 +126,23 @@ async function createStorage(): Promise<IStorage<Session>> {
         }
 
         const token = authHeader.split(' ')[1];
-        const commandData: Command = req.body;
+        const { extrinsic } = req.body;
 
-        if (!commandData || !commandData.hex) {
-          return res.status(400).json({ error: 'Incomplete data for signing the command' });
+        if (!extrinsic) {
+          return res.status(400).json({ error: 'No extrinsic provided' });
         }
 
-        const signResult = await serverSdk.auth.signWithToken(token, commandData);
+        console.log('[Sign Request] Processing transaction...');
+        const signResult = await serverSdk.auth.signWithToken(token, extrinsic);
+
+        console.log('[Sign Result]:', {
+          ok: signResult.ok,
+          hash: signResult.hash,
+        });
 
         res.json({
-          success: true,
-          message: 'Command signed successfully',
-          ...signResult
+          ...signResult,
+          ok: true,
         });
       } catch (error: any) {
         console.error('Error signing the command:', error);

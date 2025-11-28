@@ -7,11 +7,8 @@ export default defineConfig({
     port: 3000,
   },
   plugins: [wasm()],
-  ssr: {
-    external: ['jsonwebtoken']
-  },
   build: {
-    outDir: "dist/esm",
+    outDir: "dist/web",
     lib: {
       entry: resolve(__dirname, "src/index.web.ts"),
       name: "SDK",
@@ -20,6 +17,7 @@ export default defineConfig({
     },
     rollupOptions: {
       external: [
+        // Exclude all Node.js specific modules
         'jsonwebtoken',
         'ws',
         'crypto',
@@ -37,3 +35,4 @@ export default defineConfig({
     }
   }
 });
+

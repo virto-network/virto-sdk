@@ -6,13 +6,28 @@
     "rootDir": "./src",
     "declaration": true,
     "declarationDir": "./dist/esm",
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "moduleResolution": "node",
+    "baseUrl": "./",
+    "paths": {
+      "@/*": [
+        "src/*"
+      ],
+      "@virtonetwork/sdk/descriptors": [
+        ".papi/descriptors/dist/index.d.ts"
+      ]
+    }
   },
   "include": [
     "src/**/*",
     "global.d.ts"
+  ],
+  "exclude": [
+    "src/serverAuth.ts",
+    "src/serverSdk.ts"
   ]
 }

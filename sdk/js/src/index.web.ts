@@ -7,7 +7,6 @@ import CustomModule from "./custom";
 import TransactionQueue from "./transactionQueue";
 import TransactionExecutor from "./transactionExecutor";
 import { DefaultUserService } from "./services/userService";
-import ServerSDK from "./serverSdk";
 
 export type {
   TransferOptions,
@@ -35,7 +34,7 @@ export type {
 } from "./transactionQueue";
 
 export type { 
-  SDKOptions, 
+  SDKOptions,
   TransactionConfirmationLevel,
   TransactionResult,
   AttestationData,
@@ -48,7 +47,6 @@ export type {
 
 export {
   SDK,
-  ServerSDK,
   Auth,
   Transfer,
   System,
@@ -59,4 +57,5 @@ export {
   DefaultUserService,
 };
 
-export default SDK; 
+export default SDK;
+

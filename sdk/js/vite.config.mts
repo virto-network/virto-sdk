@@ -13,9 +13,9 @@ export default defineConfig({
   build: {
     outDir: "dist/umd",
     lib: {
-      entry: resolve(__dirname, "src/sdk.ts"),
+      entry: resolve(__dirname, "src/index.ts"),
       name: "SDK",
-      fileName: "sdk",
+      fileName: "index",
       formats: ["umd"]
     }
   }

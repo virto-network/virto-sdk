@@ -1,7 +1,5 @@
-
-import { default as SDK } from '../../../dist/esm/sdk.js';
-import { WalletType } from '../../../src/types';
-import type { PreparedRegistrationData, PreparedConnectionData, Command } from '../../../src/index';
+import {SDK} from '../../../dist/web/index.js';
+import type { PreparedRegistrationData } from '../../../src/types';
 
 const JWT_TOKEN_KEY = 'virto_jwt_token';
 const CONNECTED_USER_KEY = 'virto_connected_user';
@@ -22,7 +20,6 @@ function loadFromLocalStorage() {
 }
 
 let preparedRegistrationData: PreparedRegistrationData | null = null;
-let preparedConnectionData: PreparedConnectionData | null = null;
 let connectedUserId: string | null = null;
 let authToken: string | null = null;
 
@@ -39,13 +36,9 @@ const signButton = document.getElementById('signButton') as HTMLButtonElement;
 
 function initializeSDK() {
   try {
-    //@ts-ignore
     const sdk = new SDK({
       federate_server: 'http://localhost:3000/api',
-      provider_url: 'ws://localhost:12281',
-      config: {
-        wallet: WalletType.POLKADOT
-      }
+      provider_url: 'ws://localhost:21000',
     });
 
     console.log('SDK initialized successfully', 'success');
@@ -55,6 +48,8 @@ function initializeSDK() {
     throw error;
   }
 }
+
+const sdk = initializeSDK();
 
 function getUserData() {
   return {
@@ -85,7 +80,6 @@ async function prepareRegistration() {
 
     prepareRegistrationButton.disabled = true;
 
-    const sdk = initializeSDK();
     const userData = getUserData();
 
     console.log(`Preparing registration for user with ID: ${userData.profile.id}...`);
@@ -114,7 +108,7 @@ async function completeRegistration() {
 
     completeRegistrationButton.disabled = true;
 
-    const response = await fetch(`http://localhost:9000/custom-register`, {
+    const response = await fetch(`http://localhost:4000/auth/custom-register`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -133,17 +127,9 @@ async function completeRegistration() {
 
     // After successful registration, automatically start the connection process
     const userId = preparedRegistrationData.userId;
-    console.log(`Starting automatic connection process for ${userId}...`, 'info');
 
     preparedRegistrationData = null;
     completeRegistrationButton.disabled = true;
-
-    await prepareConnection();
-
-    // If we have prepared data, complete the connection
-    if (preparedConnectionData) {
-      await completeConnection();
-    }
   } catch (error) {
     console.log(`Error completing registration: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
   } finally {
@@ -160,16 +146,11 @@ async function prepareConnection() {
       return;
     }
 
-    prepareConnectionButton.disabled = true;
-
-    const sdk = initializeSDK();
-
     console.log(`Preparing connection for user with ID: ${userId.value}...`);
 
-    preparedConnectionData = await sdk.auth.prepareConnection(userId.value);
+    await sdk.auth.prepareConnection(userId.value);
 
     console.log('Connection data prepared successfully:', 'success');
-    console.log(JSON.stringify(preparedConnectionData, null, 2));
 
     completeConnectionButton.disabled = false;
   } catch (error) {
@@ -183,20 +164,22 @@ async function completeConnection() {
   try {
     console.log('Sending data to the server to complete connection...');
 
-    if (!preparedConnectionData) {
+    if (!userId.value) {
       console.log('Error: No prepared connection data. Run Step 1 first.', 'error');
       return;
     }
 
-    completeConnectionButton.disabled = true;
-
-    const response = await fetch(`http://localhost:9000/custom-connect`, {
+    const response = await fetch(`http://localhost:4000/auth/custom-connect`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(preparedConnectionData)
+      body: JSON.stringify({
+        userId: userId.value
+      })
     });
+
+    console.log("response", response);
 
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
@@ -207,7 +190,11 @@ async function completeConnection() {
     console.log('Connection completed successfully on the server:', 'success');
     console.log(JSON.stringify(result, null, 2));
 
-    connectedUserId = preparedConnectionData.userId;
+    // The user signs the transaction that starts the session on the server
+    const resultCustom = await sdk.auth.sign(result.extrinsic);
+    console.log("resultCustom", resultCustom);
+
+    connectedUserId = userId.value;
 
     authToken = result.token || null;
 
@@ -218,59 +205,35 @@ async function completeConnection() {
       console.log('Warning: No JWT token received from server', 'warning');
     }
 
-    preparedConnectionData = null;
     completeConnectionButton.disabled = true;
   } catch (error) {
     console.log(`Error completing connection: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
   } finally {
-    completeConnectionButton.disabled = !preparedConnectionData;
+    completeConnectionButton.disabled = !userId.value;
   }
 }
 
 async function signCommand() {
-  try {
-    console.log('Starting signing process...');
+  console.log("signing transaction", commandHex.value);
+  const response = await fetch(`http://localhost:4000/auth/sign`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('virto_jwt_token')}`
+    },
+    body: JSON.stringify({
+      extrinsic: commandHex.value
+    })
+  });
 
-    if (!connectedUserId) {
-      console.log('Error: You must connect first before signing', 'error');
-      return;
-    }
+  console.log("response", response);
 
-    if (!commandHex.value) {
-      console.log('Error: You must provide a command to sign', 'error');
-      return;
-    }
-
-    console.log(`Signing command for user ${connectedUserId}...`);
-
-    const command: Command = {
-      url: 'http://localhost:9000/sign',
-      body: commandHex.value,
-      hex: commandHex.value
-    };
-
-    try {
-      console.log('Using secure endpoint with JWT token authentication', 'info');
-      console.log(localStorage.getItem('virto_jwt_token'));
-      const response = await fetch('http://localhost:9000/sign', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('virto_jwt_token')}`
-        },
-        body: JSON.stringify(command)
-      });
-
-      const result = await response.json();
-
-      console.log('Command signed successfully on the server using JWT authentication:', 'success');
-      console.log(JSON.stringify(result, null, 2));
-    } catch (clientError) {
-      console.log(`Error signing the command: ${clientError instanceof Error ? clientError.message : 'Unknown error'}`, 'error');
-    }
-  } catch (error) {
-    console.log(`Error signing the command: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+  if (!response.ok) {
+    throw new Error(`Server responded with status: ${response.status}`);
   }
+
+  const result = await response.json();
+  console.log("result", result);
 }
 
 prepareRegistrationButton.addEventListener('click', prepareRegistration);
@@ -280,7 +243,7 @@ completeConnectionButton.addEventListener('click', completeConnection);
 signButton.addEventListener('click', signCommand);
 
 completeRegistrationButton.disabled = !preparedRegistrationData;
-completeConnectionButton.disabled = !preparedConnectionData;
+completeConnectionButton.disabled = !userId.value;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadFromLocalStorage();

@@ -1,22 +1,8 @@
+import { getWsProvider } from "polkadot-api/ws-provider/node";
 import ServerAuth from "./serverAuth";
-import ServerManager from "./serverManager";
-import { SubeFn, JsWalletBuilder } from "./wallet";
-import { SimpleWalletFactory } from "./factory/simpleWalletFactory";
-import { WalletType } from "./types";
-import { IStorage } from "./storage";
-import { Session } from "./manager";
-
-interface ServerSDKOptions {
-    federate_server: string;
-    provider_url: string;
-    config: {
-        wallet: WalletType;
-        jwt: {
-            secret: string;
-            expiresIn?: string;
-        }
-    };
-}
+import { ServerSDKOptions } from "./types";
+import { createClient } from "polkadot-api";
+import { InMemoryImpl, IStorage, SerializableSignerData } from "./storage";
 
 /**
  * Server version of the SDK
@@ -25,32 +11,37 @@ interface ServerSDKOptions {
  */
 export default class ServerSDK {
     private _auth: ServerAuth;
+    private _client: any = null;
+    private _provider: any = null;
 
     /**
      * Creates a new ServerSDK instance
      * 
      * @param options - Configuration options for the server SDK
      * @param storage - Optional storage implementation for sessions
-     * @param subeFn - The sube function (not used in server environments)
-     * @param jsWalletFn - The JavaScript wallet builder function (not used in server environments)
      */
     constructor(
         options: ServerSDKOptions,
-        subeFn: SubeFn,
-        jsWalletFn: JsWalletBuilder,
-        storage?: IStorage<Session>,
+        storage?: IStorage<SerializableSignerData>,
     ) {
-        const factory = new SimpleWalletFactory(subeFn, jsWalletFn, options.provider_url);
 
-        const manager = new ServerManager(factory, storage);
+        this._provider = getWsProvider(options.provider_url);
+        this._client = createClient(this._provider);
 
-        const defaultWallet = options.config?.wallet || WalletType.POLKADOT;
+        const getClient = async () => {
+            return this._client;
+        };
+
+
+        if (!storage) {
+            storage = new InMemoryImpl<SerializableSignerData>();
+        }
 
         // Create ServerAuth with JWT configuration
         this._auth = new ServerAuth(
             options.federate_server,
-            manager,
-            defaultWallet,
+            getClient,
+            storage,
             {
                 secret: options.config.jwt.secret,
                 expiresIn: options.config.jwt.expiresIn

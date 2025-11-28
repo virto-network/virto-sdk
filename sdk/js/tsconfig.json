@@ -29,6 +29,9 @@
     "paths": {
       "@/*": [
         "src/*"
+      ],
+      "@virtonetwork/sdk/descriptors": [
+        ".papi/descriptors/dist/index.d.ts"
       ]
     },
     "esModuleInterop": true,

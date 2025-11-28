@@ -13,7 +13,7 @@ This example shows how to implement a server that uses Virto SDK for authenticat
 
 ## Requirements
 
-- Node.js (v14 or higher)
+- Node.js (v22 or higher)
 - npm or yarn
 
 ## Installation
@@ -41,7 +41,7 @@ For better security in production, set the `JWT_SECRET` variable with a strong a
 npm run dev
 ```
 
-The server will start at `http://localhost:9000` or on the port specified in the environment variables.
+The server will start at `http://localhost:14000` or on the port specified in the environment variables.
 
 ## Endpoints
 

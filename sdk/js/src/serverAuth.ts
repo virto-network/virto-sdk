@@ -1,30 +1,23 @@
-import { PreparedRegistrationData } from "./auth";
-import ServerManager from "./serverManager";
-import { Command, WalletType } from "./types";
+import { JWTPayload, AttestationData, SignFn } from "./types";
 import { VError } from "./utils/error";
 import jwt, { Secret, SignOptions } from 'jsonwebtoken';
+import { kreivo, MultiAddress } from "@virtonetwork/sdk/descriptors";
+import { Binary, PolkadotClient } from "polkadot-api";
+import { Blake2256 } from '@polkadot-api/substrate-bindings';
+import { mergeUint8 } from "polkadot-api/utils";
 
-export interface PreparedConnectionData {
-  userId: string;
-  assertionResponse: {
-    id: string;
-    rawId: string;
-    type: string;
-    response: {
-      authenticatorData: string;
-      clientDataJSON: string;
-      signature: string;
-    }
-  };
-  blockNumber: number;
-}
+import { PolkadotSigner } from "polkadot-api";
+import {
+  entropyToMiniSecret,
+  generateMnemonic,
+  mnemonicToEntropy,
+  ss58Encode,
+} from "@polkadot-labs/hdkd-helpers";
 
-export interface JWTPayload {
-  userId: string;
-  address: string;
-  exp: number;
-  iat: number;
-}
+import { getPolkadotSigner } from "polkadot-api/signer";
+import { sr25519CreateDerive } from "@polkadot-labs/hdkd";
+import { IStorage } from "./storage";
+import { SerializableSignerData, SignerSerializer } from "./storage/SignerSerializer";
 
 /**
  * Server version of the Auth class
@@ -34,23 +27,27 @@ export interface JWTPayload {
 export default class ServerAuth {
   private _jwtSecret: Secret | null = null;
   private _jwtExpiresIn: string = "10m"; // Default 10 minutes
+  private _client: PolkadotClient | null = null;
+  private _sessionSigner: PolkadotSigner & {
+    sign: SignFn;
+  } | null = null;
 
   /**
    * Creates a new ServerAuth instance
    * 
    * @param baseUrl - The base URL of the federate server
-   * @param sessionManager - The server session manager for handling user sessions
-   * @param defaultWalletType - The default wallet type to use when creating new sessions
+   * @param clientFactory - Factory function to get the Polkadot client
+   * @param storage - Storage implementation for sessions
    * @param jwtConfig - JWT configuration for token generation and verification
    */
   constructor(
     private readonly baseUrl: string,
-    private readonly sessionManager: ServerManager,
-    private readonly defaultWalletType: WalletType = WalletType.POLKADOT,
+    private readonly clientFactory: () => Promise<PolkadotClient>,
+    private readonly storage?: IStorage<SerializableSignerData>,
     jwtConfig?: {
       secret: string | Secret;
       expiresIn?: string;
-    }
+    },
   ) {
     if (jwtConfig) {
       this._jwtSecret = jwtConfig.secret;
@@ -64,20 +61,41 @@ export default class ServerAuth {
    * Generates a JWT token for a user
    * 
    * @param userId - The ID of the user
-   * @param address - The wallet address of the user
+   * @param publicKey - The public key of the user
    * @returns The generated JWT token
    * @throws Error if JWT configuration is not available
    */
-  private generateToken(userId: string, address: string): string {
+  private generateToken(userId: string, publicKey: string, address: string): string {
     if (!this._jwtSecret) {
       throw new VError("E_NO_JWT_CONFIG", "JWT configuration not provided");
     }
 
     return jwt.sign(
-      { userId, address },
+      { userId, publicKey, address },
       this._jwtSecret,
       { expiresIn: this._jwtExpiresIn } as SignOptions
     );
+  }
+
+  private async getClient(): Promise<PolkadotClient> {
+    if (!this._client) {
+      this._client = await this.clientFactory();
+    }
+    return this._client;
+  }
+
+  /**
+   * Static method to extract the server address from a session signer
+   * This is used by the NonceManager to get the correct address for nonce calculation
+   * 
+   * @param sessionSigner - The session signer with the stored address
+   * @returns The original address of the session signer
+   */
+  static getServerSignerAddress(sessionSigner: any): string {
+    if (sessionSigner && (sessionSigner as any)._serverAddress) {
+      return (sessionSigner as any)._serverAddress;
+    }
+    throw new Error("Session signer does not have a stored address");
   }
 
   /**
@@ -105,26 +123,66 @@ export default class ServerAuth {
   }
 
   /**
+   * Decodes a JWT token without verifying its signature
+   * This method extracts the payload information without validation
+   * 
+   * @param token - The JWT token to decode
+   * @returns The decoded token payload
+   * @throws VError if the token format is invalid
+   */
+  public decodeToken(token: string): JWTPayload {
+    try {
+      const decoded = jwt.decode(token) as JWTPayload;
+      
+      if (!decoded) {
+        throw new VError("E_JWT_INVALID_FORMAT", "Token format is invalid");
+      }
+
+      return decoded;
+    } catch (error: any) {
+      if (error instanceof VError) {
+        throw error;
+      }
+      throw new VError("E_JWT_DECODE_FAILED", "Failed to decode token");
+    }
+  }
+
+  /**
    * Signs a command after verifying the JWT token
+   * Signs directly without using the transaction queue
    * 
    * @param token - The JWT token to verify
-   * @param command - The command to sign
-   * @returns The signed command
+   * @param extrinsic - The extrinsic to sign
+   * @returns The signed command result
    * @throws VError if the token is invalid or expired
    */
-  async signWithToken(token: string, command: Command) {
+  async signWithToken(token: string, extrinsic: string) {
     const payload = this.verifyToken(token);
 
-    const session = await this.sessionManager.getSession(payload.userId);
-    if (!session) {
-      throw new VError("E_SESSION_NOT_FOUND", "Session not found for this token");
+    if (this.storage && !this._sessionSigner) {
+      const storedData = await this.storage.get(payload.userId);
+      if (storedData && SignerSerializer.isSerializableSignerData(storedData)) {
+        this._sessionSigner = SignerSerializer.deserialize(storedData);
+      }
     }
 
-    if (session.address !== payload.address) {
+    if (!this._sessionSigner) {
+      throw new VError("E_SESSION_NOT_FOUND", "Session not found");
+    }
+
+    if (Binary.fromBytes(this._sessionSigner.publicKey).asHex() !== payload.publicKey) {
       throw new VError("E_ADDRESS_MISMATCH", "Token address does not match session address");
     }
 
-    return this.sign(payload.userId, command);
+    const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+    const transaction = await kreivoApi.txFromCallData(Binary.fromHex(extrinsic));
+    const result = await transaction.signAndSubmit(this._sessionSigner);
+
+    return {
+      ok: result.ok,
+      hash: result.txHash,
+      blockHash: result.block?.hash
+    };
   }
 
   /**
@@ -142,15 +200,32 @@ export default class ServerAuth {
    * @returns Promise with the server's response to the registration
    * @throws Will throw an error if the server request fails
    */
-  async completeRegistration(preparedData: PreparedRegistrationData) {
+  async completeRegistration(
+    attestation: AttestationData,
+    hashedUserId: string,
+    credentialId: string,
+    userId: string,
+    address: string
+  ) {
     const postRes = await fetch(`${this.baseUrl}/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(preparedData),
+      body: JSON.stringify({
+        userId: userId,
+        hashedUserId,
+        credentialId: credentialId,
+        address,
+        attestationResponse: attestation
+      }),
     });
 
     const data = await postRes.json();
     console.log("Post-register response:", data);
+
+    if (!postRes.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${postRes.status} ${postRes.statusText}`;
+      throw new Error(`Registration failed: ${errorMessage}`);
+    }
 
     return data;
   }
@@ -172,40 +247,88 @@ export default class ServerAuth {
    * @returns Promise with the server's response, session information, and auth token
    * @throws Will throw an error if the server request fails or session creation fails
    */
-  async completeConnection(preparedData: PreparedConnectionData) {
-    const sessionPreparationRes = await fetch(`${this.baseUrl}/connect`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(preparedData),
+  async completeConnection(userId: string) {
+    if (!userId) {
+      throw new Error("User ID is required");
+    }
+
+    const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+
+    const miniSecret = entropyToMiniSecret(
+      mnemonicToEntropy(generateMnemonic(256))
+    );
+    const derive = sr25519CreateDerive(miniSecret);
+
+    const derivationPath = `//${Date.now()}`;
+    const keypair = derive(derivationPath);
+
+    const signer = getPolkadotSigner(keypair.publicKey, "Sr25519", keypair.sign);
+    Object.defineProperty(signer, "sign", {
+      value: keypair.sign,
+      configurable: false,
     });
 
-    const data = await sessionPreparationRes.json();
-    console.log("Post-connect response:", data);
+    // Adds a session
+    const { s, address } = {
+      s: signer as PolkadotSigner & { sign: SignFn },
+      address: ss58Encode(keypair.publicKey, 2),
+    };
 
-    const sessionResult = await this.sessionManager.create(
-      data.command,
-      preparedData.userId,
-      this.defaultWalletType
+    const hashedUserId = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(userId))
     );
 
-    let token = null;
+    s.publicKey = Blake2256(
+      mergeUint8(new Uint8Array(32).fill(0), hashedUserId)
+    );
 
+    console.log("s.publicKey", s.publicKey);
+    console.log("address", address);
+
+    const MINUTES = 10; // 10 blocks in a minute
+
+    console.log("Adding session key");
+    const userStartsASession = kreivoApi.tx.Pass.add_session_key({
+      session: MultiAddress.Id(address),
+      duration: 15 * MINUTES,
+    });
+
+    this._sessionSigner = s;
+
+    if (this.storage) {
+      // Serialize the signer for storage
+      const serializableData = SignerSerializer.serialize({
+        miniSecret,
+        derivationPath,
+        originalPublicKey: keypair.publicKey,
+        hashedUserId,
+        address
+      });
+
+      await this.storage.store(userId, serializableData);
+    }
+
+    let token: string | null = null;
     // Generate JWT token if JWT configuration is available
-    if (this._jwtSecret && sessionResult.session) {
+    if (this._jwtSecret) {
       try {
         token = this.generateToken(
-          preparedData.userId,
-          sessionResult.session.address
+          userId,
+          Binary.fromBytes(s.publicKey).asHex(),
+          address
         );
       } catch (error) {
         console.warn("Token generation failed, continuing without JWT:", error);
       }
     }
 
+    const responseStartsASession = await userStartsASession.getEncodedData();
+
     return {
-      ...data,
-      ...sessionResult,
-      token
+      ok: true,
+      extrinsic: responseStartsASession.asHex(),
+      token,
+      publicKey: Binary.fromBytes(s.publicKey).asHex(),
     };
   }
 
@@ -226,37 +349,46 @@ export default class ServerAuth {
     const data = await res.json();
     console.log("Is registered response:", data);
 
+    if (!res.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${res.status} ${res.statusText}`;
+      throw new Error(`Failed to check registration status: ${errorMessage}`);
+    }
+
     return data.ok;
   }
 
-  /**
-   * Signs a command using the user's wallet
-   * This method retrieves the user's wallet from the session manager and uses it to sign the provided command
-   * 
-   * The method:
-   * 1. Retrieves the user's wallet from the session manager
-   * 2. Uses the wallet to sign the provided command
-   * 3. Returns the signing result including the original and signed data
-   * 
-   * @param userId - The ID of the user whose wallet will be used to sign
-   * @param command - The command object containing the data to be signed
-   * @returns Promise with the signing result including user ID, signed extrinsic, and original command
-   * @throws {VError} If the wallet cannot be retrieved from the session manager
-   */
-  private async sign(userId: string, command: Command) {
-    const wallet = await this.sessionManager.getWallet(userId);
-    console.log({ wallet })
+  public async addMember(userId: string) {
+    const res = await fetch(`${this.baseUrl}/add-member`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    });
 
-    if (!wallet) {
-      throw new VError("E_CANT_GET_CREDENTIAL", "User wallet not found");
+    const data = await res.json();
+    console.log("Add member response:", data);
+
+    if (!res.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${res.status} ${res.statusText}`;
+      throw new Error(`Failed to add member: ${errorMessage}`);
     }
 
-    const signedExtrinsic = await wallet.sign(command);
-
-    return {
-      userId,
-      signedExtrinsic,
-      originalExtrinsic: command.hex
-    };
+    return data;
   }
-} 
+
+  public async isMember(address: string) {
+    const res = await fetch(`${this.baseUrl}/is-member?address=${address}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const data = await res.json();
+    console.log("Is member response:", data);
+
+    if (!res.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${res.status} ${res.statusText}`;
+      throw new Error(`Failed to check member status: ${errorMessage}`);
+    }
+
+    return data.ok;
+  }
+}

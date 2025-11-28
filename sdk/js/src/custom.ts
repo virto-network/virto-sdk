@@ -1,5 +1,5 @@
 import { Binary } from "polkadot-api";
-import { kreivo } from "@polkadot-api/descriptors";
+import { kreivo } from "@virtonetwork/sdk/descriptors";
 import TransactionQueue from "./transactionQueue";
 import { TransactionResult } from "./types";
 
