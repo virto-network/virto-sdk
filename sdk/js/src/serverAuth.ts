@@ -159,7 +159,8 @@ export default class ServerAuth {
   async signWithToken(token: string, extrinsic: string) {
     const payload = this.verifyToken(token);
 
-    if (this.storage && !this._sessionSigner) {
+    // Always try to restore the correct session from storage for the user in the token
+    if (this.storage) {
       const storedData = await this.storage.get(payload.userId);
       if (storedData && SignerSerializer.isSerializableSignerData(storedData)) {
         this._sessionSigner = SignerSerializer.deserialize(storedData);
