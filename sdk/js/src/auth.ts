@@ -1,7 +1,7 @@
 import { BaseProfile, AttestationData, User, SignFn, TransactionResult } from "./types";
 import { Blake2256 } from "@polkadot-api/substrate-bindings";
 import { mergeUint8 } from "polkadot-api/utils";
-import { kreivo, MultiAddress } from "@polkadot-api/descriptors";
+import { kreivo, MultiAddress } from "@virtonetwork/sdk/descriptors";
 import { Binary, PolkadotClient, PolkadotSigner } from "polkadot-api";
 import {
   CredentialsHandler,
