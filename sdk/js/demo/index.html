@@ -43,6 +43,19 @@
   <body>
     <div id="app">
       <h1>Virto Network SDK Demo</h1>
+      
+      <div style="margin-bottom: 20px; padding: 15px; background-color: #f0f0f0; border-radius: 5px;">
+        <h2>Authenticator Type</h2>
+        <label for="authenticatorType">Select Authenticator:</label>
+        <select id="authenticatorType" style="margin-left: 10px; padding: 5px;">
+          <option value="webauthn">WebAuthn (Passkeys)</option>
+          <option value="substrate">Substrate Key (ed25519)</option>
+        </select>
+        <p id="authenticatorInfo" style="margin-top: 10px; font-size: 14px; color: #666;">
+          Using WebAuthn for biometric/hardware authentication
+        </p>
+      </div>
+      
       <div>
         <h2>Register User</h2>
         <input value="testuser" id="userName" placeholder="User Name" />

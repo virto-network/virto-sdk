@@ -30,10 +30,27 @@ export interface AttestationData {
   }
 }
 
+export interface SubstrateKeyRegistrationData {
+  message: {
+    context: number;
+    challenge: string;
+    authority_id: string;
+  };
+  public: string;
+  signature: string;
+}
+
 export interface PreparedRegistrationData {
   attestation: AttestationData;
   hashedUserId: string;
   credentialId: string;
+  userId: string;
+  passAccountAddress: string;
+}
+
+export interface PreparedSubstrateRegistrationData {
+  keyRegistration: SubstrateKeyRegistrationData;
+  hashedUserId: string;
   userId: string;
   passAccountAddress: string;
 }

@@ -1,6 +1,12 @@
-import SDK from '../../src/sdk';
-// import SDK from "../../dist/esm/sdk.js";
+// import SDK from '../../src/sdk';
+import SDK from "../../dist/esm/index.js";
 import { IndexedDBStorage } from "./storage/IndexedDBStorage";
+import { 
+  createEd25519Signer, 
+  storeMnemonic, 
+  getMnemonic, 
+  hasMnemonic 
+} from "./signerUtils";
 
 (async () => {
   const storage = new IndexedDBStorage('VirtoSessions', 'sessions');
@@ -27,6 +33,21 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
       }
     }
   }, storage);
+
+  let currentSubstrateSigner = null;
+
+  function getAuthenticatorType() {
+    return document.getElementById('authenticatorType').value;
+  }
+
+  document.getElementById('authenticatorType').addEventListener('change', (e) => {
+    const infoElement = document.getElementById('authenticatorInfo');
+    if (e.target.value === 'webauthn') {
+      infoElement.textContent = 'Using WebAuthn for biometric/hardware authentication';
+    } else {
+      infoElement.textContent = 'Using Substrate Key (ed25519) - A mnemonic will be generated and stored locally';
+    }
+  });
 
   // Configure transaction event listeners
   sdk.onTransactionUpdate((event) => {
@@ -115,6 +136,7 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
   document.getElementById('registerButton').addEventListener('click', async () => {
     const userName = document.getElementById('userName').value;
     const userDisplayName = document.getElementById('userDisplayName').value;
+    const authType = getAuthenticatorType();
 
     const user = {
       profile: {
@@ -126,38 +148,95 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
     };
 
     try {
-      const result = await sdk.auth.register(user);
+      let result;
+      
+      if (authType === 'webauthn') {
+        result = await sdk.auth.register(user);
+        console.log('WebAuthn Registration successful:', result);
+      } else {
+        const { signer, mnemonic } = createEd25519Signer();
+        currentSubstrateSigner = signer;
+        
+        storeMnemonic(userName, mnemonic);
+        
+        console.log('Generated mnemonic for', userName);
+        console.log('Mnemonic (save this!):', mnemonic);
+        alert(`Substrate Key Generated!\n\nMnemonic (SAVE THIS):\n${mnemonic}\n\nThis has been stored in localStorage for this demo.`);
+        
+        result = await sdk.auth.registerWithSubstrateKey(user, signer);
+        console.log('Substrate Key Registration successful:', result);
+      }
+      
       const membershipResult = await sdk.auth.addMember(user.profile.id);
-      console.log('Registration successful:', result);
       console.log('Membership successful:', membershipResult);
     } catch (error) {
       console.error('Registration failed:', error);
+      alert(`Registration failed: ${error.message}`);
     }
   });
 
   document.getElementById('connectButton').addEventListener('click', async () => {
     try {
       const userName = document.getElementById('userName').value;
-      console.log('Connecting user:', userName);
-      const result = await sdk.auth.connect(userName);
-      console.log('Connection successful:', result);
+      const authType = getAuthenticatorType();
+      
+      console.log('Connecting user:', userName, 'with', authType);
+      
+      let result;
+      
+      if (authType === 'webauthn') {
+        result = await sdk.auth.connect(userName);
+        console.log('WebAuthn Connection successful:', result);
+      } else {
+        const mnemonic = getMnemonic(userName);
+        
+        if (!mnemonic) {
+          alert(`No substrate key found for user ${userName}. Please register first.`);
+          console.error('No mnemonic found for user:', userName);
+          return;
+        }
+        
+        const { signer } = createEd25519Signer(mnemonic);
+        currentSubstrateSigner = signer;
+        
+        result = await sdk.auth.connectWithSubstrateKey(userName, signer);
+        console.log('Substrate Key Connection successful:', result);
+      }
+      
+      console.log('Connection result:', result);
     } catch (error) {
       console.error('Connection failed:', error);
+      alert(`Connection failed: ${error.message}`);
     }
   });
 
 
   document.getElementById('signButton').addEventListener('click', async () => {
-    disableButtons();
     const command = JSON.parse(document.getElementById('command').value);
 
     try {
+      const hasAuth = sdk.auth.isAuthenticated();
+      if (!hasAuth) {
+        alert('Please register and connect first');
+        console.log('Please register and connect first');
+        return;
+      }
+
+      if (!sdk.auth.sessionSigner) {
+        alert('No session signer available. Please connect first.');
+        console.log('No session signer available');
+        return;
+      }
+
+      disableButtons();
+
       const result = await sdk.system.makeRemarkAsync(sdk.auth.sessionSigner, {
         remark: command.remark || "Hello, World!"
       });
       console.log('Signing successful:', result);
     } catch (error) {
       console.error('Signing failed:', error);
+      alert(`Signing failed: ${error.message}`);
     } finally {
       enableButtons();
     }
@@ -170,12 +249,15 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
 
     try {
       if (!sdk.transfer.isValidAddress(destAddress)) {
+        alert('Invalid destination address format');
         console.log('Invalid destination address format');
         return;
       }
 
-      if (!sdk.auth.passkeysAuthenticator) {
-        console.log('Please register first');
+      const hasAuth = sdk.auth.isAuthenticated();
+      if (!hasAuth) {
+        alert('Please register and connect first');
+        console.log('Please register and connect first');
         return;
       }
 
@@ -185,7 +267,7 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
       console.log(`Sending ${amount} (${amountInUnits} units) to ${destAddress}`);
 
       const result = await sdk.transfer.sendAsync(
-        useSessionKey ? sdk.auth.sessionSigner : sdk.auth.passkeysAuthenticator,
+        useSessionKey ? sdk.auth.sessionSigner : sdk.auth.currentAuthenticator,
         {
           dest: destAddress,
           value: amountInUnits
@@ -196,35 +278,46 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
         console.log('Transfer ready:', result);
       } else {
         console.error('Transfer failed:', result.error);
-        console.log(`Transfer failed: ${result.error}`);
+        alert(`Transfer failed: ${result.error}`);
       }
 
       enableButtons();
     } catch (error) {
       console.error('Transfer failed:', error);
-      console.log(`Transfer failed: ${error.message}`);
+      alert(`Transfer failed: ${error.message}`);
       enableButtons();
     }
   });
 
   document.getElementById('balanceButton').addEventListener('click', async () => {
     try {
-      if (!sdk.auth.passkeysAuthenticator) {
-        console.log('Please register first');
+      const hasAuth = sdk.auth.isAuthenticated();
+      if (!hasAuth) {
+        alert('Please register and connect first');
+        console.log('Please register and connect first');
         return;
       }
 
-      const userAddress = sdk.auth.getAddressFromAuthenticator(sdk.auth.passkeysAuthenticator);
+      const authenticator = sdk.auth.currentAuthenticator || 
+                           sdk.auth.passkeysAuthenticator || 
+                           sdk.auth.substrateKeyAuthenticator;
+      
+      if (!authenticator) {
+        alert('No authenticator available');
+        return;
+      }
+
+      const userAddress = sdk.auth.getAddressFromAuthenticator(authenticator);
       console.log(`Checking balance for address: ${userAddress}`);
 
       const balance = await sdk.transfer.getBalance(userAddress);
 
       console.log('Balance Info:', balance);
-      console.log(balance);
+      alert(`Balance for ${userAddress}:\n\nFree: ${balance.data.free}\nReserved: ${balance.data.reserved}\nFrozen: ${balance.data.frozen}`);
 
     } catch (error) {
       console.error('Balance check failed:', error);
-      console.log(`Balance check failed: ${error.message}`);
+      alert(`Balance check failed: ${error.message}`);
     }
   });
 
@@ -236,12 +329,15 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
 
     try {
       if (!sdk.transfer.isValidAddress(destAddress)) {
+        alert('Invalid destination address format');
         console.log('Invalid destination address format');
         return;
       }
 
-      if (!sdk.auth.passkeysAuthenticator) {
-        console.log('Please register first');
+      const hasAuth = sdk.auth.isAuthenticated();
+      if (!hasAuth) {
+        alert('Please register and connect first');
+        console.log('Please register and connect first');
         return;
       }
 
@@ -259,7 +355,7 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
       });
 
       const result = await sdk.utility.batchAllAsync(
-        useSessionKey ? sdk.auth.sessionSigner : null,
+        useSessionKey ? sdk.auth.sessionSigner : sdk.auth.currentAuthenticator,
         {
           calls: [transferExtrinsic, remarkExtrinsic]
         }
@@ -269,13 +365,13 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
         console.log('Batch ready:', result);
       } else {
         console.error('Batch failed:', result.error);
-        console.log(`Batch failed: ${result.error}`);
+        alert(`Batch failed: ${result.error}`);
       }
       enableButtons();
 
     } catch (error) {
       console.error('Batch execution failed:', error);
-      console.log(`Batch execution failed: ${error.message}`);
+      alert(`Batch execution failed: ${error.message}`);
       enableButtons();
     }
   });

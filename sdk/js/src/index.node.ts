@@ -42,6 +42,8 @@ export type {
   TransactionResult,
   AttestationData,
   PreparedRegistrationData,
+  SubstrateKeyRegistrationData,
+  PreparedSubstrateRegistrationData,
   PreparedConnectionData,
   JWTPayload,
 } from "./types";
@@ -63,6 +65,8 @@ export {
   TransactionExecutor,
   DefaultUserService,
 };
+
+export { SubstrateKey } from "@virtonetwork/authenticators-substrate";
 
 export default SDK;
 

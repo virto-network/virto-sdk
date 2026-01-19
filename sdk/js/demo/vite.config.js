@@ -1,21 +1,21 @@
 import wasm from "vite-plugin-wasm";
-import { defineConfig } from 'vite'; 
+import { defineConfig } from 'vite';
 
 export default defineConfig({
   plugins: [
     wasm()
   ],
   build: {
-    target: "ES2022", // Soporta top-level await nativamente
+    target: "ES2022", // Supports native top-level await
     rollupOptions: {
       output: {
-        format: 'es' // Usar formato ES modules
+        format: 'es' // Use ES modules format
       }
     }
   },
   optimizeDeps: {
     esbuildOptions: {
-      target: "esnext" // Configurar esbuild para soportar top-level await
+      target: "esnext" // Configure esbuild to support top-level await
     }
   },
   server: {

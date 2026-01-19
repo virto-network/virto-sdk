@@ -1,4 +1,4 @@
-import { BaseProfile, AttestationData, User, SignFn, TransactionResult } from "./types";
+import { BaseProfile, AttestationData, User, SignFn, TransactionResult, SubstrateKeyRegistrationData } from "./types";
 import { Blake2256 } from "@polkadot-api/substrate-bindings";
 import { mergeUint8 } from "polkadot-api/utils";
 import { kreivo, MultiAddress } from "@virtonetwork/sdk/descriptors";
@@ -7,7 +7,8 @@ import {
   CredentialsHandler,
   WebAuthn as PasskeysAuthenticator,
 } from "@virtonetwork/authenticators-webauthn";
-import { KreivoPassSigner } from "@virtonetwork/signer";
+import { SubstrateKey } from "@virtonetwork/authenticators-substrate";
+import { KreivoPassSigner, Authenticator } from "@virtonetwork/signer";
 import { ss58Encode } from "@polkadot-labs/hdkd-helpers";
 import { VOSCredentialsHandler } from "./vocCredentialHandler";
 import NonceManager from "./nonceManager";
@@ -24,6 +25,8 @@ async function loadBase64Module() {
 export default class Auth {
   private _client: PolkadotClient | null = null;
   private _passkeysAuthenticator: PasskeysAuthenticator | null = null;
+  private _substrateKeyAuthenticator: SubstrateKey | null = null;
+  private _currentAuthenticator: Authenticator<number> | null = null;
   private _sessionSigner: PolkadotSigner & {
     sign: SignFn;
   } | null = null;
@@ -160,12 +163,97 @@ export default class Auth {
     return data;
   }
 
+  async prepareSubstrateKeyRegistration(
+    user: User<BaseProfile>,
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+  ) {
+    const substrateKeyAuthenticator = await new SubstrateKey(
+      user.profile.id,
+      signer,
+      this.blockHashChallenge.bind(this)
+    ).setup();
+
+    this._substrateKeyAuthenticator = substrateKeyAuthenticator;
+    this._currentAuthenticator = substrateKeyAuthenticator;
+
+    const passSigner = new KreivoPassSigner(substrateKeyAuthenticator);
+    const passAccountAddress = ss58Encode(passSigner.publicKey);
+
+    const client = await this.getClient();
+    const finalizedBlock = await client.getFinalizedBlock();
+    const keyRegistration = await substrateKeyAuthenticator.register(finalizedBlock.number);
+
+    console.log("keyRegistration", keyRegistration);
+
+    const keyRegistrationJSON: SubstrateKeyRegistrationData = {
+      message: {
+        context: keyRegistration.message.context,
+        challenge: keyRegistration.message.challenge.asHex(),
+        authority_id: keyRegistration.message.authority_id.asHex(),
+      },
+      public: keyRegistration.public.asHex(),
+      signature: keyRegistration.signature.asHex(),
+    };
+
+    return {
+      keyRegistration: keyRegistrationJSON,
+      hashedUserId: Binary.fromBytes(substrateKeyAuthenticator.hashedUserId).asHex(),
+      userId: user.profile.id,
+      passAccountAddress
+    };
+  }
+
+  async completeSubstrateKeyRegistration(
+    keyRegistration: SubstrateKeyRegistrationData,
+    hashedUserId: string,
+    userId: string,
+    address: string
+  ) {
+    console.log("hashedUserId", hashedUserId);
+    const postRes = await fetch(`${this.baseUrl}/register-substrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        userId: userId,
+        hashedUserId,
+        address,
+        keyRegistration
+      }),
+    });
+
+    const data = await postRes.json();
+    console.log("Post-register-substrate response:", data);
+
+    if (!postRes.ok || data.statusCode >= 500) {
+      const errorMessage = data.message || `Server error: ${postRes.status} ${postRes.statusText}`;
+      throw new Error(`Substrate key registration failed: ${errorMessage}`);
+    }
+
+    return data;
+  }
+
+  async registerWithSubstrateKey(
+    user: User<BaseProfile>,
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+  ) {
+    const preparedData = await this.prepareSubstrateKeyRegistration(user, signer);
+    const result = await this.completeSubstrateKeyRegistration(
+      preparedData.keyRegistration,
+      preparedData.hashedUserId,
+      preparedData.userId,
+      preparedData.passAccountAddress
+    );
+    return result;
+  }
+
   /**
    * Resets the Auth state, clearing any stored PasskeysAuthenticator and session signer
    * This is useful when switching between different users or starting fresh
    */
   reset() {
     this._passkeysAuthenticator = null;
+    this._substrateKeyAuthenticator = null;
+    this._currentAuthenticator = null;
     this._sessionSigner = null;
   }
 
@@ -175,7 +263,15 @@ export default class Auth {
    * @returns true if a PasskeysAuthenticator is available, false otherwise
    */
   isAuthenticated(): boolean {
-    return this._passkeysAuthenticator !== null;
+    return this._passkeysAuthenticator !== null || this._substrateKeyAuthenticator !== null;
+  }
+
+  get currentAuthenticator(): Authenticator<number> | null {
+    return this._currentAuthenticator;
+  }
+
+  get substrateKeyAuthenticator(): SubstrateKey | null {
+    return this._substrateKeyAuthenticator;
   }
 
   /**
@@ -333,6 +429,124 @@ export default class Auth {
       transaction: userSessionRes
     };
   }
+
+  async prepareSubstrateKeyConnection(
+    userId: string,
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+  ) {
+    console.log("Connecting to user with substrate key:", userId);
+
+    if (userId) {
+      this._currentUserId = userId;
+    }
+
+    if (!this._currentUserId) {
+      throw new Error("User ID is required");
+    }
+
+    const substrateKeyAuthenticator = await new SubstrateKey(
+      this._currentUserId,
+      signer,
+      this.blockHashChallenge.bind(this)
+    ).setup();
+
+    this._substrateKeyAuthenticator = substrateKeyAuthenticator;
+    this._currentAuthenticator = substrateKeyAuthenticator;
+
+    const hashedUserId = substrateKeyAuthenticator.hashedUserId;
+
+    return {
+      hashedUserId: hashedUserId,
+      userId: this._currentUserId,
+    }
+  }
+
+  async completeSubstrateKeyConnection() {
+    if (!this._substrateKeyAuthenticator) {
+      throw new Error("SubstrateKey authenticator is not available");
+    }
+
+    const passSigner = new KreivoPassSigner(this._substrateKeyAuthenticator);
+    const passSignerAddress = ss58Encode(passSigner.publicKey);
+
+    // Sync nonce from blockchain before starting the connection
+    if (this._nonceManager) {
+      try {
+        const currentNonce = await this._nonceManager.syncNonceFromChain(passSignerAddress);
+        console.log(`Synced nonce for address ${passSignerAddress} before substrate key connect: ${currentNonce}`);
+      } catch (error) {
+        console.warn('Failed to sync nonce before substrate key connect, continuing anyway:', error);
+      }
+    }
+
+    const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+    const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
+    const MINUTES = 10; // 10 blocks in a minute
+
+    const userStartsASession = kreivoApi.tx.Pass.add_session_key({
+      session: MultiAddress.Id(sessionKey),
+      duration: 15 * MINUTES,
+    });
+
+    const tx3Res = await userStartsASession.signAndSubmit(passSigner, {
+      mortality: { mortal: true, period: 60 }
+    });
+    console.log(tx3Res);
+
+    this._sessionSigner = sessionSigner;
+
+    const connectSignTx = await userStartsASession.sign(passSigner, {
+      mortality: { mortal: true, period: 60 }
+    });
+    console.log("connectSignTx", connectSignTx);
+
+    const userSessionRes = await new Promise((resolve, reject) => {
+      userStartsASession.signSubmitAndWatch(passSigner, {
+        mortality: { mortal: true, period: 60 }
+      })
+        .subscribe({
+          next: async (event: any) => {
+            console.info('Session transaction event:', event.type);
+            if (event.type === 'txBestBlocksState') {
+              // Increment nonce in NonceManager after transaction is included
+              if (this._nonceManager) {
+                try {
+                  const passSignerAddress = ss58Encode(passSigner.publicKey);
+                  console.log("nonce before", await this._nonceManager.getCurrentNonce(passSignerAddress));
+                  this._nonceManager.incrementNonce(passSignerAddress);
+                  console.log("nonce after", await this._nonceManager.getCurrentNonce(passSignerAddress));
+                  console.log(`Incremented nonce for address ${passSignerAddress} after substrate key connect transaction inclusion`);
+                } catch (error) {
+                  console.warn('Failed to increment nonce after substrate key connect transaction:', error);
+                }
+              }
+              resolve({ ok: true, txHash: event.txHash, blockHash: event.found });
+            }
+          },
+          error: (error: unknown) => {
+            console.error('Session transaction error:', error);
+            reject(error);
+          }
+        });
+    });
+    console.log(userSessionRes);
+
+    return {
+      sessionKey,
+      sessionSigner,
+      address: passSignerAddress,
+      transaction: userSessionRes
+    };
+  }
+
+  async connectWithSubstrateKey(
+    userId: string,
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+  ) {
+    await this.prepareSubstrateKeyConnection(userId, signer);
+    const result = await this.completeSubstrateKeyConnection();
+    return result;
+  }
   /**
    * Signs a command using the user's wallet
    * This method retrieves the user's wallet from the session manager and uses it to sign the provided command
@@ -421,6 +635,43 @@ export default class Auth {
       this._passkeysAuthenticator = passkeysAuthenticator;
 
       const passSigner = new KreivoPassSigner(this._passkeysAuthenticator);
+      
+      const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+
+      const transaction = await kreivoApi.txFromCallData(Binary.fromHex(extrinsic));
+      const result = await transaction.signAndSubmit(passSigner);
+
+      return {
+        ok: result.ok,
+        hash: result.txHash,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async signWithSubstrateKey(
+    extrinsic: string,
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+  ): Promise<TransactionResult> {
+    if (!this._currentUserId) {
+      throw new Error("User ID is not set");
+    }
+
+    try {
+      const substrateKeyAuthenticator = await new SubstrateKey(
+        this._currentUserId,
+        signer,
+        this.blockHashChallenge.bind(this)
+      ).setup();
+      
+      this._substrateKeyAuthenticator = substrateKeyAuthenticator;
+      this._currentAuthenticator = substrateKeyAuthenticator;
+
+      const passSigner = new KreivoPassSigner(this._substrateKeyAuthenticator);
       
       const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
 
