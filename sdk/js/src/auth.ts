@@ -1,6 +1,4 @@
 import { BaseProfile, AttestationData, User, SignFn, TransactionResult, SubstrateKeyRegistrationData } from "./types";
-import { Blake2256 } from "@polkadot-api/substrate-bindings";
-import { mergeUint8 } from "polkadot-api/utils";
 import { kreivo, MultiAddress } from "@virtonetwork/sdk/descriptors";
 import { Binary, PolkadotClient, PolkadotSigner } from "polkadot-api";
 import {
@@ -8,9 +6,9 @@ import {
   WebAuthn as PasskeysAuthenticator,
 } from "@virtonetwork/authenticators-webauthn";
 import { SubstrateKey } from "@virtonetwork/authenticators-substrate";
-import { KreivoPassSigner, Authenticator } from "@virtonetwork/signer";
+import { KreivoPassSigner, Authenticator, blockHashChallenger } from "@virtonetwork/signer";
 import { ss58Encode } from "@polkadot-labs/hdkd-helpers";
-import { VOSCredentialsHandler } from "./vocCredentialHandler";
+import { VOSCredentialsHandler } from "./vocCredentialHandler"; // Corrected typo in file path if it was wrong, assuming imported correctly
 import NonceManager from "./nonceManager";
 
 let base64Module: typeof import("./utils/base64.browser") | null = null;
@@ -87,9 +85,10 @@ export default class Auth {
    */
 
   async prepareRegistration(user: User<BaseProfile>) {
+    const client = await this.getClient();
     const passkeysAuthenticator = await new PasskeysAuthenticator(
       user.profile.id,
-      this.blockHashChallenge.bind(this),
+      blockHashChallenger(client),
       this.credentialsHandler
     ).setup();
 
@@ -99,10 +98,8 @@ export default class Auth {
     const passSigner = new KreivoPassSigner(passkeysAuthenticator);
     const passAccountAddress = ss58Encode(passSigner.publicKey);
 
-    /// Registers Charlotte (esto viene en VOS)
-    const client = await this.getClient();
     const finalizedBlock = await client.getFinalizedBlock();
-    const attestation = await passkeysAuthenticator.register(finalizedBlock.number);
+    const attestation = await passkeysAuthenticator.register(finalizedBlock.number - 1);
 
     console.log("attestation", attestation);
 
@@ -165,12 +162,13 @@ export default class Auth {
 
   async prepareSubstrateKeyRegistration(
     user: User<BaseProfile>,
-    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array; signingType: "Ed25519" | "Sr25519" | "Ecdsa" }
   ) {
+    const client = await this.getClient();
     const substrateKeyAuthenticator = await new SubstrateKey(
       user.profile.id,
       signer,
-      this.blockHashChallenge.bind(this)
+      blockHashChallenger(client)
     ).setup();
 
     this._substrateKeyAuthenticator = substrateKeyAuthenticator;
@@ -179,9 +177,8 @@ export default class Auth {
     const passSigner = new KreivoPassSigner(substrateKeyAuthenticator);
     const passAccountAddress = ss58Encode(passSigner.publicKey);
 
-    const client = await this.getClient();
     const finalizedBlock = await client.getFinalizedBlock();
-    const keyRegistration = await substrateKeyAuthenticator.register(finalizedBlock.number);
+    const keyRegistration = await substrateKeyAuthenticator.register(finalizedBlock.number - 1);
 
     console.log("keyRegistration", keyRegistration);
 
@@ -192,7 +189,7 @@ export default class Auth {
         authority_id: keyRegistration.message.authority_id.asHex(),
       },
       public: keyRegistration.public.asHex(),
-      signature: keyRegistration.signature.asHex(),
+      signature: keyRegistration.signature.value.asHex(),
     };
 
     return {
@@ -234,7 +231,7 @@ export default class Auth {
 
   async registerWithSubstrateKey(
     user: User<BaseProfile>,
-    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array; signingType: "Ed25519" | "Sr25519" | "Ecdsa" }
   ) {
     const preparedData = await this.prepareSubstrateKeyRegistration(user, signer);
     const result = await this.completeSubstrateKeyRegistration(
@@ -336,9 +333,10 @@ export default class Auth {
     if (!this._currentUserId) {
       throw new Error("User ID is required");
     }
+    const client = await this.getClient();
     const passkeysAuthenticator = await new PasskeysAuthenticator(
       this._currentUserId,
-      this.blockHashChallenge.bind(this),
+      blockHashChallenger(client),
       this.credentialsHandler
     ).setup();
 
@@ -432,7 +430,7 @@ export default class Auth {
 
   async prepareSubstrateKeyConnection(
     userId: string,
-    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array; signingType: "Ed25519" | "Sr25519" | "Ecdsa" }
   ) {
     console.log("Connecting to user with substrate key:", userId);
 
@@ -444,10 +442,11 @@ export default class Auth {
       throw new Error("User ID is required");
     }
 
+    const client = await this.getClient();
     const substrateKeyAuthenticator = await new SubstrateKey(
       this._currentUserId,
       signer,
-      this.blockHashChallenge.bind(this)
+      blockHashChallenger(client)
     ).setup();
 
     this._substrateKeyAuthenticator = substrateKeyAuthenticator;
@@ -541,7 +540,7 @@ export default class Auth {
 
   async connectWithSubstrateKey(
     userId: string,
-    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array; signingType: "Ed25519" | "Sr25519" | "Ecdsa" }
   ) {
     await this.prepareSubstrateKeyConnection(userId, signer);
     const result = await this.completeSubstrateKeyConnection();
@@ -571,17 +570,6 @@ export default class Auth {
     }
 
     return data.ok;
-  }
-
-  private blockHashChallenge = async (ctx: number, xtc: Uint8Array) => {
-    const client = await this.getClient();
-    const hash = await client._request("chain_getBlockHash", [ctx]);
-    const blockHash = Binary.fromHex(hash);
-
-    console.log("blockHash", blockHash.asHex());
-    console.log(`BlockHashChallenger::generate(${ctx}, ${[...JSON.stringify(xtc)]})`);
-    console.log("\t-> ", `${JSON.stringify([...Blake2256(mergeUint8([blockHash.asBytes(), xtc]))])}`);
-    return Blake2256(mergeUint8([blockHash.asBytes(), xtc]));
   }
 
   public async addMember(userId: string) {
@@ -625,18 +613,18 @@ export default class Auth {
     }
 
     try {
-
+      const client = await this.getClient();
       const passkeysAuthenticator = await new PasskeysAuthenticator(
         this._currentUserId,
-        this.blockHashChallenge.bind(this),
+        blockHashChallenger(client),
         this.credentialsHandler
       ).setup();
-      
+
       this._passkeysAuthenticator = passkeysAuthenticator;
 
       const passSigner = new KreivoPassSigner(this._passkeysAuthenticator);
-      
-      const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
+
+      const kreivoApi = client.getTypedApi(kreivo);
 
       const transaction = await kreivoApi.txFromCallData(Binary.fromHex(extrinsic));
       const result = await transaction.signAndSubmit(passSigner);
@@ -655,24 +643,25 @@ export default class Auth {
 
   async signWithSubstrateKey(
     extrinsic: string,
-    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array }
+    signer: { publicKey: Uint8Array; sign: (bytes: Uint8Array) => Promise<Uint8Array> | Uint8Array; signingType: "Ed25519" | "Sr25519" | "Ecdsa" }
   ): Promise<TransactionResult> {
     if (!this._currentUserId) {
       throw new Error("User ID is not set");
     }
 
     try {
+      const client = await this.getClient();
       const substrateKeyAuthenticator = await new SubstrateKey(
         this._currentUserId,
         signer,
-        this.blockHashChallenge.bind(this)
+        blockHashChallenger(client)
       ).setup();
-      
+
       this._substrateKeyAuthenticator = substrateKeyAuthenticator;
       this._currentAuthenticator = substrateKeyAuthenticator;
 
       const passSigner = new KreivoPassSigner(this._substrateKeyAuthenticator);
-      
+
       const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
 
       const transaction = await kreivoApi.txFromCallData(Binary.fromHex(extrinsic));

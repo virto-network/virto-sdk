@@ -9,20 +9,20 @@ import { Binary } from "polkadot-api";
 export function createEd25519Signer(mnemonic = null, derivationPath = '//default') {
   // Generate or use provided mnemonic
   const phrase = mnemonic || generateMnemonic(256);
-  
+
   const miniSecret = entropyToMiniSecret(mnemonicToEntropy(phrase));
   const derive = ed25519CreateDerive(miniSecret);
-  
+
   const keypair = derive(derivationPath);
-  
+
   return {
     signer: {
       sign: (bytes) => {
-        const hexMessage = Binary.fromBytes(bytes).asHex();
-        const signature = keypair.sign(hexMessage);
+        const signature = keypair.sign(bytes);
         return signature;
       },
       publicKey: keypair.publicKey,
+      signingType: "Ed25519",
     },
     mnemonic: phrase,
     publicKey: keypair.publicKey,
