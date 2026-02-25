@@ -1,6 +1,6 @@
 {
   "name": "@virtonetwork/sdk",
-  "version": "0.0.4-alpha.38",
+  "version": "0.0.4-alpha.40",
   "main": "dist/cjs/index.js",
   "types": "dist/cjs/index.d.ts",
   "scripts": {
