@@ -47,43 +47,43 @@ export default class SDK {
         storage?: IStorage<any>,
     ) {
         console.log(options.federate_server);
-        
+
         this._confirmationLevel = options.confirmation_level || 'included';
-        
+
         this._transactionQueue = new TransactionQueue();
         const credentialsHandler = new VOSCredentialsHandler(options.federate_server);
-        
+
         // Create provider with status monitoring using the official WS provider
         const onStatusChanged = (status: any) => {
             if (options.onProviderStatusChange) {
                 options.onProviderStatusChange(status);
             }
         };
-        
+
         this._provider = getWsProvider(options.provider_url, onStatusChanged);
         this._client = createClient(this._provider);
-        
+
         const getClient = async () => {
             return this._client;
         };
 
         const userService = new DefaultUserService(options.federate_server);
-        
+
         this._nonceManager = new NonceManager(getClient);
-        
+
         this._transactionQueue.setNonceManager(this._nonceManager);
         this._transactionQueue.setConfirmationLevel(this._confirmationLevel);
-        
-        this._auth = new Auth(options.federate_server, credentialsHandler, getClient, this._nonceManager);
+
+        this._auth = new Auth(options.federate_server, credentialsHandler, getClient, this._nonceManager, options.config?.session?.expiresIn);
         this._memberships = new Membership(options.federate_server);
-        
+
         // Configure the address helper in transaction queue
         this._transactionQueue.setAddressHelper((sessionSigner) => {
             return this._auth.getAddressFromAuthenticator(sessionSigner);
         });
-        
+
         this._transactionQueue.setAuthModule(this._auth);
-        
+
         this._transfer = new Transfer(getClient, userService, this._transactionQueue);
         this._system = new System(getClient, this._transactionQueue);
         this._utility = new Utility(getClient, this._transactionQueue);

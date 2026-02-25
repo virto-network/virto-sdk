@@ -26,11 +26,12 @@ import { SerializableSignerData, SignerSerializer } from "./storage/SignerSerial
  */
 export default class ServerAuth {
   private _jwtSecret: Secret | null = null;
-  private _jwtExpiresIn: string = "10m"; // Default 10 minutes
+  private _jwtExpiresIn: string | number = 7200; // Default 1 hour
   private _client: PolkadotClient | null = null;
   private _sessionSigner: PolkadotSigner & {
     sign: SignFn;
   } | null = null;
+  private readonly sessionDuration: number;
 
   /**
    * Creates a new ServerAuth instance
@@ -46,14 +47,15 @@ export default class ServerAuth {
     private readonly storage?: IStorage<SerializableSignerData>,
     jwtConfig?: {
       secret: string | Secret;
-      expiresIn?: string;
+      expiresIn?: number
     },
   ) {
+    this.sessionDuration = Math.min(jwtConfig?.expiresIn || 3600, 3600);
+
     if (jwtConfig) {
       this._jwtSecret = jwtConfig.secret;
-      if (jwtConfig.expiresIn) {
-        this._jwtExpiresIn = jwtConfig.expiresIn;
-      }
+      // Calculate token duration based on sessionDuration (120 blocks per minute = 0.5 sec per block)
+      this._jwtExpiresIn = Math.floor(this.sessionDuration / 2);
     }
   }
 
@@ -133,7 +135,7 @@ export default class ServerAuth {
   public decodeToken(token: string): JWTPayload {
     try {
       const decoded = jwt.decode(token) as JWTPayload;
-      
+
       if (!decoded) {
         throw new VError("E_JWT_INVALID_FORMAT", "Token format is invalid");
       }
@@ -286,12 +288,10 @@ export default class ServerAuth {
     console.log("s.publicKey", s.publicKey);
     console.log("address", address);
 
-    const MINUTES = 10; // 10 blocks in a minute
-
     console.log("Adding session key");
     const userStartsASession = kreivoApi.tx.Pass.add_session_key({
       session: MultiAddress.Id(address),
-      duration: 15 * MINUTES,
+      duration: this.sessionDuration,
     });
 
     this._sessionSigner = s;

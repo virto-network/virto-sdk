@@ -29,14 +29,17 @@ export default class Auth {
   } | null = null;
   private _currentUserId: string | null = null;
   private _nonceManager: NonceManager | null = null;
+  private readonly sessionDuration: number;
 
   constructor(
     private readonly baseUrl: string,
     private readonly credentialsHandler: CredentialsHandler,
     private readonly clientFactory: () => Promise<PolkadotClient>,
     nonceManager?: NonceManager,
+    expiresIn: number = 3600
   ) {
     this._nonceManager = nonceManager || null;
+    this.sessionDuration = Math.min(expiresIn, 3600);
     // Preload the module if we're in a browser environment
     if (typeof window !== "undefined") {
       loadBase64Module();
@@ -276,11 +279,10 @@ export default class Auth {
     const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
     // Adds a session
     const [sessionSigner, sessionKey] = passSigner.makeSessionKeySigner();
-    const MINUTES = 10; // 10 blocks in a minute
 
     const userStartsASession = kreivoApi.tx.Pass.add_session_key({
       session: MultiAddress.Id(sessionKey),
-      duration: 15 * MINUTES,
+      duration: this.sessionDuration,
     });
 
     this._sessionSigner = sessionSigner;
@@ -407,11 +409,11 @@ export default class Auth {
         this.blockHashChallenge.bind(this),
         this.credentialsHandler
       ).setup();
-      
+
       this._passkeysAuthenticator = passkeysAuthenticator;
 
       const passSigner = new KreivoPassSigner(this._passkeysAuthenticator);
-      
+
       const kreivoApi = (await this.getClient()).getTypedApi(kreivo);
 
       const transaction = await kreivoApi.txFromCallData(Binary.fromHex(extrinsic));

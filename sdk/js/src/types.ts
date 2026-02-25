@@ -1,16 +1,16 @@
 export type BaseProfile = {
-    id: string;
-    name?: string;
+  id: string;
+  name?: string;
 };
 
 export type User<Profile> = {
-    profile: Profile;
+  profile: Profile;
 };
 
 export type Command = {
-    url: string;
-    body: any;
-    hex: string;
+  url: string;
+  body: any;
+  hex: string;
 };
 
 export interface TransactionResult {
@@ -42,10 +42,10 @@ export interface ServerSDKOptions {
   federate_server: string;
   provider_url: string;
   config: {
-      jwt: {
-          secret: string;
-          expiresIn?: string;
-      }
+    jwt: {
+      secret: string;
+      expiresIn?: number;
+    };
   };
 }
 
@@ -72,10 +72,10 @@ export interface JWTPayload {
   iat: number;
 }
 
-export type { 
-  TransactionStatus, 
-  TransactionMetadata, 
-  TransactionEvent, 
+export type {
+  TransactionStatus,
+  TransactionMetadata,
+  TransactionEvent,
   TransactionEventCallback,
   TransactionEventType,
 } from './transactionQueue';
@@ -85,6 +85,11 @@ export type TransactionConfirmationLevel = 'submitted' | 'included' | 'finalized
 export interface SDKOptions {
   federate_server: string;
   provider_url: string;
+  config?: {
+    session?: {
+      expiresIn?: number;
+    };
+  };
   confirmation_level?: TransactionConfirmationLevel;
   onProviderStatusChange?: (status: any) => void;
 }

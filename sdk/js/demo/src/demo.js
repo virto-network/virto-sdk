@@ -1,5 +1,5 @@
-import SDK from '../../src/sdk';
-// import SDK from "../../dist/esm/sdk.js";
+// import SDK from '../../src/sdk';
+import SDK from "../../dist/esm/index.js";
 import { IndexedDBStorage } from "./storage/IndexedDBStorage";
 
 (async () => {
@@ -10,6 +10,12 @@ import { IndexedDBStorage } from "./storage/IndexedDBStorage";
     // Should be a local, test or production url
     provider_url: "ws://localhost:21000",
     confirmation_level: 'submitted',
+    config: {
+      session: {
+        expiresIn: 3600, // 30 minutes in seconds, 2 block per second
+        // expiresIn: 10, // 20 seconds in seconds, 2 block per second
+      }
+    },
     onProviderStatusChange: (status) => {
       switch (status.type) {
         case 0: // CONNECTING
