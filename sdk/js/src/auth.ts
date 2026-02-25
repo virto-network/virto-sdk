@@ -283,17 +283,7 @@ export default class Auth {
       duration: 15 * MINUTES,
     });
 
-    const tx3Res = await userStartsASession.signAndSubmit(passSigner, {
-      mortality: { mortal: true, period: 60 }
-    });
-    console.log(tx3Res);
-
     this._sessionSigner = sessionSigner;
-
-    const connectSignTx = await userStartsASession.sign(passSigner, {
-      mortality: { mortal: true, period: 60 }
-    });
-    console.log("connectSignTx", connectSignTx);
 
     const userSessionRes = await new Promise((resolve, reject) => {
       userStartsASession.signSubmitAndWatch(passSigner, {
