@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use bytes::BufMut;
+#[cfg(feature = "codec")]
 use codec::Encode;
 use core::fmt::{self, Debug};
 
@@ -139,6 +140,7 @@ where
         Serializer { out, ty, registry }
     }
 
+    #[cfg(feature = "codec")]
     fn serialize_compact(&mut self, ty: u32, v: u128) -> Result<()> {
         let type_def = self.resolve(ty);
 
@@ -236,7 +238,10 @@ where
             Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
+            #[cfg(feature = "codec")]
             Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
+            #[cfg(not(feature = "codec"))]
+            Some(SpecificType::Compact(_)) => return Err(Error::Ser("Compact encoding requires 'codec' feature".into())),
             _ => self.out.put_u64_le(v),
         }
         Ok(())
@@ -253,7 +258,10 @@ where
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
             Some(SpecificType::U64) => self.serialize_u64(v as u64)?,
+            #[cfg(feature = "codec")]
             Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v)?,
+            #[cfg(not(feature = "codec"))]
+            Some(SpecificType::Compact(_)) => return Err(Error::Ser("Compact encoding requires 'codec' feature".into())),
             _ => self.out.put_u128_le(v),
         }
         Ok(())
@@ -795,7 +803,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl ser::StdError for Error {}
+impl core::error::Error for Error {}
 
 impl ser::Error for Error {
     fn custom<T>(msg: T) -> Self

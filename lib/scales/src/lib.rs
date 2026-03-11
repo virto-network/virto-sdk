@@ -16,7 +16,7 @@ pub use bytes::Bytes;
 pub use serde_json::Value as JsonValue;
 #[cfg(feature = "experimental-serializer")]
 pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Serializer};
-#[cfg(feature = "json")]
+#[cfg(all(feature = "json", feature = "experimental-serializer"))]
 pub use serializer::{to_bytes_from_iter, to_vec_from_iter};
 pub use value::Value;
 
@@ -24,6 +24,8 @@ use prelude::*;
 use scale_info::{form::PortableForm as Portable, PortableRegistry};
 
 mod prelude {
+    pub use alloc::string::{String, ToString};
+    pub use alloc::vec::Vec;
     pub use core::ops::Deref;
 }
 
@@ -171,7 +173,7 @@ impl SpecificType {
         match self {
             SpecificType::Variant(_, _, Some(_)) => Some(self),
             SpecificType::Variant(_, ref mut variants, idx @ None) => {
-                let (vf, _) = variants
+                let (vf, _): (u8, B) = variants
                     .iter()
                     .map(|v| (v.index, get_field(v)))
                     .find(|(_, f)| f.as_ref() == selection.as_ref())?;

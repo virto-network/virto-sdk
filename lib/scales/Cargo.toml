@@ -9,24 +9,22 @@ license = "Apache-2.0"
 
 [dependencies]
 bytes = { version = "1.1.0", default-features = false }
-scale-info = { version = "2.10.0", default-features = false, features = ["serde"] }
-serde = { version = "1.0.137", default-features = false }
+scale-info = { version = "2.10.0", default-features = false, features = ["serde", "decode"] }
+serde = { version = "1.0.137", default-features = false, features = ["alloc"] }
 serde_json = { version = "1.0.80", default-features = false, optional = true }
 codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false, optional = true }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"], optional = true }
-log = "0.4.17"
-
-
+log = { version = "0.4.17", default-features = false }
 
 [features]
 default = ["std", "codec", "json", "hex", "experimental-serializer"]
-std = ["scale-info/std", "bytes/std"]
+std = ["scale-info/std", "bytes/std", "serde/std", "log/std", "codec?/std", "serde_json?/std"]
 experimental-serializer = []
-json = ["serde_json/preserve_order"]
+json = ["dep:serde_json", "serde_json/preserve_order", "serde_json/alloc"]
 
 [dev-dependencies]
 anyhow = "1.0.57"
-codec = { version = "3.1.2", package = "parity-scale-codec", features = ["derive"] }
+codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false, features = ["derive"] }
 scale-info = { version = "2.1.1", default-features = false, features = ["derive"] }
 serde = { version = "1.0.137", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.80", default-features = false, features = ["alloc"] }

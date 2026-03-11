@@ -1,6 +1,7 @@
 use crate::{EnumVariant, SpecificType};
 use alloc::{collections::BTreeMap, vec::Vec};
 use bytes::{Buf, Bytes};
+#[cfg(feature = "codec")]
 use codec::Encode;
 use core::{convert::TryInto, mem, str};
 use scale_info::{prelude::*, PortableRegistry, TypeDefPrimitive as Primitive};
@@ -597,7 +598,7 @@ impl<'a> Value<'a> {
                     e.variants
                         .iter()
                         .find(|v| v.index == variant_index)
-                        .map(|v| v.name.as_str())
+                        .map(|v| &*v.name)
                 } else {
                     None
                 }
@@ -665,18 +666,26 @@ impl Serialize for Value<'_> {
                     .expect("not found in registry")
                     .type_def;
 
-                use codec::Compact;
-                match type_def {
-                    TypeDef::Primitive(Primitive::U32) => {
-                        ser.serialize_bytes(&Compact(data.get_u32_le()).encode())
+                #[cfg(feature = "codec")]
+                {
+                    use codec::Compact;
+                    match type_def {
+                        TypeDef::Primitive(Primitive::U32) => {
+                            ser.serialize_bytes(&Compact(data.get_u32_le()).encode())
+                        }
+                        TypeDef::Primitive(Primitive::U64) => {
+                            ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
+                        }
+                        TypeDef::Primitive(Primitive::U128) => {
+                            ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
+                        }
+                        _ => unimplemented!(),
                     }
-                    TypeDef::Primitive(Primitive::U64) => {
-                        ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
-                    }
-                    TypeDef::Primitive(Primitive::U128) => {
-                        ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
-                    }
-                    _ => unimplemented!(),
+                }
+                #[cfg(not(feature = "codec"))]
+                {
+                    let _ = type_def;
+                    unimplemented!("Compact encoding requires 'codec' feature")
                 }
             }
             Bytes(_) => {
@@ -766,7 +775,7 @@ impl Serialize for Value<'_> {
                         let mut s = ser.serialize_map(Some(1))?;
                         s.serialize_key(name)?;
                         s.serialize_value(&fields.iter().fold(
-                            BTreeMap::new(),
+                            BTreeMap::<&str, Value>::new(),
                             |mut m, (name, ty)| {
                                 m.insert(*name, self.new_value(&mut data, *ty));
                                 m
