@@ -29,6 +29,28 @@ mod prelude {
     pub use core::ops::Deref;
 }
 
+// adapted from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
+#[allow(clippy::all)]
+pub(crate) fn compact_encode(n: u128, mut dest: impl bytes::BufMut) {
+    match n {
+        0..=0b0011_1111 => dest.put_u8((n as u8) << 2),
+        0..=0b0011_1111_1111_1111 => dest.put_u16_le(((n as u16) << 2) | 0b01),
+        0..=0b0011_1111_1111_1111_1111_1111_1111_1111 => {
+            dest.put_u32_le(((n as u32) << 2) | 0b10)
+        }
+        _ => {
+            let bytes_needed = 16 - n.leading_zeros() / 8;
+            assert!(bytes_needed >= 4);
+            dest.put_u8(0b11 + ((bytes_needed - 4) << 2) as u8);
+            let mut v = n;
+            for _ in 0..bytes_needed {
+                dest.put_u8(v as u8);
+                v >>= 8;
+            }
+        }
+    }
+}
+
 type Type = scale_info::Type<Portable>;
 type Variant = scale_info::Variant<Portable>;
 type TypeId = u32;
@@ -43,7 +65,6 @@ macro_rules! is_tuple {
 /// that matches serde model more closely
 #[rustfmt::skip]
 #[derive(Debug, Clone, serde::Serialize)]
-#[cfg_attr(feature = "codec", derive(codec::Encode))]
 pub enum SpecificType {
     Bool,
     U8, U16, U32, U64, U128,
@@ -246,7 +267,6 @@ impl<'a> From<&'a SpecificType> for EnumVariant<'a> {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-#[cfg_attr(feature = "codec", derive(codec::Encode))]
 pub enum TupleOrArray {
     Array(TypeId, u32),
     Tuple(Vec<TypeId>),
@@ -263,6 +283,75 @@ impl TupleOrArray {
         match self {
             Self::Array(ty, _) => *ty,
             Self::Tuple(fields) => fields[i],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codec::{Compact, Encode};
+
+    #[test]
+    fn compact_encode_single_byte() {
+        // Values 0..=63 use single-byte mode
+        for v in [0u32, 1, 42, 63] {
+            let expected = Compact(v).encode();
+            let mut out = Vec::new();
+            compact_encode(v as u128, &mut out);
+            assert_eq!(out, expected, "mismatch for {v}");
+        }
+    }
+
+    #[test]
+    fn compact_encode_two_bytes() {
+        // Values 64..=16383 use two-byte mode
+        for v in [64u32, 255, 1000, 16383] {
+            let expected = Compact(v).encode();
+            let mut out = Vec::new();
+            compact_encode(v as u128, &mut out);
+            assert_eq!(out, expected, "mismatch for {v}");
+        }
+    }
+
+    #[test]
+    fn compact_encode_four_bytes() {
+        // Values 16384..=2^30-1 use four-byte mode
+        for v in [16384u32, 65535, 1_000_000, (1 << 30) - 1] {
+            let expected = Compact(v).encode();
+            let mut out = Vec::new();
+            compact_encode(v as u128, &mut out);
+            assert_eq!(out, expected, "mismatch for {v}");
+        }
+    }
+
+    #[test]
+    fn compact_encode_big_u32() {
+        for v in [1u32 << 30, u32::MAX] {
+            let expected = Compact(v).encode();
+            let mut out = Vec::new();
+            compact_encode(v as u128, &mut out);
+            assert_eq!(out, expected, "mismatch for {v}");
+        }
+    }
+
+    #[test]
+    fn compact_encode_u64() {
+        for v in [u32::MAX as u64 + 1, 1_000_000_000_000, u64::MAX] {
+            let expected = Compact(v).encode();
+            let mut out = Vec::new();
+            compact_encode(v as u128, &mut out);
+            assert_eq!(out, expected, "mismatch for {v}");
+        }
+    }
+
+    #[test]
+    fn compact_encode_u128() {
+        for v in [u64::MAX as u128 + 1, u128::MAX] {
+            let expected = Compact(v).encode();
+            let mut out = Vec::new();
+            compact_encode(v, &mut out);
+            assert_eq!(out, expected, "mismatch for {v}");
         }
     }
 }

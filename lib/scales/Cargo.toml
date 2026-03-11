@@ -12,13 +12,12 @@ bytes = { version = "1.1.0", default-features = false }
 scale-info = { version = "2.10.0", default-features = false, features = ["serde", "decode"] }
 serde = { version = "1.0.137", default-features = false, features = ["alloc"] }
 serde_json = { version = "1.0.80", default-features = false, optional = true }
-codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false, optional = true }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"], optional = true }
 log = { version = "0.4.17", default-features = false }
 
 [features]
-default = ["std", "codec", "json", "hex", "experimental-serializer"]
-std = ["scale-info/std", "bytes/std", "serde/std", "log/std", "codec?/std", "serde_json?/std"]
+default = ["std", "json", "hex", "experimental-serializer"]
+std = ["scale-info/std", "bytes/std", "serde/std", "log/std", "serde_json?/std"]
 experimental-serializer = []
 json = ["dep:serde_json", "serde_json/preserve_order", "serde_json/alloc"]
 

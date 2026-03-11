@@ -1,7 +1,5 @@
 use crate::prelude::*;
 use bytes::BufMut;
-#[cfg(feature = "codec")]
-use codec::Encode;
 use core::fmt::{self, Debug};
 
 use scale_info::{PortableRegistry, TypeInfo};
@@ -140,20 +138,8 @@ where
         Serializer { out, ty, registry }
     }
 
-    #[cfg(feature = "codec")]
-    fn serialize_compact(&mut self, ty: u32, v: u128) -> Result<()> {
-        let type_def = self.resolve(ty);
-
-        use codec::Compact;
-        let compact_buffer = match type_def {
-            SpecificType::U32 => Compact(v as u32).encode(),
-            SpecificType::U64 => Compact(v as u64).encode(),
-            SpecificType::U128 => Compact(v).encode(),
-            _ => todo!(),
-        };
-
-        self.out.put_slice(&compact_buffer[..]);
-
+    fn serialize_compact(&mut self, _ty: u32, v: u128) -> Result<()> {
+        crate::compact_encode(v, &mut self.out);
         Ok(())
     }
 }
@@ -238,10 +224,7 @@ where
             Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
-            #[cfg(feature = "codec")]
             Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
-            #[cfg(not(feature = "codec"))]
-            Some(SpecificType::Compact(_)) => return Err(Error::Ser("Compact encoding requires 'codec' feature".into())),
             _ => self.out.put_u64_le(v),
         }
         Ok(())
@@ -258,10 +241,7 @@ where
             Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
             Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
             Some(SpecificType::U64) => self.serialize_u64(v as u64)?,
-            #[cfg(feature = "codec")]
             Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v)?,
-            #[cfg(not(feature = "codec"))]
-            Some(SpecificType::Compact(_)) => return Err(Error::Ser("Compact encoding requires 'codec' feature".into())),
             _ => self.out.put_u128_le(v),
         }
         Ok(())
@@ -814,31 +794,8 @@ impl ser::Error for Error {
     }
 }
 
-// adapted from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
-#[allow(clippy::all)]
-fn compact_number(n: usize, mut dest: impl BufMut) {
-    match n {
-        0..=0b0011_1111 => dest.put_u8((n as u8) << 2),
-        0..=0b0011_1111_1111_1111 => dest.put_u16_le(((n as u16) << 2) | 0b01),
-        0..=0b0011_1111_1111_1111_1111_1111_1111_1111 => dest.put_u32_le(((n as u32) << 2) | 0b10),
-        _ => {
-            let bytes_needed = 8 - n.leading_zeros() / 8;
-            assert!(
-                bytes_needed >= 4,
-                "Previous match arm matches anyting less than 2^30; qed"
-            );
-            dest.put_u8(0b11 + ((bytes_needed - 4) << 2) as u8);
-            let mut v = n;
-            for _ in 0..bytes_needed {
-                dest.put_u8(v as u8);
-                v >>= 8;
-            }
-            assert_eq!(
-                v, 0,
-                "shifted sufficient bits right to lead only leading zeros; qed"
-            )
-        }
-    }
+fn compact_number(n: usize, dest: impl BufMut) {
+    crate::compact_encode(n as u128, dest)
 }
 
 // nightly only

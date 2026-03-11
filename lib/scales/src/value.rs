@@ -1,8 +1,6 @@
 use crate::{EnumVariant, SpecificType};
 use alloc::{collections::BTreeMap, vec::Vec};
 use bytes::{Buf, Bytes};
-#[cfg(feature = "codec")]
-use codec::Encode;
 use core::{convert::TryInto, mem, str};
 use scale_info::{prelude::*, PortableRegistry, TypeDefPrimitive as Primitive};
 use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple, SerializeTupleStruct};
@@ -666,27 +664,15 @@ impl Serialize for Value<'_> {
                     .expect("not found in registry")
                     .type_def;
 
-                #[cfg(feature = "codec")]
-                {
-                    use codec::Compact;
-                    match type_def {
-                        TypeDef::Primitive(Primitive::U32) => {
-                            ser.serialize_bytes(&Compact(data.get_u32_le()).encode())
-                        }
-                        TypeDef::Primitive(Primitive::U64) => {
-                            ser.serialize_bytes(&Compact(data.get_u64_le()).encode())
-                        }
-                        TypeDef::Primitive(Primitive::U128) => {
-                            ser.serialize_bytes(&Compact(data.get_u128_le()).encode())
-                        }
-                        _ => unimplemented!(),
-                    }
-                }
-                #[cfg(not(feature = "codec"))]
-                {
-                    let _ = type_def;
-                    unimplemented!("Compact encoding requires 'codec' feature")
-                }
+                let v: u128 = match type_def {
+                    TypeDef::Primitive(Primitive::U32) => data.get_u32_le() as u128,
+                    TypeDef::Primitive(Primitive::U64) => data.get_u64_le() as u128,
+                    TypeDef::Primitive(Primitive::U128) => data.get_u128_le(),
+                    _ => unimplemented!(),
+                };
+                let mut buf = Vec::new();
+                crate::compact_encode(v, &mut buf);
+                ser.serialize_bytes(&buf)
             }
             Bytes(_) => {
                 let (_, s) = sequence_size(data.chunk());
@@ -826,16 +812,6 @@ impl AsRef<[u8]> for Value<'_> {
     }
 }
 
-#[cfg(feature = "codec")]
-impl codec::Encode for Value<'_> {
-    fn size_hint(&self) -> usize {
-        self.data.len()
-    }
-    fn using_encoded<R, F: FnOnce(&[u8]) -> R>(&self, f: F) -> R {
-        f(self.data.as_ref())
-    }
-}
-
 impl core::fmt::Debug for Value<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -915,17 +891,6 @@ mod tests {
         let out_value = Value::new(data, id, &reg).to_string();
 
         assert_eq!("{\"bar\":\"BAZ\"}", out_value);
-    }
-
-    #[cfg(feature = "codec")]
-    #[test]
-    fn encodable() {
-        let input = u8::MAX;
-        let (ty, reg) = register(&input);
-        let value = Value::new(b"1234".as_ref(), ty, &reg);
-
-        let expected: &[u8] = value.as_ref();
-        assert_eq!(value.encode(), expected);
     }
 
     #[test]
