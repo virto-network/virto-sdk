@@ -1,11 +1,12 @@
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::{Deserialize, Serialize};
 
 pub type TypeId = u32;
 
 /// A minimal type registry storing only what is needed for SCALE serialization.
 /// No docs, no full paths, no type params.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Registry(Vec<TypeDef>);
 
 impl Registry {
@@ -21,7 +22,7 @@ impl Registry {
 
 /// Type definitions that map directly to serde's data model.
 #[rustfmt::skip]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TypeDef {
     Bool,
     U8, U16, U32, U64, U128,
@@ -54,20 +55,20 @@ pub enum TypeDef {
     BitSequence(TypeId, TypeId),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Field {
     pub name: String,
     pub ty: TypeId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantDef {
     /// Short name (e.g. "Option") used for special-case detection
     pub name: String,
     pub variants: Vec<Variant>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Variant {
     pub index: u8,
     pub name: String,
@@ -75,7 +76,7 @@ pub struct Variant {
 }
 
 /// Pre-classified variant payload shapes matching serde's enum model
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Fields {
     Unit,
     NewType(TypeId),

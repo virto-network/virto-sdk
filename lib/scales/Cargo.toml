@@ -13,14 +13,20 @@ scale-info = { version = "2.10.0", default-features = false, features = ["serde"
 serde = { version = "1.0.137", default-features = false, features = ["alloc"] }
 serde_json = { version = "1.0.80", default-features = false, optional = true }
 hex = { version = "0.4.3", default-features = false, features = ["alloc"], optional = true }
+codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false, optional = true }
 log = { version = "0.4.17", default-features = false }
 
 [features]
 default = ["std", "json", "hex", "scale-info", "serializer"]
 serializer = []
+compress = ["dep:scale-info", "serializer", "dep:codec"]
 std = ["scale-info?/std", "bytes/std", "serde/std", "log/std", "serde_json?/std"]
 scale-info = ["dep:scale-info"]
 json = ["dep:serde_json", "serde_json/preserve_order", "serde_json/alloc"]
+
+[[bin]]
+name = "compress"
+required-features = ["std", "compress"]
 
 [dev-dependencies]
 anyhow = "1.0.57"
