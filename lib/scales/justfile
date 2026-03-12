@@ -11,16 +11,16 @@ test:
 
 check-no-std:
     cargo check --no-default-features
-    cargo check --no-default-features --features experimental-serializer
-    cargo check --no-default-features --features experimental-serializer,json,hex
+    cargo check --no-default-features --features serializer
+    cargo check --no-default-features --features json,hex
 
 check-thumbv7em:
-    cargo check --target thumbv7em-none-eabihf --no-default-features --features experimental-serializer
+    cargo check --target thumbv7em-none-eabihf --no-default-features
 
 check-riscv32:
-    cargo check --target riscv32imac-unknown-none-elf --no-default-features --features experimental-serializer
+    cargo check --target riscv32imac-unknown-none-elf --no-default-features
 
 check-wasm:
-    cargo check --target wasm32-unknown-unknown --no-default-features --features experimental-serializer
+    cargo check --target wasm32-unknown-unknown --no-default-features
 
 check-targets: check-no-std check-thumbv7em check-riscv32 check-wasm
