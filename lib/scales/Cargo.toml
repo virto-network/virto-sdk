@@ -3,18 +3,18 @@ name = "scale-serialization"
 description = "SCALE Serialization"
 version = "1.0.0-beta2"
 authors = ["Daniel Olano <daniel@olanod.com>"]
-edition = "2018"
+edition = "2021"
 repository = "https://github.com/virto-network/scales"
 license = "Apache-2.0"
 
 [dependencies]
-bytes = { version = "1.1.0", default-features = false }
-scale-info = { version = "2.10.0", default-features = false, features = ["serde", "decode"], optional = true }
-serde = { version = "1.0.137", default-features = false, features = ["alloc"] }
-serde_json = { version = "1.0.80", default-features = false, optional = true }
-hex = { version = "0.4.3", default-features = false, features = ["alloc"], optional = true }
-codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false, optional = true }
-log = { version = "0.4.17", default-features = false }
+bytes = { version = "1.11", default-features = false }
+scale-info = { version = "2.11", default-features = false, features = ["serde", "decode"], optional = true }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1", default-features = false, optional = true }
+hex = { version = "0.4", default-features = false, features = ["alloc"], optional = true }
+codec = { version = "3.7", package = "parity-scale-codec", default-features = false, optional = true }
+log = { version = "0.4", default-features = false }
 
 [features]
 default = ["std", "json", "hex", "scale-info", "serializer"]
@@ -29,8 +29,8 @@ name = "compress"
 required-features = ["std", "compress"]
 
 [dev-dependencies]
-anyhow = "1.0.57"
-codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false, features = ["derive"] }
-scale-info = { version = "2.1.1", default-features = false, features = ["derive"] }
-serde = { version = "1.0.137", default-features = false, features = ["derive"] }
-serde_json = { version = "1.0.80", default-features = false, features = ["alloc"] }
+anyhow = "1"
+codec = { version = "3.7", package = "parity-scale-codec", default-features = false, features = ["derive"] }
+scale-info = { version = "2.11", default-features = false, features = ["derive"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
