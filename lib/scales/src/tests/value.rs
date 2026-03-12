@@ -31,7 +31,7 @@ fn display_as_json() {
 
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
-    let out_value = Value::new(data, id, &reg).to_string();
+    let out_value = Value::new(&data, id, &reg).to_string();
 
     assert_eq!("{\"bar\":\"BAZ\"}", out_value);
 }
@@ -42,7 +42,7 @@ fn serialize_u8() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -54,7 +54,7 @@ fn serialize_u16() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -66,7 +66,7 @@ fn serialize_u32() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -78,7 +78,7 @@ fn serialize_u64() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -90,7 +90,7 @@ fn serialize_bool() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -102,7 +102,7 @@ fn serialize_i16() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -114,7 +114,7 @@ fn serialize_i32() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -126,7 +126,7 @@ fn serialize_i64() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -138,7 +138,7 @@ fn serialize_tuple() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -153,7 +153,7 @@ fn serialize_tuple_struct() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -165,7 +165,7 @@ fn serialize_u8array() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(&out_value)?, to_value(in_value.as_slice())?);
     Ok(())
@@ -177,7 +177,7 @@ fn serialize_u16array() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -189,7 +189,7 @@ fn serialize_u32array() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -204,7 +204,7 @@ fn serialize_simple_u8struct() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -219,7 +219,7 @@ fn serialize_simple_u32struct() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -234,7 +234,7 @@ fn serialize_simple_u64struct() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -259,7 +259,7 @@ fn serialize_complex_struct_with_enum() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -272,7 +272,7 @@ fn serialize_map() -> Result<(), Error> {
     let data = in_value.encode();
     let (id, reg) = register(&in_value);
 
-    let out_value = Value::new(data, id, &reg);
+    let out_value = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(out_value)?, to_value(in_value)?);
     Ok(())
@@ -282,7 +282,7 @@ fn serialize_map() -> Result<(), Error> {
 fn test_primitive_extraction() {
     let (id, reg) = register(&42u32);
     let data = 42u32.encode();
-    let value = Value::new(data, id, &reg);
+    let value = Value::new(&data, id, &reg);
 
     assert!(value.is_u32());
     assert_eq!(value.as_u32(), Some(42));
@@ -293,7 +293,7 @@ fn test_primitive_extraction() {
 fn test_string_extraction() {
     let (id, reg) = register(&"hello");
     let data = "hello".encode();
-    let value = Value::new(data, id, &reg);
+    let value = Value::new(&data, id, &reg);
 
     assert!(value.is_string());
     assert_eq!(value.as_str(), Some("hello"));
@@ -313,7 +313,7 @@ fn test_composite_field_access() {
     };
     let data = foo.encode();
     let (id, reg) = register(&foo);
-    let value = Value::new(data, id, &reg);
+    let value = Value::new(&data, id, &reg);
 
     assert!(value.is_composite());
     assert_eq!(value.field_count(), Some(2));
@@ -333,7 +333,7 @@ fn test_sequence_operations() {
     let input: Vec<u32> = vec![1, 2, 3, 4, 5];
     let data = input.encode();
     let (id, reg) = register(&input);
-    let value = Value::new(data, id, &reg);
+    let value = Value::new(&data, id, &reg);
 
     assert!(value.is_sequence());
     assert_eq!(value.sequence_len(), Some(5));
@@ -352,7 +352,7 @@ fn test_tuple_operations() {
     let input: (u32, bool, u8) = (42, true, 7);
     let data = input.encode();
     let (id, reg) = register(&input);
-    let value = Value::new(data, id, &reg);
+    let value = Value::new(&data, id, &reg);
 
     assert!(value.is_tuple());
     assert_eq!(value.tuple_len(), Some(3));
@@ -381,7 +381,7 @@ fn test_variant_operations() {
     let input = MyEnum::UnitVariant;
     let data = input.encode();
     let (id, reg) = register(&input);
-    let value = Value::new(data, id, &reg);
+    let value = Value::new(&data, id, &reg);
 
     assert!(value.is_variant());
     assert_eq!(value.variant_index(), Some(0));
@@ -390,7 +390,7 @@ fn test_variant_operations() {
 
     let input = MyEnum::DataVariant(42);
     let data = input.encode();
-    let value = Value::new(data, id, &reg);
+    let value = Value::new(&data, id, &reg);
 
     assert_eq!(value.variant_index(), Some(1));
     assert_eq!(value.variant_name(), Some("DataVariant"));
@@ -401,22 +401,26 @@ fn test_variant_operations() {
 #[test]
 fn test_all_unsigned_extraction() {
     let (id, reg) = register(&0u8);
-    let v = Value::new(255u8.encode(), id, &reg);
+    let data = 255u8.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_u8());
     assert_eq!(v.as_u8(), Some(255));
 
     let (id, reg) = register(&0u16);
-    let v = Value::new(0xABCDu16.encode(), id, &reg);
+    let data = 0xABCDu16.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_u16());
     assert_eq!(v.as_u16(), Some(0xABCD));
 
     let (id, reg) = register(&0u64);
-    let v = Value::new(u64::MAX.encode(), id, &reg);
+    let data = u64::MAX.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_u64());
     assert_eq!(v.as_u64(), Some(u64::MAX));
 
     let (id, reg) = register(&0u128);
-    let v = Value::new(u128::MAX.encode(), id, &reg);
+    let data = u128::MAX.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_u128());
     assert_eq!(v.as_u128(), Some(u128::MAX));
 }
@@ -424,27 +428,32 @@ fn test_all_unsigned_extraction() {
 #[test]
 fn test_all_signed_extraction() {
     let (id, reg) = register(&0i8);
-    let v = Value::new((-42i8).encode(), id, &reg);
+    let data = (-42i8).encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_i8());
     assert_eq!(v.as_i8(), Some(-42));
 
     let (id, reg) = register(&0i16);
-    let v = Value::new(i16::MIN.encode(), id, &reg);
+    let data = i16::MIN.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_i16());
     assert_eq!(v.as_i16(), Some(i16::MIN));
 
     let (id, reg) = register(&0i32);
-    let v = Value::new(i32::MIN.encode(), id, &reg);
+    let data = i32::MIN.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_i32());
     assert_eq!(v.as_i32(), Some(i32::MIN));
 
     let (id, reg) = register(&0i64);
-    let v = Value::new(i64::MIN.encode(), id, &reg);
+    let data = i64::MIN.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_i64());
     assert_eq!(v.as_i64(), Some(i64::MIN));
 
     let (id, reg) = register(&0i128);
-    let v = Value::new(i128::MIN.encode(), id, &reg);
+    let data = i128::MIN.encode();
+    let v = Value::new(&data, id, &reg);
     assert!(v.is_i128());
     assert_eq!(v.as_i128(), Some(i128::MIN));
 }
@@ -452,15 +461,18 @@ fn test_all_signed_extraction() {
 #[test]
 fn test_bool_extraction() {
     let (id, reg) = register(&true);
-    assert!(Value::new(true.encode(), id, &reg).is_bool());
-    assert_eq!(Value::new(true.encode(), id, &reg).as_bool(), Some(true));
-    assert_eq!(Value::new(false.encode(), id, &reg).as_bool(), Some(false));
+    let data = true.encode();
+    assert!(Value::new(&data, id, &reg).is_bool());
+    assert_eq!(Value::new(&data, id, &reg).as_bool(), Some(true));
+    let data = false.encode();
+    assert_eq!(Value::new(&data, id, &reg).as_bool(), Some(false));
 }
 
 #[test]
 fn test_type_mismatch_returns_none() {
     let (uid, reg) = register(&0u32);
-    let v = Value::new(42u32.encode(), uid, &reg);
+    let data = 42u32.encode();
+    let v = Value::new(&data, uid, &reg);
 
     assert_eq!(v.as_u8(), None);
     assert_eq!(v.as_u16(), None);
@@ -480,16 +492,16 @@ fn test_type_mismatch_returns_none() {
 fn test_truncated_data_returns_none() {
     let (id, reg) = register(&0u32);
     // only 2 bytes for a u32
-    let v = Value::new(vec![0u8, 0], id, &reg);
+    let v = Value::new(&[0u8, 0], id, &reg);
     assert_eq!(v.as_u32(), None);
 
     let (id, reg) = register(&0u128);
-    let v = Value::new(vec![0u8; 8], id, &reg);
+    let v = Value::new(&[0u8; 8], id, &reg);
     assert_eq!(v.as_u128(), None);
 
     // empty data
     let (id, reg) = register(&0u8);
-    let v = Value::new(vec![], id, &reg);
+    let v = Value::new(&[], id, &reg);
     assert_eq!(v.as_u8(), None);
 }
 
@@ -501,7 +513,8 @@ fn test_field_access_nonexistent() {
     }
     let foo = Foo { bar: 1 };
     let (id, reg) = register(&foo);
-    let v = Value::new(foo.encode(), id, &reg);
+    let data = foo.encode();
+    let v = Value::new(&data, id, &reg);
 
     assert!(v.field("nonexistent").is_none());
     assert!(v.field_at(1).is_none());
@@ -511,7 +524,8 @@ fn test_field_access_nonexistent() {
 #[test]
 fn test_field_on_non_struct() {
     let (id, reg) = register(&42u32);
-    let v = Value::new(42u32.encode(), id, &reg);
+    let data = 42u32.encode();
+    let v = Value::new(&data, id, &reg);
 
     assert!(v.field("x").is_none());
     assert!(v.field_at(0).is_none());
@@ -521,7 +535,8 @@ fn test_field_on_non_struct() {
 #[test]
 fn test_sequence_on_non_sequence() {
     let (id, reg) = register(&42u32);
-    let v = Value::new(42u32.encode(), id, &reg);
+    let data = 42u32.encode();
+    let v = Value::new(&data, id, &reg);
 
     assert_eq!(v.sequence_len(), None);
     assert!(v.sequence_get(0).is_none());
@@ -530,7 +545,8 @@ fn test_sequence_on_non_sequence() {
 #[test]
 fn test_tuple_on_non_tuple() {
     let (id, reg) = register(&42u32);
-    let v = Value::new(42u32.encode(), id, &reg);
+    let data = 42u32.encode();
+    let v = Value::new(&data, id, &reg);
 
     assert_eq!(v.tuple_len(), None);
     assert!(v.tuple_get(0).is_none());
@@ -539,7 +555,8 @@ fn test_tuple_on_non_tuple() {
 #[test]
 fn test_variant_on_non_variant() {
     let (id, reg) = register(&42u32);
-    let v = Value::new(42u32.encode(), id, &reg);
+    let data = 42u32.encode();
+    let v = Value::new(&data, id, &reg);
 
     assert_eq!(v.variant_index(), None);
     assert_eq!(v.variant_name(), None);
@@ -551,7 +568,7 @@ fn test_empty_sequence() {
     let input: Vec<u32> = vec![];
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert_eq!(v.sequence_len(), Some(0));
     assert!(v.sequence_get(0).is_none());
@@ -562,7 +579,7 @@ fn test_array_operations() {
     let input: [u16; 3] = [10, 20, 30];
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert!(v.is_array());
     assert_eq!(v.array_len(), Some(3));
@@ -577,7 +594,7 @@ fn test_compact_value() {
     let input = Compact(42u32);
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert!(v.is_compact());
 }
@@ -587,7 +604,7 @@ fn test_option_none() -> Result<(), Error> {
     let input: Option<u32> = None;
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert!(v.is_variant());
     assert_eq!(v.variant_name(), Some("None"));
@@ -600,7 +617,7 @@ fn test_option_some() -> Result<(), Error> {
     let input: Option<u32> = Some(42);
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert!(v.is_variant());
     assert_eq!(v.variant_name(), Some("Some"));
@@ -619,7 +636,7 @@ fn test_variant_with_tuple_fields() -> Result<(), Error> {
     let input = Msg::B(7, "hi".into());
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert_eq!(v.variant_name(), Some("B"));
     // tuple variant data is not accessible via variant_data (only NewType)
@@ -646,7 +663,7 @@ fn test_variant_with_struct_fields() -> Result<(), Error> {
     };
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert_eq!(v.variant_name(), Some("B"));
     assert_eq!(to_value(v)?, to_value(&input)?);
@@ -661,7 +678,7 @@ fn test_map_operations() -> Result<(), Error> {
     input.insert("c".into(), 3);
     let data = input.encode();
     let (id, reg) = register(&input);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     assert_eq!(to_value(v)?, to_value(&input)?);
     Ok(())
@@ -673,7 +690,7 @@ fn test_empty_struct() {
     struct Unit;
     let data = Unit.encode();
     let (id, reg) = register(&Unit);
-    let v = Value::new(data, id, &reg);
+    let v = Value::new(&data, id, &reg);
 
     // StructUnit is not composite (no fields)
     assert_eq!(v.field_count(), None);
@@ -683,28 +700,27 @@ fn test_empty_struct() {
 fn test_size_calculation() {
     // primitives
     let (id, reg) = register(&0u8);
-    assert_eq!(Value::new(0u8.encode(), id, &reg).size().unwrap(), 1);
+    let data = 0u8.encode();
+    assert_eq!(Value::new(&data, id, &reg).size().unwrap(), 1);
 
     let (id, reg) = register(&0u32);
-    assert_eq!(Value::new(0u32.encode(), id, &reg).size().unwrap(), 4);
+    let data = 0u32.encode();
+    assert_eq!(Value::new(&data, id, &reg).size().unwrap(), 4);
 
     let (id, reg) = register(&0u128);
-    assert_eq!(Value::new(0u128.encode(), id, &reg).size().unwrap(), 16);
+    let data = 0u128.encode();
+    assert_eq!(Value::new(&data, id, &reg).size().unwrap(), 16);
 
     // string
     let (id, reg) = register(&"hello");
-    assert_eq!(
-        Value::new("hello".encode(), id, &reg).size().unwrap(),
-        1 + 5
-    ); // compact(5) + 5 bytes
+    let data = "hello".encode();
+    assert_eq!(Value::new(&data, id, &reg).size().unwrap(), 1 + 5); // compact(5) + 5 bytes
 
     // sequence
     let input: Vec<u32> = vec![1, 2, 3];
     let (id, reg) = register(&input);
-    assert_eq!(
-        Value::new(input.encode(), id, &reg).size().unwrap(),
-        1 + 3 * 4
-    ); // compact(3) + 3*4
+    let data = input.encode();
+    assert_eq!(Value::new(&data, id, &reg).size().unwrap(), 1 + 3 * 4); // compact(3) + 3*4
 }
 
 #[test]

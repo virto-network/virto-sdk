@@ -15,7 +15,6 @@ pub mod registry;
 mod serializer;
 mod value;
 
-pub use bytes::Bytes;
 pub use error::Error;
 pub use registry::{Registry, TypeDef, TypeId};
 #[cfg(feature = "json")]

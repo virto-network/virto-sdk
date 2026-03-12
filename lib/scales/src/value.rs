@@ -1,7 +1,6 @@
 use crate::error::Error;
 use crate::registry::*;
-use alloc::{collections::BTreeMap, vec::Vec};
-use bytes::{Buf, Bytes};
+use bytes::Buf;
 use core::{convert::TryInto, str};
 use serde::ser::{SerializeMap, SerializeSeq, SerializeTuple, SerializeTupleStruct};
 use serde::Serialize;
@@ -9,26 +8,32 @@ use serde::Serialize;
 /// A container for SCALE encoded data that can serialize types directly
 /// with the help of a type registry and without using an intermediate representation.
 pub struct Value<'a> {
-    data: Bytes,
+    data: &'a [u8],
     ty_id: TypeId,
     registry: &'a Registry,
 }
 
 impl<'a> Value<'a> {
-    pub fn new(data: impl Into<Bytes>, ty_id: TypeId, registry: &'a Registry) -> Self {
+    pub fn new(data: &'a [u8], ty_id: TypeId, registry: &'a Registry) -> Self {
         Value {
-            data: data.into(),
+            data,
             ty_id,
             registry,
         }
     }
 
-    fn new_value(&self, data: &mut Bytes, ty_id: TypeId) -> Result<Self, Error> {
-        let size = self.ty_size(data.chunk(), ty_id)?;
-        if data.remaining() < size {
+    fn new_value(&self, data: &mut &'a [u8], ty_id: TypeId) -> Result<Self, Error> {
+        let size = self.ty_size(data, ty_id)?;
+        if data.len() < size {
             return Err(Error::Eof);
         }
-        Ok(Value::new(data.copy_to_bytes(size), ty_id, self.registry))
+        let (chunk, rest) = data.split_at(size);
+        *data = rest;
+        Ok(Value {
+            data: chunk,
+            ty_id,
+            registry: self.registry,
+        })
     }
 
     #[inline]
@@ -37,7 +42,7 @@ impl<'a> Value<'a> {
     }
 
     pub fn size(&self) -> Result<usize, Error> {
-        self.ty_size(&self.data, self.ty_id)
+        self.ty_size(self.data, self.ty_id)
     }
 
     fn ty_size(&self, data: &[u8], ty: TypeId) -> Result<usize, Error> {
@@ -266,7 +271,7 @@ impl<'a> Value<'a> {
     pub fn as_str(&self) -> Option<&str> {
         match self.resolve(self.ty_id).ok()? {
             TypeDef::Str => {
-                let (len, prefix_size) = sequence_size(&self.data).ok()?;
+                let (len, prefix_size) = sequence_size(self.data).ok()?;
                 if self.data.len() >= prefix_size + len {
                     str::from_utf8(&self.data[prefix_size..prefix_size + len]).ok()
                 } else {
@@ -346,7 +351,7 @@ impl<'a> Value<'a> {
     pub fn sequence_len(&self) -> Option<usize> {
         match self.resolve(self.ty_id).ok()? {
             TypeDef::Sequence(_) => {
-                let (len, _) = sequence_size(&self.data).ok()?;
+                let (len, _) = sequence_size(self.data).ok()?;
                 Some(len)
             }
             _ => None,
@@ -357,15 +362,15 @@ impl<'a> Value<'a> {
     pub fn sequence_get(&self, index: usize) -> Option<Value<'a>> {
         match self.resolve(self.ty_id).ok()? {
             TypeDef::Sequence(inner_ty) => {
-                let (len, prefix_size) = sequence_size(&self.data).ok()?;
+                let (len, prefix_size) = sequence_size(self.data).ok()?;
                 if index >= len {
                     return None;
                 }
                 let ty_id = *inner_ty;
-                let mut data = self.data.slice(prefix_size..);
+                let mut data = &self.data[prefix_size..];
                 for _ in 0..index {
-                    let size = self.ty_size(data.chunk(), ty_id).ok()?;
-                    data.advance(size);
+                    let size = self.ty_size(data, ty_id).ok()?;
+                    data = &data[size..];
                 }
                 self.new_value(&mut data, ty_id).ok()
             }
@@ -389,15 +394,11 @@ impl<'a> Value<'a> {
                     return None;
                 }
                 let ty_id = *ty_id;
-                let element_size = self.ty_size(&self.data, ty_id).ok()?;
+                let element_size = self.ty_size(self.data, ty_id).ok()?;
                 let start = (index as usize).checked_mul(element_size)?;
                 let end = start.checked_add(element_size)?;
                 if end <= self.data.len() {
-                    Some(Value::new(
-                        self.data.slice(start..end),
-                        ty_id,
-                        self.registry,
-                    ))
+                    Some(Value::new(&self.data[start..end], ty_id, self.registry))
                 } else {
                     None
                 }
@@ -413,15 +414,14 @@ impl<'a> Value<'a> {
                 if index >= fields.len() {
                     return None;
                 }
-                let data = self.data.clone();
                 let mut offset = 0;
                 for f in fields.iter().take(index) {
-                    offset += self.ty_size(data.get(offset..)?, f.ty).ok()?;
+                    offset += self.ty_size(self.data.get(offset..)?, f.ty).ok()?;
                 }
                 let field_ty = fields[index].ty;
-                let field_size = self.ty_size(data.get(offset..)?, field_ty).ok()?;
+                let field_size = self.ty_size(self.data.get(offset..)?, field_ty).ok()?;
                 Some(Value::new(
-                    data.slice(offset..offset + field_size),
+                    &self.data[offset..offset + field_size],
                     field_ty,
                     self.registry,
                 ))
@@ -456,15 +456,14 @@ impl<'a> Value<'a> {
                 if index >= fields.len() {
                     return None;
                 }
-                let data = self.data.clone();
                 let mut offset = 0;
                 for ty in fields.iter().take(index) {
-                    offset += self.ty_size(data.get(offset..)?, *ty).ok()?;
+                    offset += self.ty_size(self.data.get(offset..)?, *ty).ok()?;
                 }
                 let ty_id = fields[index];
-                let size = self.ty_size(data.get(offset..)?, ty_id).ok()?;
+                let size = self.ty_size(self.data.get(offset..)?, ty_id).ok()?;
                 Some(Value::new(
-                    data.slice(offset..offset + size),
+                    &self.data[offset..offset + size],
                     ty_id,
                     self.registry,
                 ))
@@ -512,7 +511,7 @@ impl<'a> Value<'a> {
                 match &var.fields {
                     Fields::Unit => None,
                     Fields::NewType(ty_id) => {
-                        Some(Value::new(self.data.slice(1..), *ty_id, self.registry))
+                        Some(Value::new(&self.data[1..], *ty_id, self.registry))
                     }
                     _ => None,
                 }
@@ -522,6 +521,7 @@ impl<'a> Value<'a> {
     }
 }
 
+use alloc::collections::BTreeMap;
 use serde::ser::Error as _;
 
 impl Serialize for Value<'_> {
@@ -529,7 +529,7 @@ impl Serialize for Value<'_> {
     where
         S: serde::Serializer,
     {
-        let mut data = self.data.clone();
+        let mut data: &[u8] = self.data;
         let ty = self.resolve(self.ty_id).map_err(S::Error::custom)?;
 
         match ty {
@@ -556,14 +556,16 @@ impl Serialize for Value<'_> {
                         )))
                     }
                 };
-                let mut buf = Vec::new();
-                crate::compact_encode(v, &mut buf);
-                ser.serialize_bytes(&buf)
+                let mut buf = [0u8; 17];
+                let mut writer: &mut [u8] = &mut buf;
+                crate::compact_encode(v, &mut writer);
+                let written = 17 - writer.len();
+                ser.serialize_bytes(&buf[..written])
             }
             TypeDef::Bytes => {
-                let (_, s) = sequence_size(data.chunk()).map_err(S::Error::custom)?;
+                let (_, s) = sequence_size(data).map_err(S::Error::custom)?;
                 data.advance(s);
-                ser.serialize_bytes(data.chunk())
+                ser.serialize_bytes(data)
             }
             TypeDef::Char => {
                 let code = data.get_u32_le();
@@ -572,14 +574,14 @@ impl Serialize for Value<'_> {
                 ser.serialize_char(c)
             }
             TypeDef::Str => {
-                let (_, s) = sequence_size(data.chunk()).map_err(S::Error::custom)?;
+                let (_, s) = sequence_size(data).map_err(S::Error::custom)?;
                 data.advance(s);
-                let text = str::from_utf8(data.chunk())
-                    .map_err(|_| S::Error::custom(Error::InvalidUtf8))?;
+                let text =
+                    str::from_utf8(data).map_err(|_| S::Error::custom(Error::InvalidUtf8))?;
                 ser.serialize_str(text)
             }
             TypeDef::Sequence(ty_id) => {
-                let (len, p_size) = sequence_size(data.chunk()).map_err(S::Error::custom)?;
+                let (len, p_size) = sequence_size(data).map_err(S::Error::custom)?;
                 data.advance(p_size);
                 let mut seq = ser.serialize_seq(Some(len))?;
                 for _ in 0..len {
@@ -591,7 +593,7 @@ impl Serialize for Value<'_> {
                 seq.end()
             }
             TypeDef::Map(ty_k, ty_v) => {
-                let (len, p_size) = sequence_size(data.chunk()).map_err(S::Error::custom)?;
+                let (len, p_size) = sequence_size(data).map_err(S::Error::custom)?;
                 data.advance(p_size);
                 let mut state = ser.serialize_map(Some(len))?;
                 for _ in 0..len {
@@ -648,7 +650,7 @@ impl Serialize for Value<'_> {
                 state.end()
             }
             TypeDef::Variant(vdef) => {
-                if data.remaining() < 1 {
+                if data.is_empty() {
                     return Err(S::Error::custom(Error::Eof));
                 }
                 let idx = data.get_u8();
@@ -684,7 +686,7 @@ impl Serialize for Value<'_> {
                     Fields::Tuple(tys) => {
                         let mut s = ser.serialize_map(Some(1))?;
                         s.serialize_key(&var.name)?;
-                        let vals: Result<Vec<_>, _> = tys
+                        let vals: Result<alloc::vec::Vec<_>, _> = tys
                             .iter()
                             .map(|ty| self.new_value(&mut data, *ty).map_err(S::Error::custom))
                             .collect();
@@ -694,6 +696,7 @@ impl Serialize for Value<'_> {
                     Fields::Struct(fields) => {
                         let mut s = ser.serialize_map(Some(1))?;
                         s.serialize_key(&var.name)?;
+                        // TODO: avoid BTreeMap allocation with a custom Serialize wrapper
                         let mut m = BTreeMap::<&str, Value>::new();
                         for f in fields {
                             let v = self.new_value(&mut data, f.ty).map_err(S::Error::custom)?;
@@ -705,14 +708,13 @@ impl Serialize for Value<'_> {
                 }
             }
             TypeDef::BitSequence(_, _) => {
-                let (bit_len, prefix_size) =
-                    sequence_size(data.chunk()).map_err(S::Error::custom)?;
+                let (bit_len, prefix_size) = sequence_size(data).map_err(S::Error::custom)?;
                 data.advance(prefix_size);
                 let byte_len = bit_len.div_ceil(8);
-                if data.remaining() < byte_len {
+                if data.len() < byte_len {
                     return Err(S::Error::custom(Error::Eof));
                 }
-                ser.serialize_bytes(&data.chunk()[..byte_len])
+                ser.serialize_bytes(&data[..byte_len])
             }
         }
     }
@@ -775,7 +777,7 @@ pub(crate) fn sequence_size(data: &[u8]) -> Result<(usize, usize), Error> {
 
 impl AsRef<[u8]> for Value<'_> {
     fn as_ref(&self) -> &[u8] {
-        self.data.as_ref()
+        self.data
     }
 }
 
