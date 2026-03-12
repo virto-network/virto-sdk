@@ -7,11 +7,15 @@
 #[macro_use]
 extern crate alloc;
 
+#[cfg(feature = "scale-info")]
+pub mod compress;
+pub mod registry;
 #[cfg(feature = "experimental-serializer")]
 mod serializer;
 mod value;
 
 pub use bytes::Bytes;
+pub use registry::{Registry, TypeDef, TypeId};
 #[cfg(feature = "json")]
 pub use serde_json::Value as JsonValue;
 #[cfg(feature = "experimental-serializer")]
@@ -20,13 +24,9 @@ pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Ser
 pub use serializer::{to_bytes_from_iter, to_vec_from_iter};
 pub use value::Value;
 
-use prelude::*;
-use scale_info::{form::PortableForm as Portable, PortableRegistry};
-
 mod prelude {
     pub use alloc::string::{String, ToString};
     pub use alloc::vec::Vec;
-    pub use core::ops::Deref;
 }
 
 // adapted from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
@@ -35,9 +35,7 @@ pub(crate) fn compact_encode(n: u128, mut dest: impl bytes::BufMut) {
     match n {
         0..=0b0011_1111 => dest.put_u8((n as u8) << 2),
         0..=0b0011_1111_1111_1111 => dest.put_u16_le(((n as u16) << 2) | 0b01),
-        0..=0b0011_1111_1111_1111_1111_1111_1111_1111 => {
-            dest.put_u32_le(((n as u32) << 2) | 0b10)
-        }
+        0..=0b0011_1111_1111_1111_1111_1111_1111_1111 => dest.put_u32_le(((n as u32) << 2) | 0b10),
         _ => {
             let bytes_needed = 16 - n.leading_zeros() / 8;
             assert!(bytes_needed >= 4);
@@ -51,250 +49,14 @@ pub(crate) fn compact_encode(n: u128, mut dest: impl bytes::BufMut) {
     }
 }
 
-type Type = scale_info::Type<Portable>;
-type Variant = scale_info::Variant<Portable>;
-type TypeId = u32;
-
-macro_rules! is_tuple {
-    ($it:ident) => {
-        $it.fields.first().and_then(|f| f.name.as_ref()).is_none()
-    };
-}
-
-/// A convenient representation of the scale-info types to a format
-/// that matches serde model more closely
-#[rustfmt::skip]
-#[derive(Debug, Clone, serde::Serialize)]
-pub enum SpecificType {
-    Bool,
-    U8, U16, U32, U64, U128,
-    I8, I16, I32, I64, I128,
-    Char,
-    Str,
-    Bytes(TypeId),
-    Sequence(TypeId),
-    Map(TypeId, TypeId),
-    Tuple(TupleOrArray),
-    Struct(Vec<(String, TypeId)>), StructUnit, StructNewType(TypeId), StructTuple(Vec<TypeId>),
-    Variant(String, Vec<Variant>, Option<u8>),
-    Compact(TypeId),
-}
-
-impl From<(&Type, &PortableRegistry)> for SpecificType {
-    fn from((ty, registry): (&Type, &PortableRegistry)) -> Self {
-        use scale_info::{TypeDef, TypeDefComposite, TypeDefPrimitive};
-        type Def = TypeDef<Portable>;
-
-        macro_rules! resolve {
-            ($ty:expr) => {
-                registry.resolve($ty.id).unwrap()
-            };
-        }
-        let is_map = |ty: &Type| -> bool { ty.path.segments == ["BTreeMap"] };
-        let map_types = |ty: &TypeDefComposite<Portable>| -> (TypeId, TypeId) {
-            let field = ty.fields.first().expect("map");
-            // Type information of BTreeMap is weirdly packed
-            if let Def::Sequence(s) = &resolve!(field.ty).type_def {
-                if let Def::Tuple(t) = &resolve!(s.type_param).type_def {
-                    assert_eq!(t.fields.len(), 2);
-                    let key_ty = t.fields.first().expect("key").id;
-                    let val_ty = t.fields.last().expect("val").id;
-                    return (key_ty, val_ty);
-                }
-            }
-            unreachable!()
-        };
-
-        let name = ty
-            .path
-            .segments
-            .last()
-            .cloned()
-            .unwrap_or_else(|| "".into());
-
-        match ty.type_def {
-            Def::Composite(ref c) => {
-                let fields = &c.fields;
-                if fields.is_empty() {
-                    Self::StructUnit
-                } else if is_map(ty) {
-                    let (k, v) = map_types(c);
-                    Self::Map(k, v)
-                } else if fields.len() == 1 && fields.first().unwrap().name.is_none() {
-                    Self::StructNewType(fields.first().unwrap().ty.id)
-                } else if is_tuple!(c) {
-                    Self::StructTuple(fields.iter().map(|f| f.ty.id).collect())
-                } else {
-                    Self::Struct(
-                        fields
-                            .iter()
-                            .map(|f| (f.name.as_ref().unwrap().deref().into(), f.ty.id))
-                            .collect(),
-                    )
-                }
-            }
-            Def::Variant(ref v) => Self::Variant(name, v.variants.clone(), None),
-            Def::Sequence(ref s) => {
-                let ty = s.type_param;
-                if matches!(resolve!(ty).type_def, Def::Primitive(TypeDefPrimitive::U8)) {
-                    Self::Bytes(ty.id)
-                } else {
-                    Self::Sequence(ty.id)
-                }
-            }
-            Def::Array(ref a) => Self::Tuple(TupleOrArray::Array(a.type_param.id, a.len)),
-            Def::Tuple(ref t) => Self::Tuple(TupleOrArray::Tuple(
-                t.fields.iter().map(|ty| ty.id).collect(),
-            )),
-            Def::Primitive(ref p) => match p {
-                TypeDefPrimitive::U8 => Self::U8,
-                TypeDefPrimitive::U16 => Self::U16,
-                TypeDefPrimitive::U32 => Self::U32,
-                TypeDefPrimitive::U64 => Self::U64,
-                TypeDefPrimitive::U128 => Self::U128,
-                TypeDefPrimitive::I8 => Self::I8,
-                TypeDefPrimitive::I16 => Self::I16,
-                TypeDefPrimitive::I32 => Self::I32,
-                TypeDefPrimitive::I64 => Self::I64,
-                TypeDefPrimitive::I128 => Self::I128,
-                TypeDefPrimitive::Bool => Self::Bool,
-                TypeDefPrimitive::Str => Self::Str,
-                TypeDefPrimitive::Char => Self::Char,
-                TypeDefPrimitive::U256 => unimplemented!(),
-                TypeDefPrimitive::I256 => unimplemented!(),
-            },
-            Def::Compact(ref c) => Self::Compact(c.type_param.id),
-            Def::BitSequence(ref _b) => todo!(),
-        }
-    }
-}
-
-// Utilities for enum variants
-impl SpecificType {
-    fn pick(&self, index: u8) -> Self {
-        match self {
-            SpecificType::Variant(name, variant, Some(_)) => {
-                Self::Variant(name.to_string(), variant.to_vec(), Some(index))
-            }
-            SpecificType::Variant(name, variants, None) => {
-                let v = variants.iter().find(|v| v.index == index).unwrap();
-                Self::Variant(name.clone(), vec![v.clone()], Some(index))
-            }
-            _ => panic!("Only for enum variants"),
-        }
-    }
-
-    #[cfg(feature = "experimental-serializer")]
-    fn pick_mut<F, A, B>(&mut self, selection: A, get_field: F) -> Option<&Self>
-    where
-        F: Fn(&Variant) -> B,
-        A: AsRef<[u8]> + PartialEq + core::fmt::Debug,
-        B: AsRef<[u8]> + PartialEq + core::fmt::Debug,
-    {
-        match self {
-            SpecificType::Variant(_, _, Some(_)) => Some(self),
-            SpecificType::Variant(_, ref mut variants, idx @ None) => {
-                let (vf, _): (u8, B) = variants
-                    .iter()
-                    .map(|v| (v.index, get_field(v)))
-                    .find(|(_, f)| f.as_ref() == selection.as_ref())?;
-
-                variants.retain(|v| v.index == vf);
-                *idx = Some(vf);
-
-                Some(self)
-            }
-            _ => panic!("Only for enum variants"),
-        }
-    }
-
-    #[cfg(feature = "experimental-serializer")]
-    fn variant_id(&self) -> u8 {
-        match self {
-            SpecificType::Variant(_, _, Some(id)) => *id,
-            _ => panic!("Only for enum variants"),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum EnumVariant<'a> {
-    OptionNone,
-    OptionSome(TypeId),
-    Unit(u8, &'a str),
-    NewType(u8, &'a str, TypeId),
-    Tuple(u8, &'a str, Vec<TypeId>),
-    Struct(u8, &'a str, Vec<(&'a str, TypeId)>),
-}
-
-impl<'a> From<&'a SpecificType> for EnumVariant<'a> {
-    fn from(ty: &'a SpecificType) -> Self {
-        match ty {
-            SpecificType::Variant(name, variants, Some(idx)) => {
-                let variant = variants.first().expect("single variant");
-                let fields = &variant.fields;
-                let vname = variant.name.as_ref();
-
-                if fields.is_empty() {
-                    if name == "Option" && vname == "None" {
-                        Self::OptionNone
-                    } else {
-                        Self::Unit(*idx, vname)
-                    }
-                } else if is_tuple!(variant) {
-                    if fields.len() == 1 {
-                        let ty = fields.first().map(|f| f.ty.id).unwrap();
-                        return if name == "Option" && variant.name == "Some" {
-                            Self::OptionSome(ty)
-                        } else {
-                            Self::NewType(*idx, vname, ty)
-                        };
-                    } else {
-                        let fields = fields.iter().map(|f| f.ty.id).collect();
-                        Self::Tuple(*idx, vname, fields)
-                    }
-                } else {
-                    let fields = fields
-                        .iter()
-                        .map(|f| (f.name.as_deref().unwrap(), f.ty.id))
-                        .collect();
-                    Self::Struct(*idx, vname, fields)
-                }
-            }
-            _ => panic!("Only for enum variants"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub enum TupleOrArray {
-    Array(TypeId, u32),
-    Tuple(Vec<TypeId>),
-}
-impl TupleOrArray {
-    fn len(&self) -> usize {
-        match self {
-            Self::Array(_, len) => *len as usize,
-            Self::Tuple(fields) => fields.len(),
-        }
-    }
-
-    fn type_id(&self, i: usize) -> TypeId {
-        match self {
-            Self::Array(ty, _) => *ty,
-            Self::Tuple(fields) => fields[i],
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
     use codec::{Compact, Encode};
 
     #[test]
     fn compact_encode_single_byte() {
-        // Values 0..=63 use single-byte mode
         for v in [0u32, 1, 42, 63] {
             let expected = Compact(v).encode();
             let mut out = Vec::new();
@@ -305,7 +67,6 @@ mod tests {
 
     #[test]
     fn compact_encode_two_bytes() {
-        // Values 64..=16383 use two-byte mode
         for v in [64u32, 255, 1000, 16383] {
             let expected = Compact(v).encode();
             let mut out = Vec::new();
@@ -316,7 +77,6 @@ mod tests {
 
     #[test]
     fn compact_encode_four_bytes() {
-        // Values 16384..=2^30-1 use four-byte mode
         for v in [16384u32, 65535, 1_000_000, (1 << 30) - 1] {
             let expected = Compact(v).encode();
             let mut out = Vec::new();
@@ -353,5 +113,127 @@ mod tests {
             compact_encode(v, &mut out);
             assert_eq!(out, expected, "mismatch for {v}");
         }
+    }
+
+    #[test]
+    fn registry_size_reduction() {
+        use codec::Decode;
+        use scale_info::PortableRegistry;
+
+        let raw = include_bytes!("registry.bin");
+        let portable = PortableRegistry::decode(&mut &raw[..]).expect("decode");
+        let compressed = compress::compress(&portable);
+
+        let encoded_portable = portable.encode();
+        let num_types = portable.types.len();
+
+        // Break down PortableRegistry content
+        let mut paths_bytes = 0usize;
+        let mut docs_bytes = 0usize;
+        let mut params_bytes = 0usize;
+        for pt in &portable.types {
+            for seg in &pt.ty.path.segments {
+                paths_bytes += seg.len();
+            }
+            for doc in &pt.ty.docs {
+                docs_bytes += doc.len();
+            }
+            for tp in &pt.ty.type_params {
+                params_bytes += tp.name.len();
+            }
+        }
+        let structure_bytes = encoded_portable.len() - paths_bytes - docs_bytes - params_bytes;
+
+        // Estimate serialized size of compressed registry
+        // (what you'd need to transmit/store)
+        let mut compressed_wire = 0usize;
+        for i in 0..num_types {
+            let ty = compressed.resolve(i as u32).unwrap();
+            compressed_wire += 1; // discriminant
+            match ty {
+                registry::TypeDef::Bool
+                | registry::TypeDef::U8
+                | registry::TypeDef::U16
+                | registry::TypeDef::U32
+                | registry::TypeDef::U64
+                | registry::TypeDef::U128
+                | registry::TypeDef::I8
+                | registry::TypeDef::I16
+                | registry::TypeDef::I32
+                | registry::TypeDef::I64
+                | registry::TypeDef::I128
+                | registry::TypeDef::Char
+                | registry::TypeDef::Str
+                | registry::TypeDef::Bytes
+                | registry::TypeDef::StructUnit => {}
+                registry::TypeDef::Sequence(id)
+                | registry::TypeDef::StructNewType(id)
+                | registry::TypeDef::Compact(id) => {
+                    compressed_wire += 4;
+                    let _ = id;
+                }
+                registry::TypeDef::Map(_, _) | registry::TypeDef::BitSequence(_, _) => {
+                    compressed_wire += 8;
+                }
+                registry::TypeDef::Array(_, _) => {
+                    compressed_wire += 8;
+                }
+                registry::TypeDef::Tuple(ids) | registry::TypeDef::StructTuple(ids) => {
+                    compressed_wire += 1 + ids.len() * 4; // compact len + ids
+                }
+                registry::TypeDef::Struct(fields) => {
+                    compressed_wire += 1; // compact len
+                    for f in fields {
+                        compressed_wire += 1 + f.name.len() + 4; // compact str len + str + ty_id
+                    }
+                }
+                registry::TypeDef::Variant(vdef) => {
+                    compressed_wire += 1 + vdef.name.len(); // compact len + name
+                    compressed_wire += 1; // compact variants len
+                    for v in &vdef.variants {
+                        compressed_wire += 1; // index
+                        compressed_wire += 1 + v.name.len(); // compact len + name
+                        compressed_wire += 1; // fields discriminant
+                        match &v.fields {
+                            registry::Fields::Unit => {}
+                            registry::Fields::NewType(_) => {
+                                compressed_wire += 4;
+                            }
+                            registry::Fields::Tuple(ids) => {
+                                compressed_wire += 1 + ids.len() * 4;
+                            }
+                            registry::Fields::Struct(fields) => {
+                                compressed_wire += 1;
+                                for f in fields {
+                                    compressed_wire += 1 + f.name.len() + 4;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        eprintln!("=== Registry Size Comparison (real Substrate registry) ===");
+        eprintln!("Types: {num_types}");
+        eprintln!();
+        eprintln!(
+            "PortableRegistry (SCALE encoded): {} bytes",
+            encoded_portable.len()
+        );
+        eprintln!("  paths:      {paths_bytes:>6} bytes");
+        eprintln!("  docs:       {docs_bytes:>6} bytes");
+        eprintln!("  params:     {params_bytes:>6} bytes");
+        eprintln!("  structure:  {structure_bytes:>6} bytes");
+        eprintln!();
+        eprintln!("Compressed Registry (wire est.):  {compressed_wire} bytes");
+        eprintln!();
+        let reduction = (1.0 - compressed_wire as f64 / encoded_portable.len() as f64) * 100.0;
+        eprintln!("Wire size reduction: ~{reduction:.0}%");
+
+        assert!(
+            compressed_wire < encoded_portable.len(),
+            "compressed should be smaller"
+        );
     }
 }

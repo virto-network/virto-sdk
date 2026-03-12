@@ -1,17 +1,11 @@
 use crate::prelude::*;
+use crate::registry::*;
 use bytes::BufMut;
 use core::fmt::{self, Debug};
 
-use scale_info::{PortableRegistry, TypeInfo};
 use serde::{ser, Serialize};
 
-use crate::{EnumVariant, SpecificType, TupleOrArray};
-
-type TypeId = u32;
 type Result<T> = core::result::Result<T, Error>;
-
-#[derive(TypeInfo)]
-struct Noop;
 
 #[inline]
 pub fn to_vec<T>(value: &T) -> Result<Vec<u8>>
@@ -24,10 +18,7 @@ where
 }
 
 #[inline]
-pub fn to_vec_with_info<T>(
-    value: &T,
-    registry_type: Option<(&PortableRegistry, TypeId)>,
-) -> Result<Vec<u8>>
+pub fn to_vec_with_info<T>(value: &T, registry_type: Option<(&Registry, TypeId)>) -> Result<Vec<u8>>
 where
     T: Serialize + ?Sized,
 {
@@ -47,7 +38,7 @@ where
 pub fn to_bytes_with_info<B, T>(
     bytes: B,
     value: &T,
-    registry_type: Option<(&PortableRegistry, TypeId)>,
+    registry_type: Option<(&Registry, TypeId)>,
 ) -> Result<()>
 where
     T: Serialize + ?Sized,
@@ -62,7 +53,7 @@ where
 pub fn to_bytes_from_iter<B, K, V>(
     bytes: B,
     iter: impl IntoIterator<Item = (K, V)>,
-    registry_type: (&PortableRegistry, TypeId),
+    registry_type: (&Registry, TypeId),
 ) -> Result<()>
 where
     B: BufMut + Debug,
@@ -74,31 +65,27 @@ where
         .resolve(registry_type.1)
         .ok_or_else(|| Error::BadInput("Type not in registry".into()))?;
     let obj = iter.into_iter().collect::<crate::JsonValue>();
-    let val: crate::JsonValue = if let scale_info::TypeDef::Composite(ref ty) = ty.type_def {
-        ty.fields
+    let val: crate::JsonValue = if let TypeDef::Struct(ref fields) = *ty {
+        fields
             .iter()
             .map(|f| {
-                let name = f.name.as_ref().expect("named field");
                 Ok((
-                    name.deref(),
-                    obj.get(name)
-                        .ok_or_else(|| Error::BadInput(format!("missing field {}", name)))?
+                    &*f.name,
+                    obj.get(&f.name)
+                        .ok_or_else(|| Error::BadInput(format!("missing field {}", f.name)))?
                         .clone(),
                 ))
             })
             .collect::<Result<_>>()?
     } else {
-        return Err(Error::Type(ty.clone()));
+        return Err(Error::BadType(format!("{:?}", ty)));
     };
 
     to_bytes_with_info(bytes, &val, Some(registry_type))
 }
 
 #[cfg(feature = "json")]
-pub fn to_vec_from_iter<I, K, V>(
-    iter: I,
-    registry_type: (&PortableRegistry, TypeId),
-) -> Result<Vec<u8>>
+pub fn to_vec_from_iter<I, K, V>(iter: I, registry_type: (&Registry, TypeId)) -> Result<Vec<u8>>
 where
     I: IntoIterator<Item = (K, V)>,
     K: Into<String>,
@@ -117,25 +104,29 @@ where
     B: Debug,
 {
     out: B,
-    ty: Option<SpecificType>,
-    registry: Option<&'reg PortableRegistry>,
+    ty: Option<TypeDef>,
+    registry: Option<&'reg Registry>,
+    picked: Option<usize>,
 }
 
 impl<'reg, B> Serializer<'reg, B>
 where
     B: BufMut + Debug,
 {
-    pub fn new(out: B, registry_type: Option<(&'reg PortableRegistry, TypeId)>) -> Self {
-        let (registry, ty) = match registry_type.map(|(reg, ty_id)| {
-            (
-                reg,
-                (reg.resolve(ty_id).expect("exists in registry"), reg).into(),
-            )
-        }) {
-            Some((reg, ty)) => (Some(reg), Some(ty)),
+    pub fn new(out: B, registry_type: Option<(&'reg Registry, TypeId)>) -> Self {
+        let (registry, ty) = match registry_type {
+            Some((reg, ty_id)) => {
+                let ty = reg.resolve(ty_id).expect("exists in registry").clone();
+                (Some(reg), Some(ty))
+            }
             None => (None, None),
         };
-        Serializer { out, ty, registry }
+        Serializer {
+            out,
+            ty,
+            registry,
+            picked: None,
+        }
     }
 
     fn serialize_compact(&mut self, _ty: u32, v: u128) -> Result<()> {
@@ -185,9 +176,9 @@ where
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok> {
         match self.ty {
-            Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
-            Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
-            Some(SpecificType::I32) => self.serialize_i32(v as i32)?,
+            Some(TypeDef::I8) => self.serialize_i8(v as i8)?,
+            Some(TypeDef::I16) => self.serialize_i16(v as i16)?,
+            Some(TypeDef::I32) => self.serialize_i32(v as i32)?,
             _ => {
                 self.maybe_some()?;
                 self.out.put_i64_le(v)
@@ -218,13 +209,13 @@ where
         self.maybe_some()?;
         // all numbers in serde_json are the same
         match self.ty {
-            Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
-            Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
-            Some(SpecificType::I32) => self.serialize_i32(v as i32)?,
-            Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
-            Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
-            Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
-            Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
+            Some(TypeDef::I8) => self.serialize_i8(v as i8)?,
+            Some(TypeDef::I16) => self.serialize_i16(v as i16)?,
+            Some(TypeDef::I32) => self.serialize_i32(v as i32)?,
+            Some(TypeDef::U8) => self.serialize_u8(v as u8)?,
+            Some(TypeDef::U16) => self.serialize_u16(v as u16)?,
+            Some(TypeDef::U32) => self.serialize_u32(v as u32)?,
+            Some(TypeDef::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
             _ => self.out.put_u64_le(v),
         }
         Ok(())
@@ -233,15 +224,15 @@ where
     fn serialize_u128(self, v: u128) -> Result<Self::Ok> {
         self.maybe_some()?;
         match self.ty {
-            Some(SpecificType::I8) => self.serialize_i8(v as i8)?,
-            Some(SpecificType::I16) => self.serialize_i16(v as i16)?,
-            Some(SpecificType::I32) => self.serialize_i32(v as i32)?,
-            Some(SpecificType::I64) => self.serialize_i64(v as i64)?,
-            Some(SpecificType::U8) => self.serialize_u8(v as u8)?,
-            Some(SpecificType::U16) => self.serialize_u16(v as u16)?,
-            Some(SpecificType::U32) => self.serialize_u32(v as u32)?,
-            Some(SpecificType::U64) => self.serialize_u64(v as u64)?,
-            Some(SpecificType::Compact(ty)) => self.serialize_compact(ty, v)?,
+            Some(TypeDef::I8) => self.serialize_i8(v as i8)?,
+            Some(TypeDef::I16) => self.serialize_i16(v as i16)?,
+            Some(TypeDef::I32) => self.serialize_i32(v as i32)?,
+            Some(TypeDef::I64) => self.serialize_i64(v as i64)?,
+            Some(TypeDef::U8) => self.serialize_u8(v as u8)?,
+            Some(TypeDef::U16) => self.serialize_u16(v as u16)?,
+            Some(TypeDef::U32) => self.serialize_u32(v as u32)?,
+            Some(TypeDef::U64) => self.serialize_u64(v as u64)?,
+            Some(TypeDef::Compact(ty)) => self.serialize_compact(ty, v)?,
             _ => self.out.put_u128_le(v),
         }
         Ok(())
@@ -338,7 +329,7 @@ where
         self.maybe_some()?;
         if matches!(
             self.ty,
-            None | Some(SpecificType::Bytes(_)) | Some(SpecificType::Sequence(_))
+            None | Some(TypeDef::Bytes) | Some(TypeDef::Sequence(_))
         ) {
             compact_number(len.expect("known length"), &mut self.out);
         }
@@ -373,7 +364,7 @@ where
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.maybe_some()?;
-        if matches!(self.ty, None | Some(SpecificType::Map(_, _))) {
+        if matches!(self.ty, None | Some(TypeDef::Map(_, _))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
@@ -405,8 +396,11 @@ where
     // if the type info says its an Option assume its Some and extract the inner type
     fn maybe_some(&mut self) -> Result<()> {
         match &self.ty {
-            Some(SpecificType::Variant(ref name, v, _)) if name == "Option" => {
-                self.ty = v[1].fields.first().map(|f| self.resolve(f.ty.id));
+            Some(TypeDef::Variant(ref vdef)) if vdef.name == "Option" => {
+                self.ty = match &vdef.variants[1].fields {
+                    Fields::NewType(ty_id) => Some(self.resolve(*ty_id)),
+                    _ => None,
+                };
                 self.out.put_u8(0x01);
             }
             _ => (),
@@ -414,83 +408,86 @@ where
         Ok(())
     }
 
-    fn resolve(&self, ty_id: TypeId) -> SpecificType {
+    fn resolve(&self, ty_id: TypeId) -> TypeDef {
         let reg = self.registry.expect("called having type");
-        let ty = reg.resolve(ty_id).expect("in registry");
-        (ty, reg).into()
+        reg.resolve(ty_id).expect("in registry").clone()
     }
 
     #[inline]
     fn maybe_other(&mut self, val: &str) -> Result<Option<()>> {
         match self.ty {
-            Some(SpecificType::Str) | None => Ok(None),
+            Some(TypeDef::Str) | None => Ok(None),
             // { "foo": "Bar" } => "Bar" might be an enum variant
-            Some(ref mut var @ SpecificType::Variant(_, _, None)) => {
-                var.pick_mut(to_vec(val)?, |k| to_vec(&k.name).unwrap())
+            Some(TypeDef::Variant(ref vdef)) => {
+                let key_data = to_vec(val)?;
+                let variant = vdef
+                    .variants
+                    .iter()
+                    .find(|v| to_vec(&v.name).unwrap() == key_data)
                     .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
-                self.out.put_u8(var.variant_id());
+                self.out.put_u8(variant.index);
                 Ok(Some(()))
             }
-            Some(SpecificType::StructNewType(ty)) => match self.resolve(ty) {
+            Some(TypeDef::StructNewType(ty)) => match self.resolve(ty) {
                 // { "foo": "bar" } => "bar" might be a string wrapped in a type
-                SpecificType::Str => Ok(None),
+                TypeDef::Str => Ok(None),
                 ref ty => Err(Error::NotSupported(
                     type_name_of_val(val),
                     format!("{:?}", ty),
                 )),
             },
-            Some(SpecificType::U8) => {
+            Some(TypeDef::U8) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u8".into()))?;
                 self.out.put_u8(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::U16) => {
+            Some(TypeDef::U16) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u16".into()))?;
                 self.out.put_u16_le(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::U32) => {
+            Some(TypeDef::U32) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u32".into()))?;
                 self.out.put_u32_le(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::U64) => {
+            Some(TypeDef::U64) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u64".into()))?;
                 self.out.put_u64_le(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::U128) => {
+            Some(TypeDef::U128) => {
                 let n = val.parse().map_err(|_| Error::BadInput("u128".into()))?;
                 self.out.put_u128_le(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::I8) => {
+            Some(TypeDef::I8) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i8".into()))?;
                 self.out.put_i8(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::I16) => {
+            Some(TypeDef::I16) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i16".into()))?;
                 self.out.put_i16_le(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::I32) => {
+            Some(TypeDef::I32) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i32".into()))?;
                 self.out.put_i32_le(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::I64) => {
+            Some(TypeDef::I64) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i64".into()))?;
                 self.out.put_i64_le(n);
                 Ok(Some(()))
             }
-            Some(SpecificType::I128) => {
+            Some(TypeDef::I128) => {
                 let n = val.parse().map_err(|_| Error::BadInput("i128".into()))?;
                 self.out.put_i128_le(n);
                 Ok(Some(()))
             }
             #[cfg(feature = "hex")]
-            Some(SpecificType::Bytes(_)) => {
+            Some(TypeDef::Bytes) => {
                 if let Some(bytes) = val.strip_prefix("0x") {
                     let bytes = hex::decode(bytes).map_err(|e| Error::BadInput(e.to_string()))?;
                     ser::Serializer::serialize_bytes(self, &bytes)?;
@@ -515,6 +512,7 @@ where
     Empty(&'a mut Serializer<'reg, B>),
     Composite(&'a mut Serializer<'reg, B>, Vec<TypeId>),
     Sequence(&'a mut Serializer<'reg, B>, TypeId),
+    ByteSeq(&'a mut Serializer<'reg, B>),
     Enum(&'a mut Serializer<'reg, B>),
 }
 
@@ -523,26 +521,29 @@ where
     B: Debug,
 {
     fn from(ser: &'a mut Serializer<'reg, B>) -> Self {
-        use SpecificType::*;
         match ser.ty.take() {
-            Some(Struct(fields)) => {
-                Self::Composite(ser, fields.iter().map(|(_, ty)| *ty).collect())
+            Some(TypeDef::Struct(fields)) => {
+                Self::Composite(ser, fields.iter().map(|f| f.ty).collect())
             }
-            Some(StructTuple(fields)) => Self::Composite(ser, fields),
-            Some(Tuple(TupleOrArray::Array(ty, _))) => Self::Sequence(ser, ty),
-            Some(Tuple(TupleOrArray::Tuple(fields))) => Self::Composite(ser, fields),
-            Some(Sequence(ty) | Bytes(ty)) => Self::Sequence(ser, ty),
-            Some(Map(_, _)) => Self::Empty(ser),
-            Some(var @ Variant(_, _, Some(_))) => match (&var).into() {
-                EnumVariant::Tuple(_, _, types) => Self::Composite(ser, types),
-                EnumVariant::Struct(_, _, types) => {
-                    Self::Composite(ser, types.iter().map(|(_, ty)| *ty).collect())
+            Some(TypeDef::StructTuple(fields)) => Self::Composite(ser, fields),
+            Some(TypeDef::Array(ty, _)) => Self::Sequence(ser, ty),
+            Some(TypeDef::Tuple(fields)) => Self::Composite(ser, fields),
+            Some(TypeDef::Sequence(ty)) => Self::Sequence(ser, ty),
+            Some(TypeDef::Bytes) => Self::ByteSeq(ser),
+            Some(TypeDef::Map(_, _)) => Self::Empty(ser),
+            Some(TypeDef::Variant(vdef)) => {
+                if let Some(idx) = ser.picked.take() {
+                    match &vdef.variants[idx].fields {
+                        Fields::Tuple(types) => Self::Composite(ser, types.clone()),
+                        Fields::Struct(fields) => {
+                            Self::Composite(ser, fields.iter().map(|f| f.ty).collect())
+                        }
+                        _ => Self::Empty(ser),
+                    }
+                } else {
+                    ser.ty = Some(TypeDef::Variant(vdef));
+                    Self::Enum(ser)
                 }
-                _ => Self::Empty(ser),
-            },
-            Some(var @ Variant(_, _, None)) => {
-                ser.ty = Some(var);
-                Self::Enum(ser)
             }
             _ => Self::Empty(ser),
         }
@@ -558,7 +559,8 @@ where
             Self::Empty(ser)
             | Self::Composite(ser, _)
             | Self::Enum(ser)
-            | Self::Sequence(ser, _) => ser,
+            | Self::Sequence(ser, _)
+            | Self::ByteSeq(ser) => ser,
         }
     }
 }
@@ -576,13 +578,16 @@ where
     {
         match self {
             TypedSerializer::Enum(ser) => {
-                if let Some(ref mut var @ SpecificType::Variant(_, _, None)) = ser.ty {
+                if let Some(TypeDef::Variant(ref vdef)) = ser.ty {
                     let key_data = to_vec(key)?;
-                    // assume the key is the name of the variant
-                    var.pick_mut(key_data, |v| to_vec(&v.name).unwrap())
-                        .ok_or_else(|| Error::BadInput("Invalid variant".into()))?
-                        .variant_id()
-                        .serialize(&mut **ser)?;
+                    let idx = vdef
+                        .variants
+                        .iter()
+                        .position(|v| to_vec(&v.name).unwrap() == key_data)
+                        .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
+                    let variant_index = vdef.variants[idx].index;
+                    ser.picked = Some(idx);
+                    variant_index.serialize(&mut **ser)?;
                 }
                 Ok(())
             }
@@ -599,21 +604,23 @@ where
             TypedSerializer::Composite(ser, types) => {
                 let mut ty = ser.resolve(types.remove(0));
                 // serde_json unwraps newtypes
-                if let SpecificType::StructNewType(ty_id) = ty {
+                if let TypeDef::StructNewType(ty_id) = ty {
                     ty = ser.resolve(ty_id)
                 }
                 ser.ty = Some(ty);
             }
             TypedSerializer::Enum(ser) => {
-                if let Some(var @ SpecificType::Variant(_, _, Some(_))) = &ser.ty {
-                    if let EnumVariant::NewType(_, _, ty_id) = var.into() {
-                        let ty = ser.resolve(ty_id);
-
-                        ser.ty = Some(if let SpecificType::StructNewType(ty_id) = ty {
-                            ser.resolve(ty_id)
-                        } else {
-                            ty
-                        });
+                if let Some(TypeDef::Variant(ref vdef)) = ser.ty {
+                    if let Some(idx) = ser.picked {
+                        if let Fields::NewType(ty_id) = &vdef.variants[idx].fields {
+                            let ty = ser.resolve(*ty_id);
+                            ser.ty = Some(if let TypeDef::StructNewType(inner) = ty {
+                                ser.resolve(inner)
+                            } else {
+                                ty
+                            });
+                            ser.picked = None;
+                        }
                     }
                 }
             }
@@ -641,7 +648,7 @@ where
         match self {
             TypedSerializer::Composite(ser, types) => {
                 let mut ty = ser.resolve(types.remove(0));
-                if let SpecificType::StructNewType(ty_id) = ty {
+                if let TypeDef::StructNewType(ty_id) = ty {
                     ty = ser.resolve(ty_id);
                 }
                 ser.ty = Some(ty);
@@ -649,9 +656,12 @@ where
             TypedSerializer::Sequence(ser, ty_id) => {
                 let ty = ser.resolve(*ty_id);
                 ser.ty = Some(match ty {
-                    SpecificType::StructNewType(ty_id) => ser.resolve(ty_id),
+                    TypeDef::StructNewType(ty_id) => ser.resolve(ty_id),
                     _ => ty,
                 });
+            }
+            TypedSerializer::ByteSeq(ser) => {
+                ser.ty = Some(TypeDef::U8);
             }
             _ => {}
         };
@@ -762,7 +772,7 @@ where
 pub enum Error {
     Ser(String),
     BadInput(String),
-    Type(scale_info::Type<scale_info::form::PortableForm>),
+    BadType(String),
     NotSupported(&'static str, String),
 }
 
@@ -771,11 +781,7 @@ impl fmt::Display for Error {
         match self {
             Error::Ser(msg) => write!(f, "{}", msg),
             Error::BadInput(msg) => write!(f, "Bad Input: {}", msg),
-            Error::Type(ty) => write!(
-                f,
-                "Unexpected type: {}",
-                ty.path.ident().unwrap_or_else(|| "Unknown".into())
-            ),
+            Error::BadType(msg) => write!(f, "Unexpected type: {}", msg),
             Error::NotSupported(from, to) => {
                 write!(f, "Serializing {} as {} is not supported", from, to)
             }
@@ -809,7 +815,7 @@ mod tests {
     use alloc::collections::BTreeMap;
     use codec::{Decode, Encode};
     use core::mem::size_of;
-    use scale_info::{meta_type, Registry, TypeInfo};
+    use scale_info::{meta_type, PortableRegistry, Registry as SiRegistry, TypeInfo};
     use serde_json::to_value;
 
     #[test]
@@ -1068,13 +1074,14 @@ mod tests {
         Ok(())
     }
 
-    fn register<T>(_ty: &T) -> (TypeId, PortableRegistry)
+    fn register<T>(_ty: &T) -> (TypeId, crate::Registry)
     where
         T: TypeInfo + 'static,
     {
-        let mut reg = Registry::new();
+        let mut reg = SiRegistry::new();
         let sym = reg.register_type(&meta_type::<T>());
-        (sym.id, reg.into())
+        let portable: PortableRegistry = reg.into();
+        (sym.id, crate::compress::compress(&portable))
     }
 
     #[test]
@@ -1251,7 +1258,8 @@ mod tests {
     #[test]
     fn test_extrincic_call() -> Result<()> {
         let bytes = include_bytes!("registry.bin");
-        let registry = PortableRegistry::decode(&mut &bytes[..]).expect("hello");
+        let portable = PortableRegistry::decode(&mut &bytes[..]).expect("hello");
+        let registry = crate::compress::compress(&portable);
 
         let transfer_call = serde_json::json!({
             "transfer_keep_alive": {
@@ -1272,6 +1280,284 @@ mod tests {
             format!("0x04{}", encooded)
         );
 
+        Ok(())
+    }
+
+    // --- Type coercion tests ---
+
+    #[test]
+    fn json_u64_coerced_to_u8() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            val: u8,
+        }
+        let foo = Foo { val: 42 };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_u64_coerced_to_u16() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            val: u16,
+        }
+        let foo = Foo { val: 1000 };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_u64_coerced_to_u32() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            val: u32,
+        }
+        let foo = Foo { val: 100_000 };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_u64_coerced_to_i32() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            val: i32,
+        }
+        let foo = Foo { val: -1 };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_string_coerced_to_u8() -> Result<()> {
+        let (id, reg) = register(&0u8);
+        let mut out = Vec::new();
+        to_bytes_with_info(&mut out, &"255", Some((&reg, id)))?;
+        assert_eq!(out, [255u8]);
+        Ok(())
+    }
+
+    #[test]
+    fn json_string_coerced_to_i64() -> Result<()> {
+        let (id, reg) = register(&0i64);
+        let mut out = Vec::new();
+        to_bytes_with_info(&mut out, &"-9223372036854775808", Some((&reg, id)))?;
+        assert_eq!(out, i64::MIN.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_compact_u32() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            #[codec(compact)]
+            val: u32,
+        }
+        let foo = Foo { val: 69 };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    // --- Option handling ---
+
+    #[test]
+    fn json_option_some_nested() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            val: Option<u32>,
+        }
+        let foo = Foo { val: Some(42) };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    // NOTE: json_option_none is not tested because serde_json serializes
+    // null via serialize_unit(), not serialize_none(), so the type-info
+    // path treats it as Some(unit). This is a known JSON→SCALE limitation.
+
+    // --- Error paths ---
+
+    #[test]
+    fn invalid_variant_name() {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        enum Bar {
+            A,
+            #[allow(dead_code)]
+            B,
+        }
+        let (id, reg) = register(&Bar::A);
+        let json = serde_json::json!("NonExistent");
+
+        let result = to_vec_with_info(&json, Some((&reg, id)));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_numeric_string() {
+        let (id, reg) = register(&0u32);
+        let result = to_vec_with_info(&"not_a_number", Some((&reg, id)));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_hex_string() {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            bar: Vec<u8>,
+        }
+        let foo = Foo { bar: vec![] };
+        let (ty, reg) = register(&foo);
+
+        // Missing 0x prefix
+        let input = vec![("bar", crate::JsonValue::String("00123456".into()))];
+        let result = to_vec_from_iter(input, (&reg, ty));
+        assert!(result.is_err());
+
+        // Invalid hex chars
+        let input = vec![("bar", crate::JsonValue::String("0xGGHH".into()))];
+        let result = to_vec_from_iter(input, (&reg, ty));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_iter_missing_field() {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            bar: u32,
+            baz: String,
+        }
+        let foo = Foo {
+            bar: 1,
+            baz: "x".into(),
+        };
+        let (ty, reg) = register(&foo);
+
+        // Only provide one field
+        let input = vec![("bar", crate::JsonValue::from(1))];
+        let result = to_vec_from_iter(input, (&reg, ty));
+        assert!(result.is_err());
+    }
+
+    // --- Nested struct variants ---
+
+    #[test]
+    fn json_struct_variant() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        enum Msg {
+            #[allow(dead_code)]
+            Ping,
+            Data {
+                id: u32,
+                payload: String,
+            },
+        }
+        let input = Msg::Data {
+            id: 42,
+            payload: "hello".into(),
+        };
+        let (id, reg) = register(&input);
+        let json = serde_json::to_value(&input).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, input.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_tuple_variant() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        enum Msg {
+            #[allow(dead_code)]
+            Ping,
+            Pair(u32, u32),
+        }
+        let input = Msg::Pair(1, 2);
+        let (id, reg) = register(&input);
+        let json = serde_json::to_value(&input).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, input.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_array_type() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            data: [u8; 4],
+        }
+        let foo = Foo { data: [1, 2, 3, 4] };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_btreemap() -> Result<()> {
+        // NOTE: Map values aren't type-coerced (TypedSerializer::Empty for Map),
+        // so we use bool values which don't need coercion (same size in JSON and SCALE)
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        struct Foo {
+            map: BTreeMap<String, bool>,
+        }
+        let foo = Foo {
+            map: {
+                let mut m = BTreeMap::new();
+                m.insert("a".into(), true);
+                m.insert("b".into(), false);
+                m
+            },
+        };
+        let (id, reg) = register(&foo);
+        let json = serde_json::to_value(&foo).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, foo.encode());
+        Ok(())
+    }
+
+    #[test]
+    fn json_nested_option_in_enum() -> Result<()> {
+        #[derive(Debug, Encode, TypeInfo, Serialize)]
+        enum Outer {
+            #[allow(dead_code)]
+            None,
+            Some(Option<u32>),
+        }
+        let input = Outer::Some(Some(99));
+        let (id, reg) = register(&input);
+        let json = serde_json::to_value(&input).unwrap();
+
+        let out = to_vec_with_info(&json, Some((&reg, id)))?;
+        assert_eq!(out, input.encode());
         Ok(())
     }
 }
