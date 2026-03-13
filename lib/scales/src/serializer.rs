@@ -8,6 +8,7 @@ use serde::{ser, Serialize};
 
 type Result<T> = core::result::Result<T, Error>;
 
+/// SCALE-encode a value into a new `Vec<u8>`.
 #[inline]
 pub fn to_vec<T>(value: &T) -> Result<Vec<u8>>
 where
@@ -18,6 +19,7 @@ where
     Ok(out)
 }
 
+/// SCALE-encode a value into a new `Vec<u8>`, using type info to coerce representations.
 #[inline]
 pub fn to_vec_with_info<T>(value: &T, registry_type: Option<(&Registry, TypeId)>) -> Result<Vec<u8>>
 where
@@ -28,6 +30,7 @@ where
     Ok(out)
 }
 
+/// SCALE-encode a value into an existing buffer.
 pub fn to_bytes<B, T>(bytes: B, value: &T) -> Result<()>
 where
     T: Serialize + ?Sized,
@@ -36,6 +39,7 @@ where
     to_bytes_with_info(bytes, value, None)
 }
 
+/// SCALE-encode a value into a buffer, using type info to coerce representations.
 pub fn to_bytes_with_info<B, T>(
     bytes: B,
     value: &T,
@@ -50,6 +54,7 @@ where
     Ok(())
 }
 
+/// SCALE-encode a JSON-like key-value iterator into a buffer using type info.
 #[cfg(feature = "json")]
 pub fn to_bytes_from_iter<B, K, V>(
     bytes: B,
@@ -85,6 +90,7 @@ where
     to_bytes_with_info(bytes, &val, Some(registry_type))
 }
 
+/// Like [`to_bytes_from_iter`] but allocates and returns a `Vec<u8>`.
 #[cfg(feature = "json")]
 pub fn to_vec_from_iter<I, K, V>(iter: I, registry_type: (&Registry, TypeId)) -> Result<Vec<u8>>
 where

@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use core::fmt;
 
+/// Errors produced during SCALE encoding, decoding, or type resolution.
 #[derive(Debug)]
 pub enum Error {
     /// End of input reached unexpectedly

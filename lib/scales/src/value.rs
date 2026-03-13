@@ -79,6 +79,7 @@ pub struct Value<'a> {
 }
 
 impl<'a> Value<'a> {
+    /// Wrap raw SCALE-encoded `data` as a typed value.
     #[must_use]
     pub fn new(data: &'a [u8], ty_id: TypeId, registry: &'a Registry) -> Self {
         Value {
@@ -94,6 +95,7 @@ impl<'a> Value<'a> {
         self.registry.resolve(self.ty_id)
     }
 
+    /// Byte length of this value's SCALE encoding.
     pub fn size(&self) -> Result<usize, Error> {
         ty_size(self.registry, self.data, self.ty_id)
     }
@@ -429,7 +431,7 @@ impl<'a> Cursor<'a> {
         Cursor { data, registry }
     }
 
-    /// Consume the next value of the given type, advancing the cursor.
+    /// Decode the next value of type `ty_id`, advancing past its bytes.
     pub fn next_value(&mut self, ty_id: TypeId) -> Result<Value<'a>, Error> {
         let size = ty_size(self.registry, self.data, ty_id)?;
         let (chunk, rest) = self.data.split_at(size);
@@ -441,6 +443,7 @@ impl<'a> Cursor<'a> {
         })
     }
 
+    /// Bytes not yet consumed.
     #[must_use]
     pub fn remaining(&self) -> &'a [u8] {
         self.data

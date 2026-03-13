@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
+/// Index into a [`Registry`].
 pub type TypeId = u32;
 
 /// A minimal type registry storing only what is needed for SCALE serialization.
@@ -10,10 +11,12 @@ pub type TypeId = u32;
 pub struct Registry(Vec<TypeDef>);
 
 impl Registry {
+    /// Create a registry from a list of type definitions.
     pub fn new(types: Vec<TypeDef>) -> Self {
         Self(types)
     }
 
+    /// Look up a type by its ID.
     #[inline]
     #[must_use]
     pub fn resolve(&self, id: TypeId) -> Option<&TypeDef> {
@@ -56,20 +59,23 @@ pub enum TypeDef {
     BitSequence(TypeId, TypeId),
 }
 
+/// A named field within a struct or variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Field {
     pub name: String,
     pub ty: TypeId,
 }
 
+/// Definition of an enum type with its variants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantDef {
-    /// Short name (e.g. "Option") used for special-case detection
+    /// Short name (e.g. "Option") used for special-case detection.
     pub name: String,
     pub variants: Vec<Variant>,
 }
 
 impl VariantDef {
+    /// Find a variant by its SCALE index byte.
     pub fn variant(&self, index: u8) -> Result<&Variant, crate::Error> {
         self.variants
             .iter()
@@ -78,6 +84,7 @@ impl VariantDef {
     }
 }
 
+/// A single variant of an enum.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Variant {
     pub index: u8,

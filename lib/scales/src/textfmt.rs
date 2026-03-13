@@ -7,14 +7,14 @@ use core::fmt::{self, Write};
 /// Maximum nesting depth to prevent stack overflow from recursive types.
 const MAX_DEPTH: usize = 64;
 
-/// Format a [`Value`] as a URL-friendly text string.
+/// Format a [`Value`] as a compact, URL-safe text string.
 pub fn to_text(value: &Value<'_>) -> Result<alloc::string::String, Error> {
     let mut out = alloc::string::String::new();
     fmt_value(value, &mut out, MAX_DEPTH)?;
     Ok(out)
 }
 
-/// Parse a text-encoded value into SCALE bytes.
+/// Parse a text-encoded string back into SCALE bytes, guided by the type registry.
 pub fn from_text(input: &str, registry: &Registry, ty_id: TypeId) -> Result<Vec<u8>, Error> {
     let mut parser = Parser {
         input,
