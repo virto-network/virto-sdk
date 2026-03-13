@@ -71,9 +71,9 @@ pub(crate) fn ty_size(registry: &Registry, data: &[u8], ty: TypeId) -> Result<us
 /// A container for SCALE encoded data that can serialize types directly
 /// with the help of a type registry and without using an intermediate representation.
 pub struct Value<'a> {
-    data: &'a [u8],
-    ty_id: TypeId,
-    registry: &'a Registry,
+    pub(crate) data: &'a [u8],
+    pub(crate) ty_id: TypeId,
+    pub(crate) registry: &'a Registry,
 }
 
 impl<'a> Value<'a> {
@@ -786,7 +786,7 @@ impl core::fmt::Debug for Value<'_> {
     }
 }
 
-#[cfg(feature = "json")]
+#[cfg(all(feature = "json", not(feature = "text")))]
 impl core::fmt::Display for Value<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         let json = serde_json::to_string(self).map_err(|_| core::fmt::Error)?;

@@ -12,7 +12,8 @@ test:
 check-no-std:
     cargo check --no-default-features
     cargo check --no-default-features --features serializer
-    cargo check --no-default-features --features json,hex
+    cargo check --no-default-features --features json
+    cargo check --no-default-features --features text
 
 check-thumbv7em:
     cargo check --target thumbv7em-none-eabihf --no-default-features

@@ -13,6 +13,8 @@ pub mod error;
 pub mod registry;
 #[cfg(feature = "serializer")]
 mod serializer;
+#[cfg(feature = "text")]
+mod textfmt;
 mod value;
 
 pub use error::Error;
@@ -23,6 +25,8 @@ pub use serde_json::Value as JsonValue;
 pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Serializer};
 #[cfg(all(feature = "serializer", feature = "json"))]
 pub use serializer::{to_bytes_from_iter, to_vec_from_iter};
+#[cfg(feature = "text")]
+pub use textfmt::{from_text, to_text};
 pub use value::{Cursor, FieldIter, SeqIter, TupleIter, Value};
 
 mod prelude {
@@ -48,6 +52,33 @@ pub(crate) fn compact_encode(n: u128, mut dest: impl bytes::BufMut) {
                 v >>= 8;
             }
         }
+    }
+}
+
+/// Decode a hex string (without `0x` prefix) into bytes.
+#[cfg(any(feature = "serializer", feature = "text"))]
+pub(crate) fn decode_hex(hex: &str) -> Result<alloc::vec::Vec<u8>, Error> {
+    if !hex.len().is_multiple_of(2) {
+        return Err(Error::BadInput("odd number of hex digits".into()));
+    }
+    hex.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let hi = hex_nibble(pair[0]).ok_or(Error::BadInput("invalid hex digit".into()))?;
+            let lo = hex_nibble(pair[1]).ok_or(Error::BadInput("invalid hex digit".into()))?;
+            Ok((hi << 4) | lo)
+        })
+        .collect()
+}
+
+#[cfg(any(feature = "serializer", feature = "text"))]
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
     }
 }
 

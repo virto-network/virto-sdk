@@ -499,10 +499,9 @@ where
                 self.out.put_i128_le(n);
                 Ok(Some(()))
             }
-            #[cfg(feature = "hex")]
             TypeDef::Bytes => {
-                if let Some(bytes) = val.strip_prefix("0x") {
-                    let bytes = hex::decode(bytes).map_err(|e| Error::BadInput(e.to_string()))?;
+                if let Some(hex) = val.strip_prefix("0x") {
+                    let bytes = crate::decode_hex(hex)?;
                     ser::Serializer::serialize_bytes(self, &bytes)?;
                     Ok(Some(()))
                 } else {
@@ -604,7 +603,7 @@ where
 }
 
 /// Resolve a field type, unwrapping newtypes (serde_json unwraps them)
-fn unwrap_newtype<'reg>(reg: &'reg Registry, ty_id: TypeId) -> TypeId {
+fn unwrap_newtype(reg: &Registry, ty_id: TypeId) -> TypeId {
     match reg.resolve(ty_id).expect("in registry") {
         TypeDef::StructNewType(inner) => *inner,
         _ => ty_id,
@@ -630,7 +629,7 @@ where
                         let idx = vdef
                             .variants
                             .iter()
-                            .position(|v| to_vec(&v.name).map_or(false, |d| d == key_data))
+                            .position(|v| to_vec(&v.name).is_ok_and(|d| d == key_data))
                             .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
                         let variant_index = vdef.variants[idx].index;
                         ser.picked = Some(idx);

@@ -33,6 +33,9 @@ fn display_as_json() {
     let (id, reg) = register(&in_value);
     let out_value = Value::new(&data, id, &reg).to_string();
 
+    #[cfg(feature = "text")]
+    assert_eq!("(bar:'BAZ')", out_value);
+    #[cfg(not(feature = "text"))]
     assert_eq!("{\"bar\":\"BAZ\"}", out_value);
 }
 

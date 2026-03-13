@@ -1,4 +1,6 @@
 mod serializer;
+#[cfg(feature = "text")]
+mod textfmt;
 mod value;
 
 use crate::compress;
