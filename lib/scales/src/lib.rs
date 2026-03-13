@@ -23,7 +23,7 @@ pub use serde_json::Value as JsonValue;
 pub use serializer::{to_bytes, to_bytes_with_info, to_vec, to_vec_with_info, Serializer};
 #[cfg(all(feature = "serializer", feature = "json"))]
 pub use serializer::{to_bytes_from_iter, to_vec_from_iter};
-pub use value::Value;
+pub use value::{Cursor, FieldIter, SeqIter, TupleIter, Value};
 
 mod prelude {
     pub use alloc::string::{String, ToString};

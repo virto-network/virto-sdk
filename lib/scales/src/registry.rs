@@ -68,6 +68,15 @@ pub struct VariantDef {
     pub variants: Vec<Variant>,
 }
 
+impl VariantDef {
+    pub fn variant(&self, index: u8) -> Result<&Variant, crate::Error> {
+        self.variants
+            .iter()
+            .find(|v| v.index == index)
+            .ok_or(crate::Error::InvalidVariant(index))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Variant {
     pub index: u8,

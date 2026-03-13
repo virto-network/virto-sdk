@@ -30,6 +30,12 @@ required-features = ["std", "compress"]
 [dev-dependencies]
 anyhow = "1"
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false, features = ["derive"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 scale-info = { version = "2.11", default-features = false, features = ["derive"] }
+scale-value = { version = "0.18", features = ["serde"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[[bench]]
+name = "comparison"
+harness = false

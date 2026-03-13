@@ -105,7 +105,9 @@ where
     B: Debug,
 {
     out: B,
-    ty: Option<TypeDef>,
+    ty_id: Option<TypeId>,
+    /// Synthetic type override for cases where no registry TypeId exists (e.g. ByteSeq U8 elements)
+    ty_hint: Option<TypeDef>,
     registry: Option<&'reg Registry>,
     picked: Option<usize>,
 }
@@ -115,16 +117,14 @@ where
     B: BufMut + Debug,
 {
     pub fn new(out: B, registry_type: Option<(&'reg Registry, TypeId)>) -> Self {
-        let (registry, ty) = match registry_type {
-            Some((reg, ty_id)) => {
-                let ty = reg.resolve(ty_id).expect("exists in registry").clone();
-                (Some(reg), Some(ty))
-            }
+        let (registry, ty_id) = match registry_type {
+            Some((reg, ty_id)) => (Some(reg), Some(ty_id)),
             None => (None, None),
         };
         Serializer {
             out,
-            ty,
+            ty_id,
+            ty_hint: None,
             registry,
             picked: None,
         }
@@ -176,7 +176,7 @@ where
     }
 
     fn serialize_i64(self, v: i64) -> Result<Self::Ok> {
-        match self.ty {
+        match self.ty() {
             Some(TypeDef::I8) => self.serialize_i8(v as i8)?,
             Some(TypeDef::I16) => self.serialize_i16(v as i16)?,
             Some(TypeDef::I32) => self.serialize_i32(v as i32)?,
@@ -209,14 +209,14 @@ where
     fn serialize_u64(self, v: u64) -> Result<Self::Ok> {
         self.maybe_some()?;
         // all numbers in serde_json are the same
-        match self.ty {
+        match self.ty() {
             Some(TypeDef::I8) => self.serialize_i8(v as i8)?,
             Some(TypeDef::I16) => self.serialize_i16(v as i16)?,
             Some(TypeDef::I32) => self.serialize_i32(v as i32)?,
             Some(TypeDef::U8) => self.serialize_u8(v as u8)?,
             Some(TypeDef::U16) => self.serialize_u16(v as u16)?,
             Some(TypeDef::U32) => self.serialize_u32(v as u32)?,
-            Some(TypeDef::Compact(ty)) => self.serialize_compact(ty, v as u128)?,
+            Some(TypeDef::Compact(ty)) => self.serialize_compact(*ty, v as u128)?,
             _ => self.out.put_u64_le(v),
         }
         Ok(())
@@ -224,7 +224,7 @@ where
 
     fn serialize_u128(self, v: u128) -> Result<Self::Ok> {
         self.maybe_some()?;
-        match self.ty {
+        match self.ty() {
             Some(TypeDef::I8) => self.serialize_i8(v as i8)?,
             Some(TypeDef::I16) => self.serialize_i16(v as i16)?,
             Some(TypeDef::I32) => self.serialize_i32(v as i32)?,
@@ -233,7 +233,7 @@ where
             Some(TypeDef::U16) => self.serialize_u16(v as u16)?,
             Some(TypeDef::U32) => self.serialize_u32(v as u32)?,
             Some(TypeDef::U64) => self.serialize_u64(v as u64)?,
-            Some(TypeDef::Compact(ty)) => self.serialize_compact(ty, v)?,
+            Some(TypeDef::Compact(ty)) => self.serialize_compact(*ty, v)?,
             _ => self.out.put_u128_le(v),
         }
         Ok(())
@@ -329,7 +329,7 @@ where
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq> {
         self.maybe_some()?;
         if matches!(
-            self.ty,
+            self.ty(),
             None | Some(TypeDef::Bytes) | Some(TypeDef::Sequence(_))
         ) {
             compact_number(len.expect("known length"), &mut self.out);
@@ -365,7 +365,7 @@ where
 
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap> {
         self.maybe_some()?;
-        if matches!(self.ty, None | Some(TypeDef::Map(_, _))) {
+        if matches!(self.ty(), None | Some(TypeDef::Map(_, _))) {
             compact_number(len.expect("known length"), &mut self.out);
         }
         Ok(self.into())
@@ -389,106 +389,118 @@ where
     }
 }
 
-impl<B> Serializer<'_, B>
+impl<'reg, B: Debug> Serializer<'reg, B> {
+    fn ty(&self) -> Option<&TypeDef> {
+        self.ty_id
+            .map(|id| self.resolve(id) as &TypeDef)
+            .or(self.ty_hint.as_ref())
+    }
+
+    fn resolve(&self, ty_id: TypeId) -> &'reg TypeDef {
+        let reg = self.registry.expect("called having type");
+        reg.resolve(ty_id).expect("in registry")
+    }
+}
+
+impl<'reg, B> Serializer<'reg, B>
 where
     B: BufMut + Debug,
 {
     // A check to run for every serialize fn since any type could be an Option::Some
     // if the type info says its an Option assume its Some and extract the inner type
     fn maybe_some(&mut self) -> Result<()> {
-        match &self.ty {
-            Some(TypeDef::Variant(ref vdef)) if vdef.name == "Option" => {
-                self.ty = match &vdef.variants[1].fields {
-                    Fields::NewType(ty_id) => Some(self.resolve(*ty_id)),
-                    _ => None,
-                };
-                self.out.put_u8(0x01);
+        if let Some(ty_id) = self.ty_id {
+            if let TypeDef::Variant(vdef) = self.resolve(ty_id) {
+                if vdef.name == "Option" {
+                    self.ty_id = match &vdef.variants[1].fields {
+                        Fields::NewType(inner) => Some(*inner),
+                        _ => None,
+                    };
+                    self.out.put_u8(0x01);
+                }
             }
-            _ => (),
         }
         Ok(())
     }
 
-    fn resolve(&self, ty_id: TypeId) -> TypeDef {
-        let reg = self.registry.expect("called having type");
-        reg.resolve(ty_id).expect("in registry").clone()
-    }
-
     #[inline]
     fn maybe_other(&mut self, val: &str) -> Result<Option<()>> {
-        match self.ty {
-            Some(TypeDef::Str) | None => Ok(None),
+        let ty = match self.ty() {
+            Some(ty) => ty,
+            None => return Ok(None),
+        };
+        match ty {
+            TypeDef::Str => Ok(None),
             // { "foo": "Bar" } => "Bar" might be an enum variant
-            Some(TypeDef::Variant(ref vdef)) => {
-                let key_data = to_vec(val)?;
+            TypeDef::Variant(vdef) => {
                 let variant = vdef
                     .variants
                     .iter()
-                    .find(|v| to_vec(&v.name).unwrap() == key_data)
+                    .find(|v| v.name == val)
                     .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
                 self.out.put_u8(variant.index);
                 Ok(Some(()))
             }
-            Some(TypeDef::StructNewType(ty)) => match self.resolve(ty) {
+            TypeDef::StructNewType(ty_id) => match self.resolve(*ty_id) {
                 // { "foo": "bar" } => "bar" might be a string wrapped in a type
                 TypeDef::Str => Ok(None),
-                ref ty => Err(Error::NotSupported(
+                ty => Err(Error::NotSupported(
                     type_name_of_val(val),
                     format!("{:?}", ty),
                 )),
             },
-            Some(TypeDef::U8) => {
+            TypeDef::U8 => {
                 let n = val.parse().map_err(|_| Error::BadInput("u8".into()))?;
                 self.out.put_u8(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::U16) => {
+            TypeDef::U16 => {
                 let n = val.parse().map_err(|_| Error::BadInput("u16".into()))?;
                 self.out.put_u16_le(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::U32) => {
+            TypeDef::U32 => {
                 let n = val.parse().map_err(|_| Error::BadInput("u32".into()))?;
                 self.out.put_u32_le(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::U64) => {
+            TypeDef::U64 => {
                 let n = val.parse().map_err(|_| Error::BadInput("u64".into()))?;
                 self.out.put_u64_le(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::U128) => {
+            TypeDef::U128 => {
                 let n = val.parse().map_err(|_| Error::BadInput("u128".into()))?;
                 self.out.put_u128_le(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::I8) => {
+            TypeDef::I8 => {
                 let n = val.parse().map_err(|_| Error::BadInput("i8".into()))?;
                 self.out.put_i8(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::I16) => {
+            TypeDef::I16 => {
                 let n = val.parse().map_err(|_| Error::BadInput("i16".into()))?;
                 self.out.put_i16_le(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::I32) => {
+            TypeDef::I32 => {
                 let n = val.parse().map_err(|_| Error::BadInput("i32".into()))?;
                 self.out.put_i32_le(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::I64) => {
+            TypeDef::I64 => {
                 let n = val.parse().map_err(|_| Error::BadInput("i64".into()))?;
                 self.out.put_i64_le(n);
                 Ok(Some(()))
             }
-            Some(TypeDef::I128) => {
+            TypeDef::I128 => {
                 let n = val.parse().map_err(|_| Error::BadInput("i128".into()))?;
                 self.out.put_i128_le(n);
                 Ok(Some(()))
             }
             #[cfg(feature = "hex")]
-            Some(TypeDef::Bytes) => {
+            TypeDef::Bytes => {
                 if let Some(bytes) = val.strip_prefix("0x") {
                     let bytes = hex::decode(bytes).map_err(|e| Error::BadInput(e.to_string()))?;
                     ser::Serializer::serialize_bytes(self, &bytes)?;
@@ -497,10 +509,34 @@ where
                     Err(Error::BadInput("Hex string must start with 0x".into()))
                 }
             }
-            Some(ref ty) => Err(Error::NotSupported(
+            ty => Err(Error::NotSupported(
                 type_name_of_val(val),
                 format!("{:?}", ty),
             )),
+        }
+    }
+}
+
+/// Borrowed field type sources — avoids Vec allocation and O(n) remove(0)
+#[derive(Debug)]
+pub enum FieldTypes<'reg> {
+    Ids(&'reg [TypeId]),
+    Fields(&'reg [Field]),
+}
+
+impl FieldTypes<'_> {
+    fn next(&mut self) -> TypeId {
+        match self {
+            FieldTypes::Ids(ids) => {
+                let (first, rest) = ids.split_first().expect("field available");
+                *ids = rest;
+                *first
+            }
+            FieldTypes::Fields(fields) => {
+                let (first, rest) = fields.split_first().expect("field available");
+                *fields = rest;
+                first.ty
+            }
         }
     }
 }
@@ -511,7 +547,7 @@ where
     B: Debug,
 {
     Empty(&'a mut Serializer<'reg, B>),
-    Composite(&'a mut Serializer<'reg, B>, Vec<TypeId>),
+    Composite(&'a mut Serializer<'reg, B>, FieldTypes<'reg>),
     Sequence(&'a mut Serializer<'reg, B>, TypeId),
     ByteSeq(&'a mut Serializer<'reg, B>),
     Enum(&'a mut Serializer<'reg, B>),
@@ -522,27 +558,28 @@ where
     B: Debug,
 {
     fn from(ser: &'a mut Serializer<'reg, B>) -> Self {
-        match ser.ty.take() {
-            Some(TypeDef::Struct(fields)) => {
-                Self::Composite(ser, fields.iter().map(|f| f.ty).collect())
-            }
-            Some(TypeDef::StructTuple(fields)) => Self::Composite(ser, fields),
-            Some(TypeDef::Array(ty, _)) => Self::Sequence(ser, ty),
-            Some(TypeDef::Tuple(fields)) => Self::Composite(ser, fields),
-            Some(TypeDef::Sequence(ty)) => Self::Sequence(ser, ty),
-            Some(TypeDef::Bytes) => Self::ByteSeq(ser),
-            Some(TypeDef::Map(_, _)) => Self::Empty(ser),
-            Some(TypeDef::Variant(vdef)) => {
+        let ty_id = match ser.ty_id.take() {
+            Some(id) => id,
+            None => return Self::Empty(ser),
+        };
+        let ty = ser.resolve(ty_id);
+        match ty {
+            TypeDef::Struct(ref fields) => Self::Composite(ser, FieldTypes::Fields(fields)),
+            TypeDef::StructTuple(ref ids) => Self::Composite(ser, FieldTypes::Ids(ids)),
+            TypeDef::Array(ty, _) => Self::Sequence(ser, *ty),
+            TypeDef::Tuple(ref ids) => Self::Composite(ser, FieldTypes::Ids(ids)),
+            TypeDef::Sequence(ty) => Self::Sequence(ser, *ty),
+            TypeDef::Bytes => Self::ByteSeq(ser),
+            TypeDef::Map(_, _) => Self::Empty(ser),
+            TypeDef::Variant(ref vdef) => {
                 if let Some(idx) = ser.picked.take() {
                     match &vdef.variants[idx].fields {
-                        Fields::Tuple(types) => Self::Composite(ser, types.clone()),
-                        Fields::Struct(fields) => {
-                            Self::Composite(ser, fields.iter().map(|f| f.ty).collect())
-                        }
+                        Fields::Tuple(types) => Self::Composite(ser, FieldTypes::Ids(types)),
+                        Fields::Struct(fields) => Self::Composite(ser, FieldTypes::Fields(fields)),
                         _ => Self::Empty(ser),
                     }
                 } else {
-                    ser.ty = Some(TypeDef::Variant(vdef));
+                    ser.ty_id = Some(ty_id);
                     Self::Enum(ser)
                 }
             }
@@ -566,6 +603,14 @@ where
     }
 }
 
+/// Resolve a field type, unwrapping newtypes (serde_json unwraps them)
+fn unwrap_newtype<'reg>(reg: &'reg Registry, ty_id: TypeId) -> TypeId {
+    match reg.resolve(ty_id).expect("in registry") {
+        TypeDef::StructNewType(inner) => *inner,
+        _ => ty_id,
+    }
+}
+
 impl<B> ser::SerializeMap for TypedSerializer<'_, '_, B>
 where
     B: BufMut + Debug,
@@ -579,16 +624,18 @@ where
     {
         match self {
             TypedSerializer::Enum(ser) => {
-                if let Some(TypeDef::Variant(ref vdef)) = ser.ty {
-                    let key_data = to_vec(key)?;
-                    let idx = vdef
-                        .variants
-                        .iter()
-                        .position(|v| to_vec(&v.name).unwrap() == key_data)
-                        .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
-                    let variant_index = vdef.variants[idx].index;
-                    ser.picked = Some(idx);
-                    variant_index.serialize(&mut **ser)?;
+                if let Some(ty_id) = ser.ty_id {
+                    if let TypeDef::Variant(vdef) = ser.resolve(ty_id) {
+                        let key_data = to_vec(key)?;
+                        let idx = vdef
+                            .variants
+                            .iter()
+                            .position(|v| to_vec(&v.name).map_or(false, |d| d == key_data))
+                            .ok_or_else(|| Error::BadInput("Invalid variant".into()))?;
+                        let variant_index = vdef.variants[idx].index;
+                        ser.picked = Some(idx);
+                        variant_index.serialize(&mut **ser)?;
+                    }
                 }
                 Ok(())
             }
@@ -602,25 +649,21 @@ where
         T: Serialize + ?Sized,
     {
         match self {
-            TypedSerializer::Composite(ser, types) => {
-                let mut ty = ser.resolve(types.remove(0));
-                // serde_json unwraps newtypes
-                if let TypeDef::StructNewType(ty_id) = ty {
-                    ty = ser.resolve(ty_id)
-                }
-                ser.ty = Some(ty);
+            TypedSerializer::Composite(ser, field_types) => {
+                let reg = ser.registry.expect("called having type");
+                ser.ty_id = Some(unwrap_newtype(reg, field_types.next()));
+                ser.ty_hint = None;
             }
             TypedSerializer::Enum(ser) => {
-                if let Some(TypeDef::Variant(ref vdef)) = ser.ty {
-                    if let Some(idx) = ser.picked {
-                        if let Fields::NewType(ty_id) = &vdef.variants[idx].fields {
-                            let ty = ser.resolve(*ty_id);
-                            ser.ty = Some(if let TypeDef::StructNewType(inner) = ty {
-                                ser.resolve(inner)
-                            } else {
-                                ty
-                            });
-                            ser.picked = None;
+                if let Some(ty_id) = ser.ty_id {
+                    if let TypeDef::Variant(vdef) = ser.resolve(ty_id) {
+                        if let Some(idx) = ser.picked {
+                            if let Fields::NewType(field_ty_id) = &vdef.variants[idx].fields {
+                                let reg = ser.registry.expect("called having type");
+                                ser.ty_id = Some(unwrap_newtype(reg, *field_ty_id));
+                                ser.ty_hint = None;
+                                ser.picked = None;
+                            }
                         }
                     }
                 }
@@ -647,22 +690,19 @@ where
         T: Serialize + ?Sized,
     {
         match self {
-            TypedSerializer::Composite(ser, types) => {
-                let mut ty = ser.resolve(types.remove(0));
-                if let TypeDef::StructNewType(ty_id) = ty {
-                    ty = ser.resolve(ty_id);
-                }
-                ser.ty = Some(ty);
+            TypedSerializer::Composite(ser, field_types) => {
+                let reg = ser.registry.expect("called having type");
+                ser.ty_id = Some(unwrap_newtype(reg, field_types.next()));
+                ser.ty_hint = None;
             }
             TypedSerializer::Sequence(ser, ty_id) => {
-                let ty = ser.resolve(*ty_id);
-                ser.ty = Some(match ty {
-                    TypeDef::StructNewType(ty_id) => ser.resolve(ty_id),
-                    _ => ty,
-                });
+                let reg = ser.registry.expect("called having type");
+                ser.ty_id = Some(unwrap_newtype(reg, *ty_id));
+                ser.ty_hint = None;
             }
             TypedSerializer::ByteSeq(ser) => {
-                ser.ty = Some(TypeDef::U8);
+                ser.ty_id = None;
+                ser.ty_hint = Some(TypeDef::U8);
             }
             _ => {}
         };

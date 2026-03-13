@@ -6,6 +6,36 @@ driven by type registry metadata, without depending on `parity-scale-codec` at r
 The core library is `no_std` compatible and has been verified on ARM Cortex-M, RISC-V,
 and WebAssembly targets.
 
+## Why scales
+
+scales builds entirely on **serde's data model**. Any type that implements `Serialize` can
+be encoded to SCALE; any SCALE blob can be decoded into a `Value` that implements
+`Serialize` so it can be forwarded to JSON, CBOR, or any other serde format without extra
+glue code. The same serde ecosystem you already use for configuration, APIs, and storage
+works for SCALE out of the box.
+
+Compared to the alternatives:
+
+- **`parity-scale-codec`** relies on proc-macro codegen (`#[derive(Encode, Decode)]`).
+  Fast, but every type must be known at compile time and the derive macros add to build
+  times. scales needs no derives — a compressed type registry is enough.
+- **`scale-value`** offers dynamic encoding/decoding but allocates heavily during both
+  operations. scales decodes with **zero-copy** (`Value` borrows the input bytes) and
+  encodes from borrowed registry slices with no intermediate allocations.
+
+### Benchmarks (Transfer struct — 4 fields, 73 bytes encoded)
+
+| Operation | parity-scale-codec | scales (serde) | scale-value |
+|-|-:|-:|-:|
+| Encode | 15 ns | 283 ns | 1.6 µs |
+| Decode + field access | 48 ns | 73 ns (iter) | 2.0 µs |
+| Decode → JSON | — | 1.7 µs | 2.9 µs |
+
+scales is ~5× faster than scale-value on encode and ~27× faster on decode, while staying
+fully dynamic. The compressed registry is ~64% smaller on the wire than a full
+`PortableRegistry`, making it practical for embedded and zkVM environments where both code
+size and memory matter.
+
 ## Compressed Registry
 
 Instead of carrying the full `scale-info` `PortableRegistry` (which includes documentation
