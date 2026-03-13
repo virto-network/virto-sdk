@@ -1,4 +1,5 @@
 use crate::registry::*;
+use crate::Error;
 use scale_info::{form::PortableForm, PortableRegistry};
 
 type SiType = scale_info::Type<PortableForm>;
@@ -8,16 +9,16 @@ type SiComposite = scale_info::TypeDefComposite<PortableForm>;
 /// Compress a `PortableRegistry` into a minimal `Registry`, stripping
 /// docs, paths, and type params while pre-classifying types into
 /// serde-compatible shapes.
-pub fn compress(source: &PortableRegistry) -> Registry {
+pub fn compress(source: &PortableRegistry) -> Result<Registry, Error> {
     let types = source
         .types
         .iter()
         .map(|pt| convert_type(&pt.ty, source))
-        .collect();
-    Registry::new(types)
+        .collect::<Result<_, _>>()?;
+    Ok(Registry::new(types))
 }
 
-fn convert_type(ty: &SiType, source: &PortableRegistry) -> TypeDef {
+fn convert_type(ty: &SiType, source: &PortableRegistry) -> Result<TypeDef, Error> {
     use scale_info::TypeDefPrimitive as P;
 
     let name = || {
@@ -32,10 +33,9 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> TypeDef {
         .path
         .segments
         .last()
-        .map(|s| s == "BTreeMap")
-        .unwrap_or(false);
+        .is_some_and(|s| s == "BTreeMap");
 
-    match &ty.type_def {
+    Ok(match &ty.type_def {
         SiTypeDef::Primitive(p) => match p {
             P::Bool => TypeDef::Bool,
             P::U8 => TypeDef::U8,
@@ -50,13 +50,13 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> TypeDef {
             P::I128 => TypeDef::I128,
             P::Char => TypeDef::Char,
             P::Str => TypeDef::Str,
-            P::U256 | P::I256 => unimplemented!(),
+            P::U256 | P::I256 => return Err(Error::BadInput("256-bit integers not supported".into())),
         },
         SiTypeDef::Composite(c) => {
             if c.fields.is_empty() {
                 TypeDef::StructUnit
             } else if is_map {
-                let (k, v) = extract_map_types(c, source);
+                let (k, v) = extract_map_types(c, source)?;
                 TypeDef::Map(k, v)
             } else if c.fields.len() == 1 && c.fields[0].name.is_none() {
                 TypeDef::StructNewType(c.fields[0].ty.id)
@@ -66,11 +66,11 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> TypeDef {
                 TypeDef::Struct(
                     c.fields
                         .iter()
-                        .map(|f| Field {
-                            name: f.name.as_ref().unwrap().to_string(),
+                        .map(|f| Ok(Field {
+                            name: f.name.as_ref().ok_or(Error::BadInput("expected named field".into()))?.to_string(),
                             ty: f.ty.id,
-                        })
-                        .collect(),
+                        }))
+                        .collect::<Result<_, Error>>()?,
                 )
             }
         }
@@ -90,26 +90,26 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> TypeDef {
                         Fields::Struct(
                             var.fields
                                 .iter()
-                                .map(|f| Field {
-                                    name: f.name.as_ref().unwrap().to_string(),
+                                .map(|f| Ok(Field {
+                                    name: f.name.as_ref().ok_or(Error::BadInput("expected named field".into()))?.to_string(),
                                     ty: f.ty.id,
-                                })
-                                .collect(),
+                                }))
+                                .collect::<Result<_, Error>>()?,
                         )
                     };
-                    Variant {
+                    Ok(Variant {
                         index: var.index,
                         name: var.name.to_string(),
                         fields,
-                    }
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, Error>>()?,
         }),
         SiTypeDef::Sequence(s) => {
             let inner = s.type_param.id;
             if let Some(inner_ty) = source.resolve(inner) {
                 if matches!(inner_ty.type_def, SiTypeDef::Primitive(P::U8)) {
-                    return TypeDef::Bytes;
+                    return Ok(TypeDef::Bytes);
                 }
             }
             TypeDef::Sequence(inner)
@@ -118,22 +118,23 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> TypeDef {
         SiTypeDef::Tuple(t) => TypeDef::Tuple(t.fields.iter().map(|f| f.id).collect()),
         SiTypeDef::Compact(c) => TypeDef::Compact(c.type_param.id),
         SiTypeDef::BitSequence(b) => TypeDef::BitSequence(b.bit_store_type.id, b.bit_order_type.id),
-    }
+    })
 }
 
 fn is_tuple(c: &SiComposite) -> bool {
     c.fields.first().and_then(|f| f.name.as_ref()).is_none()
 }
 
-fn extract_map_types(c: &SiComposite, source: &PortableRegistry) -> (TypeId, TypeId) {
-    let field = c.fields.first().expect("map field");
-    let resolved = source.resolve(field.ty.id).unwrap();
+fn extract_map_types(c: &SiComposite, source: &PortableRegistry) -> Result<(TypeId, TypeId), Error> {
+    let field = c.fields.first().ok_or(Error::BadInput("map has no fields".into()))?;
+    let resolved = source.resolve(field.ty.id).ok_or(Error::BadInput("unresolved map type".into()))?;
     if let SiTypeDef::Sequence(s) = &resolved.type_def {
-        let inner = source.resolve(s.type_param.id).unwrap();
+        let inner = source.resolve(s.type_param.id).ok_or(Error::BadInput("unresolved map inner type".into()))?;
         if let SiTypeDef::Tuple(t) = &inner.type_def {
-            assert_eq!(t.fields.len(), 2);
-            return (t.fields[0].id, t.fields[1].id);
+            if t.fields.len() == 2 {
+                return Ok((t.fields[0].id, t.fields[1].id));
+            }
         }
     }
-    unreachable!()
+    Err(Error::BadInput("unexpected map structure".into()))
 }

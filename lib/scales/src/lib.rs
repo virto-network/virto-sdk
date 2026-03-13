@@ -36,6 +36,7 @@ mod prelude {
 }
 
 // adapted from https://github.com/paritytech/parity-scale-codec/blob/master/src/compact.rs#L336
+#[cfg(any(feature = "serializer", feature = "text"))]
 #[allow(clippy::all)]
 pub(crate) fn compact_encode(n: u128, mut dest: impl bytes::BufMut) {
     match n {
@@ -44,7 +45,7 @@ pub(crate) fn compact_encode(n: u128, mut dest: impl bytes::BufMut) {
         0..=0b0011_1111_1111_1111_1111_1111_1111_1111 => dest.put_u32_le(((n as u32) << 2) | 0b10),
         _ => {
             let bytes_needed = 16 - n.leading_zeros() / 8;
-            assert!(bytes_needed >= 4);
+            debug_assert!(bytes_needed >= 4);
             dest.put_u8(0b11 + ((bytes_needed - 4) << 2) as u8);
             let mut v = n;
             for _ in 0..bytes_needed {

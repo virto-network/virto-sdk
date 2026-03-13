@@ -15,6 +15,7 @@ impl Registry {
     }
 
     #[inline]
+    #[must_use]
     pub fn resolve(&self, id: TypeId) -> Option<&TypeDef> {
         self.0.get(id as usize)
     }

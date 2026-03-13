@@ -1,4 +1,6 @@
 use crate::error::Error;
+#[cfg(feature = "json")]
+use crate::prelude::ToString;
 use crate::registry::*;
 use bytes::Buf;
 use core::str;
@@ -77,6 +79,7 @@ pub struct Value<'a> {
 }
 
 impl<'a> Value<'a> {
+    #[must_use]
     pub fn new(data: &'a [u8], ty_id: TypeId, registry: &'a Registry) -> Self {
         Value {
             data,
@@ -421,6 +424,7 @@ pub struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
+    #[must_use]
     pub fn new(data: &'a [u8], registry: &'a Registry) -> Self {
         Cursor { data, registry }
     }
@@ -437,6 +441,7 @@ impl<'a> Cursor<'a> {
         })
     }
 
+    #[must_use]
     pub fn remaining(&self) -> &'a [u8] {
         self.data
     }
@@ -545,26 +550,9 @@ impl Serialize for Value<'_> {
             TypeDef::I32 => ser.serialize_i32(data.get_i32_le()),
             TypeDef::I64 => ser.serialize_i64(data.get_i64_le()),
             TypeDef::I128 => ser.serialize_i128(data.get_i128_le()),
-            TypeDef::Compact(inner_ty) => {
-                let inner = self
-                    .registry
-                    .resolve(*inner_ty)
-                    .ok_or_else(|| S::Error::custom(Error::TypeNotFound(*inner_ty)))?;
-                let v: u128 = match inner {
-                    TypeDef::U32 => data.get_u32_le() as u128,
-                    TypeDef::U64 => data.get_u64_le() as u128,
-                    TypeDef::U128 => data.get_u128_le(),
-                    _ => {
-                        return Err(S::Error::custom(Error::BadType(
-                            "unsupported compact inner type".into(),
-                        )))
-                    }
-                };
-                let mut buf = [0u8; 17];
-                let mut writer: &mut [u8] = &mut buf;
-                crate::compact_encode(v, &mut writer);
-                let written = 17 - writer.len();
-                ser.serialize_bytes(&buf[..written])
+            TypeDef::Compact(_) => {
+                let (v, _) = sequence_size(data).map_err(S::Error::custom)?;
+                ser.serialize_u128(v as u128)
             }
             TypeDef::Bytes => {
                 let (_, s) = sequence_size(data).map_err(S::Error::custom)?;
@@ -749,7 +737,7 @@ pub(crate) fn sequence_size(data: &[u8]) -> Result<(usize, usize), Error> {
     let prefix = compact_size(data)?;
     let len = match prefix {
         1 => (data[0] >> 2) as usize,
-        2 => u16::from((data[0] >> 2) | (data[1] << 6)) as usize,
+        2 => ((data[0] as u16 >> 2) | ((data[1] as u16) << 6)) as usize,
         4 => {
             (((data[0] as u32) >> 2)
                 | ((data[1] as u32) << 6)
@@ -795,8 +783,10 @@ impl core::fmt::Display for Value<'_> {
 }
 
 #[cfg(feature = "json")]
-impl<'reg> From<Value<'reg>> for serde_json::Value {
-    fn from(val: Value<'reg>) -> Self {
-        serde_json::value::to_value(val).unwrap()
+impl<'reg> TryFrom<Value<'reg>> for serde_json::Value {
+    type Error = Error;
+
+    fn try_from(val: Value<'reg>) -> Result<Self, Self::Error> {
+        serde_json::value::to_value(val).map_err(|e| Error::Ser(e.to_string()))
     }
 }

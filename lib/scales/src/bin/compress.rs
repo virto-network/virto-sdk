@@ -21,7 +21,10 @@ fn main() {
         std::process::exit(1);
     });
 
-    let registry = compress::compress(&portable);
+    let registry = compress::compress(&portable).unwrap_or_else(|e| {
+        eprintln!("failed to compress registry: {e}");
+        std::process::exit(1);
+    });
     let encoded = to_vec(&registry).unwrap_or_else(|e| {
         eprintln!("failed to encode registry: {e}");
         std::process::exit(1);

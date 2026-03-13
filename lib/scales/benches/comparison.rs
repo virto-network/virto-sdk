@@ -13,7 +13,7 @@ fn make_portable<T: TypeInfo + 'static>() -> (u32, PortableRegistry) {
 }
 
 fn make_compressed(portable: &PortableRegistry, id: u32) -> (u32, Registry) {
-    (id, compress::compress(portable))
+    (id, compress::compress(portable).expect("compress"))
 }
 
 // -- test types --
@@ -296,13 +296,13 @@ fn bench_registry_size(c: &mut Criterion) {
     let portable = PortableRegistry::decode(&mut &raw[..]).unwrap();
 
     group.bench_function("compress PortableRegistry", |b| {
-        b.iter(|| compress::compress(black_box(&portable)))
+        b.iter(|| compress::compress(black_box(&portable)).expect("compress"))
     });
 
     group.finish();
 
     // Print size comparison as a one-off
-    let compressed = compress::compress(&portable);
+    let compressed = compress::compress(&portable).expect("compress");
     let portable_size = portable.encode().len();
 
     // Estimate compressed wire size

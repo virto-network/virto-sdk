@@ -16,7 +16,7 @@ where
     let mut reg = SiRegistry::new();
     let sym = reg.register_type(&meta_type::<T>());
     let portable: PortableRegistry = reg.into();
-    (sym.id, compress::compress(&portable))
+    (sym.id, compress::compress(&portable).expect("compress"))
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn registry_size_reduction() {
 
     let raw = include_bytes!("../registry.bin");
     let portable = PortableRegistry::decode(&mut &raw[..]).expect("decode");
-    let compressed = compress::compress(&portable);
+    let compressed = compress::compress(&portable).expect("compress");
 
     let encoded_portable = portable.encode();
     let num_types = portable.types.len();

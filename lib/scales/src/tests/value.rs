@@ -600,6 +600,32 @@ fn test_compact_value() {
     let v = Value::new(&data, id, &reg);
 
     assert!(v.is_compact());
+    // Verify serialization produces the decoded integer value
+    assert_eq!(to_value(&v).unwrap(), serde_json::json!(42));
+}
+
+#[test]
+fn test_compact_serialization_modes() {
+    use codec::Compact;
+
+    // Single-byte compact (value 0..63)
+    let c1 = Compact(5u32);
+    let data = c1.encode();
+    let (id, reg) = register(&c1);
+    let v = Value::new(&data, id, &reg);
+    assert_eq!(to_value(&v).unwrap(), serde_json::json!(5));
+
+    // Two-byte compact (value 64..16383)
+    let c2 = Compact(1000u32);
+    let data = c2.encode();
+    let v = Value::new(&data, id, &reg);
+    assert_eq!(to_value(&v).unwrap(), serde_json::json!(1000));
+
+    // Four-byte compact
+    let c3 = Compact(100_000u32);
+    let data = c3.encode();
+    let v = Value::new(&data, id, &reg);
+    assert_eq!(to_value(&v).unwrap(), serde_json::json!(100_000));
 }
 
 #[test]

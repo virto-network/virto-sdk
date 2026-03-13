@@ -59,166 +59,166 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
 
     match ty {
         TypeDef::Bool => {
-            write!(out, "{}", value.as_bool().ok_or(Error::Eof)?).unwrap();
+            write!(out, "{}", value.as_bool().ok_or(Error::Eof)?)?;
         }
-        TypeDef::U8 => write!(out, "{}", value.as_u8().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::U16 => write!(out, "{}", value.as_u16().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::U32 => write!(out, "{}", value.as_u32().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::U64 => write!(out, "{}", value.as_u64().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::U128 => write!(out, "{}", value.as_u128().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::I8 => write!(out, "{}", value.as_i8().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::I16 => write!(out, "{}", value.as_i16().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::I32 => write!(out, "{}", value.as_i32().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::I64 => write!(out, "{}", value.as_i64().ok_or(Error::Eof)?).unwrap(),
-        TypeDef::I128 => write!(out, "{}", value.as_i128().ok_or(Error::Eof)?).unwrap(),
+        TypeDef::U8 => write!(out, "{}", value.as_u8().ok_or(Error::Eof)?)?,
+        TypeDef::U16 => write!(out, "{}", value.as_u16().ok_or(Error::Eof)?)?,
+        TypeDef::U32 => write!(out, "{}", value.as_u32().ok_or(Error::Eof)?)?,
+        TypeDef::U64 => write!(out, "{}", value.as_u64().ok_or(Error::Eof)?)?,
+        TypeDef::U128 => write!(out, "{}", value.as_u128().ok_or(Error::Eof)?)?,
+        TypeDef::I8 => write!(out, "{}", value.as_i8().ok_or(Error::Eof)?)?,
+        TypeDef::I16 => write!(out, "{}", value.as_i16().ok_or(Error::Eof)?)?,
+        TypeDef::I32 => write!(out, "{}", value.as_i32().ok_or(Error::Eof)?)?,
+        TypeDef::I64 => write!(out, "{}", value.as_i64().ok_or(Error::Eof)?)?,
+        TypeDef::I128 => write!(out, "{}", value.as_i128().ok_or(Error::Eof)?)?,
         TypeDef::Char => {
             let c = value.as_char().ok_or(Error::Eof)?;
-            write!(out, "{c}").unwrap();
+            write!(out, "{c}")?;
         }
         TypeDef::Str => {
             let s = value.as_str().ok_or(Error::Eof)?;
-            out.write_char('\'').unwrap();
+            out.write_char('\'')?;
             for c in s.chars() {
                 if c == '\'' {
-                    out.write_str("''").unwrap();
+                    out.write_str("''")?;
                 } else {
-                    out.write_char(c).unwrap();
+                    out.write_char(c)?;
                 }
             }
-            out.write_char('\'').unwrap();
+            out.write_char('\'')?;
         }
         TypeDef::Bytes => {
             let (len, prefix) = sequence_size(data)?;
             let bytes = data.get(prefix..prefix + len).ok_or(Error::Eof)?;
-            write_hex(bytes, out);
+            write_hex(bytes, out)?;
         }
         TypeDef::Compact(_) => {
             let (val, _) = sequence_size(data)?;
-            write!(out, "{val}").unwrap();
+            write!(out, "{val}")?;
         }
         TypeDef::Tuple(tys) => {
-            out.write_char('(').unwrap();
+            out.write_char('(')?;
             let mut cursor = Cursor::new(data, reg);
             for (i, ty_id) in tys.iter().enumerate() {
                 if i > 0 {
-                    out.write_char(';').unwrap();
+                    out.write_char(';')?;
                 }
                 fmt_value(&cursor.next_value(*ty_id)?, out, depth)?;
             }
-            out.write_char(')').unwrap();
+            out.write_char(')')?;
         }
         TypeDef::StructUnit => {}
         TypeDef::StructNewType(inner) => {
             fmt_value(&Value::new(data, *inner, reg), out, depth)?;
         }
         TypeDef::StructTuple(tys) => {
-            out.write_char('(').unwrap();
+            out.write_char('(')?;
             let mut cursor = Cursor::new(data, reg);
             for (i, ty_id) in tys.iter().enumerate() {
                 if i > 0 {
-                    out.write_char(';').unwrap();
+                    out.write_char(';')?;
                 }
                 fmt_value(&cursor.next_value(*ty_id)?, out, depth)?;
             }
-            out.write_char(')').unwrap();
+            out.write_char(')')?;
         }
         TypeDef::Struct(fields) => {
-            out.write_char('(').unwrap();
+            out.write_char('(')?;
             let mut cursor = Cursor::new(data, reg);
             for (i, f) in fields.iter().enumerate() {
                 if i > 0 {
-                    out.write_char(';').unwrap();
+                    out.write_char(';')?;
                 }
-                out.write_str(&f.name).unwrap();
-                out.write_char(':').unwrap();
+                out.write_str(&f.name)?;
+                out.write_char(':')?;
                 fmt_value(&cursor.next_value(f.ty)?, out, depth)?;
             }
-            out.write_char(')').unwrap();
+            out.write_char(')')?;
         }
         TypeDef::Variant(vdef) => {
             let idx = *data.first().ok_or(Error::Eof)?;
             let var = vdef.variant(idx)?;
-            out.write_str(&vdef.name).unwrap();
-            out.write_str("::").unwrap();
-            out.write_str(&var.name).unwrap();
+            out.write_str(&vdef.name)?;
+            out.write_str("::")?;
+            out.write_str(&var.name)?;
             let inner = &data[1..];
             match &var.fields {
                 Fields::Unit => {}
                 Fields::NewType(ty_id) => {
-                    out.write_char('(').unwrap();
+                    out.write_char('(')?;
                     fmt_value(&Value::new(inner, *ty_id, reg), out, depth)?;
-                    out.write_char(')').unwrap();
+                    out.write_char(')')?;
                 }
                 Fields::Tuple(tys) => {
-                    out.write_char('(').unwrap();
+                    out.write_char('(')?;
                     let mut cursor = Cursor::new(inner, reg);
                     for (i, ty_id) in tys.iter().enumerate() {
                         if i > 0 {
-                            out.write_char(';').unwrap();
+                            out.write_char(';')?;
                         }
                         fmt_value(&cursor.next_value(*ty_id)?, out, depth)?;
                     }
-                    out.write_char(')').unwrap();
+                    out.write_char(')')?;
                 }
                 Fields::Struct(fields) => {
-                    out.write_char('(').unwrap();
+                    out.write_char('(')?;
                     let mut cursor = Cursor::new(inner, reg);
                     for (i, f) in fields.iter().enumerate() {
                         if i > 0 {
-                            out.write_char(';').unwrap();
+                            out.write_char(';')?;
                         }
-                        out.write_str(&f.name).unwrap();
-                        out.write_char(':').unwrap();
+                        out.write_str(&f.name)?;
+                        out.write_char(':')?;
                         fmt_value(&cursor.next_value(f.ty)?, out, depth)?;
                     }
-                    out.write_char(')').unwrap();
+                    out.write_char(')')?;
                 }
             }
         }
         TypeDef::Sequence(inner_ty) => {
             let (len, prefix) = sequence_size(data)?;
-            out.write_str("..").unwrap();
+            out.write_str("..")?;
             let mut cursor = Cursor::new(&data[prefix..], reg);
             for i in 0..len {
                 if i > 0 {
-                    out.write_char(';').unwrap();
+                    out.write_char(';')?;
                 }
                 fmt_value(&cursor.next_value(*inner_ty)?, out, depth)?;
             }
-            out.write_char('.').unwrap();
+            out.write_char('.')?;
         }
         TypeDef::Array(inner_ty, len) => {
-            out.write_str("..").unwrap();
+            out.write_str("..")?;
             let mut cursor = Cursor::new(data, reg);
             for i in 0..*len {
                 if i > 0 {
-                    out.write_char(';').unwrap();
+                    out.write_char(';')?;
                 }
                 fmt_value(&cursor.next_value(*inner_ty)?, out, depth)?;
             }
-            out.write_char('.').unwrap();
+            out.write_char('.')?;
         }
         TypeDef::Map(ty_k, ty_v) => {
             let (len, prefix) = sequence_size(data)?;
-            out.write_str("..").unwrap();
+            out.write_str("..")?;
             let mut cursor = Cursor::new(&data[prefix..], reg);
             for i in 0..len {
                 if i > 0 {
-                    out.write_char(';').unwrap();
+                    out.write_char(';')?;
                 }
-                out.write_char('(').unwrap();
+                out.write_char('(')?;
                 fmt_value(&cursor.next_value(*ty_k)?, out, depth)?;
-                out.write_char(';').unwrap();
+                out.write_char(';')?;
                 fmt_value(&cursor.next_value(*ty_v)?, out, depth)?;
-                out.write_char(')').unwrap();
+                out.write_char(')')?;
             }
-            out.write_char('.').unwrap();
+            out.write_char('.')?;
         }
         TypeDef::BitSequence(_, _) => {
             let (bit_len, prefix) = sequence_size(data)?;
             let byte_len = bit_len.div_ceil(8);
             let bytes = data.get(prefix..prefix + byte_len).ok_or(Error::Eof)?;
-            write_hex(bytes, out);
+            write_hex(bytes, out)?;
         }
     }
     Ok(())
@@ -226,11 +226,12 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
 
 /// Write bytes as `0x`-prefixed lowercase hex directly to a `fmt::Write`,
 /// without allocating an intermediate string.
-fn write_hex(bytes: &[u8], out: &mut impl Write) {
-    out.write_str("0x").unwrap();
+fn write_hex(bytes: &[u8], out: &mut impl Write) -> fmt::Result {
+    out.write_str("0x")?;
     for &b in bytes {
-        write!(out, "{:02x}", b).unwrap();
+        write!(out, "{:02x}", b)?;
     }
+    Ok(())
 }
 
 /// Returns true if `c` can immediately follow a bare keyword (true/false)

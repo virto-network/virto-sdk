@@ -43,6 +43,12 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
+impl From<fmt::Error> for Error {
+    fn from(_: fmt::Error) -> Self {
+        Error::Ser("format error".into())
+    }
+}
+
 impl serde::ser::Error for Error {
     fn custom<T: fmt::Display>(msg: T) -> Self {
         Error::Ser(msg.to_string())
