@@ -8,7 +8,7 @@ async fn main() -> Result<()> {
 
     if let Response::Value(entry, reg) = response {
         let value = entry.as_value(reg);
-        println!("{}", value);
+        log::info!("{}", value);
     }
 
     Ok(())

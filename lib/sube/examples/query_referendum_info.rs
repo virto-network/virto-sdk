@@ -11,8 +11,8 @@ async fn main() -> Result<()> {
 
     if let Response::Value(ref entry, reg) = r {
         let json_value = entry.to_json(reg)?;
-        println!("Raw JSON value: {:?}", json_value);
-        println!(
+        log::info!("Raw JSON value: {:?}", json_value);
+        log::info!(
             "Info: {}",
             serde_json::to_string_pretty(&json_value).expect("it must return an str")
         );

@@ -11,9 +11,9 @@ async fn main() -> sube::Result<()> {
 
     if let Response::Value(ref entry, reg) = r {
         let json_value = entry.to_json(reg)?;
-        println!("json: {:?}", json_value);
+        log::info!("json: {:?}", json_value);
         let x = serde_json::to_string_pretty(&json_value).expect("it must return an str");
-        println!("Preimage: {:?}", x);
+        log::info!("Preimage: {:?}", x);
     }
 
     Ok(())

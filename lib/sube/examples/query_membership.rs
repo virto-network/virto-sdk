@@ -13,11 +13,11 @@ async fn main() -> sube::Result<()> {
         for (keys, value) in entries {
             for key in keys {
                 let json_key = key.to_json(reg)?;
-                println!("key: {:?}", json_key);
+                log::info!("key: {:?}", json_key);
             }
             if let Some(val) = value {
                 let json_value = val.to_json(reg)?;
-                println!("value: {:?}", json_value);
+                log::info!("value: {:?}", json_value);
             }
         }
     }

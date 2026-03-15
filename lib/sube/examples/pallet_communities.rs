@@ -8,11 +8,11 @@ async fn main() -> Result<()> {
         for (keys, value) in &entries {
             for key in keys {
                 let json_key = key.to_json(reg)?;
-                println!("key: {:?}", json_key);
+                log::info!("key: {:?}", json_key);
             }
             if let Some(val) = value {
                 let json_value = val.to_json(reg)?;
-                println!("Collection Array value: {:?}", json_value);
+                log::info!("Collection Array value: {:?}", json_value);
             }
         }
     }
@@ -23,11 +23,11 @@ async fn main() -> Result<()> {
         for (keys, value) in &entries {
             for key in keys {
                 let json_key = key.to_json(reg)?;
-                println!("key: {:?}", json_key);
+                log::info!("key: {:?}", json_key);
             }
             if let Some(val) = value {
                 let json_value = val.to_json(reg)?;
-                println!("Collection value: {:?}", json_value);
+                log::info!("Collection value: {:?}", json_value);
             }
         }
     }
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
 
     if let Response::Value(entry, reg) = result {
         let data = entry.to_json(reg)?;
-        println!(
+        log::info!(
             "Account info: {}",
             serde_json::to_string_pretty(&data).expect("it must return an str")
         );

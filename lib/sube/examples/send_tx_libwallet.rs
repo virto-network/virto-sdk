@@ -33,8 +33,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .await.map_err(|_| format!("Error sending tx"))?;
 
-    println!("Secret phrase: \"{phrase}\"");
-    println!("Default Account: 0x{account}");
+    log::info!("Secret phrase: \"{phrase}\"");
+    log::info!("Default Account: 0x{account}");
 
     Ok(())
 }

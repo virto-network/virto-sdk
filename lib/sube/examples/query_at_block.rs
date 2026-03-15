@@ -6,7 +6,7 @@ async fn main() -> Result<()> {
 
     if let Response::Value(entry, reg) = result {
         let data = entry.to_json(reg)?;
-        println!(
+        log::info!(
             "Account info: {}",
             serde_json::to_string_pretty(&data).expect("it must return an str")
         );

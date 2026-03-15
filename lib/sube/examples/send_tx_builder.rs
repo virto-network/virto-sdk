@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_signer(signer)
         .await.map_err(|_| format!("Failed to send tx"));
 
-    println!("{:?}", response);
+    log::info!("{:?}", response);
     Ok(())
 }
 

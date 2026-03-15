@@ -6,7 +6,7 @@ async fn main() -> sube::Result<()> {
 
     if let Response::Value(entry, reg) = result {
         let data = entry.to_json(reg)?;
-        println!(
+        log::info!(
             "Account info: {}",
             serde_json::to_string_pretty(&data).expect("it must return an str")
         );
@@ -18,9 +18,9 @@ async fn main() -> sube::Result<()> {
 
     if let Response::Value(ref entry, reg) = r {
         let json_value = entry.to_json(reg)?;
-        println!("json: {:?}", json_value);
+        log::info!("json: {:?}", json_value);
         let x = serde_json::to_string_pretty(&json_value).expect("it must return an str");
-        println!("Account info: {:?}", x);
+        log::info!("Account info: {:?}", x);
     }
 
     Ok(())
