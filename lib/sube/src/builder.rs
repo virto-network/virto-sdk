@@ -76,7 +76,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
 
         Ok(match path {
             "_meta" => Response::Meta(meta),
-            "_meta/registry" => Response::Registry(&meta.types),
+            "_meta/registry" => Response::Registry(&meta.registry),
             _ => crate::query(&backend, meta, path, block).await?,
         })
     }
@@ -124,7 +124,7 @@ where
 
         Ok(match path {
             "_meta" => Response::Meta(meta),
-            "_meta/registry" => Response::Registry(&meta.types),
+            "_meta/registry" => Response::Registry(&meta.registry),
             _ => {
                 let signer = signer.ok_or(Error::BadInput)?;
 

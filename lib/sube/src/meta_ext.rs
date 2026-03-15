@@ -1,9 +1,11 @@
 use crate::prelude::*;
 use core::borrow::Borrow;
+use core::ops::Deref;
 
 use codec::Decode;
 use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 use scales::to_bytes_with_info;
+use serde::Serialize;
 
 #[cfg(feature = "v14")]
 pub use v14::*;
@@ -14,12 +16,39 @@ type TypeId = u32;
 mod v14 {
     use frame_metadata::v14::*;
     use scale_info::form::PortableForm;
-    pub type Metadata = RuntimeMetadataV14;
+    pub type InnerMetadata = RuntimeMetadataV14;
     pub type PalletMeta = PalletMetadata<PortableForm>;
     pub type EntryType = StorageEntryType<PortableForm>;
     pub type Hasher = StorageHasher;
     pub use scale_info::PortableRegistry;
     pub type Type = scale_info::Type<PortableForm>;
+}
+
+#[derive(Clone, Debug)]
+pub struct Metadata {
+    pub inner: InnerMetadata,
+    pub registry: scales::Registry,
+}
+
+impl Deref for Metadata {
+    type Target = InnerMetadata;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl codec::Encode for Metadata {
+    fn encode(&self) -> Vec<u8> {
+        self.inner.encode()
+    }
+}
+
+impl Serialize for Metadata {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error> {
+        // Metadata is opaque when serialized — encode as hex bytes
+        let bytes = codec::Encode::encode(&self.inner);
+        serializer.serialize_str(&hex::encode(bytes))
+    }
 }
 
 // Decode metadata from its raw prefixed format to the currently
@@ -30,7 +59,12 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
         RuntimeMetadata::V14(m) => m,
         _ => unreachable!("Metadata version not supported"),
     };
-    Ok(meta)
+    let registry = scales::compress::compress(&meta.types)
+        .map_err(|_| codec::Error::from("Failed to compress registry"))?;
+    Ok(Metadata {
+        inner: meta,
+        registry,
+    })
 }
 
 pub struct BlockInfo {
@@ -60,7 +94,7 @@ impl Meta for Metadata {
     type Pallet = PalletMeta;
 
     fn pallets(&self) -> impl Iterator<Item = &Self::Pallet> {
-        self.pallets.iter()
+        self.inner.pallets.iter()
     }
 }
 
@@ -119,6 +153,7 @@ impl StorageKey {
 
     pub fn build_with_registry<T: AsRef<str>>(
         registry: &PortableRegistry,
+        scales_registry: &scales::Registry,
         meta: &PalletMeta,
         item: &str,
         map_keys: &[T],
@@ -136,7 +171,9 @@ impl StorageKey {
                 .collect::<Vec<&str>>()
                 .join(", ")
         );
-        entry.ty.key(registry, &meta.name, &entry.name, map_keys)
+        entry
+            .ty
+            .key(registry, scales_registry, &meta.name, &entry.name, map_keys)
     }
 }
 
@@ -160,6 +197,7 @@ pub trait EntryTy {
     fn key<T: AsRef<str>>(
         &self,
         registry: &PortableRegistry,
+        scales_registry: &scales::Registry,
         pallet: &str,
         item: &str,
         map_keys: &[T],
@@ -168,6 +206,7 @@ pub trait EntryTy {
     fn build_call<H, T>(
         &self,
         portable_reg: &PortableRegistry,
+        scales_registry: &scales::Registry,
         key_ty_id: Option<u32>,
         value_ty_id: u32,
         pallet_item: (&str, &str),
@@ -213,11 +252,19 @@ pub trait EntryTy {
                         let mut out = vec![];
 
                         if let Some(k) = k.strip_prefix("0x") {
-                            let value = hex::decode(k).expect("str must be encoded");
-                            let _ =
-                                to_bytes_with_info(&mut out, &value, Some((portable_reg, type_id)));
+                            let value =
+                                hex::decode(k).expect("str must be encoded");
+                            let _ = to_bytes_with_info(
+                                &mut out,
+                                &value,
+                                Some((scales_registry, type_id)),
+                            );
                         } else {
-                            let _ = to_bytes_with_info(&mut out, &k, Some((portable_reg, type_id)));
+                            let _ = to_bytes_with_info(
+                                &mut out,
+                                &k,
+                                Some((scales_registry, type_id)),
+                            );
                         }
 
                         let hash = hash(hasher, &out);
@@ -238,9 +285,17 @@ pub trait EntryTy {
                     let mut out = vec![];
                     if let Some(k) = k.strip_prefix("0x") {
                         let value = hex::decode(k).expect("str must be hex encoded");
-                        let _ = to_bytes_with_info(&mut out, &value, Some((portable_reg, type_id)));
+                        let _ = to_bytes_with_info(
+                            &mut out,
+                            &value,
+                            Some((scales_registry, type_id)),
+                        );
                     } else {
-                        let _ = to_bytes_with_info(&mut out, &k, Some((portable_reg, type_id)));
+                        let _ = to_bytes_with_info(
+                            &mut out,
+                            &k,
+                            Some((scales_registry, type_id)),
+                        );
                     }
                     out
                 })
@@ -275,14 +330,21 @@ impl EntryTy for EntryType {
     fn key<T: AsRef<str>>(
         &self,
         registry: &PortableRegistry,
+        scales_registry: &scales::Registry,
         pallet: &str,
         item: &str,
         map_keys: &[T],
     ) -> crate::Result<StorageKey> {
         match self {
-            Self::Plain(ty) => {
-                self.build_call::<Hasher, &str>(registry, None, ty.id, (pallet, item), &[], &[])
-            }
+            Self::Plain(ty) => self.build_call::<Hasher, &str>(
+                registry,
+                scales_registry,
+                None,
+                ty.id,
+                (pallet, item),
+                &[],
+                &[],
+            ),
             Self::Map {
                 hashers,
                 key,
@@ -291,6 +353,7 @@ impl EntryTy for EntryType {
                 log::trace!("key={}, value={}, hasher={:?}", key.id, value.id, hashers);
                 self.build_call(
                     registry,
+                    scales_registry,
                     Some(key.id),
                     value.id,
                     (pallet, item),

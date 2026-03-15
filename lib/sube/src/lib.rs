@@ -26,6 +26,7 @@ pub use signer::{Bytes, Signer, SignerFn};
 pub use meta::Metadata;
 #[cfg(feature = "v14")]
 pub use scales::{Serializer, Value};
+pub use scales::Registry;
 
 use codec::Compact;
 use core::fmt;
@@ -34,8 +35,6 @@ use hasher::hash;
 use meta_ext::{self as meta, Meta as _};
 use meta_ext::{KeyValue, StorageKey};
 use prelude::*;
-#[cfg(feature = "v14")]
-use scale_info::PortableRegistry;
 use serde::{Deserialize, Serialize};
 pub use serde_json::{json, Value as JsonValue};
 
@@ -67,7 +66,7 @@ pub mod util;
 /// The batteries included way to query or submit extrinsics to a Substrate based blockchain
 ///
 /// Returns a builder that implments `IntoFuture` so it can be `.await`ed on.
-pub fn sube(url: &str) -> builder::SubeBuilder<(), ()> {
+pub fn sube(url: &str) -> builder::SubeBuilder<'_, (), ()> {
     builder::SubeBuilder::default().with_url(url)
 }
 
@@ -92,21 +91,22 @@ async fn query<'m>(
             .find(|c| c.name == const_name)
             .ok_or(Error::ConstantNotFound(const_name))?;
 
-        return Ok(Response::Value(Value::new(
-            const_meta.value.clone(),
-            const_meta.ty.id,
-            &meta.types,
-        )));
+        return Ok(Response::Value(
+            StorageEntry::new(const_meta.value.clone(), const_meta.ty.id),
+            &meta.registry,
+        ));
     }
 
-    if let Ok(key_res) = StorageKey::build_with_registry(&meta.types, pallet, &item_or_call, &keys)
+    if let Ok(key_res) =
+        StorageKey::build_with_registry(&meta.inner.types, &meta.registry, pallet, &item_or_call, &keys)
     {
         if !key_res.is_partial() {
             let res = chain.get_storage_item(key_res.key(), block).await?;
 
-            let value = res.map_or(Response::None, |res| {
-                Response::Value(Value::new(res, key_res.ty, &meta.types))
-            });
+            let value = match res {
+                None => Response::None,
+                Some(res) => Response::Value(StorageEntry::new(res, key_res.ty), &meta.registry),
+            };
 
             return Ok(value);
         }
@@ -124,22 +124,23 @@ async fn query<'m>(
                     .iter()
                     .map(|arg| match arg {
                         KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
-                            let hashed = &key[offset..];
-                            let value = Value::new(hashed.to_vec(), *type_id, &meta.types);
-                            offset += value.size() + 16;
-                            value
+                            let entry = StorageEntry::new(key[offset..].to_vec(), *type_id);
+                            let size = entry
+                                .as_value(&meta.registry)
+                                .size()
+                                .unwrap_or(0);
+                            offset += size + 16;
+                            entry
                         }
                     })
-                    .collect::<Vec<Value<'m>>>();
+                    .collect::<Vec<StorageEntry>>();
 
-                let value = data.map(|data| {
-                    Value::new(data.to_vec(), key_res.ty, &meta.types)
-                });
+                let value = data.map(|data| StorageEntry::new(data, key_res.ty));
                 (keys, value)
             })
             .collect::<Vec<_>>();
 
-        Ok(Response::ValueSet(value))
+        Ok(Response::ValueSet(value, &meta.registry))
     } else {
         Err(Error::ChainUnavailable)
     }
@@ -149,25 +150,6 @@ async fn query<'m>(
 pub struct ExtrinsicBody<Body> {
     pub nonce: Option<u64>,
     pub body: Body,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, Debug)]
-pub struct AccountInfo {
-    nonce: u64,
-    consumers: u64,
-    providers: u64,
-    sufficients: u64,
-    data: Data,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, Debug)]
-pub struct Data {
-    free: u128,
-    reserved: u128,
-    frozen: u128,
-    flags: u128,
 }
 
 async fn submit<'m, V>(
@@ -188,8 +170,6 @@ where
 
     log::debug!("calls_ty: {:?}", calls_ty);
 
-    let type_registry = &meta.types;
-
     let mut encoded_call = vec![pallet.index];
 
     log::debug!("tx_data: {:?}", tx_data);
@@ -198,7 +178,7 @@ where
     });
     log::debug!("json_body: {:?}", &json);
 
-    let call_data = scales::to_vec_with_info(&json, (type_registry, calls_ty).into())
+    let call_data = scales::to_vec_with_info(&json, Some((&meta.registry, calls_ty)))
         .map_err(|e| Error::Encode(e.to_string()))?;
 
     encoded_call.extend(&call_data);
@@ -224,11 +204,24 @@ where
                 .await?;
 
                 match response {
-                    Response::Value(value) => {
-                        let str = serde_json::to_string(&value).expect("wrong account info");
-                        let account_info: AccountInfo =
-                            serde_json::from_str(&str).expect("it must serialize");
-                        Ok(account_info.nonce)
+                    Response::Value(entry, reg) => {
+                        let value = entry.as_value(reg);
+                        let nonce_val = value.field("nonce").and_then(|v| {
+                            v.as_u32().map(|n| n as u64).or_else(|| v.as_u64())
+                        });
+                        match nonce_val {
+                            Some(n) => Ok(n),
+                            None => {
+                                let json_val: JsonValue = value
+                                    .try_into()
+                                    .map_err(|_| Error::Mapping("failed to decode account info".into()))?;
+                                json_val
+                                    .as_object()
+                                    .and_then(|o| o.get("nonce"))
+                                    .and_then(|v| v.as_u64())
+                                    .ok_or(Error::Mapping("nonce not found in account info".into()))
+                            }
+                        }
                     }
                     Response::None => {
                         log::warn!("account not found");
@@ -265,7 +258,9 @@ where
             .find(|c| c.name == "Version")
             .ok_or(Error::ConstantNotFound("System_Version".into()))?;
 
-        let chain_value: JsonValue = Value::new(data.value, data.ty.id, &meta.types).into();
+        let chain_value: JsonValue = Value::new(&data.value, data.ty.id, &meta.registry)
+            .try_into()
+            .map_err(|_| Error::Mapping("failed to decode System::Version".into()))?;
 
         let iter = chain_value
             .as_object()
@@ -343,26 +338,50 @@ where
     Ok(Response::Void)
 }
 
-#[derive(Serialize, Debug)]
-#[serde(untagged)]
+/// Owned raw SCALE-encoded data with its type id.
+/// Call [`as_value`](StorageEntry::as_value) with a registry to decode.
+#[derive(Clone, Debug)]
+pub struct StorageEntry {
+    pub data: Vec<u8>,
+    pub ty: scales::TypeId,
+}
+
+impl StorageEntry {
+    pub fn new(data: Vec<u8>, ty: scales::TypeId) -> Self {
+        Self { data, ty }
+    }
+
+    /// Borrow this entry as a typed [`Value`] for decoding/serialization.
+    pub fn as_value<'a>(&'a self, registry: &'a scales::Registry) -> scales::Value<'a> {
+        scales::Value::new(&self.data, self.ty, registry)
+    }
+
+    /// Decode this entry into a JSON value using the given registry.
+    pub fn to_json(&self, registry: &scales::Registry) -> Result<JsonValue> {
+        serde_json::to_value(self.as_value(registry))
+            .map_err(|e| Error::Mapping(e.to_string()))
+    }
+}
+
+#[derive(Debug)]
 pub enum Response<'m> {
     Void,
     None,
-    Value(scales::Value<'m>),
-    ValueSet(Vec<(Vec<scales::Value<'m>>, Option<scales::Value<'m>>)>),
+    Value(StorageEntry, &'m scales::Registry),
+    ValueSet(Vec<(Vec<StorageEntry>, Option<StorageEntry>)>, &'m scales::Registry),
     Meta(&'m Metadata),
-    Registry(&'m PortableRegistry),
+    Registry(&'m scales::Registry),
 }
 
 impl From<Response<'_>> for Vec<u8> {
     fn from(res: Response) -> Self {
         match res {
-            Response::Value(v) => v.as_ref().into(),
+            Response::Value(v, _) => v.data,
             Response::None => vec![0],
             Response::Meta(m) => m.encode(),
-            Response::Registry(r) => r.encode(),
-            Response::ValueSet(r) => r.encode(),
+            Response::ValueSet(_, _) => vec![],
             Response::Void => vec![],
+            Response::Registry(_) => vec![],
         }
     }
 }
@@ -410,7 +429,6 @@ pub trait Backend {
         block: Option<u32>,
     ) -> crate::Result<Option<RawValue>> {
         let res = self.get_storage_items(vec![key], block).await?;
-        log::info!("before it died");
         res.into_iter()
             .next()
             .map(|(_, v)| v)
@@ -506,5 +524,5 @@ impl fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-#[cfg(feature = "no_std")]
+#[cfg(not(feature = "std"))]
 impl core::error::Error for Error {}

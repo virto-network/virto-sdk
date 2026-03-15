@@ -70,7 +70,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 crate::Error::StorageKeyNotFound
             })?;
 
-        let result = match result.into_iter().next() {
+        let result: Vec<_> = match result.into_iter().next() {
             None => vec![],
             Some(change_set) => change_set
                 .changes
@@ -78,12 +78,15 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 .map(|(k, v)| {
                     log::debug!("key: {:?} value: {:?}", k, v);
 
-                    (
-                        hex::decode(&k[2..]).expect("to be an hex"),
-                        v.map(|v| hex::decode(&v[2..]).expect("to be an hex")),
-                    )
+                    let key = hex::decode(&k[2..])
+                        .map_err(|_| crate::Error::CantDecodeRawQueryResponse)?;
+                    let value = v
+                        .map(|v| hex::decode(&v[2..]))
+                        .transpose()
+                        .map_err(|_| crate::Error::CantDecodeRawQueryResponse)?;
+                    Ok((key, value))
                 })
-                .collect(),
+                .collect::<crate::Result<Vec<_>>>()?,
         };
 
         Ok(result.into_iter())
@@ -113,10 +116,11 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 crate::Error::StorageKeyNotFound
             })?;
         log::info!("rpc call {:?}", result);
-        Ok(result
+        let keys = result
             .into_iter()
-            .map(|k| hex::decode(&k[2..]).expect("to be an hex"))
-            .collect())
+            .map(|k| hex::decode(&k[2..]).map_err(|_| crate::Error::CantDecodeRawQueryResponse))
+            .collect::<crate::Result<Vec<_>>>()?;
+        Ok(keys)
     }
 
     async fn submit(&self, ext: impl AsRef<[u8]>) -> crate::Result<()> {
@@ -152,7 +156,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 .await
                 .map_err(|e| crate::Error::Node(e.to_string()));
 
-            Ok(hex::decode(&f?.as_str()[2..]).expect("to be an valid hex"))
+            hex::decode(&f?.as_str()[2..]).map_err(|_| crate::Error::CantDecodeRawQueryResponse)
         }
 
         let block_hash = if let Some(block_number) = at {

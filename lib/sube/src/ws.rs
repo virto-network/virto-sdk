@@ -109,10 +109,10 @@ impl Backend {
 
     fn process_tx_send_messages(tx: Arc<Mutex<Tx>>, recv: Arc<Mutex<mpsc::Receiver<Message>>>) {
         spawn(async move {
-            info!("waiting for coommands...");
+            info!("waiting for commands...");
 
             while let Some(m) = recv.lock().await.next().await {
-                info!("got for coommands...?");
+                info!("got for commands...?");
                 tx.lock().await.send(m);
             }
         });

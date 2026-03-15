@@ -1,11 +1,7 @@
-use env_logger;
-use serde_json;
-use sube::{sube, ExtrinsicBody, Response, Result, SubeBuilder};
+use sube::{sube, Response, Result};
 
 #[async_std::main]
 async fn main() -> Result<()> {
-    env_logger::init();
-
     let query = format!(
         "https://kreivo.io/communityReferenda/referendumInfoFor/{}",
         24
@@ -13,8 +9,8 @@ async fn main() -> Result<()> {
 
     let r = sube!(&query).await?;
 
-    if let Response::Value(ref v) = r {
-        let json_value = serde_json::to_value(v).expect("it must to be an valid Value");
+    if let Response::Value(ref entry, reg) = r {
+        let json_value = entry.to_json(reg)?;
         println!("Raw JSON value: {:?}", json_value);
         println!(
             "Info: {}",

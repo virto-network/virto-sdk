@@ -15,7 +15,10 @@ pub fn hash<I: AsRef<[u8]>>(hasher: &Hasher, input: I) -> Vec<u8> {
     // input might be a hex encoded string
     let mut data = vec![];
     if input.starts_with(b"0x") {
-        data.append(&mut hex::decode(&input[2..]).expect("hex string"));
+        if let Ok(mut decoded) = hex::decode(&input[2..]) {
+            data.append(&mut decoded);
+        }
+        // if hex decode fails, just use the raw input
         input = data.as_ref();
     };
 
