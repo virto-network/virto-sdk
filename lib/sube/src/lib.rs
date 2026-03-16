@@ -6,34 +6,41 @@ to Substrate based blockchains.
 It supports multiple backends and uses the chain's type information
 to automatically encode/decode data into human-readable formats like JSON.
 
-TODO: rewrite docs for sube 1.0
+# Usage
+
+Query storage:
+```rust,ignore
+let result = sube("wss://rpc.example.io/system/account/0x1234...").await?;
+```
+
+Submit an extrinsic:
+```rust,ignore
+let result = sube("wss://rpc.example.io/balances/transfer")
+    .with_body(json!({ "dest": {"Id": dest}, "value": 1000 }))
+    .with_signer(signer)
+    .await?;
+```
 */
 
 #[macro_use]
 extern crate alloc;
 
 pub use codec;
-use codec::Encode;
 pub use core::fmt::Display;
-use core::iter::Empty;
-
-pub use signer::{Bytes, Signer, SignerFn};
-
-pub use meta::Metadata;
-pub use scales::{Serializer, Value};
-pub use scales::Registry;
-
-use codec::Compact;
-use core::fmt;
-use hasher::hash;
-// use meta::Meta;
-use metadata::{self as meta};
-use metadata::{KeyValue, StorageKey};
-use prelude::*;
-use serde::{Deserialize, Serialize};
+pub use scales::{Registry, Serializer, Value};
 pub use serde_json::{json, Value as JsonValue};
 
-use crate::util::to_camel;
+pub use builder::{CallBuilder, QueryBuilder, Sube};
+pub use extrinsic::ExtrinsicBody;
+pub use meta::Metadata;
+pub use signer::{Bytes, Signer, SignerFn};
+
+use core::fmt;
+use core::iter::Empty;
+use metadata::{self as meta, KeyValue, StorageKey};
+use prelude::*;
+use serde::{Deserialize, Serialize};
+use util::to_camel;
 
 mod prelude {
     pub use alloc::boxed::Box;
@@ -48,26 +55,28 @@ pub mod http;
 #[cfg(feature = "ws")]
 pub mod ws;
 
+pub(crate) mod backend;
 pub mod builder;
-pub use builder::SubeBuilder;
+pub(crate) mod extrinsic;
 mod hasher;
 pub mod metadata;
-mod signer;
-
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
 pub mod rpc;
+mod signer;
 pub mod util;
 
-/// The batteries included way to query or submit extrinsics to a Substrate based blockchain
+/// The batteries-included entry point for querying and submitting extrinsics.
 ///
-/// Returns a builder that implments `IntoFuture` so it can be `.await`ed on.
-pub fn sube(url: &str) -> builder::SubeBuilder<'_, (), ()> {
-    builder::SubeBuilder::default().with_url(url)
+/// Returns a [`Sube`] handle that can be:
+/// - `.await`ed directly for one-liner queries (when the URL contains a path)
+/// - reused via [`.query(path)`](Sube::query) and [`.call(path)`](Sube::call)
+pub fn sube(url: &str) -> Sube {
+    Sube::new(url)
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-async fn query<'m>(
+pub(crate) async fn query<'m>(
     chain: &impl Backend,
     meta: &'m Metadata,
     path: &str,
@@ -113,17 +122,14 @@ async fn query<'m>(
             .into_iter()
             .map(|(key, data)| {
                 let key = &key[(key_res.pallet.len() + key_res.call.len())..];
-                let mut offset = 16; // TODO it depends on the hasher used to encode the key, then the size could change
+                let mut offset = 16; // TODO depends on the hasher used
                 let keys = key_res
                     .args
                     .iter()
                     .map(|arg| match arg {
                         KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
                             let entry = StorageEntry::new(key[offset..].to_vec(), *type_id);
-                            let size = entry
-                                .as_value(&meta.registry)
-                                .size()
-                                .unwrap_or(0);
+                            let size = entry.as_value(&meta.registry).size().unwrap_or(0);
                             offset += size + 16;
                             entry
                         }
@@ -141,296 +147,15 @@ async fn query<'m>(
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ExtrinsicBody<Body> {
-    pub nonce: Option<u64>,
-    pub body: Body,
-    #[serde(default)]
-    pub extensions: Vec<(String, JsonValue)>,
+pub(crate) fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
+    let mut path = uri.trim_matches('/').split('/');
+    let pallet = path.next().map(to_camel)?;
+    let item = path.next().map(to_camel)?;
+    let map_keys = path.map(to_camel).collect::<Vec<_>>();
+    Some((pallet, item, map_keys))
 }
 
-/// Chain context fetched once for extension defaults.
-struct ChainContext {
-    spec_version: u32,
-    tx_version: u32,
-    genesis_hash: [u8; 32],
-    account_nonce: u64,
-}
-
-/// Look up a caller-provided extension value by identifier.
-fn find_extension_override(extensions: &[(String, JsonValue)], id: &str) -> Option<JsonValue> {
-    extensions
-        .iter()
-        .find(|(k, _)| k == id)
-        .map(|(_, v)| v.clone())
-}
-
-/// Returns a default JSON value for well-known extension "extra" data.
-fn default_extra_value(identifier: &str, ctx: &ChainContext) -> Option<JsonValue> {
-    match identifier {
-        "CheckMortality" => Some(json!({"Immortal": null})),
-        "CheckNonce" => Some(json!(ctx.account_nonce)),
-        "ChargeTransactionPayment" => Some(json!(0)),
-        "ChargeAssetTxPayment" => Some(json!({"tip": 0, "asset_id": null})),
-        // Extensions whose extra type is unit need no value
-        _ => None,
-    }
-}
-
-/// Returns a default JSON value for well-known extension "additional_signed" data.
-fn default_additional_value(
-    identifier: &str,
-    ctx: &ChainContext,
-) -> Option<JsonValue> {
-    match identifier {
-        "CheckSpecVersion" => Some(json!(ctx.spec_version)),
-        "CheckTxVersion" => Some(json!(ctx.tx_version)),
-        "CheckGenesis" => {
-            Some(json!(format!("0x{}", hex::encode(ctx.genesis_hash))))
-        }
-        "CheckMortality" => {
-            // Immortal era → checkpoint is genesis hash
-            Some(json!(format!("0x{}", hex::encode(ctx.genesis_hash))))
-        }
-        _ => None,
-    }
-}
-
-async fn submit<'m, V>(
-    chain: impl Backend,
-    meta: &'m Metadata,
-    path: &str,
-    tx_data: ExtrinsicBody<V>,
-    signer: impl Signer,
-) -> Result<Response<'m>>
-where
-    V: serde::Serialize + core::fmt::Debug,
-{
-    let (pallet, item_or_call, _keys) = parse_uri(path).ok_or(Error::BadInput)?;
-    let pallet = meta
-        .pallet_by_name(&pallet)
-        .ok_or(Error::PalletNotFound(pallet))?;
-    let calls_ty = pallet.calls_ty.ok_or(Error::CallNotFound)?;
-
-    log::debug!("calls_ty: {:?}", calls_ty);
-
-    let mut encoded_call = vec![pallet.index];
-
-    log::debug!("tx_data: {:?}", tx_data);
-    let json = &json!({
-        &item_or_call.to_lowercase(): &tx_data.body
-    });
-    log::debug!("json_body: {:?}", &json);
-
-    let call_data = scales::to_vec_with_info(&json, Some((&meta.registry, calls_ty)))
-        .map_err(|e| Error::Encode(e.to_string()))?;
-
-    encoded_call.extend(&call_data);
-
-    let from_account = signer.account();
-    log::debug!("from_account: {:?}", hex::encode(from_account.as_ref()));
-
-    // --- Fetch chain context ---
-    let ctx = {
-        // Spec/tx version from System::Version constant
-        let system = meta
-            .pallet_by_name("System")
-            .ok_or(Error::PalletNotFound(String::from("System")))?;
-
-        let version_const = system
-            .constants
-            .iter()
-            .find(|c| c.name == "Version")
-            .ok_or(Error::ConstantNotFound("System_Version".into()))?;
-
-        let chain_value: JsonValue = Value::new(&version_const.value, version_const.ty, &meta.registry)
-            .try_into()
-            .map_err(|_| Error::Mapping("failed to decode System::Version".into()))?;
-
-        let obj = chain_value
-            .as_object()
-            .ok_or(Error::ConstantNotFound("System_Version".into()))?;
-
-        let spec_version = obj
-            .get("spec_version")
-            .and_then(|v| v.as_u64())
-            .ok_or(Error::Mapping("spec_version not found".into()))? as u32;
-
-        let tx_version = obj
-            .get("transaction_version")
-            .and_then(|v| v.as_u64())
-            .ok_or(Error::Mapping("transaction_version not found".into()))?
-            as u32;
-
-        let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
-        let mut genesis_hash = [0u8; 32];
-        genesis_hash.copy_from_slice(&genesis_block[..32]);
-
-        // Nonce: from caller override or query chain
-        let account_nonce = if let Some(nonce) = tx_data.nonce {
-            nonce
-        } else if let Some(nonce_val) = find_extension_override(&tx_data.extensions, "CheckNonce") {
-            nonce_val.as_u64().ok_or(Error::Mapping("CheckNonce override is not a number".into()))?
-        } else {
-            let response = query(
-                &chain,
-                meta,
-                &format!("system/account/0x{}", hex::encode(from_account.as_ref())),
-                None,
-            )
-            .await?;
-
-            match response {
-                Response::Value(entry, reg) => {
-                    let value = entry.as_value(reg);
-                    let nonce_val = value.field("nonce").and_then(|v| {
-                        v.as_u32().map(|n| n as u64).or_else(|| v.as_u64())
-                    });
-                    match nonce_val {
-                        Some(n) => n,
-                        None => {
-                            let json_val: JsonValue = value
-                                .try_into()
-                                .map_err(|_| Error::Mapping("failed to decode account info".into()))?;
-                            json_val
-                                .as_object()
-                                .and_then(|o| o.get("nonce"))
-                                .and_then(|v| v.as_u64())
-                                .ok_or(Error::Mapping("nonce not found in account info".into()))?
-                        }
-                    }
-                }
-                Response::None => {
-                    log::warn!("account not found");
-                    0
-                }
-                _ => return Err(Error::AccountNotFound),
-            }
-        };
-
-        ChainContext {
-            spec_version,
-            tx_version,
-            genesis_hash,
-            account_nonce,
-        }
-    };
-
-    // --- Encode extensions by iterating metadata ---
-    let mut extra_bytes = Vec::new();
-    let mut additional_signed_bytes = Vec::new();
-
-    for ext in &meta.extrinsic.extensions {
-        // "extra" bytes — included in extrinsic body
-        let extra_value = find_extension_override(&tx_data.extensions, &ext.identifier)
-            .or_else(|| default_extra_value(&ext.identifier, &ctx));
-
-        let encoded = if meta::is_zero_size_type(ext.ty, &meta.registry) {
-            vec![]
-        } else {
-            let value = extra_value.ok_or_else(|| {
-                Error::MissingExtensionValue(ext.identifier.clone())
-            })?;
-            let mut buf = vec![];
-            scales::to_bytes_with_info(&mut buf, &value, Some((&meta.registry, ext.ty)))
-                .map_err(|e| Error::Encode(e.to_string()))?;
-            buf
-        };
-        extra_bytes.extend(encoded);
-
-        // "additional_signed" bytes — signing payload only
-        let additional_value = default_additional_value(&ext.identifier, &ctx);
-
-        let encoded = if meta::is_zero_size_type(ext.additional_signed, &meta.registry) {
-            vec![]
-        } else {
-            let value = additional_value.ok_or_else(|| {
-                Error::MissingExtensionValue(format!("{} (additional_signed)", ext.identifier))
-            })?;
-            let mut buf = vec![];
-            scales::to_bytes_with_info(
-                &mut buf,
-                &value,
-                Some((&meta.registry, ext.additional_signed)),
-            )
-            .map_err(|e| Error::Encode(e.to_string()))?;
-            buf
-        };
-        additional_signed_bytes.extend(encoded);
-    }
-
-    // --- Sign ---
-    let signature_payload = [
-        encoded_call.clone(),
-        extra_bytes.clone(),
-        additional_signed_bytes,
-    ]
-    .concat();
-
-    let payload = if signature_payload.len() > 256 {
-        hash(&meta::Hasher::Blake2_256, &signature_payload[..])
-    } else {
-        signature_payload
-    };
-
-    let signature = signer.sign(payload).await?;
-
-    // --- Assemble extrinsic ---
-    let version = meta.extrinsic.version;
-
-    // Address encoding
-    let address_bytes = if meta.extrinsic.address_ty.is_some() {
-        // V15+: For now, MultiAddress::Id is variant 0 followed by 32-byte account
-        [vec![0x00], from_account.as_ref().to_vec()].concat()
-    } else {
-        // V14 fallback
-        [vec![0x00], from_account.as_ref().to_vec()].concat()
-    };
-
-    // Signature prefix: find Sr25519 variant index from signature_ty
-    let sig_prefix = if let Some(sig_ty) = meta.extrinsic.signature_ty {
-        match meta.registry.resolve(sig_ty) {
-            Some(scales::TypeDef::Variant(vdef)) => {
-                // Find the Sr25519 variant
-                vdef.variants
-                    .iter()
-                    .find(|v| v.name.contains("Sr25519"))
-                    .map(|v| v.index)
-                    .unwrap_or(1) // fallback to 1 if not found
-            }
-            _ => 0x01, // fallback
-        }
-    } else {
-        0x01 // V14 fallback: Sr25519
-    };
-
-    let extrinsic_call = {
-        let encoded_inner = [
-            // header: "is signed" flag | version
-            vec![0b10000000 | version],
-            // address
-            address_bytes,
-            // signature
-            [vec![sig_prefix], signature.as_ref().to_vec()].concat(),
-            // extra (extension data)
-            extra_bytes,
-            // call data
-            encoded_call,
-        ]
-        .concat();
-
-        let len = Compact(
-            u32::try_from(encoded_inner.len()).expect("extrinsic size expected to be <4GB"),
-        )
-        .encode();
-
-        [len, encoded_inner].concat()
-    };
-
-    chain.submit(&extrinsic_call).await?;
-
-    Ok(Response::Void)
-}
+// --- Public types ---
 
 /// Owned raw SCALE-encoded data with its type id.
 /// Call [`as_value`](StorageEntry::as_value) with a registry to decode.
@@ -445,15 +170,12 @@ impl StorageEntry {
         Self { data, ty }
     }
 
-    /// Borrow this entry as a typed [`Value`] for decoding/serialization.
     pub fn as_value<'a>(&'a self, registry: &'a scales::Registry) -> scales::Value<'a> {
         scales::Value::new(&self.data, self.ty, registry)
     }
 
-    /// Decode this entry into a JSON value using the given registry.
     pub fn to_json(&self, registry: &scales::Registry) -> Result<JsonValue> {
-        serde_json::to_value(self.as_value(registry))
-            .map_err(|e| Error::Mapping(e.to_string()))
+        serde_json::to_value(self.as_value(registry)).map_err(|e| Error::Mapping(e.to_string()))
     }
 }
 
@@ -462,7 +184,10 @@ pub enum Response<'m> {
     Void,
     None,
     Value(StorageEntry, &'m scales::Registry),
-    ValueSet(Vec<(Vec<StorageEntry>, Option<StorageEntry>)>, &'m scales::Registry),
+    ValueSet(
+        Vec<(Vec<StorageEntry>, Option<StorageEntry>)>,
+        &'m scales::Registry,
+    ),
     Meta(&'m Metadata),
     Registry(&'m scales::Registry),
 }
@@ -480,14 +205,6 @@ impl From<Response<'_>> for Vec<u8> {
     }
 }
 
-fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
-    let mut path = uri.trim_matches('/').split('/');
-    let pallet = path.next().map(to_camel)?;
-    let item = path.next().map(to_camel)?;
-    let map_keys = path.map(to_camel).collect::<Vec<_>>();
-    Some((pallet, item, map_keys))
-}
-
 #[derive(Deserialize, Serialize, Debug)]
 pub struct StorageChangeSet {
     block: String,
@@ -497,19 +214,9 @@ pub struct StorageChangeSet {
 pub type RawKey = Vec<u8>;
 pub type RawValue = Vec<u8>;
 
+// --- Backend trait ---
+
 /// Generic definition of a blockchain backend
-///
-/// ```rust,ignore
-/// pub trait Backend {
-///     async fn query_bytes(&self, key: &StorageKey) -> Result<Vec<u8>>;
-///
-///     async fn submit<T>(&self, ext: T) -> Result<()>
-///     where
-///         T: AsRef<[u8]>;
-///
-///     async fn metadata(&self) -> Result<Metadata>;
-/// }
-/// ```
 pub trait Backend {
     async fn get_storage_items(
         &self,
@@ -536,7 +243,6 @@ pub trait Backend {
         to: Option<RawKey>,
     ) -> crate::Result<Vec<RawValue>>;
 
-    /// Send a signed extrinsic to the blockchain
     async fn submit(&self, ext: impl AsRef<[u8]>) -> Result<()>;
 
     async fn metadata(&self) -> Result<Metadata>;
@@ -544,7 +250,7 @@ pub trait Backend {
     async fn block_info(&self, at: Option<u32>) -> Result<meta::BlockInfo>;
 }
 
-/// A Dummy backend for offline querying of metadata
+/// A dummy backend for offline querying of metadata
 pub struct Offline(pub Metadata);
 
 impl Backend for Offline {
@@ -565,7 +271,6 @@ impl Backend for Offline {
         Err(Error::ChainUnavailable)
     }
 
-    /// Send a signed extrinsic to the blockchain
     async fn submit(&self, _ext: impl AsRef<[u8]>) -> Result<()> {
         Err(Error::ChainUnavailable)
     }
@@ -578,6 +283,8 @@ impl Backend for Offline {
         Err(Error::ChainUnavailable)
     }
 }
+
+// --- Error ---
 
 #[derive(Clone, Debug)]
 pub enum Error {
@@ -677,7 +384,11 @@ mod tests {
         ))
         .unwrap();
         let system = meta.pallet_by_name("System").unwrap();
-        let version = system.constants.iter().find(|c| c.name == "Version").unwrap();
+        let version = system
+            .constants
+            .iter()
+            .find(|c| c.name == "Version")
+            .unwrap();
         let entry = StorageEntry::new(version.value.clone(), version.ty);
         let json = entry.to_json(&meta.registry).expect("decodes to JSON");
         assert!(json.get("spec_name").is_some());

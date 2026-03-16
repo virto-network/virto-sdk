@@ -4,7 +4,7 @@ use core::convert::TryInto;
 use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen;
 use sube::{
-    sube, Error as SubeError, ExtrinsicBody, JsonValue, Response, SubeBuilder
+    sube, Error as SubeError, ExtrinsicBody, JsonValue, Response, SubeBuilder,
 };
 use util::*;
 use wasm_bindgen::prelude::*;
@@ -45,12 +45,12 @@ pub async fn sube_js(
     log::info!("sube_js: {:?}", params);
 
     if params.is_undefined() {  
-        let response = sube!(url)
+        let response = sube(url)
             .await
             .map_err(|e| JsError::new(&format!("Error querying: {:?}", &e.to_string())))?;
 
         let value = match response {
-            v @ Response::Value(_) | v @ Response::Meta(_) | v @ Response::Registry(_) => {
+            v @ Response::Value(..) | v @ Response::Meta(_) | v @ Response::Registry(_) => {
                 let value = serde_wasm_bindgen::to_value(&v)
                     .map_err(|_| JsError::new("failed to serialize response"))?;
                 Ok(value)

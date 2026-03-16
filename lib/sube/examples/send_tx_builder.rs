@@ -1,7 +1,8 @@
-use libwallet::{self, vault, Account, Signature};
+use libwallet::{self, vault, Account};
 use serde_json::json;
 use std::{env, error::Error};
-use sube::{Bytes, SubeBuilder, Signer};
+use sube::{sube, Bytes, SignerFn};
+
 type Wallet = libwallet::Wallet<vault::Simple<String>>;
 
 #[async_std::main]
@@ -20,7 +21,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let account = wallet.default_account().unwrap();
 
-    let signer = sube::SignerFn::from((
+    let signer = SignerFn::from((
         account.public().as_ref(),
         |message: &[u8]| {
             let message = message.to_vec();
@@ -38,18 +39,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     ));
 
-    let response = SubeBuilder::default()
-        .with_url("wss://rococo-rpc.polkadot.io/balances/transfer")
-        .with_body(json!({
+    let response = sube("wss://kreivo.io/balances/transfer")
+        .body(json!({
             "dest": {
                 "Id": account.public().as_ref()
             },
             "value": 100000
         }))
-        .with_signer(signer)
-        .await.map_err(|_| format!("Failed to send tx"));
+        .signer(signer)
+        .await
+        .map_err(|e| format!("Failed to send tx: {e}"));
 
     log::info!("{:?}", response);
     Ok(())
 }
-

@@ -7,7 +7,7 @@ async fn main() -> Result<()> {
         24
     );
 
-    let r = sube!(&query).await?;
+    let r = sube(&query).await?;
 
     if let Response::Value(ref entry, reg) = r {
         let json_value = entry.to_json(reg)?;

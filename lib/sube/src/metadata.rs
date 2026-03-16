@@ -141,38 +141,42 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
         }
     }
 
-    fn convert_v14_pallet(p: frame_metadata::v14::PalletMetadata<PortableForm>) -> PalletMeta {
-        PalletMeta {
-            name: p.name,
-            index: p.index,
-            calls_ty: p.calls.map(|c| c.ty.id),
-            storage: p.storage.map(|s| StorageMeta {
-                prefix: s.prefix,
-                entries: s
-                    .entries
+    // V14/V15/V16 PalletMetadata are distinct types with identical fields.
+    macro_rules! convert_pallet {
+        ($p:expr) => {{
+            let p = $p;
+            PalletMeta {
+                name: p.name,
+                index: p.index,
+                calls_ty: p.calls.map(|c| c.ty.id),
+                storage: p.storage.map(|s| StorageMeta {
+                    prefix: s.prefix,
+                    entries: s
+                        .entries
+                        .into_iter()
+                        .map(|e| StorageEntryMeta {
+                            name: e.name,
+                            ty: convert_entry_type(&e.ty),
+                        })
+                        .collect(),
+                }),
+                constants: p
+                    .constants
                     .into_iter()
-                    .map(|e| StorageEntryMeta {
-                        name: e.name,
-                        ty: convert_entry_type(&e.ty),
+                    .map(|c| ConstantMeta {
+                        name: c.name,
+                        ty: c.ty.id,
+                        value: c.value,
                     })
                     .collect(),
-            }),
-            constants: p
-                .constants
-                .into_iter()
-                .map(|c| ConstantMeta {
-                    name: c.name,
-                    ty: c.ty.id,
-                    value: c.value,
-                })
-                .collect(),
-        }
+            }
+        }};
     }
 
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
     let (types, pallets, extrinsic) = match meta.1 {
         RuntimeMetadata::V14(m) => {
-            let pallets = m.pallets.into_iter().map(convert_v14_pallet).collect();
+            let pallets = m.pallets.into_iter().map(|p| convert_pallet!(p)).collect();
             let extrinsic = ExtrinsicMeta {
                 version: m.extrinsic.version,
                 address_ty: None,
@@ -191,35 +195,7 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
             (m.types, pallets, extrinsic)
         }
         RuntimeMetadata::V15(m) => {
-            let pallets = m
-                .pallets
-                .into_iter()
-                .map(|p| PalletMeta {
-                    name: p.name,
-                    index: p.index,
-                    calls_ty: p.calls.map(|c| c.ty.id),
-                    storage: p.storage.map(|s| StorageMeta {
-                        prefix: s.prefix,
-                        entries: s
-                            .entries
-                            .into_iter()
-                            .map(|e| StorageEntryMeta {
-                                name: e.name,
-                                ty: convert_entry_type(&e.ty),
-                            })
-                            .collect(),
-                    }),
-                    constants: p
-                        .constants
-                        .into_iter()
-                        .map(|c| ConstantMeta {
-                            name: c.name,
-                            ty: c.ty.id,
-                            value: c.value,
-                        })
-                        .collect(),
-                })
-                .collect();
+            let pallets = m.pallets.into_iter().map(|p| convert_pallet!(p)).collect();
             let extrinsic = ExtrinsicMeta {
                 version: m.extrinsic.version,
                 address_ty: Some(m.extrinsic.address_ty.id),
@@ -238,35 +214,7 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
             (m.types, pallets, extrinsic)
         }
         RuntimeMetadata::V16(m) => {
-            let pallets = m
-                .pallets
-                .into_iter()
-                .map(|p| PalletMeta {
-                    name: p.name,
-                    index: p.index,
-                    calls_ty: p.calls.map(|c| c.ty.id),
-                    storage: p.storage.map(|s| StorageMeta {
-                        prefix: s.prefix,
-                        entries: s
-                            .entries
-                            .into_iter()
-                            .map(|e| StorageEntryMeta {
-                                name: e.name,
-                                ty: convert_entry_type(&e.ty),
-                            })
-                            .collect(),
-                    }),
-                    constants: p
-                        .constants
-                        .into_iter()
-                        .map(|c| ConstantMeta {
-                            name: c.name,
-                            ty: c.ty.id,
-                            value: c.value,
-                        })
-                        .collect(),
-                })
-                .collect();
+            let pallets = m.pallets.into_iter().map(|p| convert_pallet!(p)).collect();
             // Pick highest supported version
             let version = m
                 .extrinsic

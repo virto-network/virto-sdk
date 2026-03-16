@@ -1,413 +1,240 @@
-#[cfg(any(feature = "http", feature = "http-web"))]
-use crate::http::Backend as HttpBackend;
-#[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
-use crate::rpc::RpcClient;
-#[cfg(feature = "ws")]
-use crate::ws::Backend as WSBackend;
-use crate::{
-    meta::BlockInfo, Backend, Error, ExtrinsicBody, JsonValue, Metadata, Response,
-    Result as SubeResult, Signer,
-};
-use crate::{prelude::*, Offline, RawKey, RawValue};
+use core::future::IntoFuture;
+use core::marker::PhantomData;
 
-use core::future::{Future, IntoFuture};
-use url::Url;
+use crate::backend::{chain_string_to_url, get_multi_backend_by_url, BoxFuture};
+use crate::extrinsic::ExtrinsicBody;
+use crate::prelude::*;
+use crate::{JsonValue, Metadata, Response, Result as SubeResult, Signer};
 
-pub struct SubeBuilder<'a, Body, Signer> {
-    url: Option<&'a str>,
-    nonce: Option<u64>,
-    body: Option<Body>,
-    signer: Option<Signer>,
+/// A reusable handle to a Substrate chain.
+///
+/// Created via [`sube()`](crate::sube). Can be used as a one-liner by awaiting
+/// directly, or reused for multiple queries/calls via [`.query()`] and [`.call()`].
+///
+/// ```rust,ignore
+/// // One-liner query
+/// let result = sube("wss://kreivo.io/system/account/0x1234").await?;
+///
+/// // Reusable handle
+/// let chain = sube("wss://kreivo.io");
+/// let acct = chain.query("system/account/0x1234").await?;
+/// let ver  = chain.query("system/_constants/Version").await?;
+///
+/// // Submit via handle
+/// chain.call("balances/transfer")
+///     .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
+///     .signer(my_signer)
+///     .await?;
+///
+/// // One-liner submit
+/// sube("wss://kreivo.io/balances/transfer")
+///     .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
+///     .signer(my_signer)
+///     .await?;
+/// ```
+pub struct Sube {
+    url: String,
     metadata: Option<Metadata>,
-    extensions: Vec<(String, JsonValue)>,
 }
 
-impl Default for SubeBuilder<'_, (), ()> {
-    fn default() -> Self {
-        SubeBuilder {
-            url: None,
-            nonce: None,
-            body: None,
-            signer: None,
+impl Sube {
+    pub(crate) fn new(url: &str) -> Self {
+        Sube {
+            url: url.into(),
             metadata: None,
+        }
+    }
+
+    /// Provide pre-loaded metadata instead of fetching from the chain.
+    pub fn with_meta(mut self, meta: Metadata) -> Self {
+        self.metadata = Some(meta);
+        self
+    }
+
+    /// Build a query for the given storage path.
+    pub fn query(&self, path: &str) -> QueryBuilder {
+        QueryBuilder {
+            url: join_url(&self.url, path),
+            metadata: self.metadata.clone(),
+        }
+    }
+
+    /// Build an extrinsic call for the given pallet/method path.
+    pub fn call<'a>(&self, path: &str) -> CallBuilder<'a, (), ()> {
+        CallBuilder {
+            url: join_url(&self.url, path),
+            body: (),
+            signer: (),
+            nonce: None,
+            metadata: self.metadata.clone(),
             extensions: Vec::new(),
+            _lt: PhantomData,
+        }
+    }
+
+    /// Set the extrinsic body (one-liner shorthand for submit).
+    ///
+    /// Uses the full URL passed to [`sube()`](crate::sube) as the call path.
+    pub fn body<'a, B>(self, body: B) -> CallBuilder<'a, B, ()> {
+        CallBuilder {
+            url: self.url,
+            body,
+            signer: (),
+            nonce: None,
+            metadata: self.metadata,
+            extensions: Vec::new(),
+            _lt: PhantomData,
         }
     }
 }
 
-impl<'a> SubeBuilder<'a, (), ()> {
-    pub fn with_url(self, url: &'a str) -> Self {
-        Self {
-            url: Some(url),
-            ..self
-        }
-    }
+/// One-liner query: `sube("wss://host/pallet/item/key").await?`
+impl IntoFuture for Sube {
+    type Output = SubeResult<Response<'static>>;
+    type IntoFuture = BoxFuture<'static, SubeResult<Response<'static>>>;
 
-    pub fn with_meta(self, metadata: Metadata) -> Self {
-        Self {
-            metadata: Some(metadata),
-            ..self
-        }
-    }
-
-    pub fn with_body<B>(self, body: B) -> SubeBuilder<'a, B, ()> {
-        SubeBuilder {
-            body: Some(body),
+    fn into_future(self) -> Self::IntoFuture {
+        let qb = QueryBuilder {
             url: self.url,
-            nonce: self.nonce,
-            signer: self.signer,
             metadata: self.metadata,
-            extensions: self.extensions,
-        }
+        };
+        qb.into_future()
     }
+}
 
-    async fn build_query(self) -> SubeResult<Response<'a>> {
-        let Self { url, metadata, .. } = self;
+fn join_url(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
 
-        let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
+// --- QueryBuilder ---
 
-        let block = url
-            .query_pairs()
-            .find(|(k, _)| k == "at")
-            .map(|(_, v)| v.parse::<u32>().expect("at query params must be a number"));
+/// Builder for a storage query. Implements `IntoFuture` — just `.await` it.
+pub struct QueryBuilder {
+    url: String,
+    metadata: Option<Metadata>,
+}
 
-        let path = url.path();
+impl IntoFuture for QueryBuilder {
+    type Output = SubeResult<Response<'static>>;
+    type IntoFuture = BoxFuture<'static, SubeResult<Response<'static>>>;
 
-        log::trace!("building the backend for {}", url);
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let url = chain_string_to_url(&self.url)?;
 
-        let (backend, meta) = get_multi_backend_by_url(url.clone(), metadata).await?;
+            let block = url
+                .query_pairs()
+                .find(|(k, _)| k == "at")
+                .map(|(_, v)| v.parse::<u32>().expect("at query param must be a number"));
 
-        Ok(match path {
-            "_meta" => Response::Meta(meta),
-            "_meta/registry" => Response::Registry(&meta.registry),
-            _ => crate::query(&backend, meta, path, block).await?,
+            let path = url.path();
+            let (backend, meta) =
+                get_multi_backend_by_url(url.clone(), self.metadata).await?;
+
+            Ok(match path {
+                "_meta" => Response::Meta(meta),
+                "_meta/registry" => Response::Registry(&meta.registry),
+                _ => crate::query(&backend, meta, path, block).await?,
+            })
         })
     }
 }
 
-impl<'a, B> SubeBuilder<'a, B, ()> {
-    pub fn with_signer<S>(self, signer: S) -> SubeBuilder<'a, B, S> {
-        SubeBuilder {
-            signer: Some(signer),
-            body: self.body,
-            metadata: self.metadata,
-            nonce: self.nonce,
+// --- CallBuilder ---
+
+/// Builder for an extrinsic submission.
+///
+/// Chain `.body()`, `.signer()`, and optionally `.nonce()` / `.with_extension()`,
+/// then `.await` to submit.
+pub struct CallBuilder<'a, Body = (), Sign = ()> {
+    url: String,
+    body: Body,
+    signer: Sign,
+    nonce: Option<u64>,
+    metadata: Option<Metadata>,
+    extensions: Vec<(String, JsonValue)>,
+    _lt: PhantomData<&'a ()>,
+}
+
+impl<'a, S> CallBuilder<'a, (), S> {
+    /// Set the extrinsic call body.
+    pub fn body<B>(self, body: B) -> CallBuilder<'a, B, S> {
+        CallBuilder {
             url: self.url,
+            body,
+            signer: self.signer,
+            nonce: self.nonce,
+            metadata: self.metadata,
             extensions: self.extensions,
+            _lt: PhantomData,
         }
     }
 }
 
-impl<'a, B, S> SubeBuilder<'a, B, S>
-where
-    B: serde::Serialize + core::fmt::Debug,
-    S: Signer,
-{
-    pub fn with_nonce(mut self, nonce: u64) -> Self {
+impl<'a, B> CallBuilder<'a, B, ()> {
+    /// Set the signer for this extrinsic.
+    pub fn signer<S>(self, signer: S) -> CallBuilder<'a, B, S> {
+        CallBuilder {
+            url: self.url,
+            body: self.body,
+            signer,
+            nonce: self.nonce,
+            metadata: self.metadata,
+            extensions: self.extensions,
+            _lt: PhantomData,
+        }
+    }
+}
+
+impl<'a, B, S> CallBuilder<'a, B, S> {
+    /// Override the account nonce (also sets a `CheckNonce` extension override).
+    pub fn nonce(mut self, nonce: u64) -> Self {
         self.nonce = Some(nonce);
-        // Also set as a CheckNonce extension override
-        self.extensions
-            .retain(|(id, _)| id != "CheckNonce");
+        self.extensions.retain(|(id, _)| id != "CheckNonce");
         self.extensions
             .push(("CheckNonce".into(), crate::json!(nonce)));
         self
     }
 
+    /// Provide a value for a specific signed extension by identifier.
     pub fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
-        self.extensions
-            .retain(|(id, _)| id != identifier);
-        self.extensions
-            .push((identifier.into(), value));
+        self.extensions.retain(|(id, _)| id != identifier);
+        self.extensions.push((identifier.into(), value));
         self
     }
-
-    async fn build_extrinsic(self) -> SubeResult<Response<'a>> {
-        let Self {
-            url,
-            nonce,
-            body,
-            signer,
-            metadata,
-            extensions,
-            ..
-        } = self;
-
-        let url = chain_string_to_url(url.ok_or(Error::BadInput)?)?;
-        let path = url.path();
-        let body = body.ok_or(Error::BadInput)?;
-
-        let (backend, meta) = get_multi_backend_by_url(url.clone(), metadata).await?;
-
-        Ok(match path {
-            "_meta" => Response::Meta(meta),
-            "_meta/registry" => Response::Registry(&meta.registry),
-            _ => {
-                let signer = signer.ok_or(Error::BadInput)?;
-
-                crate::submit(
-                    backend,
-                    meta,
-                    path,
-                    ExtrinsicBody {
-                        nonce,
-                        body,
-                        extensions,
-                    },
-                    signer,
-                )
-                .await?
-            }
-        })
-    }
 }
 
-use heapless::index_map::FnvIndexMap as Map;
-use no_std_async::Mutex;
-
-static INSTANCE_BACKEND: async_once_cell::OnceCell<
-    Mutex<Map<String, Mutex<&'static AnyBackend>, 16>>,
-> = async_once_cell::OnceCell::new();
-
-static INSTANCE_METADATA: async_once_cell::OnceCell<
-    Mutex<Map<String, Mutex<&'static Metadata>, 16>>,
-> = async_once_cell::OnceCell::new();
-
-async fn get_metadata(backend: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<Metadata> {
-    match metadata {
-        Some(m) => Ok(m),
-        None => backend.metadata().await.map_err(|_| Error::BadMetadata),
-    }
-}
-
-async fn get_multi_backend_by_url<'a>(
-    url: Url,
-    metadata: Option<Metadata>,
-) -> SubeResult<(&'a AnyBackend, &'a Metadata)> {
-    let mut instance_backend = INSTANCE_BACKEND
-        .get_or_init(async { Mutex::new(Map::new()) })
-        .await
-        .lock()
-        .await;
-
-    let mut instance_metadata = INSTANCE_METADATA
-        .get_or_init(async { Mutex::new(Map::new()) })
-        .await
-        .lock()
-        .await;
-
-    let base_path = format!(
-        "{}://{}:{}",
-        url.scheme(),
-        url.host_str().expect("url to have a host"),
-        url.port().unwrap_or(80)
-    );
-
-    let cached_b = instance_backend.get(&base_path);
-    let cached_m = instance_metadata.get(&base_path);
-
-    match (cached_b, cached_m) {
-        (Some(b), Some(m)) => {
-            let b = *b.lock().await;
-            let m = *m.lock().await;
-            Ok((b, m))
-        }
-        _ => {
-            let backend = Box::new(get_backend_by_url(url.clone()).await?);
-            let backend = Box::leak::<'static>(backend);
-
-            instance_backend
-                .insert(base_path.clone(), Mutex::new(backend))
-                .map_err(|_| Error::CantInitBackend)?;
-
-            let metadata = Box::new(get_metadata(backend, metadata).await?);
-            let metadata = Box::leak::<'static>(metadata);
-
-            instance_metadata
-                .insert(base_path.clone(), Mutex::new(metadata))
-                .map_err(|_| Error::BadMetadata)?;
-
-            Ok((backend, metadata))
-        }
-    }
-}
-
-pub type BoxFuture<'a, T> = core::pin::Pin<Box<dyn Future<Output = T> + 'a>>;
-
-impl<'a> IntoFuture for SubeBuilder<'a, (), ()> {
-    type Output = SubeResult<Response<'a>>;
-    type IntoFuture = BoxFuture<'a, SubeResult<Response<'a>>>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(self.build_query())
-    }
-}
-
-impl<'a, B, S> IntoFuture for SubeBuilder<'a, B, S>
+impl<'a, B, S> IntoFuture for CallBuilder<'a, B, S>
 where
     B: serde::Serialize + core::fmt::Debug + 'a,
     S: Signer + 'a,
 {
-    type Output = SubeResult<Response<'a>>;
-    type IntoFuture = BoxFuture<'a, SubeResult<Response<'a>>>;
+    type Output = SubeResult<Response<'static>>;
+    type IntoFuture = BoxFuture<'a, SubeResult<Response<'static>>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(self.build_extrinsic())
+        Box::pin(async move {
+            let url = chain_string_to_url(&self.url)?;
+            let path = url.path();
+            let (backend, meta) =
+                get_multi_backend_by_url(url.clone(), self.metadata).await?;
+
+            crate::extrinsic::submit(
+                backend,
+                meta,
+                path,
+                ExtrinsicBody {
+                    nonce: self.nonce,
+                    body: self.body,
+                    extensions: self.extensions,
+                },
+                self.signer,
+            )
+            .await
+        })
     }
-}
-
-fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
-    let chain = if !chain.starts_with("ws://")
-        && !chain.starts_with("wss://")
-        && !chain.starts_with("http://")
-        && !chain.starts_with("https://")
-    {
-        ["wss", chain].join("://")
-    } else {
-        chain.into()
-    };
-
-    let mut url = Url::parse(&chain).map_err(|_| Error::BadInput)?;
-
-    if url.host_str().eq(&Some("localhost")) && url.port().is_none() {
-        const WS_PORT: u16 = 9944;
-        const HTTP_PORT: u16 = 9933;
-        let port = match url.scheme() {
-            "ws" => WS_PORT,
-            _ => HTTP_PORT,
-        };
-
-        url.set_port(Some(port)).expect("known port");
-    }
-
-    Ok(url)
-}
-
-async fn get_backend_by_url(url: Url) -> SubeResult<AnyBackend> {
-    match url.scheme() {
-        #[cfg(feature = "ws")]
-        "ws" | "wss" => Ok(AnyBackend::Ws(RpcClient(
-            WSBackend::new_ws2(url.to_string().as_str()).await?,
-        ))),
-        #[cfg(any(feature = "http", feature = "http-web"))]
-        "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(url)))),
-        _ => Err(Error::BadInput),
-    }
-}
-
-enum AnyBackend {
-    #[cfg(any(feature = "http", feature = "http-web"))]
-    Http(RpcClient<HttpBackend>),
-    #[cfg(feature = "ws")]
-    Ws(RpcClient<WSBackend>),
-    _Offline(Offline),
-}
-
-impl Backend for &AnyBackend {
-    async fn get_storage_items(
-        &self,
-        keys: Vec<RawKey>,
-        block: Option<u32>,
-    ) -> crate::Result<impl Iterator<Item = (RawKey, Option<RawValue>)>> {
-        let result: Box<dyn Iterator<Item = (RawKey, Option<RawValue>)>> = match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => Box::new(b.get_storage_items(keys, block).await?),
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => Box::new(b.get_storage_items(keys, block).await?),
-            AnyBackend::_Offline(b) => Box::new(b.get_storage_items(keys, block).await?),
-        };
-
-        Ok(result)
-    }
-
-    async fn get_storage_item(&self, key: RawKey, block: Option<u32>) -> crate::Result<Option<Vec<u8>>> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.get_storage_item(key, block).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.get_storage_item(key, block).await,
-            AnyBackend::_Offline(b) => b.get_storage_item(key, block).await,
-        }
-    }
-
-    async fn get_keys_paged(
-        &self,
-        from: RawKey,
-        size: u16,
-        to: Option<RawKey>,
-    ) -> crate::Result<Vec<RawKey>> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.get_keys_paged(from, size, to).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.get_keys_paged(from, size, to).await,
-            AnyBackend::_Offline(b) => b.get_keys_paged(from, size, to).await,
-        }
-    }
-
-    async fn metadata(&self) -> SubeResult<Metadata> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.metadata().await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.metadata().await,
-            AnyBackend::_Offline(b) => b.metadata().await,
-        }
-    }
-
-    async fn submit(&self, ext: impl AsRef<[u8]>) -> SubeResult<()> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.submit(ext).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.submit(ext).await,
-            AnyBackend::_Offline(b) => b.submit(ext).await,
-        }
-    }
-
-    async fn block_info(&self, at: Option<u32>) -> SubeResult<BlockInfo> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.block_info(at).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.block_info(at).await,
-            AnyBackend::_Offline(b) => b.block_info(at).await,
-        }
-    }
-}
-
-#[macro_export]
-macro_rules! sube {
-
-    ($url:expr) => {
-        async {
-            $crate::SubeBuilder::default().with_url($url).await
-        }
-    };
-
-    ($url:expr => ($wallet:expr, $body:expr)) => {
-        async {
-            let mut builder = $crate::SubeBuilder::default();
-            use $crate::Bytes;
-
-            let public = $wallet.default_account().expect("to have a default account").public();
-
-            let signer = $crate::SignerFn::from((public, |message: &[u8]| { 
-                let message = message.to_vec();
-                let wallet = &$wallet;
-                async move {
-                    let signature = wallet.sign(&message).await.map_err(|_| sube::Error::Signing)?;
-                    Ok::<Bytes<64>, sube::Error>(signature.as_ref().try_into().unwrap())
-                }
-            }));
-
-            builder
-                .with_url($url)
-                .with_body($body)
-                .with_signer(signer)
-                .await
-                .map_err(|_| sube::Error::Signing)?;
-
-            $crate::Result::Ok($crate::Response::Void)
-        }
-    };
 }
