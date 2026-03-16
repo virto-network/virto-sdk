@@ -5,8 +5,8 @@ use crate::rpc::RpcClient;
 #[cfg(feature = "ws")]
 use crate::ws::Backend as WSBackend;
 use crate::{
-    meta::BlockInfo, Backend, Error, ExtrinsicBody, Metadata, Response, Result as SubeResult,
-    Signer,
+    meta::BlockInfo, Backend, Error, ExtrinsicBody, JsonValue, Metadata, Response,
+    Result as SubeResult, Signer,
 };
 use crate::{prelude::*, Offline, RawKey, RawValue};
 
@@ -19,6 +19,7 @@ pub struct SubeBuilder<'a, Body, Signer> {
     body: Option<Body>,
     signer: Option<Signer>,
     metadata: Option<Metadata>,
+    extensions: Vec<(String, JsonValue)>,
 }
 
 impl Default for SubeBuilder<'_, (), ()> {
@@ -29,6 +30,7 @@ impl Default for SubeBuilder<'_, (), ()> {
             body: None,
             signer: None,
             metadata: None,
+            extensions: Vec::new(),
         }
     }
 }
@@ -55,6 +57,7 @@ impl<'a> SubeBuilder<'a, (), ()> {
             nonce: self.nonce,
             signer: self.signer,
             metadata: self.metadata,
+            extensions: self.extensions,
         }
     }
 
@@ -90,6 +93,7 @@ impl<'a, B> SubeBuilder<'a, B, ()> {
             metadata: self.metadata,
             nonce: self.nonce,
             url: self.url,
+            extensions: self.extensions,
         }
     }
 }
@@ -99,11 +103,22 @@ where
     B: serde::Serialize + core::fmt::Debug,
     S: Signer,
 {
-    pub fn with_nonce(self, nonce: u64) -> Self {
-        Self {
-            nonce: Some(nonce),
-            ..self
-        }
+    pub fn with_nonce(mut self, nonce: u64) -> Self {
+        self.nonce = Some(nonce);
+        // Also set as a CheckNonce extension override
+        self.extensions
+            .retain(|(id, _)| id != "CheckNonce");
+        self.extensions
+            .push(("CheckNonce".into(), crate::json!(nonce)));
+        self
+    }
+
+    pub fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
+        self.extensions
+            .retain(|(id, _)| id != identifier);
+        self.extensions
+            .push((identifier.into(), value));
+        self
     }
 
     async fn build_extrinsic(self) -> SubeResult<Response<'a>> {
@@ -113,6 +128,7 @@ where
             body,
             signer,
             metadata,
+            extensions,
             ..
         } = self;
 
@@ -128,7 +144,18 @@ where
             _ => {
                 let signer = signer.ok_or(Error::BadInput)?;
 
-                crate::submit(backend, meta, path, ExtrinsicBody { nonce, body }, signer).await?
+                crate::submit(
+                    backend,
+                    meta,
+                    path,
+                    ExtrinsicBody {
+                        nonce,
+                        body,
+                        extensions,
+                    },
+                    signer,
+                )
+                .await?
             }
         })
     }

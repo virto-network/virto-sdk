@@ -63,11 +63,33 @@ pub struct PalletMeta {
     pub constants: Vec<ConstantMeta>,
 }
 
+/// Metadata for a single signed/transaction extension.
+#[derive(Clone, Debug)]
+pub struct SignedExtensionMeta {
+    pub identifier: String,
+    /// Type of data included in the extrinsic body ("extra").
+    pub ty: TypeId,
+    /// Type of data included only in the signing payload.
+    pub additional_signed: TypeId,
+}
+
+/// Extrinsic metadata extracted from the runtime.
+#[derive(Clone, Debug)]
+pub struct ExtrinsicMeta {
+    pub version: u8,
+    /// Address type — available in V15+.
+    pub address_ty: Option<TypeId>,
+    /// Signature type — available in V15+.
+    pub signature_ty: Option<TypeId>,
+    pub extensions: Vec<SignedExtensionMeta>,
+}
+
 /// Compressed runtime metadata.
 /// The full `PortableRegistry` is dropped after compression into `scales::Registry`.
 #[derive(Clone, Debug)]
 pub struct Metadata {
     pub pallets: Vec<PalletMeta>,
+    pub extrinsic: ExtrinsicMeta,
     pub registry: scales::Registry,
 }
 
@@ -148,10 +170,25 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
     }
 
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
-    let (types, pallets) = match meta.1 {
+    let (types, pallets, extrinsic) = match meta.1 {
         RuntimeMetadata::V14(m) => {
             let pallets = m.pallets.into_iter().map(convert_v14_pallet).collect();
-            (m.types, pallets)
+            let extrinsic = ExtrinsicMeta {
+                version: m.extrinsic.version,
+                address_ty: None,
+                signature_ty: None,
+                extensions: m
+                    .extrinsic
+                    .signed_extensions
+                    .into_iter()
+                    .map(|e| SignedExtensionMeta {
+                        identifier: e.identifier,
+                        ty: e.ty.id,
+                        additional_signed: e.additional_signed.id,
+                    })
+                    .collect(),
+            };
+            (m.types, pallets, extrinsic)
         }
         RuntimeMetadata::V15(m) => {
             let pallets = m
@@ -183,7 +220,22 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
                         .collect(),
                 })
                 .collect();
-            (m.types, pallets)
+            let extrinsic = ExtrinsicMeta {
+                version: m.extrinsic.version,
+                address_ty: Some(m.extrinsic.address_ty.id),
+                signature_ty: Some(m.extrinsic.signature_ty.id),
+                extensions: m
+                    .extrinsic
+                    .signed_extensions
+                    .into_iter()
+                    .map(|e| SignedExtensionMeta {
+                        identifier: e.identifier,
+                        ty: e.ty.id,
+                        additional_signed: e.additional_signed.id,
+                    })
+                    .collect(),
+            };
+            (m.types, pallets, extrinsic)
         }
         RuntimeMetadata::V16(m) => {
             let pallets = m
@@ -215,7 +267,40 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
                         .collect(),
                 })
                 .collect();
-            (m.types, pallets)
+            // Pick highest supported version
+            let version = m
+                .extrinsic
+                .versions
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(4);
+            // Get ordered extension indices for this version, or fall back to all
+            let ext_indices: Vec<u32> = m
+                .extrinsic
+                .transaction_extensions_by_version
+                .get(&version)
+                .map(|idxs| idxs.iter().map(|c| c.0).collect())
+                .unwrap_or_else(|| (0..m.extrinsic.transaction_extensions.len() as u32).collect());
+            let extrinsic = ExtrinsicMeta {
+                version,
+                address_ty: Some(m.extrinsic.address_ty.id),
+                signature_ty: Some(m.extrinsic.signature_ty.id),
+                extensions: ext_indices
+                    .into_iter()
+                    .filter_map(|i| {
+                        m.extrinsic
+                            .transaction_extensions
+                            .get(i as usize)
+                            .map(|e| SignedExtensionMeta {
+                                identifier: e.identifier.clone(),
+                                ty: e.ty.id,
+                                additional_signed: e.implicit.id,
+                            })
+                    })
+                    .collect(),
+            };
+            (m.types, pallets, extrinsic)
         }
         _ => return Err(codec::Error::from("Metadata version not supported")),
     };
@@ -223,7 +308,20 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
     let registry = scales::compress::compress(&types)
         .map_err(|_| codec::Error::from("Failed to compress registry"))?;
 
-    Ok(Metadata { pallets, registry })
+    Ok(Metadata {
+        pallets,
+        extrinsic,
+        registry,
+    })
+}
+
+/// Returns true if the type resolves to a zero-size type (StructUnit or empty Tuple).
+pub fn is_zero_size_type(ty: TypeId, registry: &scales::Registry) -> bool {
+    match registry.resolve(ty) {
+        Some(scales::TypeDef::StructUnit) => true,
+        Some(scales::TypeDef::Tuple(t)) => t.is_empty(),
+        _ => false,
+    }
 }
 
 pub struct BlockInfo {
@@ -614,5 +712,92 @@ mod tests {
     fn invalid_metadata_bytes() {
         let result = Metadata::from_bytes(&[0, 1, 2, 3]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn extrinsic_meta_from_kreivo() {
+        let meta = kreivo();
+        let ext = &meta.extrinsic;
+        assert_eq!(ext.extensions.len(), 9, "Kreivo should have 9 extensions");
+        let names: Vec<&str> = ext.extensions.iter().map(|e| e.identifier.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "PassAuthenticate",
+                "CheckNonZeroSender",
+                "CheckSpecVersion",
+                "CheckTxVersion",
+                "CheckGenesis",
+                "CheckMortality",
+                "CheckNonce",
+                "CheckWeight",
+                "ChargeAssetTxPayment",
+            ]
+        );
+    }
+
+    #[test]
+    fn extrinsic_version_is_4() {
+        let meta = kreivo();
+        assert_eq!(meta.extrinsic.version, 4);
+    }
+
+    #[test]
+    fn unit_type_extensions() {
+        let meta = kreivo();
+        let ext = &meta.extrinsic;
+        // CheckNonZeroSender and CheckWeight should have StructUnit for ty
+        for name in &["CheckNonZeroSender", "CheckWeight"] {
+            let e = ext.extensions.iter().find(|e| e.identifier == *name).unwrap();
+            assert!(
+                matches!(meta.registry.resolve(e.ty), Some(scales::TypeDef::StructUnit)),
+                "{name} ty should be StructUnit, got {:?}",
+                meta.registry.resolve(e.ty)
+            );
+        }
+        // additional_signed for these resolves to () — either StructUnit or empty Tuple
+        for name in &["CheckNonZeroSender", "CheckWeight"] {
+            let e = ext.extensions.iter().find(|e| e.identifier == *name).unwrap();
+            let is_zero_size = is_zero_size_type(e.additional_signed, &meta.registry);
+            assert!(is_zero_size, "{name} additional_signed should be zero-size, got {:?}", meta.registry.resolve(e.additional_signed));
+        }
+    }
+
+    #[test]
+    fn data_type_extensions() {
+        let meta = kreivo();
+        let ext = &meta.extrinsic;
+        // CheckNonce ty should NOT be StructUnit (it holds the nonce)
+        let check_nonce = ext.extensions.iter().find(|e| e.identifier == "CheckNonce").unwrap();
+        assert!(
+            !matches!(meta.registry.resolve(check_nonce.ty), Some(scales::TypeDef::StructUnit)),
+            "CheckNonce ty should not be StructUnit"
+        );
+        // CheckSpecVersion additional_signed should NOT be StructUnit (it's u32)
+        let check_spec = ext
+            .extensions
+            .iter()
+            .find(|e| e.identifier == "CheckSpecVersion")
+            .unwrap();
+        assert!(
+            !matches!(
+                meta.registry.resolve(check_spec.additional_signed),
+                Some(scales::TypeDef::StructUnit)
+            ),
+            "CheckSpecVersion additional_signed should not be StructUnit"
+        );
+    }
+
+    #[test]
+    fn address_and_signature_types() {
+        let meta = kreivo();
+        assert!(
+            meta.extrinsic.address_ty.is_some(),
+            "V15 should expose address_ty"
+        );
+        assert!(
+            meta.extrinsic.signature_ty.is_some(),
+            "V15 should expose signature_ty"
+        );
     }
 }

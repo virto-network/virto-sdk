@@ -145,6 +145,55 @@ async fn query<'m>(
 pub struct ExtrinsicBody<Body> {
     pub nonce: Option<u64>,
     pub body: Body,
+    #[serde(default)]
+    pub extensions: Vec<(String, JsonValue)>,
+}
+
+/// Chain context fetched once for extension defaults.
+struct ChainContext {
+    spec_version: u32,
+    tx_version: u32,
+    genesis_hash: [u8; 32],
+    account_nonce: u64,
+}
+
+/// Look up a caller-provided extension value by identifier.
+fn find_extension_override(extensions: &[(String, JsonValue)], id: &str) -> Option<JsonValue> {
+    extensions
+        .iter()
+        .find(|(k, _)| k == id)
+        .map(|(_, v)| v.clone())
+}
+
+/// Returns a default JSON value for well-known extension "extra" data.
+fn default_extra_value(identifier: &str, ctx: &ChainContext) -> Option<JsonValue> {
+    match identifier {
+        "CheckMortality" => Some(json!({"Immortal": null})),
+        "CheckNonce" => Some(json!(ctx.account_nonce)),
+        "ChargeTransactionPayment" => Some(json!(0)),
+        "ChargeAssetTxPayment" => Some(json!({"tip": 0, "asset_id": null})),
+        // Extensions whose extra type is unit need no value
+        _ => None,
+    }
+}
+
+/// Returns a default JSON value for well-known extension "additional_signed" data.
+fn default_additional_value(
+    identifier: &str,
+    ctx: &ChainContext,
+) -> Option<JsonValue> {
+    match identifier {
+        "CheckSpecVersion" => Some(json!(ctx.spec_version)),
+        "CheckTxVersion" => Some(json!(ctx.tx_version)),
+        "CheckGenesis" => {
+            Some(json!(format!("0x{}", hex::encode(ctx.genesis_hash))))
+        }
+        "CheckMortality" => {
+            // Immortal era → checkpoint is genesis hash
+            Some(json!(format!("0x{}", hex::encode(ctx.genesis_hash))))
+        }
+        _ => None,
+    }
 }
 
 async fn submit<'m, V>(
@@ -181,118 +230,140 @@ where
     let from_account = signer.account();
     log::debug!("from_account: {:?}", hex::encode(from_account.as_ref()));
 
-    let extra_params = {
-        // ImmortalEra
-        let era = 0u8;
-
-        // Impl. Note: in a real-world use case, you should store your account's nonce somewhere else
-        let nonce = {
-            if let Some(nonce) = tx_data.nonce {
-                Ok(nonce)
-            } else {
-                let response = query(
-                    &chain,
-                    meta,
-                    &format!("system/account/0x{}", hex::encode(from_account.as_ref())),
-                    None,
-                )
-                .await?;
-
-                match response {
-                    Response::Value(entry, reg) => {
-                        let value = entry.as_value(reg);
-                        let nonce_val = value.field("nonce").and_then(|v| {
-                            v.as_u32().map(|n| n as u64).or_else(|| v.as_u64())
-                        });
-                        match nonce_val {
-                            Some(n) => Ok(n),
-                            None => {
-                                let json_val: JsonValue = value
-                                    .try_into()
-                                    .map_err(|_| Error::Mapping("failed to decode account info".into()))?;
-                                json_val
-                                    .as_object()
-                                    .and_then(|o| o.get("nonce"))
-                                    .and_then(|v| v.as_u64())
-                                    .ok_or(Error::Mapping("nonce not found in account info".into()))
-                            }
-                        }
-                    }
-                    Response::None => {
-                        log::warn!("account not found");
-                        Ok(0)
-                    }
-                    _ => Err(Error::AccountNotFound),
-                }
-            }
-        }?;
-
-        let tip: u128 = 0;
-
-        [
-            vec![era],
-            Compact(nonce).encode(),
-            Compact(tip).encode(),
-            vec![0x00u8], // chain extension for kreivo
-        ]
-        .concat()
-    };
-
-    let additional_params = {
-        // Error: Still failing to deserialize the const
-        let metadata = meta;
-
-        let mut constants = metadata
+    // --- Fetch chain context ---
+    let ctx = {
+        // Spec/tx version from System::Version constant
+        let system = meta
             .pallet_by_name("System")
-            .ok_or(Error::PalletNotFound(String::from("System")))?
-            .constants
-            .clone()
-            .into_iter();
+            .ok_or(Error::PalletNotFound(String::from("System")))?;
 
-        let data = constants
+        let version_const = system
+            .constants
+            .iter()
             .find(|c| c.name == "Version")
             .ok_or(Error::ConstantNotFound("System_Version".into()))?;
 
-        let chain_value: JsonValue = Value::new(&data.value, data.ty, &meta.registry)
+        let chain_value: JsonValue = Value::new(&version_const.value, version_const.ty, &meta.registry)
             .try_into()
             .map_err(|_| Error::Mapping("failed to decode System::Version".into()))?;
 
-        let iter = chain_value
+        let obj = chain_value
             .as_object()
             .ok_or(Error::ConstantNotFound("System_Version".into()))?;
 
-        let transaction_version = iter.get("transaction_version").ok_or(Error::Mapping(
-            "System_Version.transaction_version not found in transaction version".into(),
-        ))?;
+        let spec_version = obj
+            .get("spec_version")
+            .and_then(|v| v.as_u64())
+            .ok_or(Error::Mapping("spec_version not found".into()))? as u32;
 
-        let spec_version = iter.get("spec_version").ok_or(Error::Mapping(
-            "System_Version.spec_version not found in transaction version".into(),
-        ))?;
-        // chain_version
-
-        let spec_version = spec_version.as_u64().ok_or(Error::Mapping(
-            "System_Version.spec_version is not a number".into(),
-        ))? as u32;
-
-        let transaction_version = transaction_version.as_u64().ok_or(Error::Mapping(
-            "System_Version.transaction_version is not a number".into(),
-        ))? as u32;
+        let tx_version = obj
+            .get("transaction_version")
+            .and_then(|v| v.as_u64())
+            .ok_or(Error::Mapping("transaction_version not found".into()))?
+            as u32;
 
         let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
+        let mut genesis_hash = [0u8; 32];
+        genesis_hash.copy_from_slice(&genesis_block[..32]);
 
-        [
-            spec_version.to_le_bytes().to_vec(),
-            transaction_version.to_le_bytes().to_vec(),
-            genesis_block.clone(),
-            genesis_block.clone(),
-        ]
-        .concat()
+        // Nonce: from caller override or query chain
+        let account_nonce = if let Some(nonce) = tx_data.nonce {
+            nonce
+        } else if let Some(nonce_val) = find_extension_override(&tx_data.extensions, "CheckNonce") {
+            nonce_val.as_u64().ok_or(Error::Mapping("CheckNonce override is not a number".into()))?
+        } else {
+            let response = query(
+                &chain,
+                meta,
+                &format!("system/account/0x{}", hex::encode(from_account.as_ref())),
+                None,
+            )
+            .await?;
+
+            match response {
+                Response::Value(entry, reg) => {
+                    let value = entry.as_value(reg);
+                    let nonce_val = value.field("nonce").and_then(|v| {
+                        v.as_u32().map(|n| n as u64).or_else(|| v.as_u64())
+                    });
+                    match nonce_val {
+                        Some(n) => n,
+                        None => {
+                            let json_val: JsonValue = value
+                                .try_into()
+                                .map_err(|_| Error::Mapping("failed to decode account info".into()))?;
+                            json_val
+                                .as_object()
+                                .and_then(|o| o.get("nonce"))
+                                .and_then(|v| v.as_u64())
+                                .ok_or(Error::Mapping("nonce not found in account info".into()))?
+                        }
+                    }
+                }
+                Response::None => {
+                    log::warn!("account not found");
+                    0
+                }
+                _ => return Err(Error::AccountNotFound),
+            }
+        };
+
+        ChainContext {
+            spec_version,
+            tx_version,
+            genesis_hash,
+            account_nonce,
+        }
     };
 
+    // --- Encode extensions by iterating metadata ---
+    let mut extra_bytes = Vec::new();
+    let mut additional_signed_bytes = Vec::new();
+
+    for ext in &meta.extrinsic.extensions {
+        // "extra" bytes — included in extrinsic body
+        let extra_value = find_extension_override(&tx_data.extensions, &ext.identifier)
+            .or_else(|| default_extra_value(&ext.identifier, &ctx));
+
+        let encoded = if meta::is_zero_size_type(ext.ty, &meta.registry) {
+            vec![]
+        } else {
+            let value = extra_value.ok_or_else(|| {
+                Error::MissingExtensionValue(ext.identifier.clone())
+            })?;
+            let mut buf = vec![];
+            scales::to_bytes_with_info(&mut buf, &value, Some((&meta.registry, ext.ty)))
+                .map_err(|e| Error::Encode(e.to_string()))?;
+            buf
+        };
+        extra_bytes.extend(encoded);
+
+        // "additional_signed" bytes — signing payload only
+        let additional_value = default_additional_value(&ext.identifier, &ctx);
+
+        let encoded = if meta::is_zero_size_type(ext.additional_signed, &meta.registry) {
+            vec![]
+        } else {
+            let value = additional_value.ok_or_else(|| {
+                Error::MissingExtensionValue(format!("{} (additional_signed)", ext.identifier))
+            })?;
+            let mut buf = vec![];
+            scales::to_bytes_with_info(
+                &mut buf,
+                &value,
+                Some((&meta.registry, ext.additional_signed)),
+            )
+            .map_err(|e| Error::Encode(e.to_string()))?;
+            buf
+        };
+        additional_signed_bytes.extend(encoded);
+    }
+
+    // --- Sign ---
     let signature_payload = [
         encoded_call.clone(),
-        extra_params.clone(),
-        additional_params.clone(),
+        extra_bytes.clone(),
+        additional_signed_bytes,
     ]
     .concat();
 
@@ -304,17 +375,45 @@ where
 
     let signature = signer.sign(payload).await?;
 
+    // --- Assemble extrinsic ---
+    let version = meta.extrinsic.version;
+
+    // Address encoding
+    let address_bytes = if meta.extrinsic.address_ty.is_some() {
+        // V15+: For now, MultiAddress::Id is variant 0 followed by 32-byte account
+        [vec![0x00], from_account.as_ref().to_vec()].concat()
+    } else {
+        // V14 fallback
+        [vec![0x00], from_account.as_ref().to_vec()].concat()
+    };
+
+    // Signature prefix: find Sr25519 variant index from signature_ty
+    let sig_prefix = if let Some(sig_ty) = meta.extrinsic.signature_ty {
+        match meta.registry.resolve(sig_ty) {
+            Some(scales::TypeDef::Variant(vdef)) => {
+                // Find the Sr25519 variant
+                vdef.variants
+                    .iter()
+                    .find(|v| v.name.contains("Sr25519"))
+                    .map(|v| v.index)
+                    .unwrap_or(1) // fallback to 1 if not found
+            }
+            _ => 0x01, // fallback
+        }
+    } else {
+        0x01 // V14 fallback: Sr25519
+    };
+
     let extrinsic_call = {
         let encoded_inner = [
-            // header: "is signed" (1 byte) + transaction protocol version (7 bytes)
-            vec![0b10000000 + 4u8],
-            // signer
-            vec![0x00],
-            from_account.as_ref().to_vec(),
+            // header: "is signed" flag | version
+            vec![0b10000000 | version],
+            // address
+            address_bytes,
             // signature
-            [vec![0x01], signature.as_ref().to_vec()].concat(),
-            // extra
-            extra_params,
+            [vec![sig_prefix], signature.as_ref().to_vec()].concat(),
+            // extra (extension data)
+            extra_bytes,
             // call data
             encoded_call,
         ]
@@ -505,6 +604,7 @@ pub enum Error {
     CantDecodeRawQueryResponse,
     CantFindMethodInPallet,
     BadBlockNumber,
+    MissingExtensionValue(String),
 }
 
 impl fmt::Display for Error {
