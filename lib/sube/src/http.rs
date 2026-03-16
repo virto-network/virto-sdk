@@ -36,7 +36,7 @@ impl Rpc for Backend {
                 id: 1.into(),
                 jsonrpc: Some("2.0"),
                 method,
-                params: &Self::convert_params(params),
+                params: Some(&Self::convert_params(params)),
             })
             .send()
             .await

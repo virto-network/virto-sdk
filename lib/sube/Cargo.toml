@@ -8,60 +8,61 @@ edition = "2021"
 repository = "https://github.com/valibre-org/virto-dk/sube"
 
 [dependencies]
-async-once-cell = "0.4.4"
-blake2 = { version = "0.10.5", default-features = false }
-codec = { version = "3.1.2", package = "parity-scale-codec", default-features = false }
-frame-metadata = { version = "16.0.0", default-features = false, features = [
+async-once-cell = "0.5"
+blake2 = { version = "0.10", default-features = false }
+codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
+frame-metadata = { version = "23", default-features = false, features = [
 	"serde_full",
 	"decode",
+	"current",
 ] }
-hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
-jsonrpc = { version = "0.12.1", default-features = false, optional = true }
-log = "0.4.17"
-scale-info = { version = "2.1.1", default-features = false, optional = true }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+jsonrpc = { version = "0.19", default-features = false, optional = true }
+log = "0.4"
+scale-info = { version = "2.11", default-features = false }
 scales = { path = "../scales", package = "scale-serialization", default-features = false, features = [
 	"serializer",
 	"compress",
 	"json",
 	"std",
 ] }
-serde = { version = "1.0.137", default-features = false }
+serde = { version = "1", default-features = false }
 # TODO: shouldn't be a base dependeny. remove after: https://github.com/virto-network/virto-sdk/issues/53
-serde_json = { version = "1.0.80", default-features = false, features = [
+serde_json = { version = "1", default-features = false, features = [
 	"alloc",
 	"arbitrary_precision",
 ] }
-twox-hash = { version = "1.6.2", default-features = false }
-url = "2.5.0"
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash64"] }
+url = "2.5"
 
 # http backend
-reqwest = { version = "0.12.5", optional = true, features = ["json"]}
+reqwest = { version = "0.13", optional = true, features = ["json"]}
 
 # ws backend
-futures-channel = { version = "0.3.21", default-features = false, features = [
+futures-channel = { version = "0.3", default-features = false, features = [
 	"alloc",
 ], optional = true }
-futures-util = { version = "0.3.21", default-features = false, features = [
+futures-util = { version = "0.3", default-features = false, features = [
 	"sink",
 ], optional = true }
 
-async-tls = { version = "0.11.0", default-features = false, optional = true }
+async-tls = { version = "0.13", default-features = false, optional = true }
 
 # bin target
-async-std = { version = "1.11.0", optional = true }
+async-std = { version = "1.13", optional = true }
 paste = { version = "1.0" }
-wasm-bindgen = { version = "0.2.92", optional = true }
-once_cell = { version = "1.17.1", optional = true }
-heapless = "0.8.0"
-anyhow = { version = "1.0.40", optional = true }
-rand_core = { version = "0.6.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+once_cell = { version = "1", optional = true }
+heapless = "0.9"
+anyhow = { version = "1", optional = true }
+rand_core = { version = "0.6", optional = true }
 ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
-no-std-async = "1.1.2"
+no-std-async = "1.1"
 
 
 [dev-dependencies]
-async-std = { version = "1.11.0", features = ["attributes", "tokio1"] }
-hex-literal = "0.3.4"
+async-std = { version = "1.13", features = ["attributes", "tokio1"] }
+hex-literal = "1.1"
 libwallet = { path = "../libwallet", default-features = false, features = [
 	"substrate",
 	"mnemonic",
@@ -70,19 +71,17 @@ libwallet = { path = "../libwallet", default-features = false, features = [
 	"rand",
 	"std",
 ] }
-rand_core = "0.6.3"
+rand_core = "0.6"
 
 [features]
-default = ["v14"]
-test = ["std", "wss", "http", "json", "v14", "dep:async-std", "dep:rand_core"]
+default = []
+test = ["std", "wss", "http", "json", "dep:async-std", "dep:rand_core"]
 http = ["dep:jsonrpc", "dep:reqwest"]
 http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "dep:reqwest"]
 json = ["scales/json"]
 text = ["scales/text"]
 std = []
 
-
-v14 = ["dep:scale-info", "frame-metadata/current"]
 ws = [
 	"dep:async-std",
 	"dep:ewebsock",
@@ -93,7 +92,7 @@ ws = [
 ]
 wss = ["dep:async-tls", "ws", "ewebsock/tls", "async-std/unstable"]
 examples = ["dep:rand_core"]
-js = ["http-web", "json", "v14", 'async-std/unstable', "wss", "dep:rand_core"]
+js = ["http-web", "json", 'async-std/unstable', "wss", "dep:rand_core"]
 
 [package.metadata.docs.rs]
 features = ["http"]

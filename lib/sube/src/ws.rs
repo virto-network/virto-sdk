@@ -52,7 +52,7 @@ impl Rpc for Backend {
             id: id.into(),
             jsonrpc: Some("2.0"),
             method,
-            params: &Self::convert_params(params),
+            params: Some(&Self::convert_params(params)),
         })
         .expect("Request is serializable");
 

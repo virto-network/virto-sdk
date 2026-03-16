@@ -1,4 +1,4 @@
-use crate::meta_ext::Hasher;
+use crate::metadata::Hasher;
 use crate::prelude::*;
 use blake2::{
     digest::{
@@ -72,9 +72,49 @@ mod tests {
     use hex_literal::hex;
 
     #[test]
-    fn hash_blake_hex() {
+    fn hash_blake128_hex_vs_raw() {
         let out1 = hash(&Hasher::Blake2_128, "0x68656c6c6f");
         let out2 = hash(&Hasher::Blake2_128, hex!("68656c6c6f"));
-        assert_eq!(out1, out2,);
+        assert_eq!(out1, out2);
+        assert_eq!(out1.len(), 16);
+    }
+
+    #[test]
+    fn hash_blake256() {
+        let out = hash(&Hasher::Blake2_256, b"hello");
+        assert_eq!(out.len(), 32);
+    }
+
+    #[test]
+    fn hash_blake128_concat_includes_input() {
+        let input = b"hello";
+        let out = hash(&Hasher::Blake2_128Concat, input);
+        // 16 bytes hash + original input
+        assert_eq!(out.len(), 16 + input.len());
+        assert_eq!(&out[16..], input);
+    }
+
+    #[test]
+    fn hash_twox128() {
+        let out = hash(&Hasher::Twox128, b"System");
+        assert_eq!(out.len(), 16);
+        // Well-known twox128 hash of "System"
+        assert_eq!(out, hex!("26aa394eea5630e07c48ae0c9558cef7"));
+    }
+
+    #[test]
+    fn hash_twox64_concat_includes_input() {
+        let input = b"hello";
+        let out = hash(&Hasher::Twox64Concat, input);
+        // 8 bytes hash + original input
+        assert_eq!(out.len(), 8 + input.len());
+        assert_eq!(&out[8..], input);
+    }
+
+    #[test]
+    fn hash_identity_passthrough() {
+        let input = b"unchanged";
+        let out = hash(&Hasher::Identity, input);
+        assert_eq!(out, input);
     }
 }

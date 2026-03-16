@@ -9,9 +9,6 @@ to automatically encode/decode data into human-readable formats like JSON.
 TODO: rewrite docs for sube 1.0
 */
 
-#[cfg(not(any(feature = "v14")))]
-compile_error!("Enable one of the metadata versions");
-
 #[macro_use]
 extern crate alloc;
 
@@ -20,11 +17,9 @@ use codec::Encode;
 pub use core::fmt::Display;
 use core::iter::Empty;
 
-pub use frame_metadata::RuntimeMetadataPrefixed;
 pub use signer::{Bytes, Signer, SignerFn};
 
 pub use meta::Metadata;
-#[cfg(feature = "v14")]
 pub use scales::{Serializer, Value};
 pub use scales::Registry;
 
@@ -32,8 +27,8 @@ use codec::Compact;
 use core::fmt;
 use hasher::hash;
 // use meta::Meta;
-use meta_ext::{self as meta, Meta as _};
-use meta_ext::{KeyValue, StorageKey};
+use metadata::{self as meta};
+use metadata::{KeyValue, StorageKey};
 use prelude::*;
 use serde::{Deserialize, Serialize};
 pub use serde_json::{json, Value as JsonValue};
@@ -56,7 +51,7 @@ pub mod ws;
 pub mod builder;
 pub use builder::SubeBuilder;
 mod hasher;
-pub mod meta_ext;
+pub mod metadata;
 mod signer;
 
 #[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
@@ -92,13 +87,13 @@ async fn query<'m>(
             .ok_or(Error::ConstantNotFound(const_name))?;
 
         return Ok(Response::Value(
-            StorageEntry::new(const_meta.value.clone(), const_meta.ty.id),
+            StorageEntry::new(const_meta.value.clone(), const_meta.ty),
             &meta.registry,
         ));
     }
 
     if let Ok(key_res) =
-        StorageKey::build_with_registry(&meta.inner.types, &meta.registry, pallet, &item_or_call, &keys)
+        StorageKey::build_with_registry(&meta.registry, pallet, &item_or_call, &keys)
     {
         if !key_res.is_partial() {
             let res = chain.get_storage_item(key_res.key(), block).await?;
@@ -166,7 +161,7 @@ where
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or(Error::PalletNotFound(pallet))?;
-    let calls_ty = pallet.calls.as_ref().ok_or(Error::CallNotFound)?.ty.id;
+    let calls_ty = pallet.calls_ty.ok_or(Error::CallNotFound)?;
 
     log::debug!("calls_ty: {:?}", calls_ty);
 
@@ -258,7 +253,7 @@ where
             .find(|c| c.name == "Version")
             .ok_or(Error::ConstantNotFound("System_Version".into()))?;
 
-        let chain_value: JsonValue = Value::new(&data.value, data.ty.id, &meta.registry)
+        let chain_value: JsonValue = Value::new(&data.value, data.ty, &meta.registry)
             .try_into()
             .map_err(|_| Error::Mapping("failed to decode System::Version".into()))?;
 
@@ -378,7 +373,7 @@ impl From<Response<'_>> for Vec<u8> {
         match res {
             Response::Value(v, _) => v.data,
             Response::None => vec![0],
-            Response::Meta(m) => m.encode(),
+            Response::Meta(m) => serde_json::to_vec(m).unwrap_or_default(),
             Response::ValueSet(_, _) => vec![],
             Response::Void => vec![],
             Response::Registry(_) => vec![],
@@ -526,3 +521,65 @@ impl std::error::Error for Error {}
 
 #[cfg(not(feature = "std"))]
 impl core::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_uri_pallet_and_item() {
+        let (pallet, item, keys) = parse_uri("system/account").unwrap();
+        assert_eq!(pallet, "System");
+        assert_eq!(item, "Account");
+        assert!(keys.is_empty());
+    }
+
+    #[test]
+    fn parse_uri_with_map_keys() {
+        let (pallet, item, keys) = parse_uri("system/account/0x1234").unwrap();
+        assert_eq!(pallet, "System");
+        assert_eq!(item, "Account");
+        assert_eq!(keys, vec!["0x1234"]);
+    }
+
+    #[test]
+    fn parse_uri_strips_slashes() {
+        let (pallet, item, _) = parse_uri("/system/account/").unwrap();
+        assert_eq!(pallet, "System");
+        assert_eq!(item, "Account");
+    }
+
+    #[test]
+    fn parse_uri_kebab_to_camel() {
+        let (pallet, item, _) = parse_uri("para-scheduler/validator-groups").unwrap();
+        assert_eq!(pallet, "ParaScheduler");
+        assert_eq!(item, "ValidatorGroups");
+    }
+
+    #[test]
+    fn parse_uri_too_short() {
+        assert!(parse_uri("system").is_none());
+        assert!(parse_uri("").is_none());
+    }
+
+    #[test]
+    fn parse_uri_constants() {
+        let (pallet, item, keys) = parse_uri("system/_constants/Version").unwrap();
+        assert_eq!(pallet, "System");
+        assert_eq!(item, "_constants");
+        assert_eq!(keys, vec!["Version"]);
+    }
+
+    #[test]
+    fn storage_entry_to_json() {
+        let meta = Metadata::from_bytes(include_bytes!(
+            "../../../sdk/js/.papi/metadata/kreivo.scale"
+        ))
+        .unwrap();
+        let system = meta.pallet_by_name("System").unwrap();
+        let version = system.constants.iter().find(|c| c.name == "Version").unwrap();
+        let entry = StorageEntry::new(version.value.clone(), version.ty);
+        let json = entry.to_json(&meta.registry).expect("decodes to JSON");
+        assert!(json.get("spec_name").is_some());
+    }
+}

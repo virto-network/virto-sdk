@@ -134,7 +134,7 @@ where
     }
 }
 
-use heapless::FnvIndexMap as Map;
+use heapless::index_map::FnvIndexMap as Map;
 use no_std_async::Mutex;
 
 static INSTANCE_BACKEND: async_once_cell::OnceCell<

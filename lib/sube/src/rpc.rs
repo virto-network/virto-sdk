@@ -17,13 +17,9 @@ pub trait Rpc {
     where
         T: for<'de> Deserialize<'de>;
 
-    fn convert_params(params: &[&str]) -> Vec<Box<RawValue>> {
-        params
-            .iter()
-            .map(|p| p.to_string())
-            .map(RawValue::from_string)
-            .map(Result::unwrap)
-            .collect::<Vec<_>>()
+    fn convert_params(params: &[&str]) -> Box<RawValue> {
+        let array = format!("[{}]", params.join(","));
+        RawValue::from_string(array).expect("valid JSON params array")
     }
 }
 

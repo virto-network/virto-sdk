@@ -1,0 +1,618 @@
+use crate::prelude::*;
+
+use codec::Decode;
+use scales::to_bytes_with_info;
+use serde::Serialize;
+
+use crate::hasher::hash;
+
+pub type TypeId = u32;
+
+/// Storage hasher types used by Substrate.
+#[derive(Clone, Debug)]
+pub enum Hasher {
+    Blake2_128,
+    Blake2_256,
+    Blake2_128Concat,
+    Twox128,
+    Twox256,
+    Twox64Concat,
+    Identity,
+}
+
+/// Compressed constant metadata — only name, type id, and raw value.
+#[derive(Clone, Debug)]
+pub struct ConstantMeta {
+    pub name: String,
+    pub ty: TypeId,
+    pub value: Vec<u8>,
+}
+
+/// Storage entry type — plain value or map with hashers.
+#[derive(Clone, Debug)]
+pub enum StorageEntryType {
+    Plain(TypeId),
+    Map {
+        hashers: Vec<Hasher>,
+        key: TypeId,
+        value: TypeId,
+    },
+}
+
+/// Compressed storage entry metadata — only name and type info.
+#[derive(Clone, Debug)]
+pub struct StorageEntryMeta {
+    pub name: String,
+    pub ty: StorageEntryType,
+}
+
+/// Compressed pallet storage metadata.
+#[derive(Clone, Debug)]
+pub struct StorageMeta {
+    pub prefix: String,
+    pub entries: Vec<StorageEntryMeta>,
+}
+
+/// Compressed pallet metadata — only fields sube needs at runtime.
+#[derive(Clone, Debug)]
+pub struct PalletMeta {
+    pub name: String,
+    pub index: u8,
+    pub calls_ty: Option<TypeId>,
+    pub storage: Option<StorageMeta>,
+    pub constants: Vec<ConstantMeta>,
+}
+
+/// Compressed runtime metadata.
+/// The full `PortableRegistry` is dropped after compression into `scales::Registry`.
+#[derive(Clone, Debug)]
+pub struct Metadata {
+    pub pallets: Vec<PalletMeta>,
+    pub registry: scales::Registry,
+}
+
+impl Serialize for Metadata {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> core::result::Result<S::Ok, S::Error> {
+        self.registry.serialize(serializer)
+    }
+}
+
+/// Decode metadata from its raw prefixed format.
+/// Supports V14, V15, and V16 depending on enabled features.
+/// The full PortableRegistry is compressed into a scales::Registry
+/// and then dropped — only the compressed form is kept.
+pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
+    use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
+    use scale_info::form::PortableForm;
+
+    type FmHasher = frame_metadata::v14::StorageHasher;
+
+    fn convert_hasher(h: &FmHasher) -> Hasher {
+        match h {
+            FmHasher::Blake2_128 => Hasher::Blake2_128,
+            FmHasher::Blake2_256 => Hasher::Blake2_256,
+            FmHasher::Blake2_128Concat => Hasher::Blake2_128Concat,
+            FmHasher::Twox128 => Hasher::Twox128,
+            FmHasher::Twox256 => Hasher::Twox256,
+            FmHasher::Twox64Concat => Hasher::Twox64Concat,
+            FmHasher::Identity => Hasher::Identity,
+        }
+    }
+
+    fn convert_entry_type(
+        ty: &frame_metadata::v14::StorageEntryType<PortableForm>,
+    ) -> StorageEntryType {
+        match ty {
+            frame_metadata::v14::StorageEntryType::Plain(t) => StorageEntryType::Plain(t.id),
+            frame_metadata::v14::StorageEntryType::Map {
+                hashers,
+                key,
+                value,
+            } => StorageEntryType::Map {
+                hashers: hashers.iter().map(convert_hasher).collect(),
+                key: key.id,
+                value: value.id,
+            },
+        }
+    }
+
+    fn convert_v14_pallet(p: frame_metadata::v14::PalletMetadata<PortableForm>) -> PalletMeta {
+        PalletMeta {
+            name: p.name,
+            index: p.index,
+            calls_ty: p.calls.map(|c| c.ty.id),
+            storage: p.storage.map(|s| StorageMeta {
+                prefix: s.prefix,
+                entries: s
+                    .entries
+                    .into_iter()
+                    .map(|e| StorageEntryMeta {
+                        name: e.name,
+                        ty: convert_entry_type(&e.ty),
+                    })
+                    .collect(),
+            }),
+            constants: p
+                .constants
+                .into_iter()
+                .map(|c| ConstantMeta {
+                    name: c.name,
+                    ty: c.ty.id,
+                    value: c.value,
+                })
+                .collect(),
+        }
+    }
+
+    let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
+    let (types, pallets) = match meta.1 {
+        RuntimeMetadata::V14(m) => {
+            let pallets = m.pallets.into_iter().map(convert_v14_pallet).collect();
+            (m.types, pallets)
+        }
+        RuntimeMetadata::V15(m) => {
+            let pallets = m
+                .pallets
+                .into_iter()
+                .map(|p| PalletMeta {
+                    name: p.name,
+                    index: p.index,
+                    calls_ty: p.calls.map(|c| c.ty.id),
+                    storage: p.storage.map(|s| StorageMeta {
+                        prefix: s.prefix,
+                        entries: s
+                            .entries
+                            .into_iter()
+                            .map(|e| StorageEntryMeta {
+                                name: e.name,
+                                ty: convert_entry_type(&e.ty),
+                            })
+                            .collect(),
+                    }),
+                    constants: p
+                        .constants
+                        .into_iter()
+                        .map(|c| ConstantMeta {
+                            name: c.name,
+                            ty: c.ty.id,
+                            value: c.value,
+                        })
+                        .collect(),
+                })
+                .collect();
+            (m.types, pallets)
+        }
+        RuntimeMetadata::V16(m) => {
+            let pallets = m
+                .pallets
+                .into_iter()
+                .map(|p| PalletMeta {
+                    name: p.name,
+                    index: p.index,
+                    calls_ty: p.calls.map(|c| c.ty.id),
+                    storage: p.storage.map(|s| StorageMeta {
+                        prefix: s.prefix,
+                        entries: s
+                            .entries
+                            .into_iter()
+                            .map(|e| StorageEntryMeta {
+                                name: e.name,
+                                ty: convert_entry_type(&e.ty),
+                            })
+                            .collect(),
+                    }),
+                    constants: p
+                        .constants
+                        .into_iter()
+                        .map(|c| ConstantMeta {
+                            name: c.name,
+                            ty: c.ty.id,
+                            value: c.value,
+                        })
+                        .collect(),
+                })
+                .collect();
+            (m.types, pallets)
+        }
+        _ => return Err(codec::Error::from("Metadata version not supported")),
+    };
+
+    let registry = scales::compress::compress(&types)
+        .map_err(|_| codec::Error::from("Failed to compress registry"))?;
+
+    Ok(Metadata { pallets, registry })
+}
+
+pub struct BlockInfo {
+    pub number: u64,
+    pub hash: [u8; 32],
+    pub parent: [u8; 32],
+}
+
+impl From<BlockInfo> for Vec<u8> {
+    fn from(b: BlockInfo) -> Self {
+        b.hash.into()
+    }
+}
+
+impl Metadata {
+    pub fn pallet_by_name(&self, name: &str) -> Option<&PalletMeta> {
+        self.pallets
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum KeyValue {
+    Empty(TypeId),
+    // type id, hash, encoded_value, hasher
+    Value((TypeId, Vec<u8>, Vec<u8>, Hasher)),
+}
+
+/// Represents a key of the blockchain storage in its raw form
+#[derive(Clone, Debug)]
+pub struct StorageKey {
+    pub pallet: Vec<u8>,
+    pub call: Vec<u8>,
+    pub args: Vec<KeyValue>,
+    pub ty: TypeId,
+}
+
+impl StorageKey {
+    pub fn new(ty: TypeId, pallet: Vec<u8>, call: Vec<u8>, args: Vec<KeyValue>) -> Self {
+        Self {
+            ty,
+            pallet,
+            call,
+            args,
+        }
+    }
+
+    pub fn key(&self) -> Vec<u8> {
+        let args = self
+            .args
+            .iter()
+            .map(|e| match e {
+                KeyValue::Empty(_) => &[][..],
+                KeyValue::Value((_, hash, _, _)) => &hash[..],
+            })
+            .collect::<Vec<&[u8]>>()
+            .concat();
+
+        [&self.pallet[..], &self.call[..], &args[..]].concat()
+    }
+
+    pub fn is_partial(&self) -> bool {
+        !self.args.iter().all(|n| matches!(n, KeyValue::Value(_)))
+    }
+
+    pub fn build_with_registry<T: AsRef<str>>(
+        registry: &scales::Registry,
+        meta: &PalletMeta,
+        item: &str,
+        map_keys: &[T],
+    ) -> crate::Result<Self> {
+        let entry = meta
+            .storage
+            .as_ref()
+            .and_then(|s| s.entries.iter().find(|e| e.name == item))
+            .ok_or(crate::Error::CantFindMethodInPallet)?;
+        log::trace!(
+            "map_keys={}",
+            map_keys
+                .iter()
+                .map(|x| x.as_ref())
+                .collect::<Vec<&str>>()
+                .join(", ")
+        );
+        entry
+            .ty
+            .build_key(registry, &meta.name, &entry.name, map_keys)
+    }
+}
+
+impl core::fmt::Display for StorageKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        write!(f, "0x{}", hex::encode(self.key()))
+    }
+}
+
+fn extract_tuple_type(key_id: TypeId, registry: &scales::Registry) -> Vec<TypeId> {
+    match registry.resolve(key_id) {
+        Some(scales::TypeDef::Tuple(types) | scales::TypeDef::StructTuple(types)) => types.clone(),
+        _ => vec![key_id],
+    }
+}
+
+impl StorageEntryType {
+    fn build_key<T: AsRef<str>>(
+        &self,
+        registry: &scales::Registry,
+        pallet: &str,
+        item: &str,
+        map_keys: &[T],
+    ) -> crate::Result<StorageKey> {
+        match self {
+            Self::Plain(ty) => build_storage_key(
+                registry,
+                None,
+                *ty,
+                (pallet, item),
+                &[] as &[&str],
+                &[] as &[Hasher],
+            ),
+            Self::Map {
+                hashers,
+                key,
+                value,
+            } => {
+                log::trace!("key={}, value={}, hasher={:?}", key, value, hashers);
+                build_storage_key(registry, Some(*key), *value, (pallet, item), map_keys, hashers)
+            }
+        }
+    }
+}
+
+/// Decode metadata from a full `RuntimeMetadataPrefixed` SCALE blob.
+/// Convenience wrapper that handles the `&mut &[u8]` slice.
+impl Metadata {
+    pub fn from_bytes(bytes: &[u8]) -> core::result::Result<Metadata, codec::Error> {
+        from_bytes(&mut &bytes[..])
+    }
+}
+
+fn build_storage_key<T: AsRef<str>>(
+    registry: &scales::Registry,
+    key_ty_id: Option<TypeId>,
+    value_ty_id: TypeId,
+    pallet_item: (&str, &str),
+    map_keys: &[T],
+    hashers: &[Hasher],
+) -> crate::Result<StorageKey> {
+    let type_call_ids = if let Some(key_ty_id) = key_ty_id {
+        log::trace!("resolving key type id={}", key_ty_id);
+        extract_tuple_type(key_ty_id, registry)
+    } else {
+        vec![]
+    };
+
+    if type_call_ids.len() == hashers.len() {
+        log::trace!("type_call_ids={:?}", type_call_ids);
+        let storage_key = StorageKey::new(
+            value_ty_id,
+            hash(&Hasher::Twox128, pallet_item.0),
+            hash(&Hasher::Twox128, pallet_item.1),
+            type_call_ids
+                .into_iter()
+                .enumerate()
+                .map(|(i, type_id)| {
+                    log::trace!("type_call_ids.i={} type_call_ids.type_id={}", i, type_id);
+                    let k = map_keys.get(i);
+                    let hasher = &hashers[i];
+
+                    if k.is_none() {
+                        return KeyValue::Empty(type_id);
+                    }
+
+                    let k = k.expect("checked above").as_ref();
+                    let mut out = vec![];
+
+                    if let Some(k) = k.strip_prefix("0x") {
+                        let value = hex::decode(k).expect("str must be encoded");
+                        let _ =
+                            to_bytes_with_info(&mut out, &value, Some((registry, type_id)));
+                    } else {
+                        let _ = to_bytes_with_info(&mut out, &k, Some((registry, type_id)));
+                    }
+
+                    let hashed = hash(hasher, &out);
+                    KeyValue::Value((type_id, hashed, out, hasher.clone()))
+                })
+                .collect(),
+        );
+        Ok(storage_key)
+    } else if hashers.len() == 1 {
+        log::trace!("treating tuple as argument for hasher");
+
+        let tuple_bytes: Vec<u8> = type_call_ids
+            .into_iter()
+            .enumerate()
+            .flat_map(|(i, type_id)| {
+                let k = map_keys.get(i).expect("to exist in map_keys").as_ref();
+                let mut out = vec![];
+                if let Some(k) = k.strip_prefix("0x") {
+                    let value = hex::decode(k).expect("str must be hex encoded");
+                    let _ = to_bytes_with_info(&mut out, &value, Some((registry, type_id)));
+                } else {
+                    let _ = to_bytes_with_info(&mut out, &k, Some((registry, type_id)));
+                }
+                out
+            })
+            .collect();
+
+        let hasher = &hashers[0];
+        let hashed_value = hash(hasher, &tuple_bytes);
+
+        let storage_key = StorageKey::new(
+            value_ty_id,
+            hash(&Hasher::Twox128, pallet_item.0),
+            hash(&Hasher::Twox128, pallet_item.1),
+            vec![KeyValue::Value((
+                key_ty_id.expect("key id must exist"),
+                hashed_value,
+                tuple_bytes,
+                hasher.clone(),
+            ))],
+        );
+        Ok(storage_key)
+    } else {
+        Err(crate::Error::Encode(
+            "Wrong number of hashers vs map_keys".into(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // V15 metadata from the Kreivo parachain
+    const KREIVO_METADATA: &[u8] =
+        include_bytes!("../../../sdk/js/.papi/metadata/kreivo.scale");
+
+    fn kreivo() -> Metadata {
+        Metadata::from_bytes(KREIVO_METADATA).expect("kreivo metadata decodes")
+    }
+
+    #[test]
+    fn decode_v15_metadata() {
+        let meta = kreivo();
+        assert!(
+            meta.pallets.len() > 10,
+            "expected many pallets, got {}",
+            meta.pallets.len()
+        );
+    }
+
+    #[test]
+    fn pallet_by_name_case_insensitive() {
+        let meta = kreivo();
+        assert!(meta.pallet_by_name("system").is_some());
+        assert!(meta.pallet_by_name("System").is_some());
+        assert!(meta.pallet_by_name("SYSTEM").is_some());
+        assert!(meta.pallet_by_name("Balances").is_some());
+    }
+
+    #[test]
+    fn pallet_by_name_not_found() {
+        let meta = kreivo();
+        assert!(meta.pallet_by_name("NonExistentPallet").is_none());
+    }
+
+    #[test]
+    fn system_pallet_has_expected_storage() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        let storage = system.storage.as_ref().expect("System has storage");
+        let account = storage.entries.iter().find(|e| e.name == "Account");
+        assert!(account.is_some(), "System should have Account storage");
+        match &account.unwrap().ty {
+            StorageEntryType::Map { hashers, .. } => {
+                assert!(!hashers.is_empty(), "Account map should have hashers");
+            }
+            _ => panic!("Account should be a Map"),
+        }
+    }
+
+    #[test]
+    fn system_pallet_has_constants() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        let version = system.constants.iter().find(|c| c.name == "Version");
+        assert!(version.is_some(), "System should have Version constant");
+        let version = version.unwrap();
+        assert!(!version.value.is_empty(), "Version should have data");
+    }
+
+    #[test]
+    fn balances_pallet_has_calls() {
+        let meta = kreivo();
+        let balances = meta.pallet_by_name("Balances").unwrap();
+        assert!(
+            balances.calls_ty.is_some(),
+            "Balances should have a calls type"
+        );
+    }
+
+    #[test]
+    fn registry_resolves_types() {
+        let meta = kreivo();
+        // Type 0 should always exist in a substrate registry
+        assert!(
+            meta.registry.resolve(0).is_some(),
+            "Registry should resolve type 0"
+        );
+    }
+
+    #[test]
+    fn decode_system_version_constant() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        let version = system.constants.iter().find(|c| c.name == "Version").unwrap();
+        let value = scales::Value::new(&version.value, version.ty, &meta.registry);
+        let json: serde_json::Value = value.try_into().expect("Version decodes to JSON");
+        let obj = json.as_object().expect("Version is an object");
+        assert!(obj.contains_key("spec_name"), "Version has spec_name");
+        assert!(obj.contains_key("spec_version"), "Version has spec_version");
+    }
+
+    #[test]
+    fn storage_key_for_plain_entry() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        let key = StorageKey::build_with_registry(
+            &meta.registry,
+            system,
+            "Number",
+            &[] as &[&str],
+        );
+        assert!(key.is_ok(), "Should build key for plain storage");
+        let key = key.unwrap();
+        assert!(!key.is_partial());
+        assert!(!key.key().is_empty());
+    }
+
+    #[test]
+    fn storage_key_for_map_entry() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        // Account is a Map<AccountId32, AccountInfo>
+        let key = StorageKey::build_with_registry(
+            &meta.registry,
+            system,
+            "Account",
+            &["0x0000000000000000000000000000000000000000000000000000000000000000"],
+        );
+        assert!(key.is_ok(), "Should build key for map storage: {:?}", key.err());
+        let key = key.unwrap();
+        assert!(!key.is_partial());
+    }
+
+    #[test]
+    fn storage_key_partial_map() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        // No map key provided → partial key
+        let key = StorageKey::build_with_registry(
+            &meta.registry,
+            system,
+            "Account",
+            &[] as &[&str],
+        );
+        assert!(key.is_ok());
+        assert!(key.unwrap().is_partial());
+    }
+
+    #[test]
+    fn storage_entry_not_found() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        let key = StorageKey::build_with_registry(
+            &meta.registry,
+            system,
+            "NonExistent",
+            &[] as &[&str],
+        );
+        assert!(key.is_err());
+    }
+
+    #[test]
+    fn invalid_metadata_bytes() {
+        let result = Metadata::from_bytes(&[0, 1, 2, 3]);
+        assert!(result.is_err());
+    }
+}
