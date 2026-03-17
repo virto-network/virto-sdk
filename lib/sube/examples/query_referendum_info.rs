@@ -1,13 +1,11 @@
-use sube::{sube, Response, Result};
+use sube::{Response, Result, Sube};
 
 #[async_std::main]
 async fn main() -> Result<()> {
-    let query = format!(
-        "https://kreivo.io/communityReferenda/referendumInfoFor/{}",
-        24
-    );
+    let chain = Sube::connect("wss://kreivo.io").await?;
 
-    let r = sube(&query).await?;
+    let query = format!("communityReferenda/referendumInfoFor/{}", 24);
+    let r = chain.query(&query).await?;
 
     if let Response::Value(ref entry, reg) = r {
         let json_value = entry.to_json(reg)?;

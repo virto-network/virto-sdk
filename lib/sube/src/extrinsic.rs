@@ -100,13 +100,13 @@ pub fn encode_extensions(
 }
 
 /// Build and submit a signed extrinsic using metadata-driven extensions.
-pub(crate) async fn submit<'m, V>(
-    chain: impl Backend,
-    meta: &'m crate::Metadata,
+pub(crate) async fn submit<V>(
+    chain: &(impl Backend + ?Sized),
+    meta: &crate::Metadata,
     path: &str,
     tx_data: ExtrinsicBody<V>,
     signer: impl crate::Signer,
-) -> Result<Response<'m>>
+) -> Result<Response<'static>>
 where
     V: serde::Serialize + core::fmt::Debug,
 {
@@ -127,7 +127,7 @@ where
     let from_account = signer.account();
 
     // Build chain context
-    let ctx = build_context(&chain, meta, &tx_data, from_account.as_ref()).await?;
+    let ctx = build_context(chain, meta, &tx_data, from_account.as_ref()).await?;
 
     // Encode extensions
     let (extra_bytes, additional_signed) = encode_extensions(
@@ -186,12 +186,13 @@ where
             .encode();
 
     chain.submit(&[len, encoded_inner].concat()).await?;
+
     Ok(Response::Void)
 }
 
 /// Fetch spec/tx version, genesis hash, and account nonce.
 async fn build_context<V>(
-    chain: &impl Backend,
+    chain: &(impl Backend + ?Sized),
     meta: &crate::Metadata,
     tx_data: &ExtrinsicBody<V>,
     account: &[u8],
@@ -243,7 +244,7 @@ where
 
 /// Resolve nonce from: explicit field, extension override, or on-chain query.
 async fn resolve_nonce<V>(
-    chain: &impl Backend,
+    chain: &(impl Backend + ?Sized),
     meta: &crate::Metadata,
     tx_data: &ExtrinsicBody<V>,
     account: &[u8],

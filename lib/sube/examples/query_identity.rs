@@ -1,8 +1,10 @@
-use sube::{sube, Response};
+use sube::{sube, Response, Sube};
 
 #[async_std::main]
 async fn main() -> sube::Result<()> {
-    let result = sube("ws://localhost:11004/identity/superOf/0x6d6f646c6b762f636d7479738501000000000000000000000000000000000000").await?;
+    let chain = Sube::connect("ws://localhost:11004").await?;
+
+    let result = chain.query("identity/superOf/0x6d6f646c6b762f636d7479738501000000000000000000000000000000000000").await?;
 
     if let Response::Value(entry, reg) = result {
         let data = entry.to_json(reg)?;
@@ -12,9 +14,7 @@ async fn main() -> sube::Result<()> {
         );
     }
 
-    let query = "ws://localhost:11004/identity/identityOf/0xbe6ed76ac48d5c7f1c5d2cab8a1d1e7a451dcc24b624b088ef554fd47ba21139";
-
-    let r = sube(query).await?;
+    let r = chain.query("identity/identityOf/0xbe6ed76ac48d5c7f1c5d2cab8a1d1e7a451dcc24b624b088ef554fd47ba21139").await?;
 
     if let Response::Value(ref entry, reg) = r {
         let json_value = entry.to_json(reg)?;

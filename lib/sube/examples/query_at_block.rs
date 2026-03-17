@@ -1,8 +1,9 @@
-use sube::{sube, Response, Result};
+use sube::{sube, Response, Result, Sube};
 
 #[async_std::main]
 async fn main() -> Result<()> {
-    let result = sube("ws://127.0.0.1:12281/system/account/0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b?at=2067321").await?;
+    let chain = Sube::connect("ws://127.0.0.1:12281").await?;
+    let result = chain.query_at("system/account/0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b", 2067321).await?;
 
     if let Response::Value(entry, reg) = result {
         let data = entry.to_json(reg)?;

@@ -1,8 +1,6 @@
 use crate::prelude::*;
-use crate::{meta::BlockInfo, Backend, Error, Metadata, Result as SubeResult};
-use crate::{Offline, RawKey, RawValue};
+use crate::{Backend, Error, Metadata, Result as SubeResult};
 
-use core::future::Future;
 use url::Url;
 
 #[cfg(any(feature = "http", feature = "http-web"))]
@@ -15,75 +13,106 @@ use crate::ws::Backend as WSBackend;
 use heapless::index_map::FnvIndexMap as Map;
 use no_std_async::Mutex;
 
-pub type BoxFuture<'a, T> = core::pin::Pin<Box<dyn Future<Output = T> + 'a>>;
+// --- Internal backend enum + dispatch ---
 
-// --- Static caching ---
+pub(crate) enum AnyBackend {
+    #[cfg(any(feature = "http", feature = "http-web"))]
+    Http(RpcClient<HttpBackend>),
+    #[cfg(feature = "ws")]
+    Ws(RpcClient<WSBackend>),
+}
 
-static INSTANCE_BACKEND: async_once_cell::OnceCell<
-    Mutex<Map<String, Mutex<&'static AnyBackend>, 16>>,
-> = async_once_cell::OnceCell::new();
+macro_rules! dispatch {
+    ($self:expr, $method:ident ( $($arg:expr),* )) => {
+        match $self {
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            AnyBackend::Http(b) => b.$method($($arg),*).await,
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => b.$method($($arg),*).await,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("no backend available"),
+        }
+    };
+}
 
-static INSTANCE_METADATA: async_once_cell::OnceCell<
-    Mutex<Map<String, Mutex<&'static Metadata>, 16>>,
-> = async_once_cell::OnceCell::new();
+#[allow(unused_variables)]
+impl Backend for AnyBackend {
+    async fn get_storage_items(
+        &self,
+        keys: Vec<crate::RawKey>,
+        block: Option<u32>,
+    ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        dispatch!(self, get_storage_items(keys, block))
+    }
 
-async fn get_metadata(backend: &AnyBackend, metadata: Option<Metadata>) -> SubeResult<Metadata> {
-    match metadata {
-        Some(m) => Ok(m),
-        None => backend.metadata().await.map_err(|_| Error::BadMetadata),
+    async fn get_keys_paged(
+        &self,
+        from: crate::RawKey,
+        size: u16,
+        to: Option<crate::RawKey>,
+    ) -> SubeResult<Vec<crate::RawKey>> {
+        dispatch!(self, get_keys_paged(from, size, to))
+    }
+
+    async fn submit(&self, ext: &[u8]) -> SubeResult<()> {
+        dispatch!(self, submit(ext))
+    }
+
+    async fn metadata(&self) -> SubeResult<Metadata> {
+        dispatch!(self, metadata())
+    }
+
+    async fn block_info(&self, at: Option<u32>) -> SubeResult<crate::meta::BlockInfo> {
+        dispatch!(self, block_info(at))
     }
 }
 
-pub(crate) async fn get_multi_backend_by_url<'a>(
-    url: Url,
-    metadata: Option<Metadata>,
-) -> SubeResult<(&'a AnyBackend, &'a Metadata)> {
-    let mut instance_backend = INSTANCE_BACKEND
+// --- Global metadata cache ---
+
+static META_CACHE: async_once_cell::OnceCell<Mutex<Map<String, &'static Metadata, 16>>> =
+    async_once_cell::OnceCell::new();
+
+/// Get or fetch+leak metadata for a given host, keyed by scheme://host:port.
+pub(crate) async fn get_metadata(
+    backend: &AnyBackend,
+    url: &Url,
+    preloaded: Option<Metadata>,
+) -> SubeResult<&'static Metadata> {
+    let key = base_key(url);
+
+    let mut cache = META_CACHE
         .get_or_init(async { Mutex::new(Map::new()) })
         .await
         .lock()
         .await;
 
-    let mut instance_metadata = INSTANCE_METADATA
-        .get_or_init(async { Mutex::new(Map::new()) })
-        .await
-        .lock()
-        .await;
+    if let Some(&meta) = cache.get(&key) {
+        return Ok(meta);
+    }
 
-    let base_path = format!(
+    let meta = match preloaded {
+        Some(m) => m,
+        None => backend.metadata().await.map_err(|_| Error::BadMetadata)?,
+    };
+    let meta: &'static Metadata = Box::leak(Box::new(meta));
+
+    cache
+        .insert(key, meta)
+        .map_err(|_| Error::CantInitBackend)?;
+
+    Ok(meta)
+}
+
+fn base_key(url: &Url) -> String {
+    format!(
         "{}://{}:{}",
         url.scheme(),
-        url.host_str().expect("url to have a host"),
-        url.port().unwrap_or(80)
-    );
-
-    let cached_b = instance_backend.get(&base_path);
-    let cached_m = instance_metadata.get(&base_path);
-
-    match (cached_b, cached_m) {
-        (Some(b), Some(m)) => {
-            let b = *b.lock().await;
-            let m = *m.lock().await;
-            Ok((b, m))
-        }
-        _ => {
-            let backend = Box::new(get_backend_by_url(url.clone()).await?);
-            let backend = Box::leak::<'static>(backend);
-
-            instance_backend
-                .insert(base_path.clone(), Mutex::new(backend))
-                .map_err(|_| Error::CantInitBackend)?;
-
-            let metadata = Box::new(get_metadata(backend, metadata).await?);
-            let metadata = Box::leak::<'static>(metadata);
-
-            instance_metadata
-                .insert(base_path.clone(), Mutex::new(metadata))
-                .map_err(|_| Error::BadMetadata)?;
-
-            Ok((backend, metadata))
-        }
-    }
+        url.host_str().unwrap_or("unknown"),
+        url.port().unwrap_or(match url.scheme() {
+            "wss" | "https" => 443,
+            _ => 80,
+        })
+    )
 }
 
 // --- URL parsing ---
@@ -102,11 +131,9 @@ pub(crate) fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
     let mut url = Url::parse(&chain).map_err(|_| Error::BadInput)?;
 
     if url.host_str().eq(&Some("localhost")) && url.port().is_none() {
-        const WS_PORT: u16 = 9944;
-        const HTTP_PORT: u16 = 9933;
         let port = match url.scheme() {
-            "ws" => WS_PORT,
-            _ => HTTP_PORT,
+            "ws" => 9944,
+            _ => 9933,
         };
         url.set_port(Some(port)).expect("known port");
     }
@@ -114,100 +141,16 @@ pub(crate) fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
     Ok(url)
 }
 
-// --- Backend dispatch ---
+// --- Connect ---
 
-pub(crate) enum AnyBackend {
-    #[cfg(any(feature = "http", feature = "http-web"))]
-    Http(RpcClient<HttpBackend>),
-    #[cfg(feature = "ws")]
-    Ws(RpcClient<WSBackend>),
-    _Offline(Offline),
-}
-
-async fn get_backend_by_url(url: Url) -> SubeResult<AnyBackend> {
+pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
     match url.scheme() {
         #[cfg(feature = "ws")]
         "ws" | "wss" => Ok(AnyBackend::Ws(RpcClient(
             WSBackend::new_ws2(url.to_string().as_str()).await?,
         ))),
         #[cfg(any(feature = "http", feature = "http-web"))]
-        "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(url)))),
+        "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(url.clone())))),
         _ => Err(Error::BadInput),
-    }
-}
-
-impl Backend for &AnyBackend {
-    async fn get_storage_items(
-        &self,
-        keys: Vec<RawKey>,
-        block: Option<u32>,
-    ) -> crate::Result<impl Iterator<Item = (RawKey, Option<RawValue>)>> {
-        let result: Box<dyn Iterator<Item = (RawKey, Option<RawValue>)>> = match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => Box::new(b.get_storage_items(keys, block).await?),
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => Box::new(b.get_storage_items(keys, block).await?),
-            AnyBackend::_Offline(b) => Box::new(b.get_storage_items(keys, block).await?),
-        };
-        Ok(result)
-    }
-
-    async fn get_storage_item(
-        &self,
-        key: RawKey,
-        block: Option<u32>,
-    ) -> crate::Result<Option<Vec<u8>>> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.get_storage_item(key, block).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.get_storage_item(key, block).await,
-            AnyBackend::_Offline(b) => b.get_storage_item(key, block).await,
-        }
-    }
-
-    async fn get_keys_paged(
-        &self,
-        from: RawKey,
-        size: u16,
-        to: Option<RawKey>,
-    ) -> crate::Result<Vec<RawKey>> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.get_keys_paged(from, size, to).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.get_keys_paged(from, size, to).await,
-            AnyBackend::_Offline(b) => b.get_keys_paged(from, size, to).await,
-        }
-    }
-
-    async fn metadata(&self) -> SubeResult<Metadata> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.metadata().await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.metadata().await,
-            AnyBackend::_Offline(b) => b.metadata().await,
-        }
-    }
-
-    async fn submit(&self, ext: impl AsRef<[u8]>) -> SubeResult<()> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.submit(ext).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.submit(ext).await,
-            AnyBackend::_Offline(b) => b.submit(ext).await,
-        }
-    }
-
-    async fn block_info(&self, at: Option<u32>) -> SubeResult<BlockInfo> {
-        match self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.block_info(at).await,
-            #[cfg(feature = "ws")]
-            AnyBackend::Ws(b) => b.block_info(at).await,
-            AnyBackend::_Offline(b) => b.block_info(at).await,
-        }
     }
 }

@@ -1,4 +1,4 @@
-use sube::{sube, Response, Result};
+use sube::{sube, Result};
 
 #[async_std::main]
 async fn main() -> Result<()> {

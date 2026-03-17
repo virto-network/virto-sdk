@@ -1,7 +1,7 @@
 use libwallet::{self, vault, Account};
 use serde_json::json;
 use std::{env, error::Error};
-use sube::{sube, Bytes, SignerFn};
+use sube::{Bytes, SignerFn, Sube};
 
 type Wallet = libwallet::Wallet<vault::Simple<String>>;
 
@@ -9,7 +9,7 @@ type Wallet = libwallet::Wallet<vault::Simple<String>>;
 async fn main() -> Result<(), Box<dyn Error>> {
     let phrase = env::args().skip(1).collect::<Vec<_>>().join(" ");
 
-    let (vault, phrase) = if phrase.is_empty() {
+    let (vault, _phrase) = if phrase.is_empty() {
         vault::Simple::generate_with_phrase(&mut rand_core::OsRng)
     } else {
         let phrase: libwallet::Mnemonic = phrase.parse().expect("Invalid phrase");
@@ -39,7 +39,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     ));
 
-    let response = sube("wss://kreivo.io/balances/transfer")
+    let chain = Sube::connect("wss://kreivo.io").await
+        .map_err(|e| format!("Failed to connect: {e}"))?;
+
+    let response = chain.call("balances/transfer")
         .body(json!({
             "dest": {
                 "Id": account.public().as_ref()

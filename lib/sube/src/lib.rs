@@ -1,5 +1,4 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![allow(async_fn_in_trait)]
 /*!
 Sube is a lightweight blockchain client to query and submit extrinsics
 to Substrate based blockchains.
@@ -8,16 +7,16 @@ to automatically encode/decode data into human-readable formats like JSON.
 
 # Usage
 
-Query storage:
 ```rust,ignore
-let result = sube("wss://rpc.example.io/system/account/0x1234...").await?;
-```
+let chain = sube("wss://kreivo.io").await?;
 
-Submit an extrinsic:
-```rust,ignore
-let result = sube("wss://rpc.example.io/balances/transfer")
-    .with_body(json!({ "dest": {"Id": dest}, "value": 1000 }))
-    .with_signer(signer)
+// Query storage
+let result = chain.query("system/account/0x1234...").await?;
+
+// Submit an extrinsic
+chain.call("balances/transfer")
+    .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
+    .signer(my_signer)
     .await?;
 ```
 */
@@ -30,13 +29,12 @@ pub use core::fmt::Display;
 pub use scales::{Registry, Serializer, Value};
 pub use serde_json::{json, Value as JsonValue};
 
-pub use builder::{CallBuilder, QueryBuilder, Sube};
+pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 pub use extrinsic::ExtrinsicBody;
 pub use meta::Metadata;
 pub use signer::{Bytes, Signer, SignerFn};
 
 use core::fmt;
-use core::iter::Empty;
 use metadata::{self as meta, KeyValue, StorageKey};
 use prelude::*;
 use serde::{Deserialize, Serialize};
@@ -65,19 +63,22 @@ pub mod rpc;
 mod signer;
 pub mod util;
 
-/// The batteries-included entry point for querying and submitting extrinsics.
+/// Connect to a Substrate chain.
 ///
-/// Returns a [`Sube`] handle that can be:
-/// - `.await`ed directly for one-liner queries (when the URL contains a path)
-/// - reused via [`.query(path)`](Sube::query) and [`.call(path)`](Sube::call)
-pub fn sube(url: &str) -> Sube {
-    Sube::new(url)
+/// Returns a [`SubeBuilder`] — `.await` it to get a connected [`Sube`] handle.
+///
+/// ```rust,ignore
+/// let chain = sube("wss://kreivo.io").await?;
+/// let response = chain.query("system/account/0x1234").await?;
+/// ```
+pub fn sube(url: &str) -> SubeBuilder {
+    SubeBuilder::new(url)
 }
 
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub(crate) async fn query<'m>(
-    chain: &impl Backend,
+    chain: &(impl Backend + ?Sized),
     meta: &'m Metadata,
     path: &str,
     block: Option<u32>,
@@ -216,13 +217,14 @@ pub type RawValue = Vec<u8>;
 
 // --- Backend trait ---
 
-/// Generic definition of a blockchain backend
+/// Generic definition of a blockchain backend.
+#[allow(async_fn_in_trait)]
 pub trait Backend {
     async fn get_storage_items(
         &self,
         keys: Vec<RawKey>,
         block: Option<u32>,
-    ) -> crate::Result<impl Iterator<Item = (RawKey, Option<RawValue>)>>;
+    ) -> crate::Result<Vec<(RawKey, Option<RawValue>)>>;
 
     async fn get_storage_item(
         &self,
@@ -243,14 +245,14 @@ pub trait Backend {
         to: Option<RawKey>,
     ) -> crate::Result<Vec<RawValue>>;
 
-    async fn submit(&self, ext: impl AsRef<[u8]>) -> Result<()>;
+    async fn submit(&self, ext: &[u8]) -> Result<()>;
 
     async fn metadata(&self) -> Result<Metadata>;
 
     async fn block_info(&self, at: Option<u32>) -> Result<meta::BlockInfo>;
 }
 
-/// A dummy backend for offline querying of metadata
+/// A dummy backend for offline querying of metadata.
 pub struct Offline(pub Metadata);
 
 impl Backend for Offline {
@@ -258,8 +260,8 @@ impl Backend for Offline {
         &self,
         _keys: Vec<RawKey>,
         _block: Option<u32>,
-    ) -> crate::Result<impl Iterator<Item = (RawKey, Option<RawValue>)>> {
-        Err::<Empty<(RawKey, Option<RawValue>)>, _>(Error::ChainUnavailable)
+    ) -> crate::Result<Vec<(RawKey, Option<RawValue>)>> {
+        Err(Error::ChainUnavailable)
     }
 
     async fn get_keys_paged(
@@ -271,7 +273,7 @@ impl Backend for Offline {
         Err(Error::ChainUnavailable)
     }
 
-    async fn submit(&self, _ext: impl AsRef<[u8]>) -> Result<()> {
+    async fn submit(&self, _ext: &[u8]) -> Result<()> {
         Err(Error::ChainUnavailable)
     }
 

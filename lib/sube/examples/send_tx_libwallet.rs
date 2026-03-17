@@ -1,7 +1,7 @@
 use libwallet::{self, vault, Account};
 use serde_json::json;
 use std::{env, error::Error};
-use sube::{sube, Bytes, SignerFn};
+use sube::{Bytes, SignerFn, Sube};
 
 type Wallet = libwallet::Wallet<vault::Simple<String>>;
 
@@ -33,7 +33,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     ));
 
-    let _response = sube("wss://kreivo.io/balances/transfer")
+    let chain = Sube::connect("wss://kreivo.io").await
+        .map_err(|e| format!("Error connecting: {e}"))?;
+
+    let _response = chain.call("balances/transfer")
         .body(json!({
             "dest": {
                 "Id": account.public().as_ref(),

@@ -12,6 +12,7 @@ use meta::from_bytes;
 pub type RpcResult<T> = Result<T, error::Error>;
 
 /// Rpc defines types of backends that are remote and talk JSONRpc
+#[allow(async_fn_in_trait)]
 pub trait Rpc {
     async fn rpc<T>(&self, method: &str, params: &[&str]) -> RpcResult<T>
     where
@@ -30,7 +31,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
         &self,
         keys: Vec<RawStorageKey>,
         block: Option<u32>,
-    ) -> crate::Result<impl Iterator<Item = (Vec<u8>, Option<Vec<u8>>)>> {
+    ) -> crate::Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
         let keys = serde_json::to_string(
             &keys
                 .iter()
@@ -85,7 +86,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 .collect::<crate::Result<Vec<_>>>()?,
         };
 
-        Ok(result.into_iter())
+        Ok(result)
     }
 
     async fn get_keys_paged(
@@ -119,8 +120,8 @@ impl<R: Rpc> Backend for RpcClient<R> {
         Ok(keys)
     }
 
-    async fn submit(&self, ext: impl AsRef<[u8]>) -> crate::Result<()> {
-        let extrinsic = format!("0x{}", hex::encode(ext.as_ref()));
+    async fn submit(&self, ext: &[u8]) -> crate::Result<()> {
+        let extrinsic = format!("0x{}", hex::encode(ext));
         log::debug!("Extrinsic: {}", extrinsic);
 
         self.0
@@ -146,7 +147,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
 
     async fn block_info(&self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
         #[inline]
-        async fn block_info(s: &impl Rpc, params: &[&str]) -> crate::Result<Vec<u8>> {
+        async fn block_hash(s: &impl Rpc, params: &[&str]) -> crate::Result<Vec<u8>> {
             let f = s
                 .rpc::<String>("chain_getBlockHash", params)
                 .await
@@ -155,19 +156,19 @@ impl<R: Rpc> Backend for RpcClient<R> {
             hex::decode(&f?.as_str()[2..]).map_err(|_| crate::Error::CantDecodeRawQueryResponse)
         }
 
-        let block_hash = if let Some(block_number) = at {
+        let hash = if let Some(block_number) = at {
             let block_number = block_number.to_string();
-            block_info(&self.0, &[&block_number]).await?
+            block_hash(&self.0, &[&block_number]).await?
         } else {
-            block_info(&self.0, &[]).await?
+            block_hash(&self.0, &[]).await?
         };
 
         Ok(meta::BlockInfo {
             number: at.unwrap_or(0) as u64,
-            hash: block_hash[0..32]
+            hash: hash[0..32]
                 .try_into()
                 .expect("Block hash is not 32 bytes"),
-            parent: block_hash[0..32]
+            parent: hash[0..32]
                 .try_into()
                 .expect("Block hash is not 32 bytes"),
         })
