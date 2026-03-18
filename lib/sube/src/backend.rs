@@ -1,7 +1,6 @@
 use crate::prelude::*;
+use crate::url::Url;
 use crate::{Backend, Error, Metadata, Result as SubeResult};
-
-use url::Url;
 
 #[cfg(any(feature = "http", feature = "http-web"))]
 use crate::http::Backend as HttpBackend;
@@ -69,8 +68,7 @@ impl Backend for AnyBackend {
 
 // --- Global metadata cache ---
 
-static META_CACHE: async_once_cell::OnceCell<Mutex<Map<String, &'static Metadata, 16>>> =
-    async_once_cell::OnceCell::new();
+static META_CACHE: Mutex<Option<Map<String, &'static Metadata, 16>>> = Mutex::new(None);
 
 /// Get or fetch+leak metadata for a given host, keyed by scheme://host:port.
 pub(crate) async fn get_metadata(
@@ -80,13 +78,10 @@ pub(crate) async fn get_metadata(
 ) -> SubeResult<&'static Metadata> {
     let key = base_key(url);
 
-    let mut cache = META_CACHE
-        .get_or_init(async { Mutex::new(Map::new()) })
-        .await
-        .lock()
-        .await;
+    let mut cache = META_CACHE.lock().await;
+    let map = cache.get_or_insert_with(Map::new);
 
-    if let Some(&meta) = cache.get(&key) {
+    if let Some(&meta) = map.get(&key) {
         return Ok(meta);
     }
 
@@ -96,8 +91,7 @@ pub(crate) async fn get_metadata(
     };
     let meta: &'static Metadata = Box::leak(Box::new(meta));
 
-    cache
-        .insert(key, meta)
+    map.insert(key, meta)
         .map_err(|_| Error::CantInitBackend)?;
 
     Ok(meta)
@@ -130,12 +124,12 @@ pub(crate) fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
 
     let mut url = Url::parse(&chain).map_err(|_| Error::BadInput)?;
 
-    if url.host_str().eq(&Some("localhost")) && url.port().is_none() {
+    if url.host_str() == Some("localhost") && url.port().is_none() {
         let port = match url.scheme() {
             "ws" => 9944,
             _ => 9933,
         };
-        url.set_port(Some(port)).expect("known port");
+        url.set_port(Some(port));
     }
 
     Ok(url)
@@ -150,7 +144,9 @@ pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
             WSBackend::new_ws2(url.to_string().as_str()).await?,
         ))),
         #[cfg(any(feature = "http", feature = "http-web"))]
-        "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(url.clone())))),
+        "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(
+            url.to_string(),
+        )))),
         _ => Err(Error::BadInput),
     }
 }

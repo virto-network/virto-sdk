@@ -4,12 +4,6 @@ use ewebsock::{WsEvent, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
 use futures_channel::{mpsc, oneshot};
 use futures_util::StreamExt as _;
 use no_std_async::Mutex;
-// use futures_util::StreamExt;
-use jsonrpc::{
-    error::{result_to_response, standard_error, StandardError},
-    serde_json,
-};
-use log::info;
 use serde::Deserialize;
 
 #[cfg(not(feature = "js"))]
@@ -17,10 +11,8 @@ use async_std::task::spawn;
 #[cfg(feature = "js")]
 use async_std::task::spawn_local as spawn;
 
-use crate::{
-    rpc::{self, Rpc, RpcResult},
-    Error,
-};
+use crate::rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Rpc, RpcResult};
+use crate::Error;
 
 const MAX_BUFFER: usize = usize::MAX >> 3;
 
@@ -29,7 +21,7 @@ type Id = u32;
 pub struct Backend {
     tx: Mutex<mpsc::Sender<Message>>,
     ws_sender: Arc<Mutex<Tx>>,
-    messages: Arc<Mutex<BTreeMap<Id, oneshot::Sender<rpc::Response>>>>,
+    messages: Arc<Mutex<BTreeMap<Id, oneshot::Sender<JsonRpcResponse>>>>,
 }
 unsafe impl Send for Backend {}
 unsafe impl Sync for Backend {}
@@ -40,19 +32,17 @@ impl Rpc for Backend {
         T: for<'a> Deserialize<'a>,
     {
         let id = self.next_id().await;
-        info!("RPC `{}` (ID={})", method, id);
+        log::info!("RPC `{}` (ID={})", method, id);
 
-        // Store a sender that will notify our receiver when a matching message arrives
-        let (sender, recv) = oneshot::channel::<rpc::Response>();
+        let (sender, recv) = oneshot::channel::<JsonRpcResponse>();
         let messages = self.messages.clone();
         messages.lock().await.insert(id, sender);
 
-        // send rpc request
-        let msg = serde_json::to_string(&rpc::Request {
-            id: id.into(),
-            jsonrpc: Some("2.0"),
+        let msg = serde_json::to_string(&JsonRpcRequest {
+            id,
+            jsonrpc: "2.0",
             method,
-            params: Some(&Self::convert_params(params)),
+            params: Some(Self::build_params(params)),
         })
         .expect("Request is serializable");
 
@@ -64,20 +54,16 @@ impl Rpc for Backend {
             .try_send(Message::Text(msg))
             .map_err(|err| {
                 log::error!("Error tx lock message: {:?}", err);
-                standard_error(StandardError::InternalError, None)
+                JsonRpcError::new(-32603, "send failed")
             })?;
 
         log::info!("sent CMD");
-        // wait for the matching response to arrive
-        let res = recv
-            .await
-            .map_err(|err| {
-                log::error!("Error receiving message: {:?}", err);
-                standard_error(StandardError::InternalError, None)
-            })?
-            .result()?;
+        let res = recv.await.map_err(|err| {
+            log::error!("Error receiving message: {:?}", err);
+            JsonRpcError::new(-32603, "recv failed")
+        })?;
 
-        Ok(res)
+        res.into_result()
     }
 }
 
@@ -109,10 +95,10 @@ impl Backend {
 
     fn process_tx_send_messages(tx: Arc<Mutex<Tx>>, recv: Arc<Mutex<mpsc::Receiver<Message>>>) {
         spawn(async move {
-            info!("waiting for commands...");
+            log::info!("waiting for commands...");
 
             while let Some(m) = recv.lock().await.next().await {
-                info!("got for commands...?");
+                log::info!("got for commands...?");
                 tx.lock().await.send(m);
             }
         });
@@ -132,15 +118,15 @@ impl Backend {
                         log::trace!("Got WS message {:?}", msg);
 
                         if let Message::Text(msg) = msg {
-                            let res: rpc::Response =
-                                serde_json::from_str(&msg).unwrap_or_else(|_| {
-                                    result_to_response(
-                                        Err(standard_error(StandardError::ParseError, None)),
-                                        ().into(),
-                                    )
-                                });
-                            if res.id.is_u64() {
-                                let id = res.id.as_u64().unwrap() as Id;
+                            let res: JsonRpcResponse = match serde_json::from_str(&msg) {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    log::warn!("Failed to parse WS message: {e}");
+                                    continue;
+                                }
+                            };
+                            if let Some(id) = res.id.as_u64() {
+                                let id = id as Id;
                                 log::trace!("Answering request {}", id);
                                 let mut messages = messages.lock().await;
                                 if let Some(channel) = messages.remove(&id) {

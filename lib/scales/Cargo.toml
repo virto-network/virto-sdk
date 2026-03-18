@@ -18,9 +18,9 @@ codec = { version = "3.7", package = "parity-scale-codec", default-features = fa
 default = ["std", "json", "text", "scale-info", "serializer"]
 serializer = []
 compress = ["scale-info", "serializer", "dep:codec"]
-std = ["scale-info?/std", "bytes/std", "serde/std", "serde_json?/std"]
+std = ["scale-info?/std", "bytes/std", "serde/std", "serde_json?/std", "serde_json?/preserve_order"]
 scale-info = ["dep:scale-info"]
-json = ["dep:serde_json", "serde_json/preserve_order", "serde_json/alloc"]
+json = ["dep:serde_json", "serde_json/alloc"]
 text = []
 
 [[bin]]

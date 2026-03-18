@@ -1,7 +1,5 @@
 use core::convert::TryInto;
-use jsonrpc::serde_json::value::RawValue;
-pub use jsonrpc::{error, Request, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::meta::{self, Metadata};
 use crate::Backend;
@@ -9,20 +7,76 @@ use crate::Error;
 use crate::{prelude::*, RawKey as RawStorageKey, StorageChangeSet};
 use meta::from_bytes;
 
-pub type RpcResult<T> = Result<T, error::Error>;
+// --- Inline JSON-RPC protocol types ---
 
-/// Rpc defines types of backends that are remote and talk JSONRpc
+#[derive(Serialize)]
+pub struct JsonRpcRequest<'a> {
+    pub jsonrpc: &'a str,
+    pub id: u32,
+    pub method: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct JsonRpcResponse {
+    pub id: serde_json::Value,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<JsonRpcError>,
+}
+
+impl JsonRpcResponse {
+    pub fn into_result<T: for<'de> Deserialize<'de>>(self) -> Result<T, JsonRpcError> {
+        if let Some(err) = self.error {
+            return Err(err);
+        }
+        let val = self
+            .result
+            .ok_or_else(|| JsonRpcError::new(-1, "no result"))?;
+        serde_json::from_value(val)
+            .map_err(|e| JsonRpcError::new(-32700, &format!("parse error: {e}")))
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct JsonRpcError {
+    pub code: i64,
+    pub message: String,
+}
+
+impl JsonRpcError {
+    pub fn new(code: i64, message: &str) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl core::fmt::Display for JsonRpcError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "RPC error {}: {}", self.code, self.message)
+    }
+}
+
+pub type RpcResult<T> = Result<T, JsonRpcError>;
+
+// --- Rpc trait ---
+
+/// Rpc defines types of backends that are remote and talk JSON-RPC
 #[allow(async_fn_in_trait)]
 pub trait Rpc {
     async fn rpc<T>(&self, method: &str, params: &[&str]) -> RpcResult<T>
     where
         T: for<'de> Deserialize<'de>;
 
-    fn convert_params(params: &[&str]) -> Box<RawValue> {
+    fn build_params(params: &[&str]) -> serde_json::Value {
         let array = format!("[{}]", params.join(","));
-        RawValue::from_string(array).expect("valid JSON params array")
+        serde_json::from_str(&array).expect("valid JSON params")
     }
 }
+
+// --- RpcClient ---
 
 pub struct RpcClient<R>(pub R);
 
@@ -172,5 +226,72 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 .try_into()
                 .expect("Block hash is not 32 bytes"),
         })
+    }
+}
+
+// --- Generic HTTP transport (no_std compatible) ---
+
+use core::future::Future;
+
+/// A generic JSON-RPC backend over HTTP.
+///
+/// Works in any environment — std, no_std, embassy, WASM — by taking
+/// an async function that performs the HTTP POST.
+///
+/// # Example (with reqwless on embassy)
+///
+/// ```rust,ignore
+/// use sube::rpc::{HttpTransport, RpcClient};
+///
+/// let transport = HttpTransport::new("http://10.0.0.1:9933", |url, body| async move {
+///     // Use your HTTP client here (reqwless, embassy-net, etc.)
+///     let response_bytes = my_http_post(url, body).await?;
+///     Ok(response_bytes)
+/// });
+/// let backend = RpcClient(transport);
+/// let meta = backend.metadata().await?;
+/// let response = sube::query(&backend, &meta, "system/account/0x1234", None).await?;
+/// ```
+pub struct HttpTransport<F> {
+    url: String,
+    post: F,
+}
+
+impl<F> HttpTransport<F> {
+    pub fn new(url: &str, post: F) -> Self {
+        HttpTransport {
+            url: url.into(),
+            post,
+        }
+    }
+}
+
+impl<F, Fut> Rpc for HttpTransport<F>
+where
+    F: Fn(&str, Vec<u8>) -> Fut,
+    Fut: Future<Output = core::result::Result<Vec<u8>, crate::Error>>,
+{
+    async fn rpc<T>(&self, method: &str, params: &[&str]) -> RpcResult<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0",
+            id: 1,
+            method,
+            params: Some(Self::build_params(params)),
+        };
+
+        let body =
+            serde_json::to_vec(&request).map_err(|e| JsonRpcError::new(-32700, &e.to_string()))?;
+
+        let response_bytes = (self.post)(&self.url, body)
+            .await
+            .map_err(|e| JsonRpcError::new(-32000, &e.to_string()))?;
+
+        let response: JsonRpcResponse = serde_json::from_slice(&response_bytes)
+            .map_err(|e| JsonRpcError::new(-32700, &e.to_string()))?;
+
+        response.into_result()
     }
 }

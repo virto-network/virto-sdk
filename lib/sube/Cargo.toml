@@ -8,7 +8,6 @@ edition = "2021"
 repository = "https://github.com/valibre-org/virto-dk/sube"
 
 [dependencies]
-async-once-cell = "0.5"
 blake2 = { version = "0.10", default-features = false }
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
 frame-metadata = { version = "23", default-features = false, features = [
@@ -17,26 +16,22 @@ frame-metadata = { version = "23", default-features = false, features = [
 	"current",
 ] }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
-jsonrpc = { version = "0.19", default-features = false, optional = true }
-log = "0.4"
+log = { version = "0.4", default-features = false }
 scale-info = { version = "2.11", default-features = false }
 scales = { path = "../scales", package = "scale-serialization", default-features = false, features = [
 	"serializer",
 	"compress",
 	"json",
-	"std",
 ] }
 serde = { version = "1", default-features = false }
-# TODO: shouldn't be a base dependeny. remove after: https://github.com/virto-network/virto-sdk/issues/53
 serde_json = { version = "1", default-features = false, features = [
 	"alloc",
 	"arbitrary_precision",
 ] }
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash64"] }
-url = "2.5"
 
 # http backend
-reqwest = { version = "0.13", optional = true, features = ["json"]}
+reqwest = { version = "0.13", optional = true, features = ["json"] }
 
 # ws backend
 futures-channel = { version = "0.3", default-features = false, features = [
@@ -48,7 +43,6 @@ futures-util = { version = "0.3", default-features = false, features = [
 
 async-tls = { version = "0.13", default-features = false, optional = true }
 
-# bin target
 async-std = { version = "1.13", optional = true }
 paste = { version = "1.0" }
 wasm-bindgen = { version = "0.2", optional = true }
@@ -76,18 +70,17 @@ rand_core = "0.6"
 [features]
 default = []
 test = ["std", "wss", "http", "json", "dep:async-std", "dep:rand_core"]
-http = ["dep:jsonrpc", "dep:reqwest"]
-http-web = ["dep:jsonrpc", "dep:wasm-bindgen", "dep:reqwest"]
+http = ["dep:reqwest"]
+http-web = ["dep:wasm-bindgen", "dep:reqwest"]
 json = ["scales/json"]
 text = ["scales/text"]
-std = []
+std = ["scales/std", "log/std", "serde/std", "serde_json/std", "hex/std"]
 
 ws = [
 	"dep:async-std",
 	"dep:ewebsock",
 	"dep:futures-channel",
 	"dep:futures-util",
-	"dep:jsonrpc",
 	"async-std/unstable",
 ]
 wss = ["dep:async-tls", "ws", "ewebsock/tls", "async-std/unstable"]

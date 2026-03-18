@@ -1,3 +1,4 @@
+use alloc::string::ToString;
 use crate::registry::*;
 use crate::Error;
 use scale_info::{form::PortableForm, PortableRegistry};

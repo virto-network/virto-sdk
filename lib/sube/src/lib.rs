@@ -32,6 +32,7 @@ pub use serde_json::{json, Value as JsonValue};
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 pub use extrinsic::ExtrinsicBody;
 pub use meta::Metadata;
+pub use rpc::{HttpTransport, Rpc, RpcClient};
 pub use signer::{Bytes, Signer, SignerFn};
 
 use core::fmt;
@@ -55,12 +56,12 @@ pub mod ws;
 
 pub(crate) mod backend;
 pub mod builder;
-pub(crate) mod extrinsic;
+pub mod extrinsic;
 mod hasher;
 pub mod metadata;
-#[cfg(any(feature = "http", feature = "http-web", feature = "ws"))]
 pub mod rpc;
 mod signer;
+pub(crate) mod url;
 pub mod util;
 
 /// Connect to a Substrate chain.
@@ -77,7 +78,7 @@ pub fn sube(url: &str) -> SubeBuilder {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-pub(crate) async fn query<'m>(
+pub async fn query<'m>(
     chain: &(impl Backend + ?Sized),
     meta: &'m Metadata,
     path: &str,

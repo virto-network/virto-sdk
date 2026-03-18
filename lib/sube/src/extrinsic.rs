@@ -100,7 +100,7 @@ pub fn encode_extensions(
 }
 
 /// Build and submit a signed extrinsic using metadata-driven extensions.
-pub(crate) async fn submit<V>(
+pub async fn submit<V>(
     chain: &(impl Backend + ?Sized),
     meta: &crate::Metadata,
     path: &str,

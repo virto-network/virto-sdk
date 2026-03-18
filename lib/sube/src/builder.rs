@@ -75,7 +75,7 @@ impl IntoFuture for SubeBuilder {
 
             let block = url
                 .query_pairs()
-                .find(|(k, _)| k == "at")
+                .find(|(k, _)| *k == "at")
                 .map(|(_, v)| v.parse::<u32>().expect("at query param must be a number"));
 
             let path = url.path();
