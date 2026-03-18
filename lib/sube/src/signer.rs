@@ -37,6 +37,19 @@ where
     }
 }
 
+impl<T: Signer> Signer for &T {
+    type Account = T::Account;
+    type Signature = T::Signature;
+
+    fn sign(&self, data: impl AsRef<[u8]>) -> impl Future<Output = Result<Self::Signature>> {
+        (*self).sign(data)
+    }
+
+    fn account(&self) -> Self::Account {
+        (*self).account()
+    }
+}
+
 impl<A: AsRef<[u8]>, S, SF> From<(A, S)> for SignerFn<S, SF>
 where
     A: AsRef<[u8]>,

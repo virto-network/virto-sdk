@@ -1,19 +1,77 @@
 use crate::hasher::hash;
-use crate::metadata::{self as meta, Hasher, SignedExtensionMeta};
+use crate::metadata::{self as meta, Hasher, SignedExtensionMeta, TypeId};
 use crate::prelude::*;
 use crate::{Backend, Error, Response, Result};
 
 use codec::{Compact, Encode};
 use scales::Value;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
 
+/// Encode a call body into SCALE bytes given the call variant name and type.
+///
+/// Implemented for:
+/// - Any `serde::Serialize` type (JSON values, structs, etc.) — wraps as `{"variant": body}`
+/// - [`Text`] wrapper — parses from scales text format
+pub trait EncodeCall {
+    fn encode_call(
+        &self,
+        variant: &str,
+        registry: &scales::Registry,
+        calls_ty: TypeId,
+    ) -> Result<Vec<u8>>;
+}
+
+/// Blanket impl for serde types — wraps body as `{"variant": body}` for scales serialization.
+impl<T: Serialize> EncodeCall for T {
+    fn encode_call(
+        &self,
+        variant: &str,
+        registry: &scales::Registry,
+        calls_ty: TypeId,
+    ) -> Result<Vec<u8>> {
+        let call_json = json!({ variant: self });
+        scales::to_vec_with_info(&call_json, Some((registry, calls_ty)))
+            .map_err(|e| Error::Encode(e.to_string()))
+    }
+}
+
+/// A call body in scales text format.
+///
+/// The text represents just the fields of the call variant, e.g.:
+/// ```text
+/// (dest:MultiAddress::Id(0xd435...);value:1000000000000)
+/// ```
+///
+/// The variant name is prepended automatically from the URL path.
+#[derive(Debug)]
+pub struct Text<'a>(pub &'a str);
+
+// Override the blanket impl — Text uses from_text instead of serde.
+// Since the blanket impl covers `&T where T: Serialize` and `str` is Serialize,
+// we can't directly override. Instead Text is a newtype that is NOT Serialize.
+impl EncodeCall for Text<'_> {
+    fn encode_call(
+        &self,
+        variant: &str,
+        registry: &scales::Registry,
+        calls_ty: TypeId,
+    ) -> Result<Vec<u8>> {
+        // Look up the variant name in the call enum to build the full text
+        let vdef = match registry.resolve(calls_ty) {
+            Some(scales::TypeDef::Variant(vdef)) => vdef,
+            _ => return Err(Error::Encode("calls type is not a variant".into())),
+        };
+        let full_text = alloc::format!("{}::{}{}", vdef.name, variant, self.0);
+        scales::from_text(&full_text, registry, calls_ty)
+            .map_err(|e| Error::Encode(e.to_string()))
+    }
+}
+
 /// The body of an extrinsic to be submitted.
-#[derive(Serialize, Deserialize, Debug)]
 pub struct ExtrinsicBody<Body> {
     pub nonce: Option<u64>,
     pub body: Body,
-    #[serde(default)]
     pub extensions: Vec<(String, JsonValue)>,
 }
 
@@ -108,7 +166,7 @@ pub async fn submit<V>(
     signer: impl crate::Signer,
 ) -> Result<Response<'static>>
 where
-    V: serde::Serialize + core::fmt::Debug,
+    V: EncodeCall + core::fmt::Debug,
 {
     let (pallet, item_or_call, _keys) =
         crate::parse_uri(path).ok_or(Error::BadInput)?;
@@ -119,15 +177,17 @@ where
 
     // Encode call data
     let mut encoded_call = vec![pallet.index];
-    let call_json = &json!({ &item_or_call.to_lowercase(): &tx_data.body });
-    let call_data = scales::to_vec_with_info(call_json, Some((&meta.registry, calls_ty)))
-        .map_err(|e| Error::Encode(e.to_string()))?;
+    let call_data = tx_data.body.encode_call(
+        &item_or_call.to_lowercase(),
+        &meta.registry,
+        calls_ty,
+    )?;
     encoded_call.extend(&call_data);
 
     let from_account = signer.account();
 
     // Build chain context
-    let ctx = build_context(chain, meta, &tx_data, from_account.as_ref()).await?;
+    let ctx = build_context(chain, meta, tx_data.nonce, &tx_data.extensions, from_account.as_ref()).await?;
 
     // Encode extensions
     let (extra_bytes, additional_signed) = encode_extensions(
@@ -191,15 +251,13 @@ where
 }
 
 /// Fetch spec/tx version, genesis hash, and account nonce.
-async fn build_context<V>(
+async fn build_context(
     chain: &(impl Backend + ?Sized),
     meta: &crate::Metadata,
-    tx_data: &ExtrinsicBody<V>,
+    nonce: Option<u64>,
+    extensions: &[(String, JsonValue)],
     account: &[u8],
-) -> Result<ChainContext>
-where
-    V: serde::Serialize + core::fmt::Debug,
-{
+) -> Result<ChainContext> {
     // System::Version constant
     let system = meta
         .pallet_by_name("System")
@@ -232,7 +290,7 @@ where
     genesis_hash.copy_from_slice(&genesis_block[..32]);
 
     // Nonce
-    let account_nonce = resolve_nonce(chain, meta, tx_data, account).await?;
+    let account_nonce = resolve_nonce(chain, meta, nonce, extensions, account).await?;
 
     Ok(ChainContext {
         spec_version,
@@ -243,19 +301,17 @@ where
 }
 
 /// Resolve nonce from: explicit field, extension override, or on-chain query.
-async fn resolve_nonce<V>(
+async fn resolve_nonce(
     chain: &(impl Backend + ?Sized),
     meta: &crate::Metadata,
-    tx_data: &ExtrinsicBody<V>,
+    nonce: Option<u64>,
+    extensions: &[(String, JsonValue)],
     account: &[u8],
-) -> Result<u64>
-where
-    V: serde::Serialize + core::fmt::Debug,
-{
-    if let Some(nonce) = tx_data.nonce {
+) -> Result<u64> {
+    if let Some(nonce) = nonce {
         return Ok(nonce);
     }
-    if let Some(val) = find_override(&tx_data.extensions, "CheckNonce") {
+    if let Some(val) = find_override(extensions, "CheckNonce") {
         return val
             .as_u64()
             .ok_or(Error::Mapping("CheckNonce override is not a number".into()));

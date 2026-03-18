@@ -30,7 +30,7 @@ pub use scales::{Registry, Serializer, Value};
 pub use serde_json::{json, Value as JsonValue};
 
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
-pub use extrinsic::ExtrinsicBody;
+pub use extrinsic::{EncodeCall, ExtrinsicBody, Text};
 pub use meta::Metadata;
 pub use rpc::{HttpTransport, Rpc, RpcClient};
 pub use signer::{Bytes, Signer, SignerFn};
@@ -178,6 +178,11 @@ impl StorageEntry {
 
     pub fn to_json(&self, registry: &scales::Registry) -> Result<JsonValue> {
         serde_json::to_value(self.as_value(registry)).map_err(|e| Error::Mapping(e.to_string()))
+    }
+
+    /// Format the entry as a compact text string (see [`scales::to_text`]).
+    pub fn to_text(&self, registry: &scales::Registry) -> Result<String> {
+        scales::to_text(&self.as_value(registry)).map_err(|e| Error::Mapping(e.to_string()))
     }
 }
 
@@ -395,5 +400,60 @@ mod tests {
         let entry = StorageEntry::new(version.value.clone(), version.ty);
         let json = entry.to_json(&meta.registry).expect("decodes to JSON");
         assert!(json.get("spec_name").is_some());
+    }
+
+    #[test]
+    fn encode_call_json_and_text_match() {
+        use crate::extrinsic::{EncodeCall, Text};
+
+        let meta = Metadata::from_bytes(include_bytes!(
+            "../../../sdk/js/.papi/metadata/kreivo.scale"
+        ))
+        .unwrap();
+        let system = meta.pallet_by_name("System").unwrap();
+        let calls_ty = system.calls_ty.unwrap();
+
+        // JSON body for system::remark
+        let json_body = serde_json::json!({ "remark": "0x68656c6c6f" });
+        let json_encoded = json_body
+            .encode_call("remark", &meta.registry, calls_ty)
+            .expect("json encodes");
+
+        // Text body for the same call
+        let text_body = Text("(remark:0x68656c6c6f)");
+        let text_encoded = text_body
+            .encode_call("remark", &meta.registry, calls_ty)
+            .expect("text encodes");
+
+        assert_eq!(json_encoded, text_encoded,
+            "JSON and text format should produce identical SCALE bytes");
+    }
+
+    #[test]
+    fn encode_call_text_with_enum_arg() {
+        use crate::extrinsic::{EncodeCall, Text};
+
+        let meta = Metadata::from_bytes(include_bytes!(
+            "../../../sdk/js/.papi/metadata/kreivo.scale"
+        ))
+        .unwrap();
+        let balances = meta.pallet_by_name("Balances").unwrap();
+        let calls_ty = balances.calls_ty.unwrap();
+
+        // Text body with MultiAddress::Id enum variant and a numeric value
+        let addr = "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
+        let text = alloc::format!(
+            "(dest:MultiAddress::Id({addr});value:1000000000000)"
+        );
+        let text_body = Text(&text);
+        let encoded = text_body
+            .encode_call("transfer_keep_alive", &meta.registry, calls_ty)
+            .expect("text with enum arg encodes");
+
+        // Verify the encoded bytes look correct:
+        // variant index for transfer_keep_alive + MultiAddress::Id(0x00) + 32 addr bytes + compact(value)
+        assert!(encoded.len() > 34, "should have variant idx + address + value");
+        // The address bytes should be present somewhere in the output
+        assert_eq!(encoded[2], 0xd4, "address starts with 0xd4 after variant + MultiAddress idx");
     }
 }

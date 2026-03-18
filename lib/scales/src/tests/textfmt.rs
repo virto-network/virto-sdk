@@ -209,7 +209,10 @@ fn bytes_hex() {
 
 #[test]
 fn arrays() {
-    roundtrip(&[10u8, 20, 30], "..10;20;30.");
+    // Byte arrays use compact 0x hex notation
+    roundtrip(&[10u8, 20, 30], "0x0a141e");
+    // Non-byte arrays still use the ..elem;elem. notation
+    roundtrip(&[100u32, 200, 300], "..100;200;300.");
 }
 
 #[test]

@@ -6,6 +6,28 @@ use serde::Serialize;
 
 use crate::hasher::hash;
 
+/// Encode a key value from its text representation into SCALE bytes.
+///
+/// Tries `from_text` first (handles complex types like tuples, variants, structs).
+/// Falls back to hex decoding for `0x`-prefixed values, then to serde serialization.
+fn encode_key(key: &str, registry: &scales::Registry, ty_id: TypeId) -> Vec<u8> {
+    // Try the text format first — handles everything including complex types
+    if let Ok(bytes) = scales::from_text(key, registry, ty_id) {
+        return bytes;
+    }
+
+    // Fallback: hex-prefixed raw bytes or plain string via serde
+    let mut out = vec![];
+    if let Some(hex_str) = key.strip_prefix("0x") {
+        if let Ok(value) = hex::decode(hex_str) {
+            let _ = to_bytes_with_info(&mut out, &value, Some((registry, ty_id)));
+        }
+    } else {
+        let _ = to_bytes_with_info(&mut out, &key, Some((registry, ty_id)));
+    }
+    out
+}
+
 pub type TypeId = u32;
 
 /// Storage hasher types used by Substrate.
@@ -445,15 +467,7 @@ fn build_storage_key<T: AsRef<str>>(
                     }
 
                     let k = k.expect("checked above").as_ref();
-                    let mut out = vec![];
-
-                    if let Some(k) = k.strip_prefix("0x") {
-                        let value = hex::decode(k).expect("str must be encoded");
-                        let _ =
-                            to_bytes_with_info(&mut out, &value, Some((registry, type_id)));
-                    } else {
-                        let _ = to_bytes_with_info(&mut out, &k, Some((registry, type_id)));
-                    }
+                    let out = encode_key(k, registry, type_id);
 
                     let hashed = hash(hasher, &out);
                     KeyValue::Value((type_id, hashed, out, hasher.clone()))
@@ -469,14 +483,7 @@ fn build_storage_key<T: AsRef<str>>(
             .enumerate()
             .flat_map(|(i, type_id)| {
                 let k = map_keys.get(i).expect("to exist in map_keys").as_ref();
-                let mut out = vec![];
-                if let Some(k) = k.strip_prefix("0x") {
-                    let value = hex::decode(k).expect("str must be hex encoded");
-                    let _ = to_bytes_with_info(&mut out, &value, Some((registry, type_id)));
-                } else {
-                    let _ = to_bytes_with_info(&mut out, &k, Some((registry, type_id)));
-                }
-                out
+                encode_key(k, registry, type_id)
             })
             .collect();
 
@@ -748,4 +755,117 @@ mod tests {
             "V15 should expose signature_ty"
         );
     }
+
+    /// Helper: find a storage map entry keyed by a u32 in any pallet.
+    fn find_u32_map(meta: &Metadata) -> Option<(&PalletMeta, &StorageEntryMeta)> {
+        for pallet in &meta.pallets {
+            let storage = match &pallet.storage {
+                Some(s) => s,
+                None => continue,
+            };
+            for entry in &storage.entries {
+                if let StorageEntryType::Map { key, hashers, .. } = &entry.ty {
+                    if hashers.len() == 1 {
+                        if let Some(scales::TypeDef::U32) =
+                            meta.registry.resolve(*key)
+                        {
+                            return Some((pallet, entry));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn text_format_numeric_key() {
+        // Text format lets you write "42" for a u32 key instead of hex-encoded SCALE bytes
+        let meta = kreivo();
+        let (pallet, entry) = find_u32_map(&meta).expect("should have a u32-keyed map");
+
+        let key = StorageKey::build_with_registry(
+            &meta.registry, pallet, &entry.name, &["42"],
+        ).unwrap();
+
+        assert!(!key.is_partial());
+        // Verify encode_key produced correct little-endian u32 bytes
+        match &key.args[0] {
+            KeyValue::Value((_, _, encoded, _)) => {
+                assert_eq!(encoded, &42u32.to_le_bytes(), "text '42' should encode as LE u32");
+            }
+            _ => panic!("expected a Value"),
+        }
+    }
+
+    #[test]
+    fn encode_key_text_vs_manual_scale() {
+        // Demonstrate that text format and manual SCALE encoding produce the same key
+        let meta = kreivo();
+        let (pallet, entry) = find_u32_map(&meta).expect("should have a u32-keyed map");
+
+        let text_key = StorageKey::build_with_registry(
+            &meta.registry, pallet, &entry.name, &["100"],
+        ).unwrap();
+
+        // Manually encode 100u32 as hex SCALE (little-endian)
+        let hex_key = StorageKey::build_with_registry(
+            &meta.registry, pallet, &entry.name, &["0x64000000"],
+        ).unwrap();
+
+        assert_eq!(text_key.key(), hex_key.key(),
+            "text '100' and hex '0x64000000' should produce identical storage keys");
+    }
+
+    #[test]
+    fn storage_entry_to_text_roundtrip() {
+        // Decode a constant to text, showing the text format output
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+        let version = system.constants.iter().find(|c| c.name == "Version").unwrap();
+        let entry = crate::StorageEntry::new(version.value.clone(), version.ty);
+
+        let text = entry.to_text(&meta.registry).expect("formats as text");
+        assert!(text.contains("kreivo"), "Version text should contain the spec name");
+
+        // The text output can be fed back into from_text to re-encode
+        let re_encoded = scales::from_text(&text, &meta.registry, version.ty)
+            .expect("text output should round-trip through from_text");
+        assert_eq!(re_encoded, version.value, "round-trip should reproduce original bytes");
+    }
+
+    #[test]
+    fn text_format_account_id_hex() {
+        // AccountId32 wraps [u8; 32] — text format accepts 0x hex for byte arrays
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+
+        let addr = "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
+
+        let key = StorageKey::build_with_registry(
+            &meta.registry, system, "Account", &[addr],
+        ).unwrap();
+
+        assert!(!key.is_partial());
+        match &key.args[0] {
+            KeyValue::Value((_, _, encoded, _)) => {
+                assert_eq!(encoded.len(), 32, "AccountId32 should be 32 bytes");
+                assert_eq!(encoded[0], 0xd4, "first byte should match");
+            }
+            _ => panic!("expected a Value"),
+        }
+
+        // from_text now handles this directly (no hex fallback needed)
+        let account = system.storage.as_ref().unwrap().entries.iter()
+            .find(|e| e.name == "Account").unwrap();
+        let key_ty = match &account.ty {
+            StorageEntryType::Map { key, .. } => *key,
+            _ => panic!("Account should be a Map"),
+        };
+        assert!(
+            scales::from_text(addr, &meta.registry, key_ty).is_ok(),
+            "from_text should handle 0x hex for byte arrays"
+        );
+    }
 }
+

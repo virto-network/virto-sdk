@@ -188,15 +188,23 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
             out.write_char('.')?;
         }
         TypeDef::Array(inner_ty, len) => {
-            out.write_str("..")?;
-            let mut cursor = Cursor::new(data, reg);
-            for i in 0..*len {
-                if i > 0 {
-                    out.write_char(';')?;
+            // For byte arrays [u8; N], use compact 0x hex notation
+            let is_u8 = matches!(reg.resolve(*inner_ty), Some(TypeDef::U8));
+            if is_u8 {
+                let byte_len = *len as usize;
+                let bytes = data.get(..byte_len).ok_or(Error::Eof)?;
+                write_hex(bytes, out)?;
+            } else {
+                out.write_str("..")?;
+                let mut cursor = Cursor::new(data, reg);
+                for i in 0..*len {
+                    if i > 0 {
+                        out.write_char(';')?;
+                    }
+                    fmt_value(&cursor.next_value(*inner_ty)?, out, depth)?;
                 }
-                fmt_value(&cursor.next_value(*inner_ty)?, out, depth)?;
+                out.write_char('.')?;
             }
-            out.write_char('.')?;
         }
         TypeDef::Map(ty_k, ty_v) => {
             let (len, prefix) = sequence_size(data)?;
@@ -574,16 +582,30 @@ impl<'a> Parser<'a> {
             }
             TypeDef::Array(inner_ty, len) => {
                 let (inner_ty, len) = (*inner_ty, *len);
-                if !self.consume("..") {
-                    return Err(Error::BadInput("expected '..' for array".into()));
-                }
-                for i in 0..len {
-                    if i > 0 {
-                        self.expect(';')?;
+                // For byte arrays [u8; N], accept 0x-prefixed hex as shorthand
+                let is_u8 = matches!(self.registry.resolve(inner_ty), Some(TypeDef::U8));
+                if is_u8 && self.remaining().starts_with("0x") {
+                    let bytes = self.parse_hex_bytes()?;
+                    if bytes.len() != len as usize {
+                        return Err(Error::BadInput(alloc::format!(
+                            "expected {} bytes, got {}",
+                            len,
+                            bytes.len()
+                        )));
                     }
-                    self.parse_value(inner_ty, out)?;
+                    out.extend_from_slice(&bytes);
+                } else {
+                    if !self.consume("..") {
+                        return Err(Error::BadInput("expected '..' for array".into()));
+                    }
+                    for i in 0..len {
+                        if i > 0 {
+                            self.expect(';')?;
+                        }
+                        self.parse_value(inner_ty, out)?;
+                    }
+                    self.expect('.')?;
                 }
-                self.expect('.')?;
             }
             TypeDef::Map(ty_k, ty_v) => {
                 let (ty_k, ty_v) = (*ty_k, *ty_v);

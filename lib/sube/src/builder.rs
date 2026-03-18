@@ -3,7 +3,7 @@ use core::marker::PhantomData;
 use core::pin::Pin;
 
 use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
-use crate::extrinsic::ExtrinsicBody;
+use crate::extrinsic::{EncodeCall, ExtrinsicBody};
 use crate::prelude::*;
 use crate::{JsonValue, Metadata, Response, Result as SubeResult, Signer};
 
@@ -61,6 +61,11 @@ impl SubeBuilder {
             extensions: Vec::new(),
             _lt: PhantomData,
         }
+    }
+
+    /// Set the call body using scales text format (one-liner shorthand).
+    pub fn body_text<'a>(self, text: &'a str) -> OneShotCall<'a, crate::Text<'a>, ()> {
+        self.body(crate::Text(text))
     }
 }
 
@@ -189,6 +194,18 @@ impl<'a, S> CallBuilder<'a, (), S> {
             _lt: PhantomData,
         }
     }
+
+    /// Set the call body using scales text format.
+    ///
+    /// ```rust,ignore
+    /// chain.call("balances/transfer_keep_alive")
+    ///     .body_text("(dest:MultiAddress::Id(0xd435...);value:1000000)")
+    ///     .signer(signer)
+    ///     .await?;
+    /// ```
+    pub fn body_text(self, text: &'a str) -> CallBuilder<'a, crate::Text<'a>, S> {
+        self.body(crate::Text(text))
+    }
 }
 
 impl<'a, B> CallBuilder<'a, B, ()> {
@@ -224,7 +241,7 @@ impl<'a, B, S> CallBuilder<'a, B, S> {
 
 impl<'a, B, S> IntoFuture for CallBuilder<'a, B, S>
 where
-    B: serde::Serialize + core::fmt::Debug + 'a,
+    B: EncodeCall + core::fmt::Debug + 'a,
     S: Signer + 'a,
 {
     type Output = SubeResult<Response<'static>>;
@@ -293,7 +310,7 @@ impl<'a, B, S> OneShotCall<'a, B, S> {
 
 impl<'a, B, S> IntoFuture for OneShotCall<'a, B, S>
 where
-    B: serde::Serialize + core::fmt::Debug + 'a,
+    B: EncodeCall + core::fmt::Debug + 'a,
     S: Signer + 'a,
 {
     type Output = SubeResult<Response<'static>>;

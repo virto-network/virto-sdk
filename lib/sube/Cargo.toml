@@ -21,6 +21,7 @@ scales = { path = "../scales", package = "scale-serialization", default-features
 	"serializer",
 	"compress",
 	"json",
+	"text",
 ] }
 serde = { version = "1", default-features = false }
 serde_json = { version = "1", default-features = false, features = [

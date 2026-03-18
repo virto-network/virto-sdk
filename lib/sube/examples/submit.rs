@@ -1,6 +1,8 @@
 //! Submit an extrinsic (transaction) to a chain.
 //!
-//! Run with: cargo run --example submit --features wss,json,examples -- [seed phrase]
+//! Shows two ways to encode the call body: JSON and scales text format.
+//!
+//! Run with: cargo run --example submit --features wss,json,text,examples -- [seed phrase]
 
 use libwallet::{self, vault, Account};
 use serde_json::json;
@@ -42,12 +44,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Phrase: \"{phrase}\"");
 
     let chain = Sube::connect("wss://kreivo.io").await?;
-    let _response = chain
+
+    // Submit using JSON body
+    chain
         .call("system/remark")
         .body(json!({ "remark": "0x68656c6c6f" }))
-        .signer(signer)
+        .signer(&signer)
         .await?;
+    println!("Submitted remark (JSON body)");
 
-    println!("Extrinsic submitted");
+    // Submit using text format body — more compact, no serde needed
+    chain
+        .call("system/remark")
+        .body_text("(remark:0x68656c6c6f)")
+        .signer(&signer)
+        .await?;
+    println!("Submitted remark (text body)");
+
+    // Text format shines with complex types like enum arguments.
+    // A transfer with MultiAddress::Id destination:
+    let dest = "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
+    let body = format!("(dest:MultiAddress::Id({dest});value:1000000000000)");
+    chain
+        .call("balances/transfer_keep_alive")
+        .body_text(&body)
+        .signer(&signer)
+        .await?;
+    println!("Submitted transfer (text body with enum)");
+
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! Query on-chain storage using sube.
 //!
-//! Run with: cargo run --example query --features wss,json
+//! Run with: cargo run --example query --features wss,json,text
 
 use sube::{sube, Response, Sube};
 
@@ -18,8 +18,15 @@ async fn main() -> sube::Result<()> {
     let response = chain.query(&format!("system/account/{addr}")).await?;
     print_value("Account (handle)", &response);
 
+    // Query with the identity pallet — SuperOf maps AccountId32 to (AccountId32, Data)
+    // where Data is an enum: Data::Raw0, Data::Raw1(bytes), ..., Data::BlakeTwo256(hash)
     let response = chain.query(&format!("identity/superOf/{addr}")).await?;
-    print_value("Identity", &response);
+    print_value("Identity SuperOf", &response);
+
+    // Query a map with a u32 key (e.g. assets pallet)
+    // No hex encoding needed — just the number as text
+    let response = chain.query("assets/asset/1984").await?;
+    print_value("Asset 1984 (USDT)", &response);
 
     Ok(())
 }
@@ -27,8 +34,13 @@ async fn main() -> sube::Result<()> {
 fn print_value(label: &str, response: &Response) {
     match response {
         Response::Value(entry, reg) => {
+            // Display as text (compact, URL-safe format)
+            let text = entry.to_text(reg).expect("valid text");
+            println!("{label} (text): {text}");
+
+            // Also display as JSON for comparison
             let json = entry.to_json(reg).expect("valid json");
-            println!("{label}: {}", serde_json::to_string_pretty(&json).unwrap());
+            println!("{label} (json): {}", serde_json::to_string_pretty(&json).unwrap());
         }
         other => println!("{label}: {other:?}"),
     }
