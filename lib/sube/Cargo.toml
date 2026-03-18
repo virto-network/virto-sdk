@@ -88,3 +88,4 @@ js = ["http-web", "json", 'async-std/unstable', "wss", "dep:rand_core"]
 features = ["http"]
 
 [workspace]
+exclude = ["tests/qemu"]

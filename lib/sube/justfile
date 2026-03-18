@@ -1,7 +1,43 @@
-default: check
+default: check test
 
 check:
-    cargo check --features http,wss
+    cargo check --features http,wss,json,text
 
 lint:
-    cargo clippy --features http,wss -- -D warnings
+    cargo clippy --features http,wss,json,text -- -D warnings
+
+test:
+    cargo test --features json,text
+
+# no_std compatibility checks — proves no hidden std dependencies
+check-no-std:
+    cargo check --no-default-features
+    cargo check --no-default-features --features json
+    cargo check --no-default-features --features text
+    cargo check --no-default-features --features json,text
+
+check-thumbv7em:
+    cargo check --target thumbv7em-none-eabihf --no-default-features
+    cargo check --target thumbv7em-none-eabihf --no-default-features --features json,text
+
+check-riscv32:
+    cargo check --target riscv32imac-unknown-none-elf --no-default-features
+    cargo check --target riscv32imac-unknown-none-elf --no-default-features --features json,text
+
+check-wasm:
+    cargo check --target wasm32-unknown-unknown --no-default-features
+    cargo check --target wasm32-unknown-unknown --no-default-features --features json,text
+
+check-targets: check-no-std check-thumbv7em check-riscv32 check-wasm
+
+# run the qemu smoke test — exercises sube on bare-metal cortex-m4
+test-qemu:
+    cd tests/qemu && cargo build --target thumbv7em-none-eabihf --release
+    qemu-system-arm \
+        -cpu cortex-m4 \
+        -machine lm3s6965evb \
+        -nographic \
+        -semihosting-config enable=on,target=native \
+        -kernel tests/qemu/target/thumbv7em-none-eabihf/release/sube-qemu-test
+
+ci: check-targets test test-qemu
