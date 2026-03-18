@@ -9,8 +9,11 @@ use crate::rpc::RpcClient;
 #[cfg(feature = "ws")]
 use crate::ws::Backend as WSBackend;
 
+use core::fmt::Write;
 use heapless::index_map::FnvIndexMap as Map;
 use no_std_async::Mutex;
+
+type CacheKey = heapless::String<64>;
 
 // --- Internal backend enum + dispatch ---
 
@@ -68,7 +71,7 @@ impl Backend for AnyBackend {
 
 // --- Global metadata cache ---
 
-static META_CACHE: Mutex<Option<Map<String, &'static Metadata, 16>>> = Mutex::new(None);
+static META_CACHE: Mutex<Option<Map<CacheKey, &'static Metadata, 16>>> = Mutex::new(None);
 
 /// Get or fetch+leak metadata for a given host, keyed by scheme://host:port.
 pub(crate) async fn get_metadata(
@@ -76,7 +79,7 @@ pub(crate) async fn get_metadata(
     url: &Url,
     preloaded: Option<Metadata>,
 ) -> SubeResult<&'static Metadata> {
-    let key = base_key(url);
+    let key = base_key(url).map_err(|_| Error::BadInput)?;
 
     let mut cache = META_CACHE.lock().await;
     let map = cache.get_or_insert_with(Map::new);
@@ -97,16 +100,14 @@ pub(crate) async fn get_metadata(
     Ok(meta)
 }
 
-fn base_key(url: &Url) -> String {
-    format!(
-        "{}://{}:{}",
-        url.scheme(),
-        url.host_str().unwrap_or("unknown"),
-        url.port().unwrap_or(match url.scheme() {
-            "wss" | "https" => 443,
-            _ => 80,
-        })
-    )
+fn base_key(url: &Url) -> core::result::Result<CacheKey, core::fmt::Error> {
+    let mut key = CacheKey::new();
+    let port = url.port().unwrap_or(match url.scheme() {
+        "wss" | "https" => 443,
+        _ => 80,
+    });
+    write!(key, "{}://{}:{}", url.scheme(), url.host_str().unwrap_or("unknown"), port)?;
+    Ok(key)
 }
 
 // --- URL parsing ---

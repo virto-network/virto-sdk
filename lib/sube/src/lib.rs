@@ -153,7 +153,7 @@ pub(crate) fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
     let mut path = uri.trim_matches('/').split('/');
     let pallet = path.next().map(to_camel)?;
     let item = path.next().map(to_camel)?;
-    let map_keys = path.map(to_camel).collect::<Vec<_>>();
+    let map_keys = path.map(String::from).collect::<Vec<_>>();
     Some((pallet, item, map_keys))
 }
 

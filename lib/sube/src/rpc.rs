@@ -1,4 +1,4 @@
-use core::convert::TryInto;
+use core::fmt::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::meta::{self, Metadata};
@@ -6,6 +6,30 @@ use crate::Backend;
 use crate::Error;
 use crate::{prelude::*, RawKey as RawStorageKey, StorageChangeSet};
 use meta::from_bytes;
+
+/// Hex-encode bytes with `0x` prefix into an existing String, avoiding a new allocation.
+fn push_hex(buf: &mut String, bytes: &[u8]) {
+    buf.push_str("0x");
+    for &b in bytes {
+        let _ = write!(buf, "{:02x}", b);
+    }
+}
+
+/// Hex-encode bytes with `0x` prefix, returning a new String.
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(2 + bytes.len() * 2);
+    push_hex(&mut s, bytes);
+    s
+}
+
+/// Hex-encode bytes as a quoted JSON string: `"0x..."`.
+fn to_quoted_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(4 + bytes.len() * 2);
+    s.push('"');
+    push_hex(&mut s, bytes);
+    s.push('"');
+    s
+}
 
 // --- Inline JSON-RPC protocol types ---
 
@@ -87,10 +111,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
         block: Option<u32>,
     ) -> crate::Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
         let keys = serde_json::to_string(
-            &keys
-                .iter()
-                .map(|v| format!("0x{}", hex::encode(v)))
-                .collect::<Vec<String>>(),
+            &keys.iter().map(|v| to_hex(v)).collect::<Vec<_>>(),
         )
         .expect("it to be a valid json");
 
@@ -100,7 +121,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
                 .await
                 .map_err(|_| Error::BadBlockNumber)?;
 
-            vec![keys, format!("\"0x{}\"", hex::encode(info.hash))]
+            vec![keys, to_quoted_hex(&info.hash)]
         } else {
             vec![keys]
         };
@@ -154,11 +175,9 @@ impl<R: Rpc> Backend for RpcClient<R> {
             .rpc(
                 "state_getKeysPaged",
                 &[
-                    &format!("\"0x{}\"", hex::encode(&from)),
+                    &to_quoted_hex(&from),
                     &size.to_string(),
-                    &to.or(Some(from))
-                        .map(|f| format!("\"0x{}\"", hex::encode(f)))
-                        .unwrap(),
+                    &to.or(Some(from)).map(|f| to_quoted_hex(&f)).unwrap(),
                 ],
             )
             .await
@@ -175,11 +194,11 @@ impl<R: Rpc> Backend for RpcClient<R> {
     }
 
     async fn submit(&self, ext: &[u8]) -> crate::Result<()> {
-        let extrinsic = format!("0x{}", hex::encode(ext));
+        let extrinsic = to_quoted_hex(ext);
         log::debug!("Extrinsic: {}", extrinsic);
 
         self.0
-            .rpc::<serde_json::Value>("author_submitExtrinsic", &[&format!("\"{}\"", &extrinsic)])
+            .rpc::<serde_json::Value>("author_submitExtrinsic", &[&extrinsic])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
 
@@ -201,13 +220,16 @@ impl<R: Rpc> Backend for RpcClient<R> {
 
     async fn block_info(&self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
         #[inline]
-        async fn block_hash(s: &impl Rpc, params: &[&str]) -> crate::Result<Vec<u8>> {
-            let f = s
-                .rpc::<String>("chain_getBlockHash", params)
+        async fn block_hash(s: &impl Rpc, params: &[&str]) -> crate::Result<[u8; 32]> {
+            let hex_str: String = s
+                .rpc("chain_getBlockHash", params)
                 .await
-                .map_err(|e| crate::Error::Node(e.to_string()));
+                .map_err(|e| crate::Error::Node(e.to_string()))?;
 
-            hex::decode(&f?.as_str()[2..]).map_err(|_| crate::Error::CantDecodeRawQueryResponse)
+            let mut hash = [0u8; 32];
+            hex::decode_to_slice(&hex_str.as_str()[2..], &mut hash)
+                .map_err(|_| crate::Error::CantDecodeRawQueryResponse)?;
+            Ok(hash)
         }
 
         let hash = if let Some(block_number) = at {
@@ -219,12 +241,8 @@ impl<R: Rpc> Backend for RpcClient<R> {
 
         Ok(meta::BlockInfo {
             number: at.unwrap_or(0) as u64,
-            hash: hash[0..32]
-                .try_into()
-                .expect("Block hash is not 32 bytes"),
-            parent: hash[0..32]
-                .try_into()
-                .expect("Block hash is not 32 bytes"),
+            hash,
+            parent: hash,
         })
     }
 }

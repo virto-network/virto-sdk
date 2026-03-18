@@ -11,7 +11,6 @@ repository = "https://github.com/valibre-org/virto-dk/sube"
 blake2 = { version = "0.10", default-features = false }
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
 frame-metadata = { version = "23", default-features = false, features = [
-	"serde_full",
 	"decode",
 	"current",
 ] }
@@ -44,11 +43,8 @@ futures-util = { version = "0.3", default-features = false, features = [
 async-tls = { version = "0.13", default-features = false, optional = true }
 
 async-std = { version = "1.13", optional = true }
-paste = { version = "1.0" }
 wasm-bindgen = { version = "0.2", optional = true }
-once_cell = { version = "1", optional = true }
 heapless = "0.9"
-anyhow = { version = "1", optional = true }
 rand_core = { version = "0.6", optional = true }
 ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
 no-std-async = "1.1"
