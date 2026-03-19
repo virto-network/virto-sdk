@@ -34,7 +34,7 @@ pub fn hash<I: AsRef<[u8]>>(hasher: &Hasher, input: I) -> Vec<u8> {
         Hasher::Blake2_256 => digest::<Blake2b<U32>>(input).to_vec(),
         Hasher::Blake2_128Concat => [digest::<Blake2b<U16>>(input).as_slice(), input].concat(),
         Hasher::Twox128 => twox_hash(input),
-        Hasher::Twox256 => unimplemented!(),
+        Hasher::Twox256 => twox256_hash(input),
         Hasher::Twox64Concat => twox_hash_concat(input),
         Hasher::Identity => input.into(),
     }
@@ -48,6 +48,16 @@ fn twox_hash_concat(input: &[u8]) -> Vec<u8> {
     let r = h.finish();
     dest.copy_from_slice(&r.to_le_bytes());
     [dest.as_ref(), input].concat()
+}
+
+fn twox256_hash(input: &[u8]) -> Vec<u8> {
+    let mut dest = [0u8; 32];
+    for (i, chunk) in dest.chunks_exact_mut(8).enumerate() {
+        let mut h = twox_hash::XxHash64::with_seed(i as u64);
+        h.write(input);
+        chunk.copy_from_slice(&h.finish().to_le_bytes());
+    }
+    dest.into()
 }
 
 fn twox_hash(input: &[u8]) -> Vec<u8> {
@@ -116,5 +126,14 @@ mod tests {
         let input = b"unchanged";
         let out = hash(&Hasher::Identity, input);
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn hash_twox256() {
+        let out = hash(&Hasher::Twox256, b"hello");
+        assert_eq!(out.len(), 32);
+        // First 16 bytes should match twox128
+        let twox128 = hash(&Hasher::Twox128, b"hello");
+        assert_eq!(&out[..16], &twox128[..]);
     }
 }

@@ -1,5 +1,4 @@
 use core::future::{Future, IntoFuture};
-use core::marker::PhantomData;
 use core::pin::Pin;
 
 use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
@@ -9,27 +8,85 @@ use crate::{JsonValue, Metadata, Response, Result as SubeResult, Signer};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
+// --- TxBuilder: shared call configuration ---
+
+/// Extrinsic call configuration — body, signer, nonce, extensions.
+///
+/// Shared by both [`CallBuilder`] (reusable handle) and [`OneShotCall`] (one-liner).
+struct TxBuilder<Body, Sign> {
+    path: String,
+    body: Body,
+    signer: Sign,
+    nonce: Option<u64>,
+    extensions: Vec<(String, JsonValue)>,
+}
+
+impl<S> TxBuilder<(), S> {
+    fn body<B>(self, body: B) -> TxBuilder<B, S> {
+        TxBuilder {
+            body,
+            path: self.path,
+            signer: self.signer,
+            nonce: self.nonce,
+            extensions: self.extensions,
+        }
+    }
+}
+
+impl<B> TxBuilder<B, ()> {
+    fn signer<S>(self, signer: S) -> TxBuilder<B, S> {
+        TxBuilder {
+            signer,
+            path: self.path,
+            body: self.body,
+            nonce: self.nonce,
+            extensions: self.extensions,
+        }
+    }
+}
+
+impl<B, S> TxBuilder<B, S> {
+    fn nonce(mut self, nonce: u64) -> Self {
+        self.nonce = Some(nonce);
+        self.extensions.retain(|(id, _)| id != "CheckNonce");
+        self.extensions
+            .push(("CheckNonce".into(), crate::json!(nonce)));
+        self
+    }
+
+    fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
+        self.extensions.retain(|(id, _)| id != identifier);
+        self.extensions.push((identifier.into(), value));
+        self
+    }
+
+    fn into_parts(self) -> (String, ExtrinsicBody<B>, S) {
+        let body = ExtrinsicBody {
+            nonce: self.nonce,
+            body: self.body,
+            extensions: self.extensions,
+        };
+        (self.path, body, self.signer)
+    }
+}
+
+// --- SubeBuilder: entry point ---
+
 /// Lazy handle returned by [`sube()`](crate::sube).
 ///
-/// Can be used in two ways:
-///
 /// ```rust,ignore
-/// // One-liner: connect + query (URL includes path)
+/// // One-liner query (URL includes path)
 /// let r = sube("wss://kreivo.io/system/account/0x1234").await?;
 ///
-/// // One-liner: connect + submit
+/// // One-liner submit
 /// sube("wss://kreivo.io/balances/transfer")
 ///     .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
 ///     .signer(my_signer)
 ///     .await?;
 ///
-/// // Reusable handle (keeps connection alive)
+/// // Reusable handle
 /// let chain = Sube::connect("wss://kreivo.io").await?;
 /// let r = chain.query("system/account/0x1234").await?;
-/// chain.call("balances/transfer")
-///     .body(json!({...}))
-///     .signer(signer)
-///     .await?;
 /// ```
 pub struct SubeBuilder {
     url: String,
@@ -51,28 +108,30 @@ impl SubeBuilder {
     }
 
     /// Set the extrinsic body (one-liner shorthand for submit).
-    pub fn body<'a, B>(self, body: B) -> OneShotCall<'a, B, ()> {
+    pub fn body<B>(self, body: B) -> OneShotCall<B, ()> {
         OneShotCall {
             url: self.url,
             preloaded_meta: self.metadata,
-            body,
-            signer: (),
-            nonce: None,
-            extensions: Vec::new(),
-            _lt: PhantomData,
+            tx: TxBuilder {
+                path: String::new(),
+                body,
+                signer: (),
+                nonce: None,
+                extensions: Vec::new(),
+            },
         }
     }
 
     /// Set the call body using scales text format (one-liner shorthand).
-    pub fn body_text<'a>(self, text: &'a str) -> OneShotCall<'a, crate::Text<'a>, ()> {
+    pub fn body_text<'a>(self, text: &'a str) -> OneShotCall<crate::Text<'a>, ()> {
         self.body(crate::Text(text))
     }
 }
 
 /// One-liner query: `sube("wss://host/pallet/item/key").await?`
 impl IntoFuture for SubeBuilder {
-    type Output = SubeResult<Response<'static>>;
-    type IntoFuture = BoxFuture<'static, SubeResult<Response<'static>>>;
+    type Output = SubeResult<Response>;
+    type IntoFuture = BoxFuture<'static, SubeResult<Response>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
@@ -81,7 +140,7 @@ impl IntoFuture for SubeBuilder {
             let block = url
                 .query_pairs()
                 .find(|(k, _)| *k == "at")
-                .map(|(_, v)| v.parse::<u32>().expect("at query param must be a number"));
+                .and_then(|(_, v)| v.parse::<u32>().ok());
 
             let path = url.path();
             let backend = connect(&url).await?;
@@ -122,7 +181,7 @@ impl Sube {
     }
 
     /// Query a storage path.
-    pub async fn query(&self, path: &str) -> SubeResult<Response<'static>> {
+    pub async fn query(&self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
             "_meta" => Ok(Response::Meta(self.metadata)),
@@ -132,7 +191,7 @@ impl Sube {
     }
 
     /// Query a storage path at a specific block number.
-    pub async fn query_at(&self, path: &str, block: u32) -> SubeResult<Response<'static>> {
+    pub async fn query_at(&self, path: &str, block: u32) -> SubeResult<Response> {
         crate::query(
             &self.backend,
             self.metadata,
@@ -147,12 +206,13 @@ impl Sube {
         CallBuilder {
             backend: &self.backend,
             metadata: self.metadata,
-            path: path.trim_matches('/').into(),
-            body: (),
-            signer: (),
-            nonce: None,
-            extensions: Vec::new(),
-            _lt: PhantomData,
+            tx: TxBuilder {
+                path: path.trim_matches('/').into(),
+                body: (),
+                signer: (),
+                nonce: None,
+                extensions: Vec::new(),
+            },
         }
     }
 
@@ -173,12 +233,7 @@ impl Sube {
 pub struct CallBuilder<'a, Body = (), Sign = ()> {
     backend: &'a AnyBackend,
     metadata: &'static Metadata,
-    path: String,
-    body: Body,
-    signer: Sign,
-    nonce: Option<u64>,
-    extensions: Vec<(String, JsonValue)>,
-    _lt: PhantomData<&'a ()>,
+    tx: TxBuilder<Body, Sign>,
 }
 
 impl<'a, S> CallBuilder<'a, (), S> {
@@ -186,12 +241,7 @@ impl<'a, S> CallBuilder<'a, (), S> {
         CallBuilder {
             backend: self.backend,
             metadata: self.metadata,
-            path: self.path,
-            body,
-            signer: self.signer,
-            nonce: self.nonce,
-            extensions: self.extensions,
-            _lt: PhantomData,
+            tx: self.tx.body(body),
         }
     }
 
@@ -213,28 +263,19 @@ impl<'a, B> CallBuilder<'a, B, ()> {
         CallBuilder {
             backend: self.backend,
             metadata: self.metadata,
-            path: self.path,
-            body: self.body,
-            signer,
-            nonce: self.nonce,
-            extensions: self.extensions,
-            _lt: PhantomData,
+            tx: self.tx.signer(signer),
         }
     }
 }
 
 impl<'a, B, S> CallBuilder<'a, B, S> {
     pub fn nonce(mut self, nonce: u64) -> Self {
-        self.nonce = Some(nonce);
-        self.extensions.retain(|(id, _)| id != "CheckNonce");
-        self.extensions
-            .push(("CheckNonce".into(), crate::json!(nonce)));
+        self.tx = self.tx.nonce(nonce);
         self
     }
 
     pub fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
-        self.extensions.retain(|(id, _)| id != identifier);
-        self.extensions.push((identifier.into(), value));
+        self.tx = self.tx.with_extension(identifier, value);
         self
     }
 }
@@ -244,23 +285,13 @@ where
     B: EncodeCall + core::fmt::Debug + 'a,
     S: Signer + 'a,
 {
-    type Output = SubeResult<Response<'static>>;
-    type IntoFuture = BoxFuture<'a, SubeResult<Response<'static>>>;
+    type Output = SubeResult<Response>;
+    type IntoFuture = BoxFuture<'a, SubeResult<Response>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            crate::extrinsic::submit(
-                self.backend,
-                self.metadata,
-                &self.path,
-                ExtrinsicBody {
-                    nonce: self.nonce,
-                    body: self.body,
-                    extensions: self.extensions,
-                },
-                self.signer,
-            )
-            .await
+            let (path, body, signer) = self.tx.into_parts();
+            crate::extrinsic::submit(self.backend, self.metadata, &path, body, signer).await
         })
     }
 }
@@ -268,53 +299,41 @@ where
 // --- OneShotCall (for one-liner submits) ---
 
 /// Builder for a one-liner extrinsic submit via [`sube()`](crate::sube).
-pub struct OneShotCall<'a, Body = (), Sign = ()> {
+pub struct OneShotCall<Body = (), Sign = ()> {
     url: String,
     preloaded_meta: Option<Metadata>,
-    body: Body,
-    signer: Sign,
-    nonce: Option<u64>,
-    extensions: Vec<(String, JsonValue)>,
-    _lt: PhantomData<&'a ()>,
+    tx: TxBuilder<Body, Sign>,
 }
 
-impl<'a, B> OneShotCall<'a, B, ()> {
-    pub fn signer<S>(self, signer: S) -> OneShotCall<'a, B, S> {
+impl<B> OneShotCall<B, ()> {
+    pub fn signer<S>(self, signer: S) -> OneShotCall<B, S> {
         OneShotCall {
             url: self.url,
             preloaded_meta: self.preloaded_meta,
-            body: self.body,
-            signer,
-            nonce: self.nonce,
-            extensions: self.extensions,
-            _lt: PhantomData,
+            tx: self.tx.signer(signer),
         }
     }
 }
 
-impl<'a, B, S> OneShotCall<'a, B, S> {
+impl<B, S> OneShotCall<B, S> {
     pub fn nonce(mut self, nonce: u64) -> Self {
-        self.nonce = Some(nonce);
-        self.extensions.retain(|(id, _)| id != "CheckNonce");
-        self.extensions
-            .push(("CheckNonce".into(), crate::json!(nonce)));
+        self.tx = self.tx.nonce(nonce);
         self
     }
 
     pub fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
-        self.extensions.retain(|(id, _)| id != identifier);
-        self.extensions.push((identifier.into(), value));
+        self.tx = self.tx.with_extension(identifier, value);
         self
     }
 }
 
-impl<'a, B, S> IntoFuture for OneShotCall<'a, B, S>
+impl<B, S> IntoFuture for OneShotCall<B, S>
 where
-    B: EncodeCall + core::fmt::Debug + 'a,
-    S: Signer + 'a,
+    B: EncodeCall + core::fmt::Debug + 'static,
+    S: Signer + 'static,
 {
-    type Output = SubeResult<Response<'static>>;
-    type IntoFuture = BoxFuture<'a, SubeResult<Response<'static>>>;
+    type Output = SubeResult<Response>;
+    type IntoFuture = BoxFuture<'static, SubeResult<Response>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
@@ -323,18 +342,8 @@ where
             let backend = connect(&url).await?;
             let meta = get_metadata(&backend, &url, self.preloaded_meta).await?;
 
-            crate::extrinsic::submit(
-                &backend,
-                meta,
-                path,
-                ExtrinsicBody {
-                    nonce: self.nonce,
-                    body: self.body,
-                    extensions: self.extensions,
-                },
-                self.signer,
-            )
-            .await
+            let (_, body, signer) = self.tx.into_parts();
+            crate::extrinsic::submit(&backend, meta, path, body, signer).await
         })
     }
 }

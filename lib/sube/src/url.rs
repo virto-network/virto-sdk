@@ -143,10 +143,7 @@ mod tests {
     #[test]
     fn parse_with_query() {
         let url = Url::parse("wss://kreivo.io/system/account?at=1234&foo=bar").unwrap();
-        let at = url
-            .query_pairs()
-            .find(|(k, _)| *k == "at")
-            .map(|(_, v)| v);
+        let at = url.query_pairs().find(|(k, _)| *k == "at").map(|(_, v)| v);
         assert_eq!(at, Some("1234"));
     }
 

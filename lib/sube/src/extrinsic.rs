@@ -63,8 +63,7 @@ impl EncodeCall for Text<'_> {
             _ => return Err(Error::Encode("calls type is not a variant".into())),
         };
         let full_text = alloc::format!("{}::{}{}", vdef.name, variant, self.0);
-        scales::from_text(&full_text, registry, calls_ty)
-            .map_err(|e| Error::Encode(e.to_string()))
+        scales::from_text(&full_text, registry, calls_ty).map_err(|e| Error::Encode(e.to_string()))
     }
 }
 
@@ -160,16 +159,15 @@ pub fn encode_extensions(
 /// Build and submit a signed extrinsic using metadata-driven extensions.
 pub async fn submit<V>(
     chain: &(impl Backend + ?Sized),
-    meta: &crate::Metadata,
+    meta: &'static crate::Metadata,
     path: &str,
     tx_data: ExtrinsicBody<V>,
     signer: impl crate::Signer,
-) -> Result<Response<'static>>
+) -> Result<Response>
 where
     V: EncodeCall + core::fmt::Debug,
 {
-    let (pallet, item_or_call, _keys) =
-        crate::parse_uri(path).ok_or(Error::BadInput)?;
+    let (pallet, item_or_call, _keys) = crate::parse_uri(path).ok_or(Error::BadInput)?;
     let pallet = meta
         .pallet_by_name(&pallet)
         .ok_or(Error::PalletNotFound(pallet))?;
@@ -177,17 +175,23 @@ where
 
     // Encode call data
     let mut encoded_call = vec![pallet.index];
-    let call_data = tx_data.body.encode_call(
-        &item_or_call.to_lowercase(),
-        &meta.registry,
-        calls_ty,
-    )?;
+    let call_data =
+        tx_data
+            .body
+            .encode_call(&item_or_call.to_lowercase(), &meta.registry, calls_ty)?;
     encoded_call.extend(&call_data);
 
     let from_account = signer.account();
 
     // Build chain context
-    let ctx = build_context(chain, meta, tx_data.nonce, &tx_data.extensions, from_account.as_ref()).await?;
+    let ctx = build_context(
+        chain,
+        meta,
+        tx_data.nonce,
+        &tx_data.extensions,
+        from_account.as_ref(),
+    )
+    .await?;
 
     // Encode extensions
     let (extra_bytes, additional_signed) = encode_extensions(
@@ -198,12 +202,7 @@ where
     )?;
 
     // Sign
-    let signature_payload = [
-        encoded_call.clone(),
-        extra_bytes.clone(),
-        additional_signed,
-    ]
-    .concat();
+    let signature_payload = [encoded_call.clone(), extra_bytes.clone(), additional_signed].concat();
 
     let payload = if signature_payload.len() > 256 {
         hash(&Hasher::Blake2_256, &signature_payload)
@@ -241,9 +240,11 @@ where
     ]
     .concat();
 
-    let len =
-        Compact(u32::try_from(encoded_inner.len()).expect("extrinsic size expected to be <4GB"))
-            .encode();
+    let len = Compact(
+        u32::try_from(encoded_inner.len())
+            .map_err(|_| Error::Encode("extrinsic too large".into()))?,
+    )
+    .encode();
 
     chain.submit(&[len, encoded_inner].concat()).await?;
 
@@ -253,7 +254,7 @@ where
 /// Fetch spec/tx version, genesis hash, and account nonce.
 async fn build_context(
     chain: &(impl Backend + ?Sized),
-    meta: &crate::Metadata,
+    meta: &'static crate::Metadata,
     nonce: Option<u64>,
     extensions: &[(String, JsonValue)],
     account: &[u8],
@@ -303,7 +304,7 @@ async fn build_context(
 /// Resolve nonce from: explicit field, extension override, or on-chain query.
 async fn resolve_nonce(
     chain: &(impl Backend + ?Sized),
-    meta: &crate::Metadata,
+    meta: &'static crate::Metadata,
     nonce: Option<u64>,
     extensions: &[(String, JsonValue)],
     account: &[u8],

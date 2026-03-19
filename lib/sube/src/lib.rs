@@ -78,12 +78,12 @@ pub fn sube(url: &str) -> SubeBuilder {
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-pub async fn query<'m>(
+pub async fn query(
     chain: &(impl Backend + ?Sized),
-    meta: &'m Metadata,
+    meta: &'static Metadata,
     path: &str,
     block: Option<u32>,
-) -> Result<Response<'m>> {
+) -> Result<Response> {
     let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
     let pallet = meta
         .pallet_by_name(&pallet)
@@ -187,19 +187,19 @@ impl StorageEntry {
 }
 
 #[derive(Debug)]
-pub enum Response<'m> {
+pub enum Response {
     Void,
     None,
-    Value(StorageEntry, &'m scales::Registry),
+    Value(StorageEntry, &'static scales::Registry),
     ValueSet(
         Vec<(Vec<StorageEntry>, Option<StorageEntry>)>,
-        &'m scales::Registry,
+        &'static scales::Registry,
     ),
-    Meta(&'m Metadata),
-    Registry(&'m scales::Registry),
+    Meta(&'static Metadata),
+    Registry(&'static scales::Registry),
 }
 
-impl From<Response<'_>> for Vec<u8> {
+impl From<Response> for Vec<u8> {
     fn from(res: Response) -> Self {
         match res {
             Response::Value(v, _) => v.data,
@@ -298,26 +298,17 @@ impl Backend for Offline {
 pub enum Error {
     ChainUnavailable,
     BadInput,
-    BadKey,
     BadMetadata,
-    Decode(codec::Error),
+    Decode(String),
     Encode(String),
-    NoMetadataLoaded,
     Node(String),
-    ParseStorageItem,
     StorageKeyNotFound,
     PalletNotFound(String),
     CallNotFound,
     MissingConstantName,
-    Signing,
     Mapping(String),
     AccountNotFound,
     ConstantNotFound(String),
-    Platform(String),
-    CantInitBackend,
-    CantDecodeReponseForMeta,
-    CantDecodeRawQueryResponse,
-    CantFindMethodInPallet,
     BadBlockNumber,
     MissingExtensionValue(String),
 }
@@ -325,8 +316,21 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Node(e) => write!(f, "{:}", e),
-            _ => write!(f, "{:?}", self),
+            Self::ChainUnavailable => write!(f, "chain unavailable"),
+            Self::BadInput => write!(f, "bad input"),
+            Self::BadMetadata => write!(f, "bad or missing metadata"),
+            Self::Decode(e) => write!(f, "decode error: {e}"),
+            Self::Encode(e) => write!(f, "encode error: {e}"),
+            Self::Node(e) => write!(f, "node error: {e}"),
+            Self::StorageKeyNotFound => write!(f, "storage key not found"),
+            Self::PalletNotFound(p) => write!(f, "pallet not found: {p}"),
+            Self::CallNotFound => write!(f, "call type not found in pallet"),
+            Self::MissingConstantName => write!(f, "missing constant name in query"),
+            Self::Mapping(e) => write!(f, "mapping error: {e}"),
+            Self::AccountNotFound => write!(f, "account not found"),
+            Self::ConstantNotFound(c) => write!(f, "constant not found: {c}"),
+            Self::BadBlockNumber => write!(f, "bad block number"),
+            Self::MissingExtensionValue(ext) => write!(f, "missing value for extension: {ext}"),
         }
     }
 }
@@ -425,8 +429,10 @@ mod tests {
             .encode_call("remark", &meta.registry, calls_ty)
             .expect("text encodes");
 
-        assert_eq!(json_encoded, text_encoded,
-            "JSON and text format should produce identical SCALE bytes");
+        assert_eq!(
+            json_encoded, text_encoded,
+            "JSON and text format should produce identical SCALE bytes"
+        );
     }
 
     #[test]
@@ -442,9 +448,7 @@ mod tests {
 
         // Text body with MultiAddress::Id enum variant and a numeric value
         let addr = "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
-        let text = alloc::format!(
-            "(dest:MultiAddress::Id({addr});value:1000000000000)"
-        );
+        let text = alloc::format!("(dest:MultiAddress::Id({addr});value:1000000000000)");
         let text_body = Text(&text);
         let encoded = text_body
             .encode_call("transfer_keep_alive", &meta.registry, calls_ty)
@@ -452,8 +456,14 @@ mod tests {
 
         // Verify the encoded bytes look correct:
         // variant index for transfer_keep_alive + MultiAddress::Id(0x00) + 32 addr bytes + compact(value)
-        assert!(encoded.len() > 34, "should have variant idx + address + value");
+        assert!(
+            encoded.len() > 34,
+            "should have variant idx + address + value"
+        );
         // The address bytes should be present somewhere in the output
-        assert_eq!(encoded[2], 0xd4, "address starts with 0xd4 after variant + MultiAddress idx");
+        assert_eq!(
+            encoded[2], 0xd4,
+            "address starts with 0xd4 after variant + MultiAddress idx"
+        );
     }
 }

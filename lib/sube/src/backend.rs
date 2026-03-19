@@ -94,8 +94,7 @@ pub(crate) async fn get_metadata(
     };
     let meta: &'static Metadata = Box::leak(Box::new(meta));
 
-    map.insert(key, meta)
-        .map_err(|_| Error::CantInitBackend)?;
+    map.insert(key, meta).map_err(|_| Error::BadMetadata)?;
 
     Ok(meta)
 }
@@ -106,7 +105,13 @@ fn base_key(url: &Url) -> core::result::Result<CacheKey, core::fmt::Error> {
         "wss" | "https" => 443,
         _ => 80,
     });
-    write!(key, "{}://{}:{}", url.scheme(), url.host_str().unwrap_or("unknown"), port)?;
+    write!(
+        key,
+        "{}://{}:{}",
+        url.scheme(),
+        url.host_str().unwrap_or("unknown"),
+        port
+    )?;
     Ok(key)
 }
 

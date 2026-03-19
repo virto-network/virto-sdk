@@ -238,13 +238,7 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
         RuntimeMetadata::V16(m) => {
             let pallets = m.pallets.into_iter().map(|p| convert_pallet!(p)).collect();
             // Pick highest supported version
-            let version = m
-                .extrinsic
-                .versions
-                .iter()
-                .copied()
-                .max()
-                .unwrap_or(4);
+            let version = m.extrinsic.versions.iter().copied().max().unwrap_or(4);
             // Get ordered extension indices for this version, or fall back to all
             let ext_indices: Vec<u32> = m
                 .extrinsic
@@ -259,14 +253,13 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
                 extensions: ext_indices
                     .into_iter()
                     .filter_map(|i| {
-                        m.extrinsic
-                            .transaction_extensions
-                            .get(i as usize)
-                            .map(|e| SignedExtensionMeta {
+                        m.extrinsic.transaction_extensions.get(i as usize).map(|e| {
+                            SignedExtensionMeta {
                                 identifier: e.identifier.clone(),
                                 ty: e.ty.id,
                                 additional_signed: e.implicit.id,
-                            })
+                            }
+                        })
                     })
                     .collect(),
             };
@@ -368,7 +361,7 @@ impl StorageKey {
             .storage
             .as_ref()
             .and_then(|s| s.entries.iter().find(|e| e.name == item))
-            .ok_or(crate::Error::CantFindMethodInPallet)?;
+            .ok_or(crate::Error::StorageKeyNotFound)?;
         log::trace!(
             "map_keys={}",
             map_keys
@@ -419,7 +412,14 @@ impl StorageEntryType {
                 value,
             } => {
                 log::trace!("key={}, value={}, hasher={:?}", key, value, hashers);
-                build_storage_key(registry, Some(*key), *value, (pallet, item), map_keys, hashers)
+                build_storage_key(
+                    registry,
+                    Some(*key),
+                    *value,
+                    (pallet, item),
+                    map_keys,
+                    hashers,
+                )
             }
         }
     }
@@ -462,11 +462,11 @@ fn build_storage_key<T: AsRef<str>>(
                     let k = map_keys.get(i);
                     let hasher = &hashers[i];
 
-                    if k.is_none() {
+                    let Some(k) = k else {
                         return KeyValue::Empty(type_id);
-                    }
+                    };
 
-                    let k = k.expect("checked above").as_ref();
+                    let k = k.as_ref();
                     let out = encode_key(k, registry, type_id);
 
                     let hashed = hash(hasher, &out);
@@ -478,24 +478,22 @@ fn build_storage_key<T: AsRef<str>>(
     } else if hashers.len() == 1 {
         log::trace!("treating tuple as argument for hasher");
 
-        let tuple_bytes: Vec<u8> = type_call_ids
-            .into_iter()
-            .enumerate()
-            .flat_map(|(i, type_id)| {
-                let k = map_keys.get(i).expect("to exist in map_keys").as_ref();
-                encode_key(k, registry, type_id)
-            })
-            .collect();
+        let mut tuple_bytes = Vec::new();
+        for (i, type_id) in type_call_ids.into_iter().enumerate() {
+            let k = map_keys.get(i).ok_or(crate::Error::BadInput)?;
+            tuple_bytes.extend(encode_key(k.as_ref(), registry, type_id));
+        }
 
         let hasher = &hashers[0];
         let hashed_value = hash(hasher, &tuple_bytes);
+        let key_ty = key_ty_id.ok_or(crate::Error::BadInput)?;
 
         let storage_key = StorageKey::new(
             value_ty_id,
             hash(&Hasher::Twox128, pallet_item.0),
             hash(&Hasher::Twox128, pallet_item.1),
             vec![KeyValue::Value((
-                key_ty_id.expect("key id must exist"),
+                key_ty,
                 hashed_value,
                 tuple_bytes,
                 hasher.clone(),
@@ -514,8 +512,7 @@ mod tests {
     use super::*;
 
     // V15 metadata from the Kreivo parachain
-    const KREIVO_METADATA: &[u8] =
-        include_bytes!("../../../sdk/js/.papi/metadata/kreivo.scale");
+    const KREIVO_METADATA: &[u8] = include_bytes!("../../../sdk/js/.papi/metadata/kreivo.scale");
 
     fn kreivo() -> Metadata {
         Metadata::from_bytes(KREIVO_METADATA).expect("kreivo metadata decodes")
@@ -595,7 +592,11 @@ mod tests {
     fn decode_system_version_constant() {
         let meta = kreivo();
         let system = meta.pallet_by_name("System").unwrap();
-        let version = system.constants.iter().find(|c| c.name == "Version").unwrap();
+        let version = system
+            .constants
+            .iter()
+            .find(|c| c.name == "Version")
+            .unwrap();
         let value = scales::Value::new(&version.value, version.ty, &meta.registry);
         let json: serde_json::Value = value.try_into().expect("Version decodes to JSON");
         let obj = json.as_object().expect("Version is an object");
@@ -607,12 +608,7 @@ mod tests {
     fn storage_key_for_plain_entry() {
         let meta = kreivo();
         let system = meta.pallet_by_name("System").unwrap();
-        let key = StorageKey::build_with_registry(
-            &meta.registry,
-            system,
-            "Number",
-            &[] as &[&str],
-        );
+        let key = StorageKey::build_with_registry(&meta.registry, system, "Number", &[] as &[&str]);
         assert!(key.is_ok(), "Should build key for plain storage");
         let key = key.unwrap();
         assert!(!key.is_partial());
@@ -630,7 +626,11 @@ mod tests {
             "Account",
             &["0x0000000000000000000000000000000000000000000000000000000000000000"],
         );
-        assert!(key.is_ok(), "Should build key for map storage: {:?}", key.err());
+        assert!(
+            key.is_ok(),
+            "Should build key for map storage: {:?}",
+            key.err()
+        );
         let key = key.unwrap();
         assert!(!key.is_partial());
     }
@@ -640,12 +640,8 @@ mod tests {
         let meta = kreivo();
         let system = meta.pallet_by_name("System").unwrap();
         // No map key provided → partial key
-        let key = StorageKey::build_with_registry(
-            &meta.registry,
-            system,
-            "Account",
-            &[] as &[&str],
-        );
+        let key =
+            StorageKey::build_with_registry(&meta.registry, system, "Account", &[] as &[&str]);
         assert!(key.is_ok());
         assert!(key.unwrap().is_partial());
     }
@@ -654,12 +650,8 @@ mod tests {
     fn storage_entry_not_found() {
         let meta = kreivo();
         let system = meta.pallet_by_name("System").unwrap();
-        let key = StorageKey::build_with_registry(
-            &meta.registry,
-            system,
-            "NonExistent",
-            &[] as &[&str],
-        );
+        let key =
+            StorageKey::build_with_registry(&meta.registry, system, "NonExistent", &[] as &[&str]);
         assert!(key.is_err());
     }
 
@@ -674,7 +666,11 @@ mod tests {
         let meta = kreivo();
         let ext = &meta.extrinsic;
         assert_eq!(ext.extensions.len(), 9, "Kreivo should have 9 extensions");
-        let names: Vec<&str> = ext.extensions.iter().map(|e| e.identifier.as_str()).collect();
+        let names: Vec<&str> = ext
+            .extensions
+            .iter()
+            .map(|e| e.identifier.as_str())
+            .collect();
         assert_eq!(
             names,
             vec![
@@ -703,18 +699,33 @@ mod tests {
         let ext = &meta.extrinsic;
         // CheckNonZeroSender and CheckWeight should have StructUnit for ty
         for name in &["CheckNonZeroSender", "CheckWeight"] {
-            let e = ext.extensions.iter().find(|e| e.identifier == *name).unwrap();
+            let e = ext
+                .extensions
+                .iter()
+                .find(|e| e.identifier == *name)
+                .unwrap();
             assert!(
-                matches!(meta.registry.resolve(e.ty), Some(scales::TypeDef::StructUnit)),
+                matches!(
+                    meta.registry.resolve(e.ty),
+                    Some(scales::TypeDef::StructUnit)
+                ),
                 "{name} ty should be StructUnit, got {:?}",
                 meta.registry.resolve(e.ty)
             );
         }
         // additional_signed for these resolves to () — either StructUnit or empty Tuple
         for name in &["CheckNonZeroSender", "CheckWeight"] {
-            let e = ext.extensions.iter().find(|e| e.identifier == *name).unwrap();
+            let e = ext
+                .extensions
+                .iter()
+                .find(|e| e.identifier == *name)
+                .unwrap();
             let is_zero_size = is_zero_size_type(e.additional_signed, &meta.registry);
-            assert!(is_zero_size, "{name} additional_signed should be zero-size, got {:?}", meta.registry.resolve(e.additional_signed));
+            assert!(
+                is_zero_size,
+                "{name} additional_signed should be zero-size, got {:?}",
+                meta.registry.resolve(e.additional_signed)
+            );
         }
     }
 
@@ -723,9 +734,16 @@ mod tests {
         let meta = kreivo();
         let ext = &meta.extrinsic;
         // CheckNonce ty should NOT be StructUnit (it holds the nonce)
-        let check_nonce = ext.extensions.iter().find(|e| e.identifier == "CheckNonce").unwrap();
+        let check_nonce = ext
+            .extensions
+            .iter()
+            .find(|e| e.identifier == "CheckNonce")
+            .unwrap();
         assert!(
-            !matches!(meta.registry.resolve(check_nonce.ty), Some(scales::TypeDef::StructUnit)),
+            !matches!(
+                meta.registry.resolve(check_nonce.ty),
+                Some(scales::TypeDef::StructUnit)
+            ),
             "CheckNonce ty should not be StructUnit"
         );
         // CheckSpecVersion additional_signed should NOT be StructUnit (it's u32)
@@ -766,9 +784,7 @@ mod tests {
             for entry in &storage.entries {
                 if let StorageEntryType::Map { key, hashers, .. } = &entry.ty {
                     if hashers.len() == 1 {
-                        if let Some(scales::TypeDef::U32) =
-                            meta.registry.resolve(*key)
-                        {
+                        if let Some(scales::TypeDef::U32) = meta.registry.resolve(*key) {
                             return Some((pallet, entry));
                         }
                     }
@@ -784,15 +800,18 @@ mod tests {
         let meta = kreivo();
         let (pallet, entry) = find_u32_map(&meta).expect("should have a u32-keyed map");
 
-        let key = StorageKey::build_with_registry(
-            &meta.registry, pallet, &entry.name, &["42"],
-        ).unwrap();
+        let key =
+            StorageKey::build_with_registry(&meta.registry, pallet, &entry.name, &["42"]).unwrap();
 
         assert!(!key.is_partial());
         // Verify encode_key produced correct little-endian u32 bytes
         match &key.args[0] {
             KeyValue::Value((_, _, encoded, _)) => {
-                assert_eq!(encoded, &42u32.to_le_bytes(), "text '42' should encode as LE u32");
+                assert_eq!(
+                    encoded,
+                    &42u32.to_le_bytes(),
+                    "text '42' should encode as LE u32"
+                );
             }
             _ => panic!("expected a Value"),
         }
@@ -804,17 +823,19 @@ mod tests {
         let meta = kreivo();
         let (pallet, entry) = find_u32_map(&meta).expect("should have a u32-keyed map");
 
-        let text_key = StorageKey::build_with_registry(
-            &meta.registry, pallet, &entry.name, &["100"],
-        ).unwrap();
+        let text_key =
+            StorageKey::build_with_registry(&meta.registry, pallet, &entry.name, &["100"]).unwrap();
 
         // Manually encode 100u32 as hex SCALE (little-endian)
-        let hex_key = StorageKey::build_with_registry(
-            &meta.registry, pallet, &entry.name, &["0x64000000"],
-        ).unwrap();
+        let hex_key =
+            StorageKey::build_with_registry(&meta.registry, pallet, &entry.name, &["0x64000000"])
+                .unwrap();
 
-        assert_eq!(text_key.key(), hex_key.key(),
-            "text '100' and hex '0x64000000' should produce identical storage keys");
+        assert_eq!(
+            text_key.key(),
+            hex_key.key(),
+            "text '100' and hex '0x64000000' should produce identical storage keys"
+        );
     }
 
     #[test]
@@ -822,16 +843,26 @@ mod tests {
         // Decode a constant to text, showing the text format output
         let meta = kreivo();
         let system = meta.pallet_by_name("System").unwrap();
-        let version = system.constants.iter().find(|c| c.name == "Version").unwrap();
+        let version = system
+            .constants
+            .iter()
+            .find(|c| c.name == "Version")
+            .unwrap();
         let entry = crate::StorageEntry::new(version.value.clone(), version.ty);
 
         let text = entry.to_text(&meta.registry).expect("formats as text");
-        assert!(text.contains("kreivo"), "Version text should contain the spec name");
+        assert!(
+            text.contains("kreivo"),
+            "Version text should contain the spec name"
+        );
 
         // The text output can be fed back into from_text to re-encode
         let re_encoded = scales::from_text(&text, &meta.registry, version.ty)
             .expect("text output should round-trip through from_text");
-        assert_eq!(re_encoded, version.value, "round-trip should reproduce original bytes");
+        assert_eq!(
+            re_encoded, version.value,
+            "round-trip should reproduce original bytes"
+        );
     }
 
     #[test]
@@ -842,9 +873,8 @@ mod tests {
 
         let addr = "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
 
-        let key = StorageKey::build_with_registry(
-            &meta.registry, system, "Account", &[addr],
-        ).unwrap();
+        let key =
+            StorageKey::build_with_registry(&meta.registry, system, "Account", &[addr]).unwrap();
 
         assert!(!key.is_partial());
         match &key.args[0] {
@@ -856,8 +886,14 @@ mod tests {
         }
 
         // from_text now handles this directly (no hex fallback needed)
-        let account = system.storage.as_ref().unwrap().entries.iter()
-            .find(|e| e.name == "Account").unwrap();
+        let account = system
+            .storage
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|e| e.name == "Account")
+            .unwrap();
         let key_ty = match &account.ty {
             StorageEntryType::Map { key, .. } => *key,
             _ => panic!("Account should be a Map"),
@@ -868,4 +904,3 @@ mod tests {
         );
     }
 }
-

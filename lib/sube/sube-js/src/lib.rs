@@ -81,11 +81,11 @@ pub async fn sube_js(
                             &JsValue::null(), 
                             &JsValue::from(js_sys::Uint8Array::from(message.to_vec().as_ref())),
                         )
-                        .map_err(|_| SubeError::Signing)?;
+                        .map_err(|_| SubeError::Encode("signing failed".into()))?;
 
                     let response = wasm_bindgen_futures::JsFuture::from(js_sys::Promise::from(promise))
                         .await
-                        .map_err(|_| SubeError::Signing)?;
+                        .map_err(|_| SubeError::Encode("signing failed".into()))?;
 
                     let vec: Vec<u8> = serde_wasm_bindgen::from_value(response)
                         .map_err(|_| SubeError::Encode("Unknown value to decode".into()))?;

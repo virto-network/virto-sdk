@@ -110,10 +110,8 @@ impl<R: Rpc> Backend for RpcClient<R> {
         keys: Vec<RawStorageKey>,
         block: Option<u32>,
     ) -> crate::Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
-        let keys = serde_json::to_string(
-            &keys.iter().map(|v| to_hex(v)).collect::<Vec<_>>(),
-        )
-        .expect("it to be a valid json");
+        let keys = serde_json::to_string(&keys.iter().map(|v| to_hex(v)).collect::<Vec<_>>())
+            .expect("it to be a valid json");
 
         let params: Vec<String> = if let Some(block_number) = block {
             let info = self
@@ -151,11 +149,11 @@ impl<R: Rpc> Backend for RpcClient<R> {
                     log::debug!("key: {:?} value: {:?}", k, v);
 
                     let key = hex::decode(&k[2..])
-                        .map_err(|_| crate::Error::CantDecodeRawQueryResponse)?;
+                        .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
                     let value = v
                         .map(|v| hex::decode(&v[2..]))
                         .transpose()
-                        .map_err(|_| crate::Error::CantDecodeRawQueryResponse)?;
+                        .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
                     Ok((key, value))
                 })
                 .collect::<crate::Result<Vec<_>>>()?,
@@ -188,7 +186,9 @@ impl<R: Rpc> Backend for RpcClient<R> {
         log::info!("rpc call {:?}", result);
         let keys = result
             .into_iter()
-            .map(|k| hex::decode(&k[2..]).map_err(|_| crate::Error::CantDecodeRawQueryResponse))
+            .map(|k| {
+                hex::decode(&k[2..]).map_err(|_| crate::Error::Decode("hex decode failed".into()))
+            })
             .collect::<crate::Result<Vec<_>>>()?;
         Ok(keys)
     }
@@ -211,8 +211,8 @@ impl<R: Rpc> Backend for RpcClient<R> {
             .rpc("state_getMetadata", &[])
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
-        let response =
-            hex::decode(&res[2..]).map_err(|_err| crate::Error::CantDecodeReponseForMeta)?;
+        let response = hex::decode(&res[2..])
+            .map_err(|_err| crate::Error::Decode("metadata hex decode failed".into()))?;
         let meta = from_bytes(&mut response.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
         log::trace!("Metadata {:#?}", meta);
         Ok(meta)
@@ -228,7 +228,7 @@ impl<R: Rpc> Backend for RpcClient<R> {
 
             let mut hash = [0u8; 32];
             hex::decode_to_slice(&hex_str.as_str()[2..], &mut hash)
-                .map_err(|_| crate::Error::CantDecodeRawQueryResponse)?;
+                .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
             Ok(hash)
         }
 

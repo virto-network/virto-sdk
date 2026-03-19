@@ -76,8 +76,7 @@ impl Backend {
         let url = url.into();
         log::trace!("WS connecting to {}", url);
 
-        let (tx, rx) =
-            ewebsock::connect(url, ewebsock::Options::default()).map_err(Error::Platform)?;
+        let (tx, rx) = ewebsock::connect(url, ewebsock::Options::default()).map_err(Error::Node)?;
 
         let (sender, recv) = mpsc::channel::<Message>(MAX_BUFFER);
 

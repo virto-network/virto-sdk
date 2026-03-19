@@ -40,7 +40,10 @@ fn print_value(label: &str, response: &Response) {
 
             // Also display as JSON for comparison
             let json = entry.to_json(reg).expect("valid json");
-            println!("{label} (json): {}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{label} (json): {}",
+                serde_json::to_string_pretty(&json).unwrap()
+            );
         }
         other => println!("{label}: {other:?}"),
     }

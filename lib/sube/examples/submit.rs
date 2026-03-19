@@ -25,20 +25,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     wallet.unlock(None, None).await?;
     let account = wallet.default_account().unwrap();
 
-    let signer = SignerFn::from((
-        account.public().as_ref(),
-        |message: &[u8]| {
-            let message = message.to_vec();
-            let wallet = &wallet;
-            async move {
-                wallet
-                    .sign(&message)
-                    .await
-                    .map(|sig| sig.as_ref().try_into().unwrap())
-                    .map_err(|_| sube::Error::Signing)
-            }
-        },
-    ));
+    let signer = SignerFn::from((account.public().as_ref(), |message: &[u8]| {
+        let message = message.to_vec();
+        let wallet = &wallet;
+        async move {
+            wallet
+                .sign(&message)
+                .await
+                .map(|sig| sig.as_ref().try_into().unwrap())
+                .map_err(|_| sube::Error::Encode("signing failed".into()))
+        }
+    }));
 
     println!("Account: 0x{account}");
     println!("Phrase: \"{phrase}\"");
