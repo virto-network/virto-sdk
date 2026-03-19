@@ -180,6 +180,40 @@ impl Sube {
         Ok(Sube { backend, metadata })
     }
 
+    /// Connect via smoldot light client (no external node needed).
+    ///
+    /// ```rust,ignore
+    /// let chain = Sube::connect_light(include_str!("polkadot.json")).await?;
+    /// let r = chain.query("system/account/0x1234").await?;
+    /// ```
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    pub async fn connect_light(chain_spec: &str) -> SubeResult<Self> {
+        Self::connect_light_with_meta(chain_spec, None).await
+    }
+
+    /// Connect light client with pre-loaded metadata.
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    pub async fn connect_light_with_meta(
+        chain_spec: &str,
+        preloaded: Option<Metadata>,
+    ) -> SubeResult<Self> {
+        let backend = crate::backend::connect_light(chain_spec)?;
+        let metadata =
+            crate::backend::get_metadata_by_key(&backend, "light://chain", preloaded).await?;
+        Ok(Sube { backend, metadata })
+    }
+
+    /// Connect a parachain via smoldot light client.
+    ///
+    /// Both the parachain and relay chain specs are required.
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    pub async fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<Self> {
+        let backend = crate::backend::connect_light_para(chain_spec, relay_spec)?;
+        let metadata =
+            crate::backend::get_metadata_by_key(&backend, "light://parachain", None).await?;
+        Ok(Sube { backend, metadata })
+    }
+
     /// Query a storage path.
     pub async fn query(&self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');

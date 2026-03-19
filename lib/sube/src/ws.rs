@@ -1,4 +1,5 @@
 use alloc::{collections::BTreeMap, sync::Arc};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use ewebsock::{WsEvent, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
 use futures_channel::{mpsc, oneshot};
@@ -21,7 +22,8 @@ type Id = u32;
 pub struct Backend {
     tx: Mutex<mpsc::Sender<Message>>,
     ws_sender: Arc<Mutex<Tx>>,
-    messages: Arc<Mutex<BTreeMap<Id, oneshot::Sender<JsonRpcResponse>>>>,
+    pending: Arc<Mutex<BTreeMap<Id, oneshot::Sender<JsonRpcResponse>>>>,
+    next_id: AtomicU32,
 }
 unsafe impl Send for Backend {}
 unsafe impl Sync for Backend {}
@@ -31,12 +33,11 @@ impl Rpc for Backend {
     where
         T: for<'a> Deserialize<'a>,
     {
-        let id = self.next_id().await;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         log::info!("RPC `{}` (ID={})", method, id);
 
         let (sender, recv) = oneshot::channel::<JsonRpcResponse>();
-        let messages = self.messages.clone();
-        messages.lock().await.insert(id, sender);
+        self.pending.lock().await.insert(id, sender);
 
         let msg = serde_json::to_string(&JsonRpcRequest {
             id,
@@ -57,7 +58,6 @@ impl Rpc for Backend {
                 JsonRpcError::new(-32603, "send failed")
             })?;
 
-        log::info!("sent CMD");
         let res = recv.await.map_err(|err| {
             log::error!("Error receiving message: {:?}", err);
             JsonRpcError::new(-32603, "recv failed")
@@ -68,10 +68,6 @@ impl Rpc for Backend {
 }
 
 impl Backend {
-    async fn next_id(&self) -> Id {
-        self.messages.lock().await.keys().last().unwrap_or(&0) + 1
-    }
-
     pub async fn new_ws2<'a, U: Into<&'a str>>(url: U) -> core::result::Result<Self, Error> {
         let url = url.into();
         log::trace!("WS connecting to {}", url);
@@ -83,7 +79,8 @@ impl Backend {
         let backend = Backend {
             tx: Mutex::new(sender),
             ws_sender: Arc::new(Mutex::new(tx)),
-            messages: Arc::new(Mutex::new(BTreeMap::new())),
+            pending: Arc::new(Mutex::new(BTreeMap::new())),
+            next_id: AtomicU32::new(1),
         };
 
         let recv = Arc::new(Mutex::new(recv));
@@ -97,7 +94,6 @@ impl Backend {
             log::info!("waiting for commands...");
 
             while let Some(m) = recv.lock().await.next().await {
-                log::info!("got for commands...?");
                 tx.lock().await.send(m);
             }
         });
@@ -109,7 +105,7 @@ impl Backend {
         tx: Arc<Mutex<Tx>>,
         recv: Arc<Mutex<mpsc::Receiver<Message>>>,
     ) {
-        let messages = self.messages.clone();
+        let messages = self.pending.clone();
         spawn(async move {
             while let Some(event) = rx.next().await {
                 match event {

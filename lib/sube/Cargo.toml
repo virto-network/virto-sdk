@@ -45,6 +45,7 @@ async-tls = { version = "0.13", default-features = false, optional = true }
 
 async-std = { version = "1.13", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
+smoldot-light = { version = "0.19", optional = true }
 heapless = "0.9"
 rand_core = { version = "0.6", optional = true }
 ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
@@ -81,6 +82,8 @@ ws = [
 	"async-std/unstable",
 ]
 wss = ["dep:async-tls", "ws", "ewebsock/tls", "async-std/unstable"]
+smoldot = ["dep:smoldot-light", "dep:futures-channel"]
+smoldot-std = ["smoldot", "std", "dep:async-std"]
 examples = ["dep:rand_core"]
 js = ["http-web", "json", 'async-std/unstable', "wss", "dep:rand_core"]
 

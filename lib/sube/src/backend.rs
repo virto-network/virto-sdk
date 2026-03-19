@@ -4,10 +4,19 @@ use crate::{Backend, Error, Metadata, Result as SubeResult};
 
 #[cfg(any(feature = "http", feature = "http-web"))]
 use crate::http::Backend as HttpBackend;
-#[cfg(any(feature = "http", feature = "http-web", feature = "ws", feature = "js"))]
+#[cfg(any(
+    feature = "http",
+    feature = "http-web",
+    feature = "ws",
+    feature = "js",
+    feature = "smoldot"
+))]
 use crate::rpc::RpcClient;
 #[cfg(feature = "ws")]
 use crate::ws::Backend as WSBackend;
+
+#[cfg(all(feature = "smoldot", feature = "std"))]
+type SmoldotPlatform = alloc::sync::Arc<smoldot_light::platform::DefaultPlatform>;
 
 use core::fmt::Write;
 use heapless::index_map::FnvIndexMap as Map;
@@ -22,6 +31,8 @@ pub(crate) enum AnyBackend {
     Http(RpcClient<HttpBackend>),
     #[cfg(feature = "ws")]
     Ws(RpcClient<WSBackend>),
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    Smoldot(RpcClient<crate::smoldot::Backend<SmoldotPlatform>>),
 }
 
 macro_rules! dispatch {
@@ -31,6 +42,8 @@ macro_rules! dispatch {
             AnyBackend::Http(b) => b.$method($($arg),*).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.$method($($arg),*).await,
+            #[cfg(all(feature = "smoldot", feature = "std"))]
+            AnyBackend::Smoldot(b) => b.$method($($arg),*).await,
             #[allow(unreachable_patterns)]
             _ => unreachable!("no backend available"),
         }
@@ -73,14 +86,32 @@ impl Backend for AnyBackend {
 
 static META_CACHE: Mutex<Option<Map<CacheKey, &'static Metadata, 16>>> = Mutex::new(None);
 
-/// Get or fetch+leak metadata for a given host, keyed by scheme://host:port.
+/// Get or fetch+leak metadata, keyed by scheme://host:port.
 pub(crate) async fn get_metadata(
     backend: &AnyBackend,
     url: &Url,
     preloaded: Option<Metadata>,
 ) -> SubeResult<&'static Metadata> {
     let key = base_key(url).map_err(|_| Error::BadInput)?;
+    get_or_fetch(key, backend, preloaded).await
+}
 
+/// Fetch+cache metadata using a string cache key (for backends without a URL).
+#[cfg(all(feature = "smoldot", feature = "std"))]
+pub(crate) async fn get_metadata_by_key(
+    backend: &AnyBackend,
+    cache_key: &str,
+    preloaded: Option<Metadata>,
+) -> SubeResult<&'static Metadata> {
+    let key: CacheKey = cache_key.try_into().map_err(|_| Error::BadInput)?;
+    get_or_fetch(key, backend, preloaded).await
+}
+
+async fn get_or_fetch(
+    key: CacheKey,
+    backend: &AnyBackend,
+    preloaded: Option<Metadata>,
+) -> SubeResult<&'static Metadata> {
     let mut cache = META_CACHE.lock().await;
     let map = cache.get_or_insert_with(Map::new);
 
@@ -155,4 +186,18 @@ pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
         )))),
         _ => Err(Error::BadInput),
     }
+}
+
+/// Connect via smoldot light client using a chain spec (std only).
+#[cfg(all(feature = "smoldot", feature = "std"))]
+pub(crate) fn connect_light(chain_spec: &str) -> SubeResult<AnyBackend> {
+    let backend = crate::smoldot::Backend::new_std(chain_spec)?;
+    Ok(AnyBackend::Smoldot(RpcClient(backend)))
+}
+
+/// Connect via smoldot light client for a parachain (std only).
+#[cfg(all(feature = "smoldot", feature = "std"))]
+pub(crate) fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<AnyBackend> {
+    let backend = crate::smoldot::Backend::new_std_with_relay(chain_spec, Some(relay_spec))?;
+    Ok(AnyBackend::Smoldot(RpcClient(backend)))
 }

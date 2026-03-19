@@ -287,8 +287,9 @@ async fn build_context(
 
     // Genesis hash
     let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
-    let mut genesis_hash = [0u8; 32];
-    genesis_hash.copy_from_slice(&genesis_block[..32]);
+    let genesis_hash: [u8; 32] = genesis_block
+        .try_into()
+        .map_err(|_| Error::Decode("genesis block hash is not 32 bytes".into()))?;
 
     // Nonce
     let account_nonce = resolve_nonce(chain, meta, nonce, extensions, account).await?;

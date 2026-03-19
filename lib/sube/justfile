@@ -2,9 +2,11 @@ default: check test
 
 check:
     cargo check --features http,wss,json,text
+    cargo check --features smoldot-std,json,text
 
 lint:
     cargo clippy --features http,wss,json,text -- -D warnings
+    cargo clippy --features smoldot-std,json,text -- -D warnings
 
 test:
     cargo test --features json,text

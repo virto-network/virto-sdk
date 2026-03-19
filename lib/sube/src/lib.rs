@@ -50,6 +50,9 @@ mod prelude {
 /// Surf based backend
 #[cfg(any(feature = "http", feature = "http-web"))]
 pub mod http;
+/// Smoldot light client backend
+#[cfg(feature = "smoldot")]
+pub mod smoldot;
 /// Tungstenite based backend
 #[cfg(feature = "ws")]
 pub mod ws;
