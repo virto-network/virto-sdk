@@ -9,13 +9,13 @@ repository = "https://github.com/valibre-org/virto-dk/sube"
 
 [dependencies]
 blake2 = { version = "0.10", default-features = false }
-codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
+codec = { workspace = true }
 frame-metadata = { version = "23", default-features = false, features = [
 	"decode",
 	"current",
 ] }
-hex = { version = "0.4", default-features = false, features = ["alloc"] }
-log = { version = "0.4", default-features = false }
+hex = { workspace = true }
+log = { workspace = true }
 scale-info = { version = "2.11", default-features = false }
 scales = { path = "../scales", package = "scale-serialization", default-features = false, features = [
 	"serializer",
@@ -23,11 +23,8 @@ scales = { path = "../scales", package = "scale-serialization", default-features
 	"json",
 	"text",
 ] }
-serde = { version = "1", default-features = false }
-serde_json = { version = "1", default-features = false, features = [
-	"alloc",
-	"arbitrary_precision",
-] }
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash64"] }
 
 # http backend
@@ -43,8 +40,9 @@ futures-util = { version = "0.3", default-features = false, features = [
 
 async-tls = { version = "0.13", default-features = false, optional = true }
 
-async-std = { version = "1.13", optional = true }
-wasm-bindgen = { version = "0.2", optional = true }
+smol = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
 smoldot-light = { version = "0.19", optional = true }
 heapless = "0.9"
 rand_core = { version = "0.6", optional = true }
@@ -53,7 +51,7 @@ no-std-async = "1.1"
 
 
 [dev-dependencies]
-async-std = { version = "1.13", features = ["attributes", "tokio1"] }
+smol = { workspace = true }
 hex-literal = "1.1"
 libwallet = { path = "../libwallet", default-features = false, features = [
 	"substrate",
@@ -67,7 +65,7 @@ rand_core = "0.6"
 
 [features]
 default = []
-test = ["std", "wss", "http", "json", "dep:async-std", "dep:rand_core"]
+test = ["std", "wss", "http", "json", "dep:smol", "dep:rand_core"]
 http = ["dep:reqwest"]
 http-web = ["dep:wasm-bindgen", "dep:reqwest"]
 json = ["scales/json"]
@@ -75,20 +73,29 @@ text = ["scales/text"]
 std = ["scales/std", "log/std", "serde/std", "serde_json/std", "hex/std"]
 
 ws = [
-	"dep:async-std",
+	"dep:smol",
 	"dep:ewebsock",
 	"dep:futures-channel",
 	"dep:futures-util",
-	"async-std/unstable",
 ]
-wss = ["dep:async-tls", "ws", "ewebsock/tls", "async-std/unstable"]
-smoldot = ["dep:smoldot-light", "dep:futures-channel"]
-smoldot-std = ["smoldot", "std", "dep:async-std"]
+wss = ["dep:async-tls", "ws", "ewebsock/tls"]
+smoldot = ["dep:smoldot-light", "dep:futures-channel", "dep:futures-util"]
+smoldot-std = ["smoldot", "std", "dep:smol"]
 examples = ["dep:rand_core"]
-js = ["http-web", "json", 'async-std/unstable', "wss", "dep:rand_core"]
+js = ["http-web", "json", "wss", "dep:wasm-bindgen-futures", "dep:rand_core"]
 
 [package.metadata.docs.rs]
 features = ["http"]
 
 [workspace]
+members = ["."]
 exclude = ["tests/qemu"]
+
+[workspace.dependencies]
+serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+log = { version = "0.4", default-features = false }
+codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
+wasm-bindgen = { version = "0.2" }
+smol = { version = "2" }

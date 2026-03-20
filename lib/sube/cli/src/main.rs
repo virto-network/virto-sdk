@@ -1,11 +1,8 @@
 use anyhow::{anyhow, Result};
-use async_std::{
-    io::{self, ReadExt, WriteExt},
-    path::PathBuf,
-    task::block_on,
-};
 use codec::Decode;
 use opts::Opt;
+use std::io::Write;
+use std::path::PathBuf;
 use structopt::StructOpt;
 use sube::{sube, Backend, Metadata};
 use url::Url;
@@ -27,22 +24,20 @@ async fn run() -> Result<()> {
     let backend = sube::http::Backend::new(url.as_str());
 
     let meta = if let Some(m) = opt.metadata {
-        get_meta_from_fs(&m)
-            .await
-            .ok_or_else(|| anyhow!("Couldn't read Metadata from file"))?
+        get_meta_from_fs(&m).ok_or_else(|| anyhow!("Couldn't read Metadata from file"))?
     } else {
         backend.metadata().await?
     };
 
     let res = sube::<u8>(backend, &meta, &opt.input, None, |_, _| {}).await?;
 
-    io::stdout().write_all(&opt.output.format(res)?).await?;
-    writeln!(io::stdout()).await?;
+    std::io::stdout().write_all(&opt.output.format(res)?)?;
+    writeln!(std::io::stdout())?;
     Ok(())
 }
 
 fn main() {
-    block_on(async {
+    smol::block_on(async {
         match run().await {
             Ok(_) => {}
             Err(err) => {
@@ -81,9 +76,7 @@ fn chain_string_to_url(chain: &str) -> Result<Url> {
     Ok(url)
 }
 
-async fn get_meta_from_fs(path: &PathBuf) -> Option<Metadata> {
-    let mut m = Vec::new();
-    let mut f = async_std::fs::File::open(path).await.ok()?;
-    f.read_to_end(&mut m).await.ok()?;
+fn get_meta_from_fs(path: &PathBuf) -> Option<Metadata> {
+    let m = std::fs::read(path).ok()?;
     Metadata::decode(&mut m.as_slice()).ok()
 }

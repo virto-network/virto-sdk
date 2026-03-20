@@ -137,7 +137,7 @@ impl Backend<Arc<smoldot_light::platform::DefaultPlatform>> {
             env!("CARGO_PKG_VERSION").into(),
         );
         Self::new(platform, chain_spec, relay_spec, |fut| {
-            async_std::task::spawn(fut);
+            smol::spawn(fut).detach();
         })
     }
 }
@@ -175,7 +175,6 @@ impl<P: PlatformRef> Rpc for Backend<P> {
 }
 
 // Smoldot supports subscriptions natively
-#[cfg(feature = "ws")]
 impl<P: PlatformRef> crate::rpc::RpcSubscription for Backend<P> {
     async fn subscribe(
         &self,

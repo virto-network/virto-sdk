@@ -7,7 +7,7 @@ use crate::http::Backend as HttpBackend;
 #[cfg(any(feature = "http", feature = "http-web"))]
 use crate::rpc::RpcClient;
 
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 use crate::chainhead::ChainHead;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]
@@ -25,9 +25,9 @@ pub(crate) enum AnyBackend {
     #[cfg(any(feature = "http", feature = "http-web"))]
     Http(RpcClient<HttpBackend>),
     #[cfg(feature = "ws")]
-    Ws(ChainHead<crate::ws::Backend>),
+    Ws(Box<ChainHead<crate::ws::Backend>>),
     #[cfg(all(feature = "smoldot", feature = "std"))]
-    Smoldot(ChainHead<crate::smoldot::Backend<SmoldotPlatform>>),
+    Smoldot(Box<ChainHead<crate::smoldot::Backend<SmoldotPlatform>>>),
 }
 
 macro_rules! dispatch {
@@ -175,7 +175,7 @@ pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
         "ws" | "wss" => {
             let ws = crate::ws::Backend::new_ws2(url.to_string().as_str()).await?;
             let chainhead = ChainHead::new(ws).await?;
-            Ok(AnyBackend::Ws(chainhead))
+            Ok(AnyBackend::Ws(Box::new(chainhead)))
         }
         #[cfg(any(feature = "http", feature = "http-web"))]
         "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(
@@ -190,7 +190,7 @@ pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
 pub(crate) async fn connect_light(chain_spec: &str) -> SubeResult<AnyBackend> {
     let backend = crate::smoldot::Backend::new_std(chain_spec)?;
     let chainhead = ChainHead::new(backend).await?;
-    Ok(AnyBackend::Smoldot(chainhead))
+    Ok(AnyBackend::Smoldot(Box::new(chainhead)))
 }
 
 /// Connect via smoldot light client for a parachain (std only).
@@ -201,7 +201,7 @@ pub(crate) async fn connect_light_para(
 ) -> SubeResult<AnyBackend> {
     let backend = crate::smoldot::Backend::new_std_with_relay(chain_spec, Some(relay_spec))?;
     let chainhead = ChainHead::new(backend).await?;
-    Ok(AnyBackend::Smoldot(chainhead))
+    Ok(AnyBackend::Smoldot(Box::new(chainhead)))
 }
 
 #[cfg(test)]

@@ -7,9 +7,13 @@ use futures_util::StreamExt as _;
 use no_std_async::Mutex;
 
 #[cfg(not(feature = "js"))]
-use async_std::task::spawn;
+fn spawn(fut: impl core::future::Future<Output = ()> + Send + 'static) {
+    smol::spawn(fut).detach();
+}
 #[cfg(feature = "js")]
-use async_std::task::spawn_local as spawn;
+fn spawn(fut: impl core::future::Future<Output = ()> + 'static) {
+    wasm_bindgen_futures::spawn_local(fut);
+}
 
 use crate::rpc::{
     IncomingMessage, JsonRpcError, JsonRpcRequest, JsonRpcResponse, Rpc, RpcResult,

@@ -2,31 +2,32 @@
 //!
 //! Run with: cargo run --example query --features wss,json,text
 
-use sube::{sube, Response, Sube};
+use sube::{Response, Sube};
 
-#[async_std::main]
-async fn main() -> sube::Result<()> {
-    let addr = "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b";
+fn main() -> sube::Result<()> {
+    smol::block_on(async {
+        let addr = "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b";
 
-    // One-liner: connect, query and get the result in a single expression
-    let response = sube(&format!("wss://kreivo.io/system/account/{addr}")).await?;
-    print_value("Account (one-liner)", &response);
+        // One-liner: connect, query and get the result in a single expression
+        let response = sube::sube(&format!("wss://kreivo.io/system/account/{addr}")).await?;
+        print_value("Account (one-liner)", &response);
 
-    // Reusable handle: connect once, query many times
-    let chain = Sube::connect("wss://kreivo.io").await?;
+        // Reusable handle: connect once, query many times
+        let chain = Sube::connect("wss://kreivo.io").await?;
 
-    let response = chain.query(&format!("system/account/{addr}")).await?;
-    print_value("Account (handle)", &response);
+        let response = chain.query(&format!("system/account/{addr}")).await?;
+        print_value("Account (handle)", &response);
 
-    // Query with the identity pallet — SuperOf maps AccountId32 to (AccountId32, Data)
-    let response = chain.query(&format!("identity/superOf/{addr}")).await?;
-    print_value("Identity SuperOf", &response);
+        // Query with the identity pallet — SuperOf maps AccountId32 to (AccountId32, Data)
+        let response = chain.query(&format!("identity/superOf/{addr}")).await?;
+        print_value("Identity SuperOf", &response);
 
-    // Query a map with a u32 key (e.g. assets pallet)
-    let response = chain.query("assets/asset/1984").await?;
-    print_value("Asset 1984 (USDT)", &response);
+        // Query a map with a u32 key (e.g. assets pallet)
+        let response = chain.query("assets/asset/1984").await?;
+        print_value("Asset 1984 (USDT)", &response);
 
-    Ok(())
+        Ok(())
+    })
 }
 
 fn print_value(label: &str, response: &Response) {

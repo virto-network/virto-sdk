@@ -195,12 +195,12 @@ mod tests {
 // --- Subscription type ---
 
 /// A subscription stream that yields JSON values from the node.
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 pub struct Subscription {
     pub(crate) rx: futures_channel::mpsc::UnboundedReceiver<serde_json::Value>,
 }
 
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 impl Subscription {
     pub async fn next(&mut self) -> Option<serde_json::Value> {
         use futures_util::StreamExt;
@@ -217,7 +217,7 @@ pub trait Rpc {
 }
 
 /// Backends that support JSON-RPC subscriptions (WebSocket, smoldot).
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 #[allow(async_fn_in_trait)]
 pub trait RpcSubscription: Rpc {
     /// Subscribe to a method. Returns (subscription_id, receiver).

@@ -29,10 +29,10 @@ chain.call("balances/transfer")
 | `json` | Enable JSON serialization support in `scales` |
 | `text` | Enable compact text format support in `scales` |
 | `std` | Enable standard library support across dependencies |
-| `ws` | WebSocket backend via `ewebsock` and `async-std` |
+| `ws` | WebSocket backend via `ewebsock` and `smol` |
 | `wss` | WebSocket backend with TLS support (implies `ws`) |
 | `smoldot` | Embedded light client backend via `smoldot-light` |
-| `smoldot-std` | Smoldot with standard library and `async-std` (implies `smoldot` + `std`) |
+| `smoldot-std` | Smoldot with standard library and `smol` (implies `smoldot` + `std`) |
 | `js` | Bundle of features for browser/WASM targets (`http-web` + `json` + `wss`) |
 */
 
@@ -75,7 +75,7 @@ pub mod ws;
 pub(crate) mod backend;
 pub mod builder;
 /// ChainHead v1 session manager
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 pub(crate) mod chainhead;
 pub mod extrinsic;
 mod hasher;
@@ -83,7 +83,7 @@ pub mod metadata;
 pub mod rpc;
 mod signer;
 /// Public subscription types
-#[cfg(feature = "ws")]
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 pub mod subscription;
 pub(crate) mod url;
 pub mod util;

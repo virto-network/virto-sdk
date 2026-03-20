@@ -86,86 +86,96 @@ mod tests {
         (tx, TxProgress { rx })
     }
 
-    #[async_std::test]
-    async fn next_returns_items_from_channel() {
-        let (tx, mut progress) = make_progress();
-        tx.unbounded_send(TxStatus::Validated).unwrap();
-        tx.unbounded_send(TxStatus::Broadcasted { num_peers: 3 })
-            .unwrap();
-        drop(tx);
+    #[test]
+    fn next_returns_items_from_channel() {
+        smol::block_on(async {
+            let (tx, mut progress) = make_progress();
+            tx.unbounded_send(TxStatus::Validated).unwrap();
+            tx.unbounded_send(TxStatus::Broadcasted { num_peers: 3 })
+                .unwrap();
+            drop(tx);
 
-        match progress.next().await.unwrap() {
-            TxStatus::Validated => {}
-            other => panic!("expected Validated, got {:?}", other),
-        }
-        match progress.next().await.unwrap() {
-            TxStatus::Broadcasted { num_peers } => assert_eq!(num_peers, 3),
-            other => panic!("expected Broadcasted, got {:?}", other),
-        }
-        assert!(progress.next().await.is_none());
+            match progress.next().await.unwrap() {
+                TxStatus::Validated => {}
+                other => panic!("expected Validated, got {:?}", other),
+            }
+            match progress.next().await.unwrap() {
+                TxStatus::Broadcasted { num_peers } => assert_eq!(num_peers, 3),
+                other => panic!("expected Broadcasted, got {:?}", other),
+            }
+            assert!(progress.next().await.is_none());
+        });
     }
 
-    #[async_std::test]
-    async fn wait_included_with_finalized() {
-        let (tx, mut progress) = make_progress();
-        let block = [0xaa; 32];
-        tx.unbounded_send(TxStatus::Finalized { block, index: 5 })
-            .unwrap();
-        drop(tx);
+    #[test]
+    fn wait_included_with_finalized() {
+        smol::block_on(async {
+            let (tx, mut progress) = make_progress();
+            let block = [0xaa; 32];
+            tx.unbounded_send(TxStatus::Finalized { block, index: 5 })
+                .unwrap();
+            drop(tx);
 
-        let result = progress.wait_included().await.unwrap();
-        assert_eq!(result.block, block);
-        assert_eq!(result.index, 5);
+            let result = progress.wait_included().await.unwrap();
+            assert_eq!(result.block, block);
+            assert_eq!(result.index, 5);
+        });
     }
 
-    #[async_std::test]
-    async fn wait_included_with_invalid_returns_error() {
-        let (tx, mut progress) = make_progress();
-        tx.unbounded_send(TxStatus::Invalid {
-            error: "bad tx".into(),
-        })
-        .unwrap();
-        drop(tx);
+    #[test]
+    fn wait_included_with_invalid_returns_error() {
+        smol::block_on(async {
+            let (tx, mut progress) = make_progress();
+            tx.unbounded_send(TxStatus::Invalid {
+                error: "bad tx".into(),
+            })
+            .unwrap();
+            drop(tx);
 
-        let err = progress.wait_included().await.unwrap_err();
-        match err {
-            crate::Error::Node(msg) => assert_eq!(msg, "bad tx"),
-            other => panic!("expected Node error, got {:?}", other),
-        }
+            let err = progress.wait_included().await.unwrap_err();
+            match err {
+                crate::Error::Node(msg) => assert_eq!(msg, "bad tx"),
+                other => panic!("expected Node error, got {:?}", other),
+            }
+        });
     }
 
-    #[async_std::test]
-    async fn wait_finalized_skips_non_terminal() {
-        let (tx, mut progress) = make_progress();
-        let block = [0xbb; 32];
-        tx.unbounded_send(TxStatus::Validated).unwrap();
-        tx.unbounded_send(TxStatus::Broadcasted { num_peers: 1 })
+    #[test]
+    fn wait_finalized_skips_non_terminal() {
+        smol::block_on(async {
+            let (tx, mut progress) = make_progress();
+            let block = [0xbb; 32];
+            tx.unbounded_send(TxStatus::Validated).unwrap();
+            tx.unbounded_send(TxStatus::Broadcasted { num_peers: 1 })
+                .unwrap();
+            tx.unbounded_send(TxStatus::InBestBlock {
+                block: [0xcc; 32],
+                index: 0,
+            })
             .unwrap();
-        tx.unbounded_send(TxStatus::InBestBlock {
-            block: [0xcc; 32],
-            index: 0,
-        })
-        .unwrap();
-        tx.unbounded_send(TxStatus::Finalized { block, index: 7 })
-            .unwrap();
-        drop(tx);
+            tx.unbounded_send(TxStatus::Finalized { block, index: 7 })
+                .unwrap();
+            drop(tx);
 
-        let result = progress.wait_finalized().await.unwrap();
-        assert_eq!(result.block, block);
-        assert_eq!(result.index, 7);
+            let result = progress.wait_finalized().await.unwrap();
+            assert_eq!(result.block, block);
+            assert_eq!(result.index, 7);
+        });
     }
 
-    #[async_std::test]
-    async fn channel_dropped_returns_subscription_closed() {
-        let (tx, mut progress) = make_progress();
-        tx.unbounded_send(TxStatus::Validated).unwrap();
-        drop(tx);
+    #[test]
+    fn channel_dropped_returns_subscription_closed() {
+        smol::block_on(async {
+            let (tx, mut progress) = make_progress();
+            tx.unbounded_send(TxStatus::Validated).unwrap();
+            drop(tx);
 
-        let err = progress.wait_finalized().await.unwrap_err();
-        match err {
-            crate::Error::SubscriptionClosed => {}
-            other => panic!("expected SubscriptionClosed, got {:?}", other),
-        }
+            let err = progress.wait_finalized().await.unwrap_err();
+            match err {
+                crate::Error::SubscriptionClosed => {}
+                other => panic!("expected SubscriptionClosed, got {:?}", other),
+            }
+        });
     }
 }
 
