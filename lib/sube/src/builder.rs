@@ -197,7 +197,7 @@ impl Sube {
         chain_spec: &str,
         preloaded: Option<Metadata>,
     ) -> SubeResult<Self> {
-        let backend = crate::backend::connect_light(chain_spec)?;
+        let backend = crate::backend::connect_light(chain_spec).await?;
         let metadata =
             crate::backend::get_metadata_by_key(&backend, "light://chain", preloaded).await?;
         Ok(Sube { backend, metadata })
@@ -208,7 +208,7 @@ impl Sube {
     /// Both the parachain and relay chain specs are required.
     #[cfg(all(feature = "smoldot", feature = "std"))]
     pub async fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<Self> {
-        let backend = crate::backend::connect_light_para(chain_spec, relay_spec)?;
+        let backend = crate::backend::connect_light_para(chain_spec, relay_spec).await?;
         let metadata =
             crate::backend::get_metadata_by_key(&backend, "light://parachain", None).await?;
         Ok(Sube { backend, metadata })
@@ -312,6 +312,13 @@ impl<'a, B, S> CallBuilder<'a, B, S> {
         self.tx = self.tx.with_extension(identifier, value);
         self
     }
+}
+
+impl<'a, B, S> CallBuilder<'a, B, S>
+where
+    B: EncodeCall + core::fmt::Debug + 'a,
+    S: Signer + 'a,
+{
 }
 
 impl<'a, B, S> IntoFuture for CallBuilder<'a, B, S>

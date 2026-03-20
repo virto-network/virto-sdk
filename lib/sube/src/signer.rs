@@ -13,7 +13,8 @@ pub trait Signer {
     fn account(&self) -> Self::Account;
 }
 
-/// Wrapper to create a standard signer from an account and closure
+/// Adapter that implements [`Signer`] from a 32-byte account and a signing closure.
+/// Construct via `SignerFn::from((account, |data| async { ... }))`.
 pub struct SignerFn<S, SF> {
     account: Bytes<32>,
     signer: S,

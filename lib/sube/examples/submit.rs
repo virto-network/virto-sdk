@@ -1,6 +1,8 @@
 //! Submit an extrinsic (transaction) to a chain.
 //!
 //! Shows two ways to encode the call body: JSON and scales text format.
+//! With the v2 JSON-RPC spec, transactions are broadcast via `transaction_v1_broadcast`
+//! and storage is queried via `chainHead_v1_storage`.
 //!
 //! Run with: cargo run --example submit --features wss,json,text,examples -- [seed phrase]
 
@@ -50,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("Submitted remark (JSON body)");
 
-    // Submit using text format body — more compact, no serde needed
+    // Submit using text format body
     chain
         .call("system/remark")
         .body_text("(remark:0x68656c6c6f)")
@@ -58,8 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("Submitted remark (text body)");
 
-    // Text format shines with complex types like enum arguments.
-    // A transfer with MultiAddress::Id destination:
+    // Text format with complex types like enum arguments
     let dest = "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
     let body = format!("(dest:MultiAddress::Id({dest});value:1000000000000)");
     chain

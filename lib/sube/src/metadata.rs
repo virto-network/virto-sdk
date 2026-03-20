@@ -550,12 +550,13 @@ mod tests {
         let storage = system.storage.as_ref().expect("System has storage");
         let account = storage.entries.iter().find(|e| e.name == "Account");
         assert!(account.is_some(), "System should have Account storage");
-        match &account.unwrap().ty {
-            StorageEntryType::Map { hashers, .. } => {
-                assert!(!hashers.is_empty(), "Account map should have hashers");
-            }
-            _ => panic!("Account should be a Map"),
-        }
+        assert!(
+            matches!(
+                &account.unwrap().ty,
+                StorageEntryType::Map { hashers, .. } if !hashers.is_empty()
+            ),
+            "Account should be a Map with non-empty hashers"
+        );
     }
 
     #[test]
@@ -805,16 +806,10 @@ mod tests {
 
         assert!(!key.is_partial());
         // Verify encode_key produced correct little-endian u32 bytes
-        match &key.args[0] {
-            KeyValue::Value((_, _, encoded, _)) => {
-                assert_eq!(
-                    encoded,
-                    &42u32.to_le_bytes(),
-                    "text '42' should encode as LE u32"
-                );
-            }
-            _ => panic!("expected a Value"),
-        }
+        assert!(
+            matches!(&key.args[0], KeyValue::Value((_, _, encoded, _)) if encoded == &42u32.to_le_bytes()),
+            "text '42' should encode as LE u32"
+        );
     }
 
     #[test]
@@ -882,7 +877,7 @@ mod tests {
                 assert_eq!(encoded.len(), 32, "AccountId32 should be 32 bytes");
                 assert_eq!(encoded[0], 0xd4, "first byte should match");
             }
-            _ => panic!("expected a Value"),
+            other => assert!(false, "expected a Value, got {:?}", other),
         }
 
         // from_text now handles this directly (no hex fallback needed)
@@ -896,7 +891,10 @@ mod tests {
             .unwrap();
         let key_ty = match &account.ty {
             StorageEntryType::Map { key, .. } => *key,
-            _ => panic!("Account should be a Map"),
+            other => {
+                assert!(false, "Account should be a Map, got {:?}", other);
+                return;
+            }
         };
         assert!(
             scales::from_text(addr, &meta.registry, key_ty).is_ok(),

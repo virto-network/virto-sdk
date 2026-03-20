@@ -19,12 +19,10 @@ async fn main() -> sube::Result<()> {
     print_value("Account (handle)", &response);
 
     // Query with the identity pallet — SuperOf maps AccountId32 to (AccountId32, Data)
-    // where Data is an enum: Data::Raw0, Data::Raw1(bytes), ..., Data::BlakeTwo256(hash)
     let response = chain.query(&format!("identity/superOf/{addr}")).await?;
     print_value("Identity SuperOf", &response);
 
     // Query a map with a u32 key (e.g. assets pallet)
-    // No hex encoding needed — just the number as text
     let response = chain.query("assets/asset/1984").await?;
     print_value("Asset 1984 (USDT)", &response);
 

@@ -251,6 +251,94 @@ where
     Ok(Response::Void)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_ctx() -> ChainContext {
+        ChainContext {
+            spec_version: 100,
+            tx_version: 2,
+            genesis_hash: [0xab; 32],
+            account_nonce: 42,
+        }
+    }
+
+    #[test]
+    fn default_extra_check_mortality() {
+        let ctx = test_ctx();
+        assert_eq!(
+            default_extra("CheckMortality", &ctx),
+            Some(json!({"Immortal": null}))
+        );
+    }
+
+    #[test]
+    fn default_extra_check_nonce() {
+        let ctx = test_ctx();
+        assert_eq!(default_extra("CheckNonce", &ctx), Some(json!(42)));
+    }
+
+    #[test]
+    fn default_extra_charge_transaction_payment() {
+        let ctx = test_ctx();
+        assert_eq!(
+            default_extra("ChargeTransactionPayment", &ctx),
+            Some(json!(0))
+        );
+    }
+
+    #[test]
+    fn default_extra_unknown() {
+        let ctx = test_ctx();
+        assert_eq!(default_extra("UnknownExtension", &ctx), None);
+    }
+
+    #[test]
+    fn default_additional_check_spec_version() {
+        let ctx = test_ctx();
+        assert_eq!(
+            default_additional("CheckSpecVersion", &ctx),
+            Some(json!(100))
+        );
+    }
+
+    #[test]
+    fn default_additional_check_tx_version() {
+        let ctx = test_ctx();
+        assert_eq!(default_additional("CheckTxVersion", &ctx), Some(json!(2)));
+    }
+
+    #[test]
+    fn default_additional_check_genesis() {
+        let ctx = test_ctx();
+        let expected = format!("0x{}", hex::encode([0xab; 32]));
+        assert_eq!(
+            default_additional("CheckGenesis", &ctx),
+            Some(json!(expected))
+        );
+    }
+
+    #[test]
+    fn default_additional_unknown() {
+        let ctx = test_ctx();
+        assert_eq!(default_additional("UnknownExtension", &ctx), None);
+    }
+
+    #[test]
+    fn find_override_present() {
+        let overrides = vec![("CheckNonce".to_string(), json!(99))];
+        assert_eq!(find_override(&overrides, "CheckNonce"), Some(json!(99)));
+    }
+
+    #[test]
+    fn find_override_absent() {
+        let overrides: Vec<(String, JsonValue)> = vec![];
+        assert_eq!(find_override(&overrides, "CheckNonce"), None);
+    }
+}
+
 /// Fetch spec/tx version, genesis hash, and account nonce.
 async fn build_context(
     chain: &(impl Backend + ?Sized),

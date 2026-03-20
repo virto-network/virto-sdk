@@ -1,8 +1,8 @@
 use crate::prelude::*;
 use crate::rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Rpc, RpcResult};
 use reqwest::Client;
-use serde::Deserialize;
 
+/// HTTP-based JSON-RPC transport backed by `reqwest`.
 #[derive(Debug)]
 pub struct Backend(String);
 
@@ -13,17 +13,14 @@ impl Backend {
 }
 
 impl Rpc for Backend {
-    async fn rpc<T>(&self, method: &str, params: &[&str]) -> RpcResult<T>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
+    async fn rpc(&self, method: &str, params: serde_json::Value) -> RpcResult<serde_json::Value> {
         log::info!("RPC `{}` to {}", method, &self.0);
 
         let request = JsonRpcRequest {
             jsonrpc: "2.0",
             id: 1,
             method,
-            params: Some(Self::build_params(params)),
+            params: Some(params),
         };
 
         let res = Client::new()

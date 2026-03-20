@@ -19,6 +19,21 @@ chain.call("balances/transfer")
     .signer(my_signer)
     .await?;
 ```
+
+# Feature Flags
+
+| Feature | Description |
+|---------|-------------|
+| `http` | HTTP backend via `reqwest` (native) |
+| `http-web` | HTTP backend via `reqwest` with WASM/`wasm-bindgen` support |
+| `json` | Enable JSON serialization support in `scales` |
+| `text` | Enable compact text format support in `scales` |
+| `std` | Enable standard library support across dependencies |
+| `ws` | WebSocket backend via `ewebsock` and `async-std` |
+| `wss` | WebSocket backend with TLS support (implies `ws`) |
+| `smoldot` | Embedded light client backend via `smoldot-light` |
+| `smoldot-std` | Smoldot with standard library and `async-std` (implies `smoldot` + `std`) |
+| `js` | Bundle of features for browser/WASM targets (`http-web` + `json` + `wss`) |
 */
 
 #[macro_use]
@@ -53,17 +68,23 @@ pub mod http;
 /// Smoldot light client backend
 #[cfg(feature = "smoldot")]
 pub mod smoldot;
-/// Tungstenite based backend
+/// WebSocket based backend
 #[cfg(feature = "ws")]
 pub mod ws;
 
 pub(crate) mod backend;
 pub mod builder;
+/// ChainHead v1 session manager
+#[cfg(feature = "ws")]
+pub(crate) mod chainhead;
 pub mod extrinsic;
 mod hasher;
 pub mod metadata;
 pub mod rpc;
 mod signer;
+/// Public subscription types
+#[cfg(feature = "ws")]
+pub mod subscription;
 pub(crate) mod url;
 pub mod util;
 
@@ -314,6 +335,8 @@ pub enum Error {
     ConstantNotFound(String),
     BadBlockNumber,
     MissingExtensionValue(String),
+    SubscriptionClosed,
+    OperationFailed(String),
 }
 
 impl fmt::Display for Error {
@@ -334,6 +357,8 @@ impl fmt::Display for Error {
             Self::ConstantNotFound(c) => write!(f, "constant not found: {c}"),
             Self::BadBlockNumber => write!(f, "bad block number"),
             Self::MissingExtensionValue(ext) => write!(f, "missing value for extension: {ext}"),
+            Self::SubscriptionClosed => write!(f, "subscription closed"),
+            Self::OperationFailed(e) => write!(f, "operation failed: {e}"),
         }
     }
 }
@@ -457,13 +482,10 @@ mod tests {
             .encode_call("transfer_keep_alive", &meta.registry, calls_ty)
             .expect("text with enum arg encodes");
 
-        // Verify the encoded bytes look correct:
-        // variant index for transfer_keep_alive + MultiAddress::Id(0x00) + 32 addr bytes + compact(value)
         assert!(
             encoded.len() > 34,
             "should have variant idx + address + value"
         );
-        // The address bytes should be present somewhere in the output
         assert_eq!(
             encoded[2], 0xd4,
             "address starts with 0xd4 after variant + MultiAddress idx"

@@ -4,16 +4,11 @@ use crate::{Backend, Error, Metadata, Result as SubeResult};
 
 #[cfg(any(feature = "http", feature = "http-web"))]
 use crate::http::Backend as HttpBackend;
-#[cfg(any(
-    feature = "http",
-    feature = "http-web",
-    feature = "ws",
-    feature = "js",
-    feature = "smoldot"
-))]
+#[cfg(any(feature = "http", feature = "http-web"))]
 use crate::rpc::RpcClient;
+
 #[cfg(feature = "ws")]
-use crate::ws::Backend as WSBackend;
+use crate::chainhead::ChainHead;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]
 type SmoldotPlatform = alloc::sync::Arc<smoldot_light::platform::DefaultPlatform>;
@@ -30,9 +25,9 @@ pub(crate) enum AnyBackend {
     #[cfg(any(feature = "http", feature = "http-web"))]
     Http(RpcClient<HttpBackend>),
     #[cfg(feature = "ws")]
-    Ws(RpcClient<WSBackend>),
+    Ws(ChainHead<crate::ws::Backend>),
     #[cfg(all(feature = "smoldot", feature = "std"))]
-    Smoldot(RpcClient<crate::smoldot::Backend<SmoldotPlatform>>),
+    Smoldot(ChainHead<crate::smoldot::Backend<SmoldotPlatform>>),
 }
 
 macro_rules! dispatch {
@@ -177,9 +172,11 @@ pub(crate) fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
 pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
     match url.scheme() {
         #[cfg(feature = "ws")]
-        "ws" | "wss" => Ok(AnyBackend::Ws(RpcClient(
-            WSBackend::new_ws2(url.to_string().as_str()).await?,
-        ))),
+        "ws" | "wss" => {
+            let ws = crate::ws::Backend::new_ws2(url.to_string().as_str()).await?;
+            let chainhead = ChainHead::new(ws).await?;
+            Ok(AnyBackend::Ws(chainhead))
+        }
         #[cfg(any(feature = "http", feature = "http-web"))]
         "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(
             url.to_string(),
@@ -190,14 +187,57 @@ pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
 
 /// Connect via smoldot light client using a chain spec (std only).
 #[cfg(all(feature = "smoldot", feature = "std"))]
-pub(crate) fn connect_light(chain_spec: &str) -> SubeResult<AnyBackend> {
+pub(crate) async fn connect_light(chain_spec: &str) -> SubeResult<AnyBackend> {
     let backend = crate::smoldot::Backend::new_std(chain_spec)?;
-    Ok(AnyBackend::Smoldot(RpcClient(backend)))
+    let chainhead = ChainHead::new(backend).await?;
+    Ok(AnyBackend::Smoldot(chainhead))
 }
 
 /// Connect via smoldot light client for a parachain (std only).
 #[cfg(all(feature = "smoldot", feature = "std"))]
-pub(crate) fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<AnyBackend> {
+pub(crate) async fn connect_light_para(
+    chain_spec: &str,
+    relay_spec: &str,
+) -> SubeResult<AnyBackend> {
     let backend = crate::smoldot::Backend::new_std_with_relay(chain_spec, Some(relay_spec))?;
-    Ok(AnyBackend::Smoldot(RpcClient(backend)))
+    let chainhead = ChainHead::new(backend).await?;
+    Ok(AnyBackend::Smoldot(chainhead))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_string_with_scheme() {
+        let url = chain_string_to_url("wss://kreivo.io").unwrap();
+        assert_eq!(url.scheme(), "wss");
+        assert_eq!(url.host_str(), Some("kreivo.io"));
+    }
+
+    #[test]
+    fn chain_string_without_scheme_defaults_to_wss() {
+        let url = chain_string_to_url("kreivo.io").unwrap();
+        assert_eq!(url.scheme(), "wss");
+        assert_eq!(url.host_str(), Some("kreivo.io"));
+    }
+
+    #[test]
+    fn chain_string_ws_localhost_default_port() {
+        let url = chain_string_to_url("ws://localhost").unwrap();
+        assert_eq!(url.port(), Some(9944));
+    }
+
+    #[test]
+    fn chain_string_http_localhost_default_port() {
+        let url = chain_string_to_url("http://localhost").unwrap();
+        assert_eq!(url.port(), Some(9933));
+    }
+
+    #[test]
+    fn chain_string_preserves_port_and_path() {
+        let url = chain_string_to_url("wss://example.com:1234/some/path").unwrap();
+        assert_eq!(url.port(), Some(1234));
+        assert_eq!(url.path(), "/some/path");
+    }
 }
