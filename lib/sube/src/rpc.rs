@@ -206,6 +206,11 @@ impl Subscription {
         use futures_util::StreamExt;
         self.rx.next().await
     }
+
+    /// Non-blocking: return the next queued item if available.
+    pub fn try_next(&mut self) -> Option<serde_json::Value> {
+        self.rx.try_recv().ok()
+    }
 }
 
 // --- Rpc trait ---

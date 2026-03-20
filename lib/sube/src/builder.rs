@@ -222,8 +222,7 @@ impl Sube {
         chain_spec: &str,
         preloaded: Option<Metadata>,
     ) -> SubeResult<Self> {
-        let backend =
-            crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
+        let backend = crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
         let metadata =
             crate::backend::get_metadata_by_key(&backend, "light://chain", preloaded).await?;
         Ok(Sube { backend, metadata })

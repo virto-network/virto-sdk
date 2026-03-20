@@ -221,10 +221,7 @@ pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBacke
 
 /// Connect via smoldot light client using a chain spec (std only).
 #[cfg(all(feature = "smoldot", feature = "std"))]
-pub(crate) async fn connect_light(
-    chain_spec: &str,
-    timeout: Duration,
-) -> SubeResult<AnyBackend> {
+pub(crate) async fn connect_light(chain_spec: &str, timeout: Duration) -> SubeResult<AnyBackend> {
     with_timeout(timeout, async {
         let backend = crate::smoldot::Backend::new_std(chain_spec)?;
         let chainhead = ChainHead::new(backend).await?;

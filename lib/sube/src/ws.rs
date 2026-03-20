@@ -1,9 +1,10 @@
-use alloc::{collections::BTreeMap, string::String, sync::Arc};
+use alloc::{collections::BTreeMap, format, string::String, string::ToString, sync::Arc};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use ewebsock::{WsEvent, WsMessage as Message, WsReceiver as Rx, WsSender as Tx};
+use async_tungstenite::tungstenite::client::IntoClientRequest;
+use async_tungstenite::tungstenite::Message;
 use futures_channel::{mpsc, oneshot};
-use futures_util::StreamExt as _;
+use futures_util::StreamExt;
 use no_std_async::Mutex;
 
 #[cfg(not(feature = "js"))]
@@ -21,19 +22,14 @@ use crate::rpc::{
 };
 use crate::Error;
 
-const MAX_BUFFER: usize = usize::MAX >> 3;
-
 type Id = u32;
 
 pub struct Backend {
-    tx: Mutex<mpsc::Sender<Message>>,
-    ws_sender: Arc<Mutex<Tx>>,
+    tx: mpsc::UnboundedSender<Message>,
     pending: Arc<Mutex<BTreeMap<Id, oneshot::Sender<JsonRpcResponse>>>>,
     subscriptions: Arc<Mutex<BTreeMap<String, mpsc::UnboundedSender<serde_json::Value>>>>,
     next_id: AtomicU32,
 }
-unsafe impl Send for Backend {}
-unsafe impl Sync for Backend {}
 
 impl Rpc for Backend {
     async fn rpc(&self, method: &str, params: serde_json::Value) -> RpcResult<serde_json::Value> {
@@ -54,11 +50,9 @@ impl Rpc for Backend {
         log::debug!("RPC Request {} ...", &msg);
 
         self.tx
-            .lock()
-            .await
-            .try_send(Message::Text(msg))
+            .unbounded_send(Message::Text(msg.into()))
             .map_err(|err| {
-                log::error!("Error tx lock message: {:?}", err);
+                log::error!("Error sending message: {:?}", err);
                 JsonRpcError::new(-32603, "send failed")
             })?;
 
@@ -77,7 +71,6 @@ impl RpcSubscription for Backend {
         method: &str,
         params: serde_json::Value,
     ) -> RpcResult<(String, Subscription)> {
-        // Send the subscribe request — response contains the subscription id
         let sub_id: String = serde_json::from_value(self.rpc(method, params).await?)
             .map_err(|e| JsonRpcError::new(-32603, &format!("bad sub id: {e}")))?;
 
@@ -95,102 +88,107 @@ impl RpcSubscription for Backend {
 }
 
 impl Backend {
-    pub async fn new_ws2<'a, U: Into<&'a str>>(url: U) -> core::result::Result<Self, Error> {
-        let url = url.into();
+    pub async fn new_ws2(url: &str) -> core::result::Result<Self, Error> {
         log::trace!("WS connecting to {}", url);
 
-        let (tx, rx) = ewebsock::connect(url, ewebsock::Options::default()).map_err(Error::Node)?;
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| Error::Node(format!("websocket request: {e}")))?;
+        request
+            .headers_mut()
+            .insert("User-Agent", "sube/1.0".parse().expect("valid header"));
 
-        let (sender, recv) = mpsc::channel::<Message>(MAX_BUFFER);
+        let host = request.uri().host().unwrap_or("localhost").to_string();
+        let scheme = request.uri().scheme_str().unwrap_or("ws");
+        let port = request
+            .uri()
+            .port_u16()
+            .unwrap_or(if scheme == "wss" || scheme == "https" {
+                443
+            } else {
+                80
+            });
 
-        let backend = Backend {
-            tx: Mutex::new(sender),
-            ws_sender: Arc::new(Mutex::new(tx)),
-            pending: Arc::new(Mutex::new(BTreeMap::new())),
-            subscriptions: Arc::new(Mutex::new(BTreeMap::new())),
-            next_id: AtomicU32::new(1),
-        };
+        let tcp = smol::net::TcpStream::connect((host.as_str(), port))
+            .await
+            .map_err(|e| Error::Node(format!("tcp connect: {e}")))?;
 
-        let recv = Arc::new(Mutex::new(recv));
+        let (ws_stream, _response) = async_tungstenite::async_tls::client_async_tls(request, tcp)
+            .await
+            .map_err(|e| Error::Node(format!("websocket connect: {e}")))?;
 
-        backend.process_incoming_messages(rx, backend.ws_sender.clone(), recv.clone());
-        Ok(backend)
-    }
+        let (mut sink, mut stream) = ws_stream.split();
 
-    fn process_tx_send_messages(tx: Arc<Mutex<Tx>>, recv: Arc<Mutex<mpsc::Receiver<Message>>>) {
+        let (tx, mut rx) = mpsc::unbounded::<Message>();
+        let pending: Arc<Mutex<BTreeMap<Id, oneshot::Sender<JsonRpcResponse>>>> =
+            Arc::new(Mutex::new(BTreeMap::new()));
+        let subscriptions: Arc<Mutex<BTreeMap<String, mpsc::UnboundedSender<serde_json::Value>>>> =
+            Arc::new(Mutex::new(BTreeMap::new()));
+
+        // Outgoing messages: forward from channel to websocket sink
         spawn(async move {
-            log::info!("waiting for commands...");
-
-            while let Some(m) = recv.lock().await.next().await {
-                tx.lock().await.send(m);
+            while let Some(msg) = rx.next().await {
+                if let Err(e) = sink.send(msg).await {
+                    log::error!("WS send error: {e}");
+                    break;
+                }
             }
+            log::debug!("WS outgoing task stopped");
         });
-    }
 
-    fn process_incoming_messages(
-        &self,
-        mut rx: Rx,
-        tx: Arc<Mutex<Tx>>,
-        recv: Arc<Mutex<mpsc::Receiver<Message>>>,
-    ) {
-        let pending = self.pending.clone();
-        let subscriptions = self.subscriptions.clone();
+        // Incoming messages: read from websocket stream, dispatch to pending/subscriptions
+        let pending_clone = pending.clone();
+        let subs_clone = subscriptions.clone();
         spawn(async move {
-            while let Some(event) = rx.next().await {
-                match event {
-                    WsEvent::Message(msg) => {
-                        log::trace!("Got WS message {:?}", msg);
-
-                        if let Message::Text(msg) = msg {
-                            match IncomingMessage::parse(&msg) {
-                                Some(IncomingMessage::Response(res)) => {
-                                    if let Some(id) = res.id.as_ref().and_then(|v| v.as_u64()) {
-                                        let id = id as Id;
-                                        log::trace!("Answering request {}", id);
-                                        let mut messages = pending.lock().await;
-                                        if let Some(channel) = messages.remove(&id) {
-                                            log::debug!("Answered request id: {}", id);
-                                            if let Err(res) = channel.send(res) {
-                                                log::warn!("response error: {:?}", res);
-                                            }
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(Message::Text(msg)) => {
+                        log::trace!("WS message: {}", &msg);
+                        match IncomingMessage::parse(&msg) {
+                            Some(IncomingMessage::Response(res)) => {
+                                if let Some(id) = res.id.as_ref().and_then(|v| v.as_u64()) {
+                                    let id = id as Id;
+                                    let mut messages = pending_clone.lock().await;
+                                    if let Some(channel) = messages.remove(&id) {
+                                        if let Err(res) = channel.send(res) {
+                                            log::warn!("response error: {:?}", res);
                                         }
                                     }
                                 }
-                                Some(IncomingMessage::Notification(notif)) => {
-                                    let sub_id = &notif.params.subscription;
-                                    let subs = subscriptions.lock().await;
-                                    if let Some(sender) = subs.get(sub_id) {
-                                        if sender.unbounded_send(notif.params.result).is_err() {
-                                            log::warn!("subscription {} receiver dropped", sub_id);
-                                        }
-                                    } else {
-                                        log::debug!(
-                                            "notification for unknown subscription {}",
-                                            sub_id
-                                        );
+                            }
+                            Some(IncomingMessage::Notification(notif)) => {
+                                let sub_id = &notif.params.subscription;
+                                let subs = subs_clone.lock().await;
+                                if let Some(sender) = subs.get(sub_id) {
+                                    if sender.unbounded_send(notif.params.result).is_err() {
+                                        log::warn!("subscription {} receiver dropped", sub_id);
                                     }
                                 }
-                                None => {
-                                    log::warn!("Failed to parse WS message: {}", &msg);
-                                }
+                            }
+                            None => {
+                                log::warn!("Failed to parse WS message: {}", &msg);
                             }
                         }
                     }
-                    WsEvent::Error(e) => {
-                        log::warn!("WS error {}", &e);
+                    Ok(Message::Close(_)) => {
+                        log::info!("WS connection closed by server");
+                        break;
                     }
-                    WsEvent::Closed => {
-                        log::info!("WS connection closed");
-                    }
-                    WsEvent::Opened => {
-                        log::info!("Processing tx msg");
-                        Backend::process_tx_send_messages(tx.clone(), recv.clone());
-                        log::trace!("Ws connection opened");
+                    Ok(_) => {} // Binary, Ping, Pong — handled by tungstenite
+                    Err(e) => {
+                        log::warn!("WS error: {e}");
+                        break;
                     }
                 }
             }
-
-            log::warn!("WS connection closed");
+            log::debug!("WS incoming task stopped");
         });
+
+        Ok(Backend {
+            tx,
+            pending,
+            subscriptions,
+            next_id: AtomicU32::new(1),
+        })
     }
 }

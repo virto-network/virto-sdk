@@ -33,12 +33,13 @@ reqwest = { version = "0.13", optional = true, features = ["json"] }
 # ws backend
 futures-channel = { version = "0.3", default-features = false, features = [
 	"alloc",
+	"std",
 ], optional = true }
 futures-util = { version = "0.3", default-features = false, features = [
 	"sink",
 ], optional = true }
 
-async-tls = { version = "0.13", default-features = false, optional = true }
+async-tungstenite = { version = "0.34", optional = true, default-features = false }
 
 smol = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
@@ -46,7 +47,6 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 smoldot-light = { version = "0.19", optional = true }
 heapless = "0.9"
 rand_core = { version = "0.6", optional = true }
-ewebsock = { git = "https://github.com/S0c5/ewebsock.git", optional = true, branch = "enhacement/aviod-blocking-operations-with-mpsc-futures" }
 no-std-async = "1.1"
 
 
@@ -74,11 +74,12 @@ std = ["scales/std", "log/std", "serde/std", "serde_json/std", "hex/std"]
 
 ws = [
 	"dep:smol",
-	"dep:ewebsock",
+	"dep:async-tungstenite",
 	"dep:futures-channel",
 	"dep:futures-util",
+	"async-tungstenite/smol-runtime",
 ]
-wss = ["dep:async-tls", "ws", "ewebsock/tls"]
+wss = ["ws", "async-tungstenite/async-tls"]
 smoldot = ["dep:smoldot-light", "dep:futures-channel", "dep:futures-util"]
 smoldot-std = ["smoldot", "std", "dep:smol"]
 examples = ["dep:rand_core"]
