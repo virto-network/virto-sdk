@@ -91,6 +91,7 @@ impl<B, S> TxBuilder<B, S> {
 pub struct SubeBuilder {
     url: String,
     metadata: Option<Metadata>,
+    timeout: core::time::Duration,
 }
 
 impl SubeBuilder {
@@ -98,6 +99,7 @@ impl SubeBuilder {
         SubeBuilder {
             url: url.into(),
             metadata: None,
+            timeout: crate::DEFAULT_TIMEOUT,
         }
     }
 
@@ -107,11 +109,18 @@ impl SubeBuilder {
         self
     }
 
+    /// Set the connection timeout (default: 30s).
+    pub fn with_timeout(mut self, timeout: core::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Set the extrinsic body (one-liner shorthand for submit).
     pub fn body<B>(self, body: B) -> OneShotCall<B, ()> {
         OneShotCall {
             url: self.url,
             preloaded_meta: self.metadata,
+            timeout: self.timeout,
             tx: TxBuilder {
                 path: String::new(),
                 body,
@@ -143,7 +152,7 @@ impl IntoFuture for SubeBuilder {
                 .and_then(|(_, v)| v.parse::<u32>().ok());
 
             let path = url.path();
-            let backend = connect(&url).await?;
+            let backend = connect(&url, self.timeout).await?;
             let meta = get_metadata(&backend, &url, self.metadata).await?;
 
             Ok(match path {
@@ -169,13 +178,29 @@ pub struct Sube {
 impl Sube {
     /// Connect to a chain and return a reusable handle.
     pub async fn connect(url: &str) -> SubeResult<Self> {
-        Self::connect_with_meta(url, None).await
+        Self::connect_with_options(url, None, crate::DEFAULT_TIMEOUT).await
+    }
+
+    /// Connect with a custom timeout.
+    pub async fn connect_with_timeout(
+        url: &str,
+        timeout: core::time::Duration,
+    ) -> SubeResult<Self> {
+        Self::connect_with_options(url, None, timeout).await
     }
 
     /// Connect with pre-loaded metadata.
     pub async fn connect_with_meta(url: &str, preloaded: Option<Metadata>) -> SubeResult<Self> {
+        Self::connect_with_options(url, preloaded, crate::DEFAULT_TIMEOUT).await
+    }
+
+    async fn connect_with_options(
+        url: &str,
+        preloaded: Option<Metadata>,
+        timeout: core::time::Duration,
+    ) -> SubeResult<Self> {
         let url = chain_string_to_url(url)?;
-        let backend = connect(&url).await?;
+        let backend = connect(&url, timeout).await?;
         let metadata = get_metadata(&backend, &url, preloaded).await?;
         Ok(Sube { backend, metadata })
     }
@@ -197,7 +222,8 @@ impl Sube {
         chain_spec: &str,
         preloaded: Option<Metadata>,
     ) -> SubeResult<Self> {
-        let backend = crate::backend::connect_light(chain_spec).await?;
+        let backend =
+            crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
         let metadata =
             crate::backend::get_metadata_by_key(&backend, "light://chain", preloaded).await?;
         Ok(Sube { backend, metadata })
@@ -208,7 +234,9 @@ impl Sube {
     /// Both the parachain and relay chain specs are required.
     #[cfg(all(feature = "smoldot", feature = "std"))]
     pub async fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<Self> {
-        let backend = crate::backend::connect_light_para(chain_spec, relay_spec).await?;
+        let backend =
+            crate::backend::connect_light_para(chain_spec, relay_spec, crate::DEFAULT_TIMEOUT)
+                .await?;
         let metadata =
             crate::backend::get_metadata_by_key(&backend, "light://parachain", None).await?;
         Ok(Sube { backend, metadata })
@@ -343,6 +371,7 @@ where
 pub struct OneShotCall<Body = (), Sign = ()> {
     url: String,
     preloaded_meta: Option<Metadata>,
+    timeout: core::time::Duration,
     tx: TxBuilder<Body, Sign>,
 }
 
@@ -351,6 +380,7 @@ impl<B> OneShotCall<B, ()> {
         OneShotCall {
             url: self.url,
             preloaded_meta: self.preloaded_meta,
+            timeout: self.timeout,
             tx: self.tx.signer(signer),
         }
     }
@@ -380,7 +410,7 @@ where
         Box::pin(async move {
             let url = chain_string_to_url(&self.url)?;
             let path = url.path();
-            let backend = connect(&url).await?;
+            let backend = connect(&url, self.timeout).await?;
             let meta = get_metadata(&backend, &url, self.preloaded_meta).await?;
 
             let (_, body, signer) = self.tx.into_parts();

@@ -1,82 +1,87 @@
-use anyhow::{anyhow, Result};
-use codec::Decode;
-use opts::Opt;
-use std::io::Write;
-use std::path::PathBuf;
-use structopt::StructOpt;
-use sube::{sube, Backend, Metadata};
-use url::Url;
+use anyhow::Result;
+use clap::Parser;
 
-mod opts;
+mod tui;
+
+/// Sube — query and explore Substrate chains
+#[derive(Parser)]
+#[command(name = "sube", version)]
+struct Cli {
+    /// URL path to query, e.g. system/account/0x1234
+    /// Defaults to kreivo (wss://kreivo.io)
+    path: Option<String>,
+
+    /// Chain endpoint (wss://kreivo.io by default)
+    #[arg(short, long, default_value = "wss://kreivo.io")]
+    chain: String,
+
+    /// Output format: text (default) or json
+    #[arg(short, long, default_value = "text")]
+    format: String,
+}
+
+fn main() -> Result<()> {
+    smol::block_on(run())
+}
 
 async fn run() -> Result<()> {
-    let opt = Opt::from_args();
+    let cli = Cli::parse();
 
-    stderrlog::new()
-        .verbosity(opt.verbose)
-        .quiet(opt.quiet)
-        .init()
-        .unwrap();
-
-    let url = chain_string_to_url(&opt.chain)?;
-
-    // let backend = sube::ws::Backend::new_ws2(url.as_str()).await?;
-    let backend = sube::http::Backend::new(url.as_str());
-
-    let meta = if let Some(m) = opt.metadata {
-        get_meta_from_fs(&m).ok_or_else(|| anyhow!("Couldn't read Metadata from file"))?
-    } else {
-        backend.metadata().await?
-    };
-
-    let res = sube::<u8>(backend, &meta, &opt.input, None, |_, _| {}).await?;
-
-    std::io::stdout().write_all(&opt.output.format(res)?)?;
-    writeln!(std::io::stdout())?;
-    Ok(())
+    match cli.path {
+        Some(path) => oneshot(&cli.chain, &path, &cli.format).await,
+        None => tui::run(&cli.chain).await,
+    }
 }
 
-fn main() {
-    smol::block_on(async {
-        match run().await {
-            Ok(_) => {}
-            Err(err) => {
-                log::error!("{}", err);
-                std::process::exit(1);
+async fn oneshot(chain: &str, path: &str, format: &str) -> Result<()> {
+    use sube::Response;
+
+    eprintln!("Connecting to {chain}...");
+    let chain = sube::Sube::connect(chain).await?;
+    let response = chain.query(path).await?;
+
+    match response {
+        Response::None => println!("(none)"),
+        Response::Value(entry, registry) => match format {
+            "json" => {
+                let json = entry.to_json(registry)?;
+                println!("{}", serde_json::to_string_pretty(&json)?);
+            }
+            _ => {
+                let text = entry.to_text(registry)?;
+                println!("{text}");
+            }
+        },
+        Response::ValueSet(items, registry) => {
+            for (keys, value) in items {
+                let key_strs: Vec<String> = keys
+                    .iter()
+                    .filter_map(|k| k.to_text(registry).ok())
+                    .collect();
+                let key_display = key_strs.join(", ");
+                match value {
+                    Some(v) => match format {
+                        "json" => {
+                            let json = v.to_json(registry)?;
+                            println!("[{key_display}] {}", serde_json::to_string(&json)?);
+                        }
+                        _ => {
+                            let text = v.to_text(registry)?;
+                            println!("[{key_display}] {text}");
+                        }
+                    },
+                    None => println!("[{key_display}] (none)"),
+                }
             }
         }
-    })
-}
-
-// Function that tries to be "smart" about what the user might want to actually connect to
-fn chain_string_to_url(chain: &str) -> Result<Url> {
-    let chain = if !chain.starts_with("ws://")
-        && !chain.starts_with("wss://")
-        && !chain.starts_with("http://")
-        && !chain.starts_with("https://")
-    {
-        ["wss", &chain].join("://")
-    } else {
-        chain.into()
-    };
-
-    let mut url = Url::parse(&chain)?;
-
-    if url.host_str().eq(&Some("localhost")) && url.port().is_none() {
-        const WS_PORT: u16 = 9944;
-        const HTTP_PORT: u16 = 9933;
-        let port = match url.scheme() {
-            "ws" => WS_PORT,
-            _ => HTTP_PORT,
-        };
-
-        url.set_port(Some(port)).expect("known port");
+        Response::Meta(meta) => {
+            for p in &meta.pallets {
+                println!("{}", p.name);
+            }
+        }
+        Response::Registry(_) => println!("(registry)"),
+        Response::Void => {}
     }
 
-    Ok(url)
-}
-
-fn get_meta_from_fs(path: &PathBuf) -> Option<Metadata> {
-    let m = std::fs::read(path).ok()?;
-    Metadata::decode(&mut m.as_slice()).ok()
+    Ok(())
 }

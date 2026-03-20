@@ -1,3 +1,5 @@
+use core::time::Duration;
+
 use crate::prelude::*;
 use crate::url::Url;
 use crate::{Backend, Error, Metadata, Result as SubeResult};
@@ -167,30 +169,68 @@ pub(crate) fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
     Ok(url)
 }
 
+// --- Timeout ---
+
+/// Race a future against a timer. When `ws` or `smoldot` features are enabled
+/// `smol::Timer` is available; otherwise the timeout is a no-op.
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+async fn with_timeout<T>(
+    duration: Duration,
+    fut: impl core::future::Future<Output = SubeResult<T>>,
+) -> SubeResult<T> {
+    use core::pin::pin;
+    use futures_util::future::Either;
+    match futures_util::future::select(pin!(fut), pin!(smol::Timer::after(duration))).await {
+        Either::Left((result, _)) => result,
+        Either::Right((_, _)) => Err(Error::ConnectionTimeout),
+    }
+}
+
+#[cfg(not(any(feature = "ws", feature = "smoldot-std")))]
+async fn with_timeout<T>(
+    _duration: Duration,
+    fut: impl core::future::Future<Output = SubeResult<T>>,
+) -> SubeResult<T> {
+    fut.await
+}
+
 // --- Connect ---
 
-pub(crate) async fn connect(url: &Url) -> SubeResult<AnyBackend> {
-    match url.scheme() {
-        #[cfg(feature = "ws")]
-        "ws" | "wss" => {
-            let ws = crate::ws::Backend::new_ws2(url.to_string().as_str()).await?;
-            let chainhead = ChainHead::new(ws).await?;
-            Ok(AnyBackend::Ws(Box::new(chainhead)))
+pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBackend> {
+    with_timeout(timeout, async {
+        match url.scheme() {
+            #[cfg(feature = "ws")]
+            "ws" | "wss" => {
+                let ws = crate::ws::Backend::new_ws2(url.to_string().as_str())
+                    .await
+                    .map_err(|e| Error::Node(format!("connecting to {url}: {e}")))?;
+                let chainhead = ChainHead::new(ws)
+                    .await
+                    .map_err(|e| Error::Node(format!("chain session for {url}: {e}")))?;
+                Ok(AnyBackend::Ws(Box::new(chainhead)))
+            }
+            #[cfg(any(feature = "http", feature = "http-web"))]
+            "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(
+                url.to_string(),
+            )))),
+            _ => Err(Error::BadInput),
         }
-        #[cfg(any(feature = "http", feature = "http-web"))]
-        "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(
-            url.to_string(),
-        )))),
-        _ => Err(Error::BadInput),
-    }
+    })
+    .await
 }
 
 /// Connect via smoldot light client using a chain spec (std only).
 #[cfg(all(feature = "smoldot", feature = "std"))]
-pub(crate) async fn connect_light(chain_spec: &str) -> SubeResult<AnyBackend> {
-    let backend = crate::smoldot::Backend::new_std(chain_spec)?;
-    let chainhead = ChainHead::new(backend).await?;
-    Ok(AnyBackend::Smoldot(Box::new(chainhead)))
+pub(crate) async fn connect_light(
+    chain_spec: &str,
+    timeout: Duration,
+) -> SubeResult<AnyBackend> {
+    with_timeout(timeout, async {
+        let backend = crate::smoldot::Backend::new_std(chain_spec)?;
+        let chainhead = ChainHead::new(backend).await?;
+        Ok(AnyBackend::Smoldot(Box::new(chainhead)))
+    })
+    .await
 }
 
 /// Connect via smoldot light client for a parachain (std only).
@@ -198,10 +238,14 @@ pub(crate) async fn connect_light(chain_spec: &str) -> SubeResult<AnyBackend> {
 pub(crate) async fn connect_light_para(
     chain_spec: &str,
     relay_spec: &str,
+    timeout: Duration,
 ) -> SubeResult<AnyBackend> {
-    let backend = crate::smoldot::Backend::new_std_with_relay(chain_spec, Some(relay_spec))?;
-    let chainhead = ChainHead::new(backend).await?;
-    Ok(AnyBackend::Smoldot(Box::new(chainhead)))
+    with_timeout(timeout, async {
+        let backend = crate::smoldot::Backend::new_std_with_relay(chain_spec, Some(relay_spec))?;
+        let chainhead = ChainHead::new(backend).await?;
+        Ok(AnyBackend::Smoldot(Box::new(chainhead)))
+    })
+    .await
 }
 
 #[cfg(test)]

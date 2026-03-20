@@ -41,7 +41,7 @@ extern crate alloc;
 
 pub use codec;
 pub use core::fmt::Display;
-pub use scales::{Registry, Serializer, Value};
+pub use scales::{self, Registry, Serializer, Value};
 pub use serde_json::{json, Value as JsonValue};
 
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
@@ -99,6 +99,9 @@ pub mod util;
 pub fn sube(url: &str) -> SubeBuilder {
     SubeBuilder::new(url)
 }
+
+/// Default connection timeout (30 seconds).
+pub const DEFAULT_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(30);
 
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -337,6 +340,7 @@ pub enum Error {
     MissingExtensionValue(String),
     SubscriptionClosed,
     OperationFailed(String),
+    ConnectionTimeout,
 }
 
 impl fmt::Display for Error {
@@ -359,6 +363,7 @@ impl fmt::Display for Error {
             Self::MissingExtensionValue(ext) => write!(f, "missing value for extension: {ext}"),
             Self::SubscriptionClosed => write!(f, "subscription closed"),
             Self::OperationFailed(e) => write!(f, "operation failed: {e}"),
+            Self::ConnectionTimeout => write!(f, "connection timed out"),
         }
     }
 }

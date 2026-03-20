@@ -175,11 +175,9 @@ impl<R: Rpc> Inner<R> {
     /// Poll the subscription until the initialized event arrives.
     async fn wait_initialized(&mut self) -> crate::Result<()> {
         loop {
-            let event_json = self
-                .sub
-                .next()
-                .await
-                .ok_or(crate::Error::SubscriptionClosed)?;
+            let event_json = self.sub.next().await.ok_or(crate::Error::Node(
+                "subscription closed before receiving initialized event".into(),
+            ))?;
             let event: FollowEvent = serde_json::from_value(event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
