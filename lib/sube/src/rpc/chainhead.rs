@@ -10,20 +10,18 @@
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
 use codec::Decode;
-use no_std_async::Mutex;
 use serde::Deserialize;
 
+use super::{to_hex, Rpc, RpcSubscription};
 use crate::meta::{self, Metadata};
 use crate::prelude::*;
-use crate::rpc::{to_hex, Rpc, RpcSubscription, Subscription};
 
-/// Mutable session state, behind a Mutex for interior mutability
-/// (Backend trait methods take `&self`).
-struct Inner<R> {
+/// A chainHead session that manages a `chainHead_v1_follow` subscription.
+pub(crate) struct ChainHead<R> {
     rpc: R,
-    sub: Subscription,
     follow_sub_id: String,
     finalized_hash: String,
+    genesis_hash: [u8; 32],
     /// Accumulates storage items for in-progress operations.
     storage_accum: BTreeMap<String, Vec<StorageItem>>,
     /// Block hashes that are pinned on the server but we don't need.
@@ -32,12 +30,6 @@ struct Inner<R> {
     /// Set when a finalized event arrives after flush — means finalized_hash
     /// points to an already-unpinned block and we need to refollow.
     needs_refollow: bool,
-}
-
-/// A chainHead session that manages a `chainHead_v1_follow` subscription.
-pub(crate) struct ChainHead<R> {
-    inner: Mutex<Inner<R>>,
-    genesis_hash: [u8; 32],
 }
 
 /// Result from a chainHead operation.
@@ -143,7 +135,7 @@ enum OperationStarted {
 
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Create a new ChainHead session. Fetches genesis hash and starts follow subscription.
-    pub async fn new(rpc: R) -> crate::Result<Self> {
+    pub async fn new(mut rpc: R) -> crate::Result<Self> {
         let genesis_hex: String = serde_json::from_value(
             rpc.rpc("chainSpec_v1_genesisHash", serde_json::json!([]))
                 .await
@@ -155,36 +147,30 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         hex::decode_to_slice(genesis_hex.trim_start_matches("0x"), &mut genesis_hash)
             .map_err(|_| crate::Error::Decode("genesis hash hex decode failed".into()))?;
 
-        let (sub_id, sub) = rpc
+        let follow_sub_id = rpc
             .subscribe("chainHead_v1_follow", serde_json::json!([true]))
             .await
             .map_err(|e| crate::Error::Node(format!("follow subscribe failed: {e}")))?;
 
-        let mut inner = Inner {
+        let mut ch = ChainHead {
             rpc,
-            sub,
-            follow_sub_id: sub_id,
+            follow_sub_id,
             finalized_hash: String::new(),
+            genesis_hash,
             storage_accum: BTreeMap::new(),
             pending_unpin: Vec::new(),
             needs_refollow: false,
         };
 
-        // Wait for initialized event
-        inner.wait_initialized().await?;
+        ch.wait_initialized().await?;
 
-        Ok(ChainHead {
-            inner: Mutex::new(inner),
-            genesis_hash,
-        })
+        Ok(ch)
     }
-}
 
-impl<R: Rpc + RpcSubscription> Inner<R> {
     /// Poll the subscription until the initialized event arrives.
     async fn wait_initialized(&mut self) -> crate::Result<()> {
         loop {
-            let event_json = self.sub.next().await.ok_or(crate::Error::Node(
+            let event_json = self.rpc.next_event().await.ok_or(crate::Error::Node(
                 "subscription closed before receiving initialized event".into(),
             ))?;
             let event: FollowEvent = serde_json::from_value(event_json)
@@ -235,7 +221,6 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
                 }
             }
             FollowEvent::NewBlock { block_hash, .. } => {
-                // Queue for unpinning — we never query non-finalized blocks.
                 self.pending_unpin.push(block_hash);
             }
             FollowEvent::Finalized {
@@ -244,23 +229,16 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
             } => {
                 let old = core::mem::take(&mut self.finalized_hash);
 
-                // Queue old finalized for unpin
                 if !old.is_empty() {
                     self.pending_unpin.push(old);
                 }
-                // Queue pruned blocks
                 for h in pruned_block_hashes {
                     self.pending_unpin.push(h);
                 }
-                // Queue all finalized except latest
                 for h in finalized_block_hashes.iter().rev().skip(1) {
                     self.pending_unpin.push(h.clone());
                 }
 
-                // The latest finalized block: if it's still in pending_unpin
-                // (not yet flushed), remove it so it stays pinned.
-                // If it's NOT in pending_unpin, it was already unpinned in a
-                // previous flush — we need to refollow to get a fresh pin.
                 if let Some(new) = finalized_block_hashes.last() {
                     self.finalized_hash = new.clone();
                     let was_pending = self.pending_unpin.iter().any(|h| h == new);
@@ -280,7 +258,7 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
     async fn prepare_operation(&mut self) -> crate::Result<String> {
         let mut stopped = false;
 
-        while let Some(event_json) = self.sub.try_next() {
+        while let Some(event_json) = self.rpc.try_next_event() {
             let event: FollowEvent = match serde_json::from_value(event_json) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -292,19 +270,15 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
             self.record_lifecycle_event(event);
         }
 
-        // Flush accumulated unpins
         self.flush_unpins().await;
 
         if stopped || self.needs_refollow {
-            // Re-subscribe to get a fresh session with a pinned finalized block
             self.needs_refollow = false;
-            let (sub_id, sub) = self
+            self.follow_sub_id = self
                 .rpc
                 .subscribe("chainHead_v1_follow", serde_json::json!([true]))
                 .await
                 .map_err(|e| crate::Error::Node(format!("refollow failed: {e}")))?;
-            self.sub = sub;
-            self.follow_sub_id = sub_id;
             self.finalized_hash.clear();
             self.pending_unpin.clear();
             self.wait_initialized().await?;
@@ -319,8 +293,8 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
     async fn wait_for_operation(&mut self, target: &str) -> crate::Result<OperationResult> {
         loop {
             let event_json = self
-                .sub
-                .next()
+                .rpc
+                .next_event()
                 .await
                 .ok_or(crate::Error::SubscriptionClosed)?;
             let event: FollowEvent = serde_json::from_value(event_json)
@@ -330,8 +304,6 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
                 FollowEvent::Stop => {
                     return Err(crate::Error::SubscriptionClosed);
                 }
-
-                // --- Operation events ---
                 FollowEvent::OperationStorageItems {
                     operation_id,
                     items,
@@ -382,9 +354,6 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
                             .await;
                     }
                 }
-
-                // Lifecycle events — just record, don't unpin mid-operation.
-                // Unpins happen in prepare_operation before the next op.
                 other => self.record_lifecycle_event(other),
             }
         }
@@ -492,17 +461,16 @@ impl<R: Rpc + RpcSubscription> Inner<R> {
 
 impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     async fn get_storage_items(
-        &self,
+        &mut self,
         keys: Vec<crate::RawKey>,
         block: Option<u32>,
     ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
         if block.is_some() {
             return Err(crate::Error::BadBlockNumber);
         }
-        let mut inner = self.inner.lock().await;
         let hex_keys: Vec<String> = keys.iter().map(|k| to_hex(k)).collect();
 
-        let items = inner.storage(&hex_keys).await?;
+        let items = self.storage(&hex_keys).await?;
 
         let mut result = Vec::new();
         for key in &keys {
@@ -522,15 +490,14 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     }
 
     async fn get_keys_paged(
-        &self,
+        &mut self,
         from: crate::RawKey,
         _size: u16,
         _to: Option<crate::RawKey>,
     ) -> crate::Result<Vec<crate::RawKey>> {
-        let mut inner = self.inner.lock().await;
         let prefix = to_hex(&from);
 
-        let items = inner.storage_descendants(&prefix).await?;
+        let items = self.storage_descendants(&prefix).await?;
 
         items
             .into_iter()
@@ -541,22 +508,19 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .collect()
     }
 
-    async fn submit(&self, ext: &[u8]) -> crate::Result<()> {
-        let inner = self.inner.lock().await;
+    async fn submit(&mut self, ext: &[u8]) -> crate::Result<()> {
+        self.prepare_operation().await?;
         let hex = to_hex(ext);
-        inner
-            .rpc
+        self.rpc
             .rpc("transaction_v1_broadcast", serde_json::json!([hex]))
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
         Ok(())
     }
 
-    async fn metadata(&self) -> crate::Result<Metadata> {
-        let mut inner = self.inner.lock().await;
-        let raw = inner.runtime_call("Metadata_metadata", "0x").await?;
+    async fn metadata(&mut self) -> crate::Result<Metadata> {
+        let raw = self.runtime_call("Metadata_metadata", "0x").await?;
 
-        // Metadata_metadata returns OpaqueMetadata (SCALE Vec<u8>), always has compact length prefix
         let mut cursor = raw.as_slice();
         let _len = <codec::Compact<u32>>::decode(&mut cursor)
             .map_err(|_| crate::Error::Decode("compact prefix".into()))?;
@@ -564,7 +528,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         meta::from_bytes(&mut cursor).map_err(|_| crate::Error::BadMetadata)
     }
 
-    async fn block_info(&self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
+    async fn block_info(&mut self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
         match at {
             Some(0) => Ok(meta::BlockInfo {
                 number: 0,
@@ -572,9 +536,8 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 parent: self.genesis_hash,
             }),
             None => {
-                let inner = self.inner.lock().await;
                 let mut h = [0u8; 32];
-                hex::decode_to_slice(inner.finalized_hash.trim_start_matches("0x"), &mut h)
+                hex::decode_to_slice(self.finalized_hash.trim_start_matches("0x"), &mut h)
                     .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
                 Ok(meta::BlockInfo {
                     number: 0,

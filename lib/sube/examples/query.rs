@@ -13,7 +13,7 @@ fn main() -> sube::Result<()> {
         print_value("Account (one-liner)", &response);
 
         // Reusable handle: connect once, query many times
-        let chain = Sube::connect("wss://kreivo.io").await?;
+        let mut chain = Sube::connect("wss://kreivo.io").await?;
 
         let response = chain.query(&format!("system/account/{addr}")).await?;
         print_value("Account (handle)", &response);

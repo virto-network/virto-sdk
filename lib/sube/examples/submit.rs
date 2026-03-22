@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Account: 0x{account}");
         println!("Phrase: \"{phrase}\"");
 
-        let chain = Sube::connect("wss://kreivo.io").await?;
+        let mut chain = Sube::connect("wss://kreivo.io").await?;
 
         // Submit using JSON body
         chain

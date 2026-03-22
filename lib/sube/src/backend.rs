@@ -5,12 +5,12 @@ use crate::url::Url;
 use crate::{Backend, Error, Metadata, Result as SubeResult};
 
 #[cfg(any(feature = "http", feature = "http-web"))]
-use crate::http::Backend as HttpBackend;
+use crate::rpc::http::Backend as HttpBackend;
 #[cfg(any(feature = "http", feature = "http-web"))]
 use crate::rpc::RpcClient;
 
 #[cfg(any(feature = "ws", feature = "smoldot"))]
-use crate::chainhead::ChainHead;
+use crate::rpc::chainhead::ChainHead;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]
 type SmoldotPlatform = alloc::sync::Arc<smoldot_light::platform::DefaultPlatform>;
@@ -27,9 +27,9 @@ pub(crate) enum AnyBackend {
     #[cfg(any(feature = "http", feature = "http-web"))]
     Http(RpcClient<HttpBackend>),
     #[cfg(feature = "ws")]
-    Ws(Box<ChainHead<crate::ws::Backend>>),
+    Ws(Box<ChainHead<crate::rpc::ws::Backend>>),
     #[cfg(all(feature = "smoldot", feature = "std"))]
-    Smoldot(Box<ChainHead<crate::smoldot::Backend<SmoldotPlatform>>>),
+    Smoldot(Box<ChainHead<crate::rpc::smoldot::Backend<SmoldotPlatform>>>),
 }
 
 macro_rules! dispatch {
@@ -50,7 +50,7 @@ macro_rules! dispatch {
 #[allow(unused_variables)]
 impl Backend for AnyBackend {
     async fn get_storage_items(
-        &self,
+        &mut self,
         keys: Vec<crate::RawKey>,
         block: Option<u32>,
     ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
@@ -58,7 +58,7 @@ impl Backend for AnyBackend {
     }
 
     async fn get_keys_paged(
-        &self,
+        &mut self,
         from: crate::RawKey,
         size: u16,
         to: Option<crate::RawKey>,
@@ -66,15 +66,15 @@ impl Backend for AnyBackend {
         dispatch!(self, get_keys_paged(from, size, to))
     }
 
-    async fn submit(&self, ext: &[u8]) -> SubeResult<()> {
+    async fn submit(&mut self, ext: &[u8]) -> SubeResult<()> {
         dispatch!(self, submit(ext))
     }
 
-    async fn metadata(&self) -> SubeResult<Metadata> {
+    async fn metadata(&mut self) -> SubeResult<Metadata> {
         dispatch!(self, metadata())
     }
 
-    async fn block_info(&self, at: Option<u32>) -> SubeResult<crate::meta::BlockInfo> {
+    async fn block_info(&mut self, at: Option<u32>) -> SubeResult<crate::meta::BlockInfo> {
         dispatch!(self, block_info(at))
     }
 }
@@ -85,7 +85,7 @@ static META_CACHE: Mutex<Option<Map<CacheKey, &'static Metadata, 16>>> = Mutex::
 
 /// Get or fetch+leak metadata, keyed by scheme://host:port.
 pub(crate) async fn get_metadata(
-    backend: &AnyBackend,
+    backend: &mut AnyBackend,
     url: &Url,
     preloaded: Option<Metadata>,
 ) -> SubeResult<&'static Metadata> {
@@ -96,7 +96,7 @@ pub(crate) async fn get_metadata(
 /// Fetch+cache metadata using a string cache key (for backends without a URL).
 #[cfg(all(feature = "smoldot", feature = "std"))]
 pub(crate) async fn get_metadata_by_key(
-    backend: &AnyBackend,
+    backend: &mut AnyBackend,
     cache_key: &str,
     preloaded: Option<Metadata>,
 ) -> SubeResult<&'static Metadata> {
@@ -106,7 +106,7 @@ pub(crate) async fn get_metadata_by_key(
 
 async fn get_or_fetch(
     key: CacheKey,
-    backend: &AnyBackend,
+    backend: &mut AnyBackend,
     preloaded: Option<Metadata>,
 ) -> SubeResult<&'static Metadata> {
     let mut cache = META_CACHE.lock().await;
@@ -201,7 +201,7 @@ pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBacke
         match url.scheme() {
             #[cfg(feature = "ws")]
             "ws" | "wss" => {
-                let ws = crate::ws::Backend::new_ws2(url.to_string().as_str())
+                let ws = crate::rpc::ws::Backend::new(url.to_string().as_str())
                     .await
                     .map_err(|e| Error::Node(format!("connecting to {url}: {e}")))?;
                 let chainhead = ChainHead::new(ws)
@@ -223,7 +223,7 @@ pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBacke
 #[cfg(all(feature = "smoldot", feature = "std"))]
 pub(crate) async fn connect_light(chain_spec: &str, timeout: Duration) -> SubeResult<AnyBackend> {
     with_timeout(timeout, async {
-        let backend = crate::smoldot::Backend::new_std(chain_spec)?;
+        let backend = crate::rpc::smoldot::Backend::new_std(chain_spec)?;
         let chainhead = ChainHead::new(backend).await?;
         Ok(AnyBackend::Smoldot(Box::new(chainhead)))
     })
@@ -238,7 +238,8 @@ pub(crate) async fn connect_light_para(
     timeout: Duration,
 ) -> SubeResult<AnyBackend> {
     with_timeout(timeout, async {
-        let backend = crate::smoldot::Backend::new_std_with_relay(chain_spec, Some(relay_spec))?;
+        let backend =
+            crate::rpc::smoldot::Backend::new_std_with_relay(chain_spec, Some(relay_spec))?;
         let chainhead = ChainHead::new(backend).await?;
         Ok(AnyBackend::Smoldot(Box::new(chainhead)))
     })

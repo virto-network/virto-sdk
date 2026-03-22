@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        let backend = RpcClient(transport);
+        let mut backend = RpcClient(transport);
 
         // This will fail with ChainUnavailable since our dummy transport doesn't connect.
         // Replace the closure body with a real HTTP POST to make it work.

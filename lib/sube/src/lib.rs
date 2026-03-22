@@ -62,21 +62,8 @@ mod prelude {
     pub use alloc::vec::Vec;
 }
 
-/// Surf based backend
-#[cfg(any(feature = "http", feature = "http-web"))]
-pub mod http;
-/// Smoldot light client backend
-#[cfg(feature = "smoldot")]
-pub mod smoldot;
-/// WebSocket based backend
-#[cfg(feature = "ws")]
-pub mod ws;
-
 pub(crate) mod backend;
 pub mod builder;
-/// ChainHead v1 session manager
-#[cfg(any(feature = "ws", feature = "smoldot"))]
-pub(crate) mod chainhead;
 pub mod extrinsic;
 mod hasher;
 pub mod metadata;
@@ -106,7 +93,7 @@ pub const DEFAULT_TIMEOUT: core::time::Duration = core::time::Duration::from_sec
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub async fn query(
-    chain: &(impl Backend + ?Sized),
+    chain: &mut (impl Backend + ?Sized),
     meta: &'static Metadata,
     path: &str,
     block: Option<u32>,
@@ -254,13 +241,13 @@ pub type RawValue = Vec<u8>;
 #[allow(async_fn_in_trait)]
 pub trait Backend {
     async fn get_storage_items(
-        &self,
+        &mut self,
         keys: Vec<RawKey>,
         block: Option<u32>,
     ) -> crate::Result<Vec<(RawKey, Option<RawValue>)>>;
 
     async fn get_storage_item(
-        &self,
+        &mut self,
         key: RawKey,
         block: Option<u32>,
     ) -> crate::Result<Option<RawValue>> {
@@ -272,17 +259,17 @@ pub trait Backend {
     }
 
     async fn get_keys_paged(
-        &self,
+        &mut self,
         from: RawKey,
         size: u16,
         to: Option<RawKey>,
     ) -> crate::Result<Vec<RawValue>>;
 
-    async fn submit(&self, ext: &[u8]) -> Result<()>;
+    async fn submit(&mut self, ext: &[u8]) -> Result<()>;
 
-    async fn metadata(&self) -> Result<Metadata>;
+    async fn metadata(&mut self) -> Result<Metadata>;
 
-    async fn block_info(&self, at: Option<u32>) -> Result<meta::BlockInfo>;
+    async fn block_info(&mut self, at: Option<u32>) -> Result<meta::BlockInfo>;
 }
 
 /// A dummy backend for offline querying of metadata.
@@ -290,7 +277,7 @@ pub struct Offline(pub Metadata);
 
 impl Backend for Offline {
     async fn get_storage_items(
-        &self,
+        &mut self,
         _keys: Vec<RawKey>,
         _block: Option<u32>,
     ) -> crate::Result<Vec<(RawKey, Option<RawValue>)>> {
@@ -298,7 +285,7 @@ impl Backend for Offline {
     }
 
     async fn get_keys_paged(
-        &self,
+        &mut self,
         _from: RawKey,
         _size: u16,
         _to: Option<RawKey>,
@@ -306,15 +293,15 @@ impl Backend for Offline {
         Err(Error::ChainUnavailable)
     }
 
-    async fn submit(&self, _ext: &[u8]) -> Result<()> {
+    async fn submit(&mut self, _ext: &[u8]) -> Result<()> {
         Err(Error::ChainUnavailable)
     }
 
-    async fn metadata(&self) -> Result<Metadata> {
+    async fn metadata(&mut self) -> Result<Metadata> {
         Ok(self.0.clone())
     }
 
-    async fn block_info(&self, _: Option<u32>) -> Result<meta::BlockInfo> {
+    async fn block_info(&mut self, _: Option<u32>) -> Result<meta::BlockInfo> {
         Err(Error::ChainUnavailable)
     }
 }

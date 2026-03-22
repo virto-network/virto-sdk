@@ -158,7 +158,7 @@ pub fn encode_extensions(
 
 /// Build and submit a signed extrinsic using metadata-driven extensions.
 pub async fn submit<V>(
-    chain: &(impl Backend + ?Sized),
+    chain: &mut (impl Backend + ?Sized),
     meta: &'static crate::Metadata,
     path: &str,
     tx_data: ExtrinsicBody<V>,
@@ -341,7 +341,7 @@ mod tests {
 
 /// Fetch spec/tx version, genesis hash, and account nonce.
 async fn build_context(
-    chain: &(impl Backend + ?Sized),
+    chain: &mut (impl Backend + ?Sized),
     meta: &'static crate::Metadata,
     nonce: Option<u64>,
     extensions: &[(String, JsonValue)],
@@ -392,7 +392,7 @@ async fn build_context(
 
 /// Resolve nonce from: explicit field, extension override, or on-chain query.
 async fn resolve_nonce(
-    chain: &(impl Backend + ?Sized),
+    chain: &mut (impl Backend + ?Sized),
     meta: &'static crate::Metadata,
     nonce: Option<u64>,
     extensions: &[(String, JsonValue)],

@@ -1,6 +1,7 @@
 use crate::prelude::*;
-use crate::rpc::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Rpc, RpcResult};
 use reqwest::Client;
+
+use super::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, Rpc, RpcResult};
 
 /// HTTP-based JSON-RPC transport backed by `reqwest`.
 #[derive(Debug)]
@@ -13,7 +14,11 @@ impl Backend {
 }
 
 impl Rpc for Backend {
-    async fn rpc(&self, method: &str, params: serde_json::Value) -> RpcResult<serde_json::Value> {
+    async fn rpc(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> RpcResult<serde_json::Value> {
         log::info!("RPC `{}` to {}", method, &self.0);
 
         let request = JsonRpcRequest {

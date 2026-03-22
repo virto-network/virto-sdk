@@ -152,14 +152,14 @@ impl IntoFuture for SubeBuilder {
                 .and_then(|(_, v)| v.parse::<u32>().ok());
 
             let path = url.path();
-            let backend = connect(&url, self.timeout).await?;
-            let meta = get_metadata(&backend, &url, self.metadata).await?;
+            let mut backend = connect(&url, self.timeout).await?;
+            let meta = get_metadata(&mut backend, &url, self.metadata).await?;
 
             Ok(match path {
                 "/" | "" => Response::Meta(meta),
                 "_meta" => Response::Meta(meta),
                 "_meta/registry" => Response::Registry(&meta.registry),
-                _ => crate::query(&backend, meta, path, block).await?,
+                _ => crate::query(&mut backend, meta, path, block).await?,
             })
         })
     }
@@ -200,8 +200,8 @@ impl Sube {
         timeout: core::time::Duration,
     ) -> SubeResult<Self> {
         let url = chain_string_to_url(url)?;
-        let backend = connect(&url, timeout).await?;
-        let metadata = get_metadata(&backend, &url, preloaded).await?;
+        let mut backend = connect(&url, timeout).await?;
+        let metadata = get_metadata(&mut backend, &url, preloaded).await?;
         Ok(Sube { backend, metadata })
     }
 
@@ -222,9 +222,9 @@ impl Sube {
         chain_spec: &str,
         preloaded: Option<Metadata>,
     ) -> SubeResult<Self> {
-        let backend = crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
+        let mut backend = crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
         let metadata =
-            crate::backend::get_metadata_by_key(&backend, "light://chain", preloaded).await?;
+            crate::backend::get_metadata_by_key(&mut backend, "light://chain", preloaded).await?;
         Ok(Sube { backend, metadata })
     }
 
@@ -233,28 +233,28 @@ impl Sube {
     /// Both the parachain and relay chain specs are required.
     #[cfg(all(feature = "smoldot", feature = "std"))]
     pub async fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<Self> {
-        let backend =
+        let mut backend =
             crate::backend::connect_light_para(chain_spec, relay_spec, crate::DEFAULT_TIMEOUT)
                 .await?;
         let metadata =
-            crate::backend::get_metadata_by_key(&backend, "light://parachain", None).await?;
+            crate::backend::get_metadata_by_key(&mut backend, "light://parachain", None).await?;
         Ok(Sube { backend, metadata })
     }
 
     /// Query a storage path.
-    pub async fn query(&self, path: &str) -> SubeResult<Response> {
+    pub async fn query(&mut self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
             "_meta" => Ok(Response::Meta(self.metadata)),
             "_meta/registry" => Ok(Response::Registry(&self.metadata.registry)),
-            _ => crate::query(&self.backend, self.metadata, path, None).await,
+            _ => crate::query(&mut self.backend, self.metadata, path, None).await,
         }
     }
 
     /// Query a storage path at a specific block number.
-    pub async fn query_at(&self, path: &str, block: u32) -> SubeResult<Response> {
+    pub async fn query_at(&mut self, path: &str, block: u32) -> SubeResult<Response> {
         crate::query(
-            &self.backend,
+            &mut self.backend,
             self.metadata,
             path.trim_matches('/'),
             Some(block),
@@ -263,9 +263,9 @@ impl Sube {
     }
 
     /// Build an extrinsic call for the given pallet/method path.
-    pub fn call<'a>(&'a self, path: &str) -> CallBuilder<'a, (), ()> {
+    pub fn call(&mut self, path: &str) -> CallBuilder<'_, (), ()> {
         CallBuilder {
-            backend: &self.backend,
+            backend: &mut self.backend,
             metadata: self.metadata,
             tx: TxBuilder {
                 path: path.trim_matches('/').into(),
@@ -292,7 +292,7 @@ impl Sube {
 
 /// Builder for an extrinsic submission via a reusable [`Sube`] handle.
 pub struct CallBuilder<'a, Body = (), Sign = ()> {
-    backend: &'a AnyBackend,
+    backend: &'a mut AnyBackend,
     metadata: &'static Metadata,
     tx: TxBuilder<Body, Sign>,
 }
@@ -409,11 +409,11 @@ where
         Box::pin(async move {
             let url = chain_string_to_url(&self.url)?;
             let path = url.path();
-            let backend = connect(&url, self.timeout).await?;
-            let meta = get_metadata(&backend, &url, self.preloaded_meta).await?;
+            let mut backend = connect(&url, self.timeout).await?;
+            let meta = get_metadata(&mut backend, &url, self.preloaded_meta).await?;
 
             let (_, body, signer) = self.tx.into_parts();
-            crate::extrinsic::submit(&backend, meta, path, body, signer).await
+            crate::extrinsic::submit(&mut backend, meta, path, body, signer).await
         })
     }
 }

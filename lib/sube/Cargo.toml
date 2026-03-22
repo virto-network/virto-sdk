@@ -40,6 +40,7 @@ futures-util = { version = "0.3", default-features = false, features = [
 ], optional = true }
 
 async-tungstenite = { version = "0.34", optional = true, default-features = false }
+async-tls = { version = "0.13", optional = true, default-features = false, features = ["client"] }
 
 smol = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
@@ -75,12 +76,11 @@ std = ["scales/std", "log/std", "serde/std", "serde_json/std", "hex/std"]
 ws = [
 	"dep:smol",
 	"dep:async-tungstenite",
-	"dep:futures-channel",
 	"dep:futures-util",
 	"async-tungstenite/smol-runtime",
 ]
-wss = ["ws", "async-tungstenite/async-tls"]
-smoldot = ["dep:smoldot-light", "dep:futures-channel", "dep:futures-util"]
+wss = ["ws", "async-tungstenite/async-tls", "dep:async-tls"]
+smoldot = ["dep:smoldot-light"]
 smoldot-std = ["smoldot", "std", "dep:smol"]
 examples = ["dep:rand_core"]
 js = ["http-web", "json", "wss", "dep:wasm-bindgen-futures", "dep:rand_core"]

@@ -6,7 +6,7 @@ use sube::{Response, Sube};
 
 fn main() -> sube::Result<()> {
     smol::block_on(async {
-        let chain = Sube::connect("wss://kreivo.io").await?;
+        let mut chain = Sube::connect("wss://kreivo.io").await?;
 
         // Iterate over all entries of a storage map
         let response = chain.query("communityMemberships/collection").await?;
