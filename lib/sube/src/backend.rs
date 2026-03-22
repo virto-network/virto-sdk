@@ -4,12 +4,7 @@ use crate::prelude::*;
 use crate::url::Url;
 use crate::{Backend, Error, Metadata, Result as SubeResult};
 
-#[cfg(any(feature = "http", feature = "http-web"))]
-use crate::rpc::http::Backend as HttpBackend;
-#[cfg(any(feature = "http", feature = "http-web"))]
-use crate::rpc::RpcClient;
-
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 use crate::rpc::chainhead::ChainHead;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]
@@ -24,8 +19,6 @@ type CacheKey = heapless::String<64>;
 // --- Internal backend enum + dispatch ---
 
 pub(crate) enum AnyBackend {
-    #[cfg(any(feature = "http", feature = "http-web"))]
-    Http(RpcClient<HttpBackend>),
     #[cfg(feature = "ws")]
     Ws(Box<ChainHead<crate::rpc::ws::Backend>>),
     #[cfg(all(feature = "smoldot", feature = "std"))]
@@ -35,8 +28,6 @@ pub(crate) enum AnyBackend {
 macro_rules! dispatch {
     ($self:expr, $method:ident ( $($arg:expr),* )) => {
         match $self {
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            AnyBackend::Http(b) => b.$method($($arg),*).await,
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.$method($($arg),*).await,
             #[cfg(all(feature = "smoldot", feature = "std"))]
@@ -209,10 +200,6 @@ pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBacke
                     .map_err(|e| Error::Node(format!("chain session for {url}: {e}")))?;
                 Ok(AnyBackend::Ws(Box::new(chainhead)))
             }
-            #[cfg(any(feature = "http", feature = "http-web"))]
-            "http" | "https" => Ok(AnyBackend::Http(RpcClient(HttpBackend::new(
-                url.to_string(),
-            )))),
             _ => Err(Error::BadInput),
         }
     })

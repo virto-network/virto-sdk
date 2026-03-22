@@ -143,7 +143,7 @@ pub trait Rpc {
 /// Events are buffered inside the transport. `rpc()` calls that encounter
 /// subscription notifications while waiting for a response automatically
 /// buffer them for later retrieval via `next_event`/`try_next_event`.
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 #[allow(async_fn_in_trait)]
 pub trait RpcSubscription: Rpc {
     /// Subscribe to a method. Returns the subscription ID.
@@ -159,207 +159,19 @@ pub trait RpcSubscription: Rpc {
     async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> RpcResult<()>;
 }
 
-// --- Generic HTTP transport (no_std compatible) ---
-
-use core::future::Future;
-
-/// A generic JSON-RPC backend over HTTP.
-///
-/// Works in any environment — std, no_std, embassy, WASM — by taking
-/// an async function that performs the HTTP POST.
-pub struct HttpTransport<F> {
-    url: String,
-    post: F,
-}
-
-impl<F> HttpTransport<F> {
-    pub fn new(url: &str, post: F) -> Self {
-        HttpTransport {
-            url: url.into(),
-            post,
-        }
-    }
-}
-
-impl<F, Fut> Rpc for HttpTransport<F>
-where
-    F: Fn(&str, Vec<u8>) -> Fut,
-    Fut: Future<Output = core::result::Result<Vec<u8>, crate::Error>>,
-{
-    async fn rpc(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> RpcResult<serde_json::Value> {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0",
-            id: 1,
-            method,
-            params: Some(params),
-        };
-
-        let body =
-            serde_json::to_vec(&request).map_err(|e| JsonRpcError::new(-32700, &e.to_string()))?;
-
-        let response_bytes = (self.post)(&self.url, body)
-            .await
-            .map_err(|e| JsonRpcError::new(-32000, &e.to_string()))?;
-
-        let response: JsonRpcResponse = serde_json::from_slice(&response_bytes)
-            .map_err(|e| JsonRpcError::new(-32700, &e.to_string()))?;
-
-        response.into_result()
-    }
-}
-
-// --- RpcClient: Backend impl for HTTP-only transports (legacy methods) ---
-
-use crate::meta::{self, Metadata};
-use crate::Backend;
-use crate::Error;
-use meta::from_bytes;
-
-pub struct RpcClient<R>(pub R);
-
-impl<R: Rpc> Backend for RpcClient<R> {
-    async fn get_storage_items(
-        &mut self,
-        keys: Vec<crate::RawKey>,
-        block: Option<u32>,
-    ) -> crate::Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
-        let hex_keys: Vec<String> = keys.iter().map(|v| to_hex(v)).collect();
-
-        let params = if let Some(block_number) = block {
-            let info = self
-                .block_info(Some(block_number))
-                .await
-                .map_err(|_| Error::BadBlockNumber)?;
-            serde_json::json!([hex_keys, to_hex(&info.hash)])
-        } else {
-            serde_json::json!([hex_keys])
-        };
-
-        let result: Vec<crate::StorageChangeSet> =
-            serde_json::from_value(self.0.rpc("state_queryStorageAt", params).await.map_err(
-                |err| {
-                    log::error!("error state_queryStorageAt {:?}", err);
-                    crate::Error::StorageKeyNotFound
-                },
-            )?)
-            .map_err(|e| crate::Error::Decode(e.to_string()))?;
-
-        let result: Vec<_> = match result.into_iter().next() {
-            None => vec![],
-            Some(change_set) => change_set
-                .changes
-                .into_iter()
-                .map(|(k, v)| {
-                    let key = hex::decode(&k[2..])
-                        .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
-                    let value = v
-                        .map(|v| hex::decode(&v[2..]))
-                        .transpose()
-                        .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
-                    Ok((key, value))
-                })
-                .collect::<crate::Result<Vec<_>>>()?,
-        };
-
-        Ok(result)
-    }
-
-    async fn get_keys_paged(
-        &mut self,
-        from: crate::RawKey,
-        size: u16,
-        to: Option<crate::RawKey>,
-    ) -> crate::Result<Vec<crate::RawKey>> {
-        let start_key = to_hex(&to.unwrap_or_else(|| from.clone()));
-        let params = serde_json::json!([to_hex(&from), size, start_key]);
-
-        let result: Vec<String> =
-            serde_json::from_value(self.0.rpc("state_getKeysPaged", params).await.map_err(
-                |err| {
-                    log::error!("error paged {:?}", err);
-                    crate::Error::StorageKeyNotFound
-                },
-            )?)
-            .map_err(|e| crate::Error::Decode(e.to_string()))?;
-
-        let keys = result
-            .into_iter()
-            .map(|k| {
-                hex::decode(&k[2..]).map_err(|_| crate::Error::Decode("hex decode failed".into()))
-            })
-            .collect::<crate::Result<Vec<_>>>()?;
-        Ok(keys)
-    }
-
-    async fn submit(&mut self, ext: &[u8]) -> crate::Result<()> {
-        let extrinsic = to_hex(ext);
-        log::debug!("Extrinsic: {}", extrinsic);
-
-        self.0
-            .rpc("author_submitExtrinsic", serde_json::json!([extrinsic]))
-            .await
-            .map_err(|e| crate::Error::Node(e.to_string()))?;
-
-        Ok(())
-    }
-
-    async fn metadata(&mut self) -> crate::Result<Metadata> {
-        let res: String = serde_json::from_value(
-            self.0
-                .rpc("state_getMetadata", serde_json::json!([]))
-                .await
-                .map_err(|e| crate::Error::Node(e.to_string()))?,
-        )
-        .map_err(|e| crate::Error::Decode(e.to_string()))?;
-        let response = hex::decode(&res[2..])
-            .map_err(|_err| crate::Error::Decode("metadata hex decode failed".into()))?;
-        let meta = from_bytes(&mut response.as_slice()).map_err(|_| crate::Error::BadMetadata)?;
-        log::trace!("Metadata {:#?}", meta);
-        Ok(meta)
-    }
-
-    async fn block_info(&mut self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
-        let params = match at {
-            Some(n) => serde_json::json!([n]),
-            None => serde_json::json!([]),
-        };
-
-        let hex_str: String = serde_json::from_value(
-            self.0
-                .rpc("chain_getBlockHash", params)
-                .await
-                .map_err(|e| crate::Error::Node(e.to_string()))?,
-        )
-        .map_err(|e| crate::Error::Decode(e.to_string()))?;
-
-        let mut hash = [0u8; 32];
-        hex::decode_to_slice(&hex_str[2..], &mut hash)
-            .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
-
-        Ok(meta::BlockInfo {
-            number: at.unwrap_or(0) as u64,
-            hash,
-            parent: hash,
-        })
-    }
-}
-
 // --- Transport backends ---
 
-#[cfg(any(feature = "http", feature = "http-web"))]
-pub mod http;
+#[cfg(feature = "ws-edge")]
+pub mod edge;
 #[cfg(feature = "smoldot")]
 pub mod smoldot;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-/// ChainHead v1 session manager
-#[cfg(any(feature = "ws", feature = "smoldot"))]
-pub(crate) mod chainhead;
+/// ChainHead v1 session manager — public for embedded users who construct
+/// `ChainHead<edge::Backend<T>>` directly.
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+pub mod chainhead;
 
 #[cfg(test)]
 mod tests {

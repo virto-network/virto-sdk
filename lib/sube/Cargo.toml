@@ -27,25 +27,21 @@ serde = { workspace = true }
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash64"] }
 
-# http backend
-reqwest = { version = "0.13", optional = true, features = ["json"] }
-
-# ws backend
-futures-channel = { version = "0.3", default-features = false, features = [
-	"alloc",
-	"std",
-], optional = true }
+# ws backend (std, smol runtime)
 futures-util = { version = "0.3", default-features = false, features = [
 	"sink",
 ], optional = true }
-
 async-tungstenite = { version = "0.34", optional = true, default-features = false }
 async-tls = { version = "0.13", optional = true, default-features = false, features = ["client"] }
-
 smol = { workspace = true, optional = true }
-wasm-bindgen = { workspace = true, optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
+
+# ws backend (embedded, edge-ws)
+edge-ws = { version = "0.7", optional = true, default-features = false, features = ["io"] }
+embedded-io-async = { version = "0.7", optional = true }
+
+# light client
 smoldot-light = { version = "0.19", optional = true }
+
 heapless = "0.9"
 rand_core = { version = "0.6", optional = true }
 no-std-async = "1.1"
@@ -66,9 +62,7 @@ rand_core = "0.6"
 
 [features]
 default = []
-test = ["std", "wss", "http", "json", "dep:smol", "dep:rand_core"]
-http = ["dep:reqwest"]
-http-web = ["dep:wasm-bindgen", "dep:reqwest"]
+test = ["std", "wss", "json", "dep:smol", "dep:rand_core"]
 json = ["scales/json"]
 text = ["scales/text"]
 std = ["scales/std", "log/std", "serde/std", "serde_json/std", "hex/std"]
@@ -80,13 +74,13 @@ ws = [
 	"async-tungstenite/smol-runtime",
 ]
 wss = ["ws", "async-tungstenite/async-tls", "dep:async-tls"]
+ws-edge = ["dep:edge-ws", "dep:embedded-io-async"]
 smoldot = ["dep:smoldot-light"]
 smoldot-std = ["smoldot", "std", "dep:smol"]
 examples = ["dep:rand_core"]
-js = ["http-web", "json", "wss", "dep:wasm-bindgen-futures", "dep:rand_core"]
 
 [package.metadata.docs.rs]
-features = ["http"]
+features = ["wss"]
 
 [workspace]
 members = ["."]
@@ -98,5 +92,4 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false }
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
-wasm-bindgen = { version = "0.2" }
 smol = { version = "2" }

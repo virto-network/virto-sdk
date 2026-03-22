@@ -24,16 +24,14 @@ chain.call("balances/transfer")
 
 | Feature | Description |
 |---------|-------------|
-| `http` | HTTP backend via `reqwest` (native) |
-| `http-web` | HTTP backend via `reqwest` with WASM/`wasm-bindgen` support |
 | `json` | Enable JSON serialization support in `scales` |
 | `text` | Enable compact text format support in `scales` |
 | `std` | Enable standard library support across dependencies |
-| `ws` | WebSocket backend via `ewebsock` and `smol` |
-| `wss` | WebSocket backend with TLS support (implies `ws`) |
+| `ws` | WebSocket backend via `async-tungstenite` and `smol` (std) |
+| `wss` | WebSocket with TLS support (implies `ws`) |
+| `ws-edge` | WebSocket backend via `edge-ws` for embedded targets (no_std) |
 | `smoldot` | Embedded light client backend via `smoldot-light` |
 | `smoldot-std` | Smoldot with standard library and `smol` (implies `smoldot` + `std`) |
-| `js` | Bundle of features for browser/WASM targets (`http-web` + `json` + `wss`) |
 */
 
 #[macro_use]
@@ -47,13 +45,12 @@ pub use serde_json::{json, Value as JsonValue};
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 pub use extrinsic::{EncodeCall, ExtrinsicBody, Text};
 pub use meta::Metadata;
-pub use rpc::{HttpTransport, Rpc, RpcClient};
+pub use rpc::Rpc;
 pub use signer::{Bytes, Signer, SignerFn};
 
 use core::fmt;
 use metadata::{self as meta, KeyValue, StorageKey};
 use prelude::*;
-use serde::{Deserialize, Serialize};
 use util::to_camel;
 
 mod prelude {
@@ -69,9 +66,6 @@ mod hasher;
 pub mod metadata;
 pub mod rpc;
 mod signer;
-/// Public subscription types
-#[cfg(any(feature = "ws", feature = "smoldot"))]
-pub mod subscription;
 pub(crate) mod url;
 pub mod util;
 
@@ -224,12 +218,6 @@ impl From<Response> for Vec<u8> {
             Response::Registry(_) => vec![],
         }
     }
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct StorageChangeSet {
-    block: String,
-    changes: Vec<(String, Option<String>)>,
 }
 
 pub type RawKey = Vec<u8>;

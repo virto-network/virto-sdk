@@ -17,7 +17,7 @@ use crate::meta::{self, Metadata};
 use crate::prelude::*;
 
 /// A chainHead session that manages a `chainHead_v1_follow` subscription.
-pub(crate) struct ChainHead<R> {
+pub struct ChainHead<R> {
     rpc: R,
     follow_sub_id: String,
     finalized_hash: String,
@@ -40,7 +40,7 @@ enum OperationResult {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct StorageItem {
+pub struct StorageItem {
     pub key: String,
     pub value: Option<String>,
 }
