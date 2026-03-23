@@ -82,6 +82,22 @@ impl AnyBackend {
         dispatch!(self, next_chain_event())
     }
 
+    pub(crate) async fn runtime_call_at(
+        &mut self,
+        block_hash: &str,
+        function: &str,
+        call_data: &str,
+    ) -> SubeResult<Vec<u8>> {
+        dispatch!(self, runtime_call_at(block_hash, function, call_data))
+    }
+
+    pub(crate) async fn header(
+        &mut self,
+        block_hash: &str,
+    ) -> SubeResult<crate::rpc::chainhead::BlockHeader> {
+        dispatch!(self, header(block_hash))
+    }
+
     pub(crate) async fn get_storage_at_hash(
         &mut self,
         block_hash: &str,

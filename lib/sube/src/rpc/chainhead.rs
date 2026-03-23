@@ -23,6 +23,7 @@ pub enum ChainEvent {
     NewBlock {
         hash: String,
         parent: String,
+        number: u64,
         /// True if the runtime was upgraded in this block.
         is_new_runtime: bool,
     },
@@ -35,6 +36,15 @@ pub enum ChainEvent {
         /// Block hashes that were pruned (fork branches).
         pruned: Vec<String>,
     },
+}
+
+/// Decoded block header fields.
+#[derive(Debug, Clone)]
+pub struct BlockHeader {
+    pub parent_hash: String,
+    pub number: u64,
+    pub state_root: String,
+    pub extrinsics_root: String,
 }
 
 /// A chainHead session that manages a `chainHead_v1_follow` subscription.
@@ -294,12 +304,31 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         log::trace!("discarding event from non-follow subscription");
     }
 
+    /// Fetch and decode the block header at a pinned block hash.
+    pub async fn header(&mut self, block_hash: &str) -> crate::Result<BlockHeader> {
+        let result = self
+            .rpc
+            .rpc(
+                "chainHead_v1_header",
+                serde_json::json!([&self.follow_sub_id, block_hash]),
+            )
+            .await
+            .map_err(|e| crate::Error::Node(format!("header: {e}")))?;
+
+        let hex: String = serde_json::from_value(result)
+            .map_err(|e| crate::Error::Decode(format!("header response: {e}")))?;
+
+        decode_header(&hex)
+    }
+
     /// Wait for the next user-visible chain event.
     ///
     /// Drains buffered events first, then reads from the follow subscription.
     /// Internal operation events are handled transparently.
+    /// `NewBlock` events include the block number (resolved via header RPC).
     pub async fn next_chain_event(&mut self) -> crate::Result<ChainEvent> {
-        if let Some(event) = self.event_queue.pop_front() {
+        let front = self.event_queue.pop_front();
+        if let Some(event) = self.resolve_event(front).await? {
             return Ok(event);
         }
         loop {
@@ -330,11 +359,36 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 | FollowEvent::OperationWaitingForContinue { .. } => continue,
                 other => {
                     self.record_lifecycle_event(other);
-                    if let Some(event) = self.event_queue.pop_front() {
+                    let front = self.event_queue.pop_front();
+                    if let Some(event) = self.resolve_event(front).await? {
                         return Ok(event);
                     }
                 }
             }
+        }
+    }
+
+    /// Resolve block number for NewBlock events via header RPC.
+    async fn resolve_event(
+        &mut self,
+        event: Option<ChainEvent>,
+    ) -> crate::Result<Option<ChainEvent>> {
+        match event {
+            Some(ChainEvent::NewBlock {
+                ref hash,
+                ref parent,
+                is_new_runtime,
+                ..
+            }) => {
+                let header = self.header(hash).await?;
+                Ok(Some(ChainEvent::NewBlock {
+                    hash: hash.clone(),
+                    parent: parent.clone(),
+                    number: header.number,
+                    is_new_runtime,
+                }))
+            }
+            other => Ok(other),
         }
     }
 
@@ -378,6 +432,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 self.event_queue.push_back(ChainEvent::NewBlock {
                     hash: block_hash,
                     parent: parent_block_hash,
+                    number: 0, // resolved in next_chain_event via header RPC
                     is_new_runtime: new_runtime.is_some(),
                 });
                 // Don't unpin new blocks — keep them queryable until finalized/pruned
@@ -620,9 +675,31 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         }
     }
 
-    /// Execute a runtime call at a pinned block.
+    /// Execute a runtime call at a specific pinned block hash.
+    pub async fn runtime_call_at(
+        &mut self,
+        block_hash: &str,
+        function: &str,
+        call_data: &str,
+    ) -> crate::Result<Vec<u8>> {
+        self.prepare_operation().await?;
+        self.runtime_call_with_hash(block_hash, function, call_data)
+            .await
+    }
+
+    /// Execute a runtime call at the current finalized block.
     async fn runtime_call(&mut self, function: &str, call_data: &str) -> crate::Result<Vec<u8>> {
         let hash = self.prepare_operation().await?;
+        self.runtime_call_with_hash(&hash, function, call_data)
+            .await
+    }
+
+    async fn runtime_call_with_hash(
+        &mut self,
+        hash: &str,
+        function: &str,
+        call_data: &str,
+    ) -> crate::Result<Vec<u8>> {
         let result = self
             .rpc
             .rpc(
@@ -750,6 +827,45 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 }
 
 // --- Public query-at-hash ---
+
+/// Decode a SCALE-encoded block header from hex.
+fn decode_header(hex: &str) -> crate::Result<BlockHeader> {
+    let bytes = hex::decode(hex.trim_start_matches("0x"))
+        .map_err(|_| crate::Error::Decode("header hex".into()))?;
+    let mut cursor = &bytes[..];
+
+    // parent_hash: 32 bytes
+    if cursor.len() < 32 {
+        return Err(crate::Error::Decode("header too short for parent_hash".into()));
+    }
+    let parent_hash = format!("0x{}", hex::encode(&cursor[..32]));
+    cursor = &cursor[32..];
+
+    // number: Compact<u64>
+    let number = <codec::Compact<u64>>::decode(&mut cursor)
+        .map_err(|_| crate::Error::Decode("header block number".into()))?
+        .0;
+
+    // state_root: 32 bytes
+    if cursor.len() < 32 {
+        return Err(crate::Error::Decode("header too short for state_root".into()));
+    }
+    let state_root = format!("0x{}", hex::encode(&cursor[..32]));
+    cursor = &cursor[32..];
+
+    // extrinsics_root: 32 bytes
+    if cursor.len() < 32 {
+        return Err(crate::Error::Decode("header too short for extrinsics_root".into()));
+    }
+    let extrinsics_root = format!("0x{}", hex::encode(&cursor[..32]));
+
+    Ok(BlockHeader {
+        parent_hash,
+        number,
+        state_root,
+        extrinsics_root,
+    })
+}
 
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Query storage items at a specific block hash (must be a pinned hash

@@ -350,6 +350,29 @@ impl Sube {
         &self.metadata.registry
     }
 
+    /// Fetch the block header at a pinned block hash.
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub async fn header(&mut self, block_hash: &str) -> SubeResult<crate::BlockHeader> {
+        self.backend.header(block_hash).await
+    }
+
+    /// Execute a runtime API call at a specific pinned block hash.
+    ///
+    /// `function` is the runtime API method (e.g. `"BlockBuilder_apply_extrinsic"`).
+    /// `call_data` is the hex-encoded SCALE input (e.g. `"0x"`).
+    /// Returns the raw SCALE-encoded output bytes.
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub async fn runtime_call_at(
+        &mut self,
+        block_hash: &str,
+        function: &str,
+        call_data: &str,
+    ) -> SubeResult<Vec<u8>> {
+        self.backend
+            .runtime_call_at(block_hash, function, call_data)
+            .await
+    }
+
     /// Query storage at a specific block hash from a `NewBlock` event.
     ///
     /// The block hash must be from a recent `ChainEvent::NewBlock` that hasn't

@@ -142,9 +142,15 @@ fn follow_chain_events() {
         for _ in 0..100 {
             let event = chain.next_event().await.expect("gets event");
             match event {
-                ChainEvent::NewBlock { hash, parent, .. } => {
+                ChainEvent::NewBlock {
+                    hash,
+                    parent,
+                    number,
+                    ..
+                } => {
                     assert!(hash.starts_with("0x"), "hash is hex");
                     assert!(parent.starts_with("0x"), "parent is hex");
+                    assert!(number > 0, "block number is resolved");
                     saw_new_block = true;
                 }
                 ChainEvent::Finalized { hashes, .. } => {
@@ -186,6 +192,81 @@ fn query_at_new_block() {
                         Response::None => {} // account may not exist at this block
                         other => panic!("expected Value or None, got {other:?}"),
                     }
+                    break;
+                }
+                _ => continue,
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore]
+fn decode_block_events() {
+    block_on(async {
+        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+
+        // Wait for a new block and decode its events
+        loop {
+            match chain.next_event().await.expect("gets event") {
+                ChainEvent::NewBlock {
+                    ref hash, number, ..
+                } => {
+                    // Query System::Events at this block
+                    let response = chain
+                        .query_at_hash("system/events", hash)
+                        .await
+                        .expect("queries events");
+
+                    match response {
+                        Response::Value(entry, meta) => {
+                            let json = entry.to_json(&meta.registry).expect("decodes events");
+                            let events = json.as_array().expect("events is an array");
+                            assert!(!events.is_empty(), "block {number} has events");
+
+                            // Each event has phase and event fields
+                            let first = &events[0];
+                            assert!(
+                                first.get("phase").is_some(),
+                                "event has phase"
+                            );
+                            assert!(
+                                first.get("event").is_some(),
+                                "event has event body"
+                            );
+                        }
+                        other => panic!("expected Value, got {other:?}"),
+                    }
+                    break;
+                }
+                _ => continue,
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore]
+fn fetch_block_header() {
+    block_on(async {
+        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+
+        // Wait for a new block and fetch its full header
+        loop {
+            match chain.next_event().await.expect("gets event") {
+                ChainEvent::NewBlock {
+                    ref hash, number, ..
+                } => {
+                    let header = chain.header(hash).await.expect("gets header");
+                    assert_eq!(header.number, number, "header number matches event");
+                    assert!(
+                        header.state_root.starts_with("0x"),
+                        "state_root is hex"
+                    );
+                    assert!(
+                        header.extrinsics_root.starts_with("0x"),
+                        "extrinsics_root is hex"
+                    );
                     break;
                 }
                 _ => continue,
