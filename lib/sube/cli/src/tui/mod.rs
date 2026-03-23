@@ -51,8 +51,8 @@ enum Focus {
 }
 
 struct App<'a> {
-    chain: &'a Sube,
-    meta: &'a Metadata,
+    chain: &'a mut Sube,
+    meta: sube::Arc<Metadata>,
     all_pallets: Vec<String>,
     pallets: Vec<String>,
     pallet_idx: usize,
@@ -70,7 +70,7 @@ struct App<'a> {
 }
 
 impl<'a> App<'a> {
-    fn new(chain: &'a Sube, meta: &'a Metadata) -> Self {
+    fn new(chain: &'a mut Sube, meta: sube::Arc<Metadata>) -> Self {
         let mut all_pallets: Vec<String> = meta.pallets.iter().map(|p| p.name.clone()).collect();
         all_pallets.sort();
         let pallets = all_pallets.clone();
@@ -348,20 +348,22 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 fn format_response(resp: sube::Response) -> String {
     match resp {
         sube::Response::None => "(none)".into(),
-        sube::Response::Value(entry, registry) => entry
-            .to_text(registry)
+        sube::Response::Value(entry, meta) => entry
+            .to_text(&meta.registry)
             .unwrap_or_else(|e| format!("error: {e}")),
-        sube::Response::ValueSet(items, registry) => {
+        sube::Response::ValueSet(items, meta) => {
             let mut out = String::new();
             for (keys, value) in items {
                 let key_strs: Vec<String> = keys
                     .iter()
-                    .filter_map(|k| k.to_text(registry).ok())
+                    .filter_map(|k| k.to_text(&meta.registry).ok())
                     .collect();
                 let key_display = key_strs.join(", ");
                 match value {
                     Some(v) => {
-                        let text = v.to_text(registry).unwrap_or_else(|e| format!("error: {e}"));
+                        let text = v
+                            .to_text(&meta.registry)
+                            .unwrap_or_else(|e| format!("error: {e}"));
                         out.push_str(&format!("[{key_display}] {text}\n"));
                     }
                     None => out.push_str(&format!("[{key_display}] (none)\n")),
@@ -371,21 +373,20 @@ fn format_response(resp: sube::Response) -> String {
         }
         sube::Response::Void => "(void)".into(),
         sube::Response::Meta(_) => "(metadata)".into(),
-        sube::Response::Registry(_) => "(registry)".into(),
     }
 }
 
 pub async fn run(chain_url: &str) -> Result<()> {
     eprintln!("Connecting to {chain_url}...");
-    let chain = sube::Sube::connect(chain_url).await?;
+    let mut chain = sube::Sube::connect(chain_url).await?;
     eprintln!("Connected, loading metadata...");
-    let meta = chain.metadata();
+    let meta = chain.metadata_arc();
 
     enable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
 
-    let mut app = App::new(&chain, meta);
+    let mut app = App::new(&mut chain, meta);
 
     loop {
         terminal.draw(|f| draw(f, &app))?;

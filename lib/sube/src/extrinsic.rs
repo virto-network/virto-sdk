@@ -1,7 +1,9 @@
+use alloc::sync::Arc;
+
 use crate::hasher::hash;
 use crate::metadata::{self as meta, Hasher, SignedExtensionMeta, TypeId};
 use crate::prelude::*;
-use crate::{Backend, Error, Response, Result};
+use crate::{Backend, Error, Metadata, Response, Result};
 
 use codec::{Compact, Encode};
 use scales::Value;
@@ -159,7 +161,7 @@ pub fn encode_extensions(
 /// Build and submit a signed extrinsic using metadata-driven extensions.
 pub async fn submit<V>(
     chain: &mut (impl Backend + ?Sized),
-    meta: &'static crate::Metadata,
+    meta: &Arc<Metadata>,
     path: &str,
     tx_data: ExtrinsicBody<V>,
     signer: impl crate::Signer,
@@ -342,7 +344,7 @@ mod tests {
 /// Fetch spec/tx version, genesis hash, and account nonce.
 async fn build_context(
     chain: &mut (impl Backend + ?Sized),
-    meta: &'static crate::Metadata,
+    meta: &Arc<Metadata>,
     nonce: Option<u64>,
     extensions: &[(String, JsonValue)],
     account: &[u8],
@@ -393,7 +395,7 @@ async fn build_context(
 /// Resolve nonce from: explicit field, extension override, or on-chain query.
 async fn resolve_nonce(
     chain: &mut (impl Backend + ?Sized),
-    meta: &'static crate::Metadata,
+    meta: &Arc<Metadata>,
     nonce: Option<u64>,
     extensions: &[(String, JsonValue)],
     account: &[u8],
@@ -416,8 +418,8 @@ async fn resolve_nonce(
     .await?;
 
     match response {
-        Response::Value(entry, reg) => {
-            let value = entry.as_value(reg);
+        Response::Value(entry, meta) => {
+            let value = entry.as_value(&meta.registry);
             if let Some(n) = value
                 .field("nonce")
                 .and_then(|v| v.as_u32().map(|n| n as u64).or_else(|| v.as_u64()))

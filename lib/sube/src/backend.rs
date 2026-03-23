@@ -1,5 +1,7 @@
 use core::time::Duration;
 
+use alloc::sync::Arc;
+
 use crate::prelude::*;
 use crate::url::Url;
 use crate::{Backend, Error, Metadata, Result as SubeResult};
@@ -72,14 +74,14 @@ impl Backend for AnyBackend {
 
 // --- Global metadata cache ---
 
-static META_CACHE: Mutex<Option<Map<CacheKey, &'static Metadata, 16>>> = Mutex::new(None);
+static META_CACHE: Mutex<Option<Map<CacheKey, Arc<Metadata>, 16>>> = Mutex::new(None);
 
-/// Get or fetch+leak metadata, keyed by scheme://host:port.
+/// Get or fetch metadata, keyed by scheme://host:port.
 pub(crate) async fn get_metadata(
     backend: &mut AnyBackend,
     url: &Url,
     preloaded: Option<Metadata>,
-) -> SubeResult<&'static Metadata> {
+) -> SubeResult<Arc<Metadata>> {
     let key = base_key(url).map_err(|_| Error::BadInput)?;
     get_or_fetch(key, backend, preloaded).await
 }
@@ -90,7 +92,7 @@ pub(crate) async fn get_metadata_by_key(
     backend: &mut AnyBackend,
     cache_key: &str,
     preloaded: Option<Metadata>,
-) -> SubeResult<&'static Metadata> {
+) -> SubeResult<Arc<Metadata>> {
     let key: CacheKey = cache_key.try_into().map_err(|_| Error::BadInput)?;
     get_or_fetch(key, backend, preloaded).await
 }
@@ -99,21 +101,22 @@ async fn get_or_fetch(
     key: CacheKey,
     backend: &mut AnyBackend,
     preloaded: Option<Metadata>,
-) -> SubeResult<&'static Metadata> {
+) -> SubeResult<Arc<Metadata>> {
     let mut cache = META_CACHE.lock().await;
     let map = cache.get_or_insert_with(Map::new);
 
-    if let Some(&meta) = map.get(&key) {
-        return Ok(meta);
+    if let Some(meta) = map.get(&key) {
+        return Ok(Arc::clone(meta));
     }
 
     let meta = match preloaded {
         Some(m) => m,
         None => backend.metadata().await.map_err(|_| Error::BadMetadata)?,
     };
-    let meta: &'static Metadata = Box::leak(Box::new(meta));
+    let meta = Arc::new(meta);
 
-    map.insert(key, meta).map_err(|_| Error::BadMetadata)?;
+    map.insert(key, Arc::clone(&meta))
+        .map_err(|_| Error::BadMetadata)?;
 
     Ok(meta)
 }

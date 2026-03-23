@@ -37,6 +37,7 @@ chain.call("balances/transfer")
 #[macro_use]
 extern crate alloc;
 
+pub use alloc::sync::Arc;
 pub use codec;
 pub use core::fmt::Display;
 pub use scales::{self, Registry, Serializer, Value};
@@ -88,7 +89,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 pub async fn query(
     chain: &mut (impl Backend + ?Sized),
-    meta: &'static Metadata,
+    meta: &Arc<Metadata>,
     path: &str,
     block: Option<u32>,
 ) -> Result<Response> {
@@ -107,7 +108,7 @@ pub async fn query(
 
         return Ok(Response::Value(
             StorageEntry::new(const_meta.value.clone(), const_meta.ty),
-            &meta.registry,
+            Arc::clone(meta),
         ));
     }
 
@@ -119,7 +120,7 @@ pub async fn query(
 
             let value = match res {
                 None => Response::None,
-                Some(res) => Response::Value(StorageEntry::new(res, key_res.ty), &meta.registry),
+                Some(res) => Response::Value(StorageEntry::new(res, key_res.ty), Arc::clone(meta)),
             };
 
             return Ok(value);
@@ -156,7 +157,7 @@ pub async fn query(
             })
             .collect::<Vec<_>>();
 
-        Ok(Response::ValueSet(value, &meta.registry))
+        Ok(Response::ValueSet(value, Arc::clone(meta)))
     } else {
         Err(Error::ChainUnavailable)
     }
@@ -203,13 +204,24 @@ impl StorageEntry {
 pub enum Response {
     Void,
     None,
-    Value(StorageEntry, &'static scales::Registry),
+    Value(StorageEntry, Arc<Metadata>),
     ValueSet(
         Vec<(Vec<StorageEntry>, Option<StorageEntry>)>,
-        &'static scales::Registry,
+        Arc<Metadata>,
     ),
-    Meta(&'static Metadata),
-    Registry(&'static scales::Registry),
+    Meta(Arc<Metadata>),
+}
+
+impl Response {
+    /// Access the type registry from this response (if it carries metadata).
+    pub fn registry(&self) -> Option<&scales::Registry> {
+        match self {
+            Response::Value(_, m) | Response::ValueSet(_, m) | Response::Meta(m) => {
+                Some(&m.registry)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl From<Response> for Vec<u8> {
@@ -217,10 +229,9 @@ impl From<Response> for Vec<u8> {
         match res {
             Response::Value(v, _) => v.data,
             Response::None => vec![0],
-            Response::Meta(m) => serde_json::to_vec(m).unwrap_or_default(),
+            Response::Meta(m) => serde_json::to_vec(m.as_ref()).unwrap_or_default(),
             Response::ValueSet(_, _) => vec![],
             Response::Void => vec![],
-            Response::Registry(_) => vec![],
         }
     }
 }

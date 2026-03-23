@@ -50,7 +50,7 @@ pub async fn sube_js(
             .map_err(|e| JsError::new(&format!("Error querying: {:?}", &e.to_string())))?;
 
         let value = match response {
-            v @ Response::Value(..) | v @ Response::Meta(_) | v @ Response::Registry(_) => {
+            v @ Response::Value(..) | v @ Response::Meta(_) => {
                 let value = serde_wasm_bindgen::to_value(&v)
                     .map_err(|_| JsError::new("failed to serialize response"))?;
                 Ok(value)

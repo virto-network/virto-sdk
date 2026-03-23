@@ -1,6 +1,8 @@
 use core::future::{Future, IntoFuture};
 use core::pin::Pin;
 
+use alloc::sync::Arc;
+
 use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
 use crate::extrinsic::{EncodeCall, ExtrinsicBody};
 use crate::prelude::*;
@@ -156,10 +158,8 @@ impl IntoFuture for SubeBuilder {
             let meta = get_metadata(&mut backend, &url, self.metadata).await?;
 
             Ok(match path {
-                "/" | "" => Response::Meta(meta),
-                "_meta" => Response::Meta(meta),
-                "_meta/registry" => Response::Registry(&meta.registry),
-                _ => crate::query(&mut backend, meta, path, block).await?,
+                "/" | "" | "_meta" | "_meta/registry" => Response::Meta(Arc::clone(&meta)),
+                _ => crate::query(&mut backend, &meta, path, block).await?,
             })
         })
     }
@@ -172,7 +172,7 @@ impl IntoFuture for SubeBuilder {
 /// Owns the backend connection. Metadata is cached globally.
 pub struct Sube {
     backend: AnyBackend,
-    metadata: &'static Metadata,
+    metadata: Arc<Metadata>,
 }
 
 impl Sube {
@@ -245,9 +245,8 @@ impl Sube {
     pub async fn query(&mut self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
-            "_meta" => Ok(Response::Meta(self.metadata)),
-            "_meta/registry" => Ok(Response::Registry(&self.metadata.registry)),
-            _ => crate::query(&mut self.backend, self.metadata, path, None).await,
+            "_meta" | "_meta/registry" => Ok(Response::Meta(Arc::clone(&self.metadata))),
+            _ => crate::query(&mut self.backend, &self.metadata, path, None).await,
         }
     }
 
@@ -255,7 +254,7 @@ impl Sube {
     pub async fn query_at(&mut self, path: &str, block: u32) -> SubeResult<Response> {
         crate::query(
             &mut self.backend,
-            self.metadata,
+            &self.metadata,
             path.trim_matches('/'),
             Some(block),
         )
@@ -266,7 +265,7 @@ impl Sube {
     pub fn call(&mut self, path: &str) -> CallBuilder<'_, (), ()> {
         CallBuilder {
             backend: &mut self.backend,
-            metadata: self.metadata,
+            metadata: Arc::clone(&self.metadata),
             tx: TxBuilder {
                 path: path.trim_matches('/').into(),
                 body: (),
@@ -279,7 +278,12 @@ impl Sube {
 
     /// Access the chain's metadata.
     pub fn metadata(&self) -> &Metadata {
-        self.metadata
+        &self.metadata
+    }
+
+    /// Get a shared reference-counted handle to the metadata.
+    pub fn metadata_arc(&self) -> Arc<Metadata> {
+        Arc::clone(&self.metadata)
     }
 
     /// Access the type registry.
@@ -293,7 +297,7 @@ impl Sube {
 /// Builder for an extrinsic submission via a reusable [`Sube`] handle.
 pub struct CallBuilder<'a, Body = (), Sign = ()> {
     backend: &'a mut AnyBackend,
-    metadata: &'static Metadata,
+    metadata: Arc<Metadata>,
     tx: TxBuilder<Body, Sign>,
 }
 
@@ -359,7 +363,7 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let (path, body, signer) = self.tx.into_parts();
-            crate::extrinsic::submit(self.backend, self.metadata, &path, body, signer).await
+            crate::extrinsic::submit(self.backend, &self.metadata, &path, body, signer).await
         })
     }
 }
@@ -413,7 +417,7 @@ where
             let meta = get_metadata(&mut backend, &url, self.preloaded_meta).await?;
 
             let (_, body, signer) = self.tx.into_parts();
-            crate::extrinsic::submit(&mut backend, meta, path, body, signer).await
+            crate::extrinsic::submit(&mut backend, &meta, path, body, signer).await
         })
     }
 }

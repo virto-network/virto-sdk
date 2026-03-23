@@ -37,36 +37,36 @@ async fn oneshot(chain: &str, path: &str, format: &str) -> Result<()> {
     use sube::Response;
 
     eprintln!("Connecting to {chain}...");
-    let chain = sube::Sube::connect(chain).await?;
+    let mut chain = sube::Sube::connect(chain).await?;
     let response = chain.query(path).await?;
 
     match response {
         Response::None => println!("(none)"),
-        Response::Value(entry, registry) => match format {
+        Response::Value(entry, meta) => match format {
             "json" => {
-                let json = entry.to_json(registry)?;
+                let json = entry.to_json(&meta.registry)?;
                 println!("{}", serde_json::to_string_pretty(&json)?);
             }
             _ => {
-                let text = entry.to_text(registry)?;
+                let text = entry.to_text(&meta.registry)?;
                 println!("{text}");
             }
         },
-        Response::ValueSet(items, registry) => {
+        Response::ValueSet(items, meta) => {
             for (keys, value) in items {
                 let key_strs: Vec<String> = keys
                     .iter()
-                    .filter_map(|k| k.to_text(registry).ok())
+                    .filter_map(|k| k.to_text(&meta.registry).ok())
                     .collect();
                 let key_display = key_strs.join(", ");
                 match value {
                     Some(v) => match format {
                         "json" => {
-                            let json = v.to_json(registry)?;
+                            let json = v.to_json(&meta.registry)?;
                             println!("[{key_display}] {}", serde_json::to_string(&json)?);
                         }
                         _ => {
-                            let text = v.to_text(registry)?;
+                            let text = v.to_text(&meta.registry)?;
                             println!("[{key_display}] {text}");
                         }
                     },
@@ -79,7 +79,6 @@ async fn oneshot(chain: &str, path: &str, format: &str) -> Result<()> {
                 println!("{}", p.name);
             }
         }
-        Response::Registry(_) => println!("(registry)"),
         Response::Void => {}
     }
 

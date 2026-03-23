@@ -32,13 +32,13 @@ fn main() -> sube::Result<()> {
 
 fn print_value(label: &str, response: &Response) {
     match response {
-        Response::Value(entry, reg) => {
+        Response::Value(entry, meta) => {
             // Display as text (compact, URL-safe format)
-            let text = entry.to_text(reg).expect("valid text");
+            let text = entry.to_text(&meta.registry).expect("valid text");
             println!("{label} (text): {text}");
 
             // Also display as JSON for comparison
-            let json = entry.to_json(reg).expect("valid json");
+            let json = entry.to_json(&meta.registry).expect("valid json");
             println!(
                 "{label} (json): {}",
                 serde_json::to_string_pretty(&json).unwrap()

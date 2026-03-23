@@ -10,14 +10,14 @@ fn main() -> sube::Result<()> {
 
         // Iterate over all entries of a storage map
         let response = chain.query("communityMemberships/collection").await?;
-        if let Response::ValueSet(entries, reg) = response {
+        if let Response::ValueSet(entries, meta) = response {
             for (keys, value) in &entries {
                 for key in keys {
-                    let k = key.to_json(reg)?;
+                    let k = key.to_json(&meta.registry)?;
                     println!("key: {k:?}");
                 }
                 if let Some(val) = value {
-                    let v = val.to_json(reg)?;
+                    let v = val.to_json(&meta.registry)?;
                     println!("val: {v:?}");
                 }
             }
@@ -29,8 +29,8 @@ fn main() -> sube::Result<()> {
         let response = chain
             .query_at(&format!("system/account/{addr}"), 2067321)
             .await?;
-        if let Response::Value(entry, reg) = response {
-            let data = entry.to_json(reg)?;
+        if let Response::Value(entry, meta) = response {
+            let data = entry.to_json(&meta.registry)?;
             println!(
                 "Account at block 2067321: {}",
                 serde_json::to_string_pretty(&data).unwrap()
