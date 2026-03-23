@@ -79,6 +79,10 @@ smoldot = ["dep:smoldot-light"]
 smoldot-std = ["smoldot", "std", "dep:smol", "dep:futures-util"]
 examples = ["dep:rand_core"]
 
+[[bench]]
+name = "metadata"
+harness = false
+
 [package.metadata.docs.rs]
 features = ["wss"]
 
