@@ -139,7 +139,7 @@ fn follow_chain_events() {
         // Receive a few chain events
         let mut saw_new_block = false;
         let mut saw_finalized = false;
-        for _ in 0..20 {
+        for _ in 0..100 {
             let event = chain.next_event().await.expect("gets event");
             match event {
                 ChainEvent::NewBlock { hash, parent, .. } => {
@@ -161,6 +161,36 @@ fn follow_chain_events() {
         }
         assert!(saw_new_block, "saw at least one NewBlock event");
         assert!(saw_finalized, "saw at least one Finalized event");
+    });
+}
+
+#[test]
+#[ignore]
+fn query_at_new_block() {
+    block_on(async {
+        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+
+        // Wait for a new block, then query at that block hash
+        loop {
+            match chain.next_event().await.expect("gets event") {
+                ChainEvent::NewBlock { ref hash, .. } => {
+                    let response = chain
+                        .query_at_hash(&format!("system/account/{ADDR}"), hash)
+                        .await
+                        .expect("queries at block hash");
+                    match response {
+                        Response::Value(entry, meta) => {
+                            let json = entry.to_json(&meta.registry).expect("decodes");
+                            assert!(json.get("nonce").is_some(), "has nonce");
+                        }
+                        Response::None => {} // account may not exist at this block
+                        other => panic!("expected Value or None, got {other:?}"),
+                    }
+                    break;
+                }
+                _ => continue,
+            }
+        }
     });
 }
 

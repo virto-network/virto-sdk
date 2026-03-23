@@ -350,6 +350,74 @@ impl Sube {
         &self.metadata.registry
     }
 
+    /// Query storage at a specific block hash from a `NewBlock` event.
+    ///
+    /// The block hash must be from a recent `ChainEvent::NewBlock` that hasn't
+    /// been finalized or pruned yet (it's pinned by the follow subscription).
+    ///
+    /// ```rust,ignore
+    /// loop {
+    ///     match chain.next_event().await? {
+    ///         ChainEvent::NewBlock { hash, .. } => {
+    ///             let r = chain.query_at_hash("system/account/0x1234", &hash).await?;
+    ///         }
+    ///         _ => {}
+    ///     }
+    /// }
+    /// ```
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub async fn query_at_hash(&mut self, path: &str, block_hash: &str) -> SubeResult<Response> {
+        let path = path.trim_matches('/');
+        match path {
+            "_meta" | "_meta/registry" => Ok(Response::Meta(Arc::clone(&self.metadata))),
+            _ => {
+                let (pallet, item_or_call, mut keys) =
+                    crate::parse_uri(path).ok_or(crate::Error::BadInput)?;
+                let pallet = self
+                    .metadata
+                    .pallet_by_name(&pallet)
+                    .ok_or(crate::Error::PalletNotFound(pallet))?;
+
+                if item_or_call == "_constants" {
+                    let const_name = keys.pop().ok_or(crate::Error::MissingConstantName)?;
+                    let const_meta = pallet
+                        .constants
+                        .iter()
+                        .find(|c| c.name == const_name)
+                        .ok_or(crate::Error::ConstantNotFound(const_name))?;
+                    return Ok(Response::Value(
+                        crate::StorageEntry::new(const_meta.value.clone(), const_meta.ty),
+                        Arc::clone(&self.metadata),
+                    ));
+                }
+
+                if let Ok(key_res) = crate::metadata::StorageKey::build_with_registry(
+                    &self.metadata.registry,
+                    pallet,
+                    &item_or_call,
+                    &keys,
+                ) {
+                    if !key_res.is_partial() {
+                        let results = self
+                            .backend
+                            .get_storage_at_hash(block_hash, vec![key_res.key()])
+                            .await?;
+                        let value = results.into_iter().next().and_then(|(_, v)| v);
+                        return Ok(match value {
+                            None => Response::None,
+                            Some(data) => Response::Value(
+                                crate::StorageEntry::new(data, key_res.ty),
+                                Arc::clone(&self.metadata),
+                            ),
+                        });
+                    }
+                }
+
+                Err(crate::Error::BadInput)
+            }
+        }
+    }
+
     /// Wait for the next chain event (new block, finalization, best block change).
     ///
     /// ```rust,ignore

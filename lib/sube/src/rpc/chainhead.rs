@@ -376,11 +376,11 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 new_runtime,
             } => {
                 self.event_queue.push_back(ChainEvent::NewBlock {
-                    hash: block_hash.clone(),
+                    hash: block_hash,
                     parent: parent_block_hash,
                     is_new_runtime: new_runtime.is_some(),
                 });
-                self.pending_unpin.push(block_hash);
+                // Don't unpin new blocks — keep them queryable until finalized/pruned
             }
             FollowEvent::Finalized {
                 finalized_block_hashes,
@@ -535,9 +535,29 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         }
     }
 
+    /// Send a storage query at a specific pinned block hash and wait for results.
+    async fn storage_at_hash(
+        &mut self,
+        hash: &str,
+        keys: &[String],
+    ) -> crate::Result<Vec<StorageItem>> {
+        // Drain buffered events and flush unpins before querying
+        self.prepare_operation().await?;
+        self.storage_with_hash(hash, keys).await
+    }
+
     /// Send a storage query and wait for results.
     async fn storage(&mut self, keys: &[String]) -> crate::Result<Vec<StorageItem>> {
         let hash = self.prepare_operation().await?;
+        self.storage_with_hash(&hash, keys).await
+    }
+
+    /// Query storage at a given block hash (must be pinned).
+    async fn storage_with_hash(
+        &mut self,
+        hash: &str,
+        keys: &[String],
+    ) -> crate::Result<Vec<StorageItem>> {
         let items: Vec<serde_json::Value> = keys
             .iter()
             .map(|k| serde_json::json!({"key": k, "type": "value"}))
@@ -547,7 +567,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .rpc
             .rpc(
                 "chainHead_v1_storage",
-                serde_json::json!([&self.follow_sub_id, &hash, items, null]),
+                serde_json::json!([&self.follow_sub_id, hash, items, null]),
             )
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
@@ -729,6 +749,42 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     }
 }
 
+// --- Public query-at-hash ---
+
+impl<R: Rpc + RpcSubscription> ChainHead<R> {
+    /// Query storage items at a specific block hash (must be a pinned hash
+    /// from a recent `NewBlock` event that hasn't been finalized/pruned yet).
+    pub async fn get_storage_at_hash(
+        &mut self,
+        block_hash: &str,
+        keys: Vec<crate::RawKey>,
+    ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        let hex_keys: Vec<String> = keys.iter().map(|k| to_hex(k)).collect();
+        let items = self.storage_at_hash(block_hash, &hex_keys).await?;
+        decode_storage_items(&keys, &items)
+    }
+}
+
+fn decode_storage_items(
+    keys: &[crate::RawKey],
+    items: &[StorageItem],
+) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+    let mut result = Vec::new();
+    for key in keys {
+        let search_key = hex::encode(key);
+        let value = items
+            .iter()
+            .find(|item| item.key.trim_start_matches("0x") == search_key)
+            .and_then(|item| {
+                item.value
+                    .as_ref()
+                    .map(|v| hex::decode(v.trim_start_matches("0x")).unwrap_or_default())
+            });
+        result.push((key.clone(), value));
+    }
+    Ok(result)
+}
+
 // --- Backend implementation ---
 
 impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
@@ -747,21 +803,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             }
         };
 
-        let mut result = Vec::new();
-        for key in &keys {
-            let search_key = hex::encode(key);
-            let value = items
-                .iter()
-                .find(|item| item.key.trim_start_matches("0x") == search_key)
-                .and_then(|item| {
-                    item.value
-                        .as_ref()
-                        .map(|v| hex::decode(v.trim_start_matches("0x")).unwrap_or_default())
-                });
-            result.push((key.clone(), value));
-        }
-
-        Ok(result)
+        decode_storage_items(&keys, &items)
     }
 
     async fn get_keys_paged(

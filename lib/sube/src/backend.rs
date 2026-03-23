@@ -82,6 +82,14 @@ impl AnyBackend {
         dispatch!(self, next_chain_event())
     }
 
+    pub(crate) async fn get_storage_at_hash(
+        &mut self,
+        block_hash: &str,
+        keys: Vec<crate::RawKey>,
+    ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        dispatch!(self, get_storage_at_hash(block_hash, keys))
+    }
+
     pub(crate) fn try_next_chain_event(&mut self) -> Option<crate::rpc::chainhead::ChainEvent> {
         match self {
             #[cfg(feature = "ws")]
