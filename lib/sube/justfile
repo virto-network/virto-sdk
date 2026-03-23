@@ -1,22 +1,26 @@
-default: check test
+default: check lint test
 
 check:
     cargo check --features wss,json,text
     cargo check --features smoldot-std,json,text
+    cargo check --no-default-features --features ws-edge,json,text
 
 lint:
     cargo clippy --features wss,json,text -- -D warnings
+    cargo clippy --no-default-features --features ws-edge,json,text -- -D warnings
     cargo clippy --features smoldot-std,json,text -- -D warnings
 
 test:
-    cargo test --features json,text
+    cargo test --features wss,json,text
+
+test-integration:
+    cargo test --features test --test integration -- --ignored
 
 # no_std compatibility checks — proves no hidden std dependencies
 check-no-std:
     cargo check --no-default-features
-    cargo check --no-default-features --features json
-    cargo check --no-default-features --features text
     cargo check --no-default-features --features json,text
+    cargo check --no-default-features --features ws-edge,json,text
 
 check-thumbv7em:
     cargo check --target thumbv7em-none-eabihf --no-default-features
@@ -46,4 +50,4 @@ test-qemu:
         -semihosting-config enable=on,target=native \
         -kernel tests/qemu/target/thumbv7em-none-eabihf/release/sube-qemu-test
 
-ci: check-targets test test-qemu
+ci: check-targets lint test test-qemu

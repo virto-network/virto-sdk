@@ -1,8 +1,8 @@
 //! Submit an extrinsic (transaction) to a chain.
 //!
 //! Shows two ways to encode the call body: JSON and scales text format.
-//! With the v2 JSON-RPC spec, transactions are broadcast via `transaction_v1_broadcast`
-//! and storage is queried via `chainHead_v1_storage`.
+//! Submissions are tracked via `transactionWatch_v1_submitAndWatch`
+//! and wait for finalization before returning.
 //!
 //! Run with: cargo run --example submit --features wss,json,text,examples -- [seed phrase]
 
