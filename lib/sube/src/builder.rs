@@ -170,9 +170,12 @@ impl IntoFuture for SubeBuilder {
 /// A connected handle to a Substrate chain.
 ///
 /// Owns the backend connection. Metadata is cached globally.
+/// If a connection drops, operations automatically reconnect once and retry.
 pub struct Sube {
     backend: AnyBackend,
     metadata: Arc<Metadata>,
+    url: String,
+    timeout: core::time::Duration,
 }
 
 impl Sube {
@@ -195,14 +198,19 @@ impl Sube {
     }
 
     async fn connect_with_options(
-        url: &str,
+        url_str: &str,
         preloaded: Option<Metadata>,
         timeout: core::time::Duration,
     ) -> SubeResult<Self> {
-        let url = chain_string_to_url(url)?;
+        let url = chain_string_to_url(url_str)?;
         let mut backend = connect(&url, timeout).await?;
         let metadata = get_metadata(&mut backend, &url, preloaded).await?;
-        Ok(Sube { backend, metadata })
+        Ok(Sube {
+            backend,
+            metadata,
+            url: url_str.into(),
+            timeout,
+        })
     }
 
     /// Connect via smoldot light client (no external node needed).
@@ -225,7 +233,12 @@ impl Sube {
         let mut backend = crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
         let metadata =
             crate::backend::get_metadata_by_key(&mut backend, "light://chain", preloaded).await?;
-        Ok(Sube { backend, metadata })
+        Ok(Sube {
+            backend,
+            metadata,
+            url: String::new(),
+            timeout: crate::DEFAULT_TIMEOUT,
+        })
     }
 
     /// Connect a parachain via smoldot light client.
@@ -238,27 +251,49 @@ impl Sube {
                 .await?;
         let metadata =
             crate::backend::get_metadata_by_key(&mut backend, "light://parachain", None).await?;
-        Ok(Sube { backend, metadata })
+        Ok(Sube {
+            backend,
+            metadata,
+            url: String::new(),
+            timeout: crate::DEFAULT_TIMEOUT,
+        })
     }
 
-    /// Query a storage path.
+    /// Query a storage path. Reconnects once on connection failure.
     pub async fn query(&mut self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
             "_meta" | "_meta/registry" => Ok(Response::Meta(Arc::clone(&self.metadata))),
-            _ => crate::query(&mut self.backend, &self.metadata, path, None).await,
+            _ => {
+                let result = crate::query(&mut self.backend, &self.metadata, path, None).await;
+                match result {
+                    Err(ref e) if Self::is_connection_error(e) => {
+                        self.reconnect().await?;
+                        crate::query(&mut self.backend, &self.metadata, path, None).await
+                    }
+                    other => other,
+                }
+            }
         }
     }
 
-    /// Query a storage path at a specific block number.
+    /// Query a storage path at a specific block number. Reconnects once on connection failure.
     pub async fn query_at(&mut self, path: &str, block: u32) -> SubeResult<Response> {
-        crate::query(
+        let path = path.trim_matches('/');
+        let result = crate::query(
             &mut self.backend,
             &self.metadata,
-            path.trim_matches('/'),
+            path,
             Some(block),
         )
-        .await
+        .await;
+        match result {
+            Err(ref e) if Self::is_connection_error(e) => {
+                self.reconnect().await?;
+                crate::query(&mut self.backend, &self.metadata, path, Some(block)).await
+            }
+            other => other,
+        }
     }
 
     /// Build an extrinsic call for the given pallet/method path.
@@ -289,6 +324,32 @@ impl Sube {
     /// Access the type registry.
     pub fn registry(&self) -> &crate::Registry {
         &self.metadata.registry
+    }
+
+    /// Re-establish the backend connection using the stored URL.
+    async fn reconnect(&mut self) -> SubeResult<()> {
+        if self.url.is_empty() {
+            return Err(crate::Error::ChainUnavailable);
+        }
+        log::info!("reconnecting to {}", self.url);
+        let url = chain_string_to_url(&self.url)?;
+        self.backend = connect(&url, self.timeout).await?;
+        Ok(())
+    }
+
+    fn is_connection_error(e: &crate::Error) -> bool {
+        match e {
+            crate::Error::ChainUnavailable
+            | crate::Error::SubscriptionClosed
+            | crate::Error::ConnectionTimeout => true,
+            crate::Error::Node(msg) => {
+                msg.contains("connection closed")
+                    || msg.contains("ws read")
+                    || msg.contains("ws send")
+                    || msg.contains("io error")
+            }
+            _ => false,
+        }
     }
 }
 
