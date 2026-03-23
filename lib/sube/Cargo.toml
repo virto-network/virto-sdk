@@ -76,7 +76,7 @@ ws = [
 wss = ["ws", "async-tungstenite/async-tls", "dep:async-tls"]
 ws-edge = ["dep:edge-ws", "dep:embedded-io-async"]
 smoldot = ["dep:smoldot-light"]
-smoldot-std = ["smoldot", "std", "dep:smol"]
+smoldot-std = ["smoldot", "std", "dep:smol", "dep:futures-util"]
 examples = ["dep:rand_core"]
 
 [package.metadata.docs.rs]

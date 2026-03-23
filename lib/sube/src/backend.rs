@@ -6,7 +6,7 @@ use crate::prelude::*;
 use crate::url::Url;
 use crate::{Backend, Error, Metadata, Result as SubeResult};
 
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 use crate::rpc::chainhead::ChainHead;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]

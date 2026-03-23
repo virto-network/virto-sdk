@@ -5,12 +5,14 @@
 //!
 //! All trait methods take `&mut self` — single-threaded, no spawning.
 
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 use core::fmt::Write;
 use serde::{Deserialize, Serialize};
 
 use crate::prelude::*;
 
 /// Hex-encode bytes with `0x` prefix into an existing String, avoiding a new allocation.
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 fn push_hex(buf: &mut String, bytes: &[u8]) {
     buf.push_str("0x");
     for &b in bytes {
@@ -19,6 +21,7 @@ fn push_hex(buf: &mut String, bytes: &[u8]) {
 }
 
 /// Hex-encode bytes with `0x` prefix, returning a new String.
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 pub(crate) fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(2 + bytes.len() * 2);
     push_hex(&mut s, bytes);
@@ -177,14 +180,16 @@ pub mod chainhead;
 mod tests {
     use super::*;
 
+    #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
     #[test]
     fn to_hex_encodes_bytes() {
-        assert_eq!(to_hex(&[0xde, 0xad]), "0xdead");
+        assert_eq!(super::to_hex(&[0xde, 0xad]), "0xdead");
     }
 
+    #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
     #[test]
     fn to_hex_empty() {
-        assert_eq!(to_hex(&[]), "0x");
+        assert_eq!(super::to_hex(&[]), "0x");
     }
 
     #[test]

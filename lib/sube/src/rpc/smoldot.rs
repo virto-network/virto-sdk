@@ -6,14 +6,14 @@ use alloc::{format, sync::Arc, vec::Vec};
 use smoldot_light::platform::PlatformRef;
 use smoldot_light::{AddChainConfig, AddChainConfigJsonRpc, Client};
 
-use super::{IncomingMessage, JsonRpcError, JsonRpcRequest, RpcResult};
+use super::{IncomingMessage, JsonRpcError, JsonRpcRequest, Rpc, RpcResult};
 use crate::Error;
 
 /// Light client backend powered by smoldot.
 pub struct Backend<P: PlatformRef> {
     client: Client<P, ()>,
     chain_id: smoldot_light::ChainId,
-    responses: smoldot_light::JsonRpcResponses,
+    responses: smoldot_light::JsonRpcResponses<P>,
     event_buffer: VecDeque<serde_json::Value>,
     next_id: u32,
 }
