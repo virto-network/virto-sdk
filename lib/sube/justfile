@@ -1,11 +1,11 @@
 default: check test
 
 check:
-    cargo check --features http,wss,json,text
+    cargo check --features wss,json,text
     cargo check --features smoldot-std,json,text
 
 lint:
-    cargo clippy --features http,wss,json,text -- -D warnings
+    cargo clippy --features wss,json,text -- -D warnings
     cargo clippy --features smoldot-std,json,text -- -D warnings
 
 test:
@@ -30,7 +30,11 @@ check-wasm:
     cargo check --target wasm32-unknown-unknown --no-default-features
     cargo check --target wasm32-unknown-unknown --no-default-features --features json,text
 
-check-targets: check-no-std check-thumbv7em check-riscv32 check-wasm
+check-xtensa:
+    source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features -Zbuild-std=core,alloc
+    source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features --features ws-edge,json,text -Zbuild-std=core,alloc
+
+check-targets: check-no-std check-thumbv7em check-riscv32 check-wasm check-xtensa
 
 # run the qemu smoke test — exercises sube on bare-metal cortex-m4
 test-qemu:
