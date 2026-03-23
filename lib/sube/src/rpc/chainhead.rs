@@ -154,6 +154,41 @@ struct ArchiveStorageItemJson {
     value: Option<String>,
 }
 
+// --- Transaction watch event types ---
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "event")]
+#[allow(dead_code)]
+enum TxEvent {
+    #[serde(rename = "validated")]
+    Validated,
+    #[serde(rename = "broadcasted")]
+    Broadcasted {
+        #[serde(rename = "numPeers")]
+        _num_peers: u32,
+    },
+    #[serde(rename = "bestChainBlockIncluded")]
+    BestChainBlockIncluded { block: Option<TxEventBlock> },
+    #[serde(rename = "finalized")]
+    Finalized { block: TxEventBlock },
+    #[serde(rename = "invalid")]
+    Invalid { error: String },
+    #[serde(rename = "dropped")]
+    Dropped {
+        #[serde(default)]
+        error: String,
+    },
+    #[serde(rename = "error")]
+    Error { error: String },
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(dead_code)]
+struct TxEventBlock {
+    hash: String,
+    index: u32,
+}
+
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Create a new ChainHead session. Fetches genesis hash and starts follow subscription.
     pub async fn new(mut rpc: R) -> crate::Result<Self> {
@@ -659,13 +694,56 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     }
 
     async fn submit(&mut self, ext: &[u8]) -> crate::Result<()> {
-        self.prepare_operation().await?;
         let hex = to_hex(ext);
-        self.rpc
-            .rpc("transaction_v1_broadcast", serde_json::json!([hex]))
+
+        let sub_id = self
+            .rpc
+            .subscribe(
+                "transactionWatch_v1_submitAndWatch",
+                serde_json::json!([hex]),
+            )
             .await
-            .map_err(|e| crate::Error::Node(e.to_string()))?;
-        Ok(())
+            .map_err(|e| crate::Error::Node(format!("tx watch: {e}")))?;
+
+        // Wait for finalization or terminal error
+        loop {
+            let (event_sub_id, event_json) = self
+                .rpc
+                .next_event()
+                .await
+                .ok_or(crate::Error::SubscriptionClosed)?;
+
+            if event_sub_id == sub_id {
+                let event: TxEvent = serde_json::from_value(event_json)
+                    .map_err(|e| crate::Error::Decode(format!("tx event: {e}")))?;
+
+                match event {
+                    TxEvent::Finalized { .. } => return Ok(()),
+                    TxEvent::Invalid { error } => {
+                        return Err(crate::Error::OperationFailed(format!(
+                            "tx invalid: {error}"
+                        )));
+                    }
+                    TxEvent::Dropped { error } => {
+                        return Err(crate::Error::OperationFailed(format!(
+                            "tx dropped: {error}"
+                        )));
+                    }
+                    TxEvent::Error { error } => {
+                        return Err(crate::Error::OperationFailed(format!("tx error: {error}")));
+                    }
+                    // Validated, Broadcasted, BestChainBlockIncluded — keep waiting
+                    _ => {}
+                }
+            } else if event_sub_id == self.follow_sub_id {
+                if let Ok(event) = serde_json::from_value::<FollowEvent>(event_json) {
+                    match event {
+                        FollowEvent::Stop => self.needs_refollow = true,
+                        other => self.record_lifecycle_event(other),
+                    }
+                }
+            }
+        }
     }
 
     async fn metadata(&mut self) -> crate::Result<Metadata> {
