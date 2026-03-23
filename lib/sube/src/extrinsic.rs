@@ -163,8 +163,8 @@ pub async fn submit<V>(
     chain: &mut (impl Backend + ?Sized),
     meta: &Arc<Metadata>,
     path: &str,
-    tx_data: ExtrinsicBody<V>,
-    signer: impl crate::Signer,
+    tx_data: &ExtrinsicBody<V>,
+    signer: &(impl crate::Signer + ?Sized),
 ) -> Result<Response>
 where
     V: EncodeCall + core::fmt::Debug,

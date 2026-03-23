@@ -297,10 +297,10 @@ impl Sube {
     }
 
     /// Build an extrinsic call for the given pallet/method path.
+    /// Reconnects once on connection failure before returning an error.
     pub fn call(&mut self, path: &str) -> CallBuilder<'_, (), ()> {
         CallBuilder {
-            backend: &mut self.backend,
-            metadata: Arc::clone(&self.metadata),
+            sube: self,
             tx: TxBuilder {
                 path: path.trim_matches('/').into(),
                 body: (),
@@ -308,6 +308,30 @@ impl Sube {
                 nonce: None,
                 extensions: Vec::new(),
             },
+        }
+    }
+
+    /// Submit an extrinsic with reconnect-on-failure.
+    async fn submit_with_reconnect<B, S>(
+        &mut self,
+        path: &str,
+        body: ExtrinsicBody<B>,
+        signer: S,
+    ) -> SubeResult<Response>
+    where
+        B: EncodeCall + core::fmt::Debug,
+        S: Signer,
+    {
+        let result =
+            crate::extrinsic::submit(&mut self.backend, &self.metadata, path, &body, &signer)
+                .await;
+        match result {
+            Err(ref e) if Self::is_connection_error(e) => {
+                self.reconnect().await?;
+                crate::extrinsic::submit(&mut self.backend, &self.metadata, path, &body, &signer)
+                    .await
+            }
+            other => other,
         }
     }
 
@@ -324,6 +348,51 @@ impl Sube {
     /// Access the type registry.
     pub fn registry(&self) -> &crate::Registry {
         &self.metadata.registry
+    }
+
+    /// Wait for the next chain event (new block, finalization, best block change).
+    ///
+    /// ```rust,ignore
+    /// loop {
+    ///     match chain.next_event().await? {
+    ///         ChainEvent::NewBlock { hash, parent, .. } => { /* new block */ }
+    ///         ChainEvent::Finalized { hashes, .. } => { /* finalized */ }
+    ///         ChainEvent::BestBlock { hash } => { /* head changed */ }
+    ///     }
+    /// }
+    /// ```
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub async fn next_event(&mut self) -> SubeResult<crate::ChainEvent> {
+        self.backend.next_chain_event().await
+    }
+
+    /// Return a buffered chain event without blocking, if any.
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub fn try_next_event(&mut self) -> Option<crate::ChainEvent> {
+        self.backend.try_next_chain_event()
+    }
+
+    /// Wait for the next finalization event.
+    ///
+    /// Convenience method that skips `NewBlock` and `BestBlock` events,
+    /// returning only when blocks are finalized. Useful for polling storage
+    /// at each finalization point.
+    ///
+    /// ```rust,ignore
+    /// loop {
+    ///     let finalized = chain.next_finalized().await?;
+    ///     let value = chain.query("system/account/0x1234").await?;
+    ///     // value is at the latest finalized block
+    /// }
+    /// ```
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub async fn next_finalized(&mut self) -> SubeResult<crate::ChainEvent> {
+        loop {
+            let event = self.next_event().await?;
+            if matches!(event, crate::ChainEvent::Finalized { .. }) {
+                return Ok(event);
+            }
+        }
     }
 
     /// Re-establish the backend connection using the stored URL.
@@ -357,16 +426,14 @@ impl Sube {
 
 /// Builder for an extrinsic submission via a reusable [`Sube`] handle.
 pub struct CallBuilder<'a, Body = (), Sign = ()> {
-    backend: &'a mut AnyBackend,
-    metadata: Arc<Metadata>,
+    sube: &'a mut Sube,
     tx: TxBuilder<Body, Sign>,
 }
 
 impl<'a, S> CallBuilder<'a, (), S> {
     pub fn body<B>(self, body: B) -> CallBuilder<'a, B, S> {
         CallBuilder {
-            backend: self.backend,
-            metadata: self.metadata,
+            sube: self.sube,
             tx: self.tx.body(body),
         }
     }
@@ -387,8 +454,7 @@ impl<'a, S> CallBuilder<'a, (), S> {
 impl<'a, B> CallBuilder<'a, B, ()> {
     pub fn signer<S>(self, signer: S) -> CallBuilder<'a, B, S> {
         CallBuilder {
-            backend: self.backend,
-            metadata: self.metadata,
+            sube: self.sube,
             tx: self.tx.signer(signer),
         }
     }
@@ -424,7 +490,7 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let (path, body, signer) = self.tx.into_parts();
-            crate::extrinsic::submit(self.backend, &self.metadata, &path, body, signer).await
+            self.sube.submit_with_reconnect(&path, body, signer).await
         })
     }
 }
@@ -478,7 +544,7 @@ where
             let meta = get_metadata(&mut backend, &url, self.preloaded_meta).await?;
 
             let (_, body, signer) = self.tx.into_parts();
-            crate::extrinsic::submit(&mut backend, &meta, path, body, signer).await
+            crate::extrinsic::submit(&mut backend, &meta, path, &body, &signer).await
         })
     }
 }
