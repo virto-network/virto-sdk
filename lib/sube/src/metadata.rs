@@ -42,6 +42,30 @@ pub enum Hasher {
     Identity,
 }
 
+impl Hasher {
+    /// Number of bytes the hash prefix occupies before the raw key data
+    /// in the storage key. For transparent (concat/identity) hashers this
+    /// is the fixed hash size; for opaque hashers the raw key is not
+    /// recoverable from the storage key at all.
+    pub fn key_prefix_len(&self) -> usize {
+        match self {
+            Hasher::Blake2_128Concat => 16,
+            Hasher::Twox64Concat => 8,
+            Hasher::Identity => 0,
+            // Opaque hashers — the raw key is not appended
+            Hasher::Blake2_128 | Hasher::Blake2_256 | Hasher::Twox128 | Hasher::Twox256 => 0,
+        }
+    }
+
+    /// Whether the raw key data can be extracted from the hashed storage key.
+    pub fn is_transparent(&self) -> bool {
+        matches!(
+            self,
+            Hasher::Blake2_128Concat | Hasher::Twox64Concat | Hasher::Identity
+        )
+    }
+}
+
 /// Compressed constant metadata — only name, type id, and raw value.
 #[derive(Clone, Debug)]
 pub struct ConstantMeta {
@@ -320,16 +344,24 @@ pub struct StorageKey {
     pub pallet: Vec<u8>,
     pub call: Vec<u8>,
     pub args: Vec<KeyValue>,
+    pub hashers: Vec<Hasher>,
     pub ty: TypeId,
 }
 
 impl StorageKey {
-    pub fn new(ty: TypeId, pallet: Vec<u8>, call: Vec<u8>, args: Vec<KeyValue>) -> Self {
+    pub fn new(
+        ty: TypeId,
+        pallet: Vec<u8>,
+        call: Vec<u8>,
+        args: Vec<KeyValue>,
+        hashers: Vec<Hasher>,
+    ) -> Self {
         Self {
             ty,
             pallet,
             call,
             args,
+            hashers,
         }
     }
 
@@ -473,6 +505,7 @@ fn build_storage_key<T: AsRef<str>>(
                     KeyValue::Value((type_id, hashed, out, hasher.clone()))
                 })
                 .collect(),
+            hashers.to_vec(),
         );
         Ok(storage_key)
     } else if hashers.len() == 1 {
@@ -498,6 +531,7 @@ fn build_storage_key<T: AsRef<str>>(
                 tuple_bytes,
                 hasher.clone(),
             ))],
+            hashers.to_vec(),
         );
         Ok(storage_key)
     } else {
@@ -900,5 +934,44 @@ mod tests {
             scales::from_text(addr, &meta.registry, key_ty).is_ok(),
             "from_text should handle 0x hex for byte arrays"
         );
+    }
+
+    #[test]
+    fn hasher_key_prefix_lengths() {
+        assert_eq!(Hasher::Blake2_128Concat.key_prefix_len(), 16);
+        assert_eq!(Hasher::Twox64Concat.key_prefix_len(), 8);
+        assert_eq!(Hasher::Identity.key_prefix_len(), 0);
+        assert_eq!(Hasher::Blake2_128.key_prefix_len(), 0);
+        assert_eq!(Hasher::Blake2_256.key_prefix_len(), 0);
+        assert_eq!(Hasher::Twox128.key_prefix_len(), 0);
+        assert_eq!(Hasher::Twox256.key_prefix_len(), 0);
+
+        assert!(Hasher::Blake2_128Concat.is_transparent());
+        assert!(Hasher::Twox64Concat.is_transparent());
+        assert!(Hasher::Identity.is_transparent());
+        assert!(!Hasher::Blake2_128.is_transparent());
+        assert!(!Hasher::Twox256.is_transparent());
+    }
+
+    #[test]
+    fn storage_key_carries_hashers() {
+        let meta = kreivo();
+        let system = meta.pallet_by_name("System").unwrap();
+
+        // System::Account uses Blake2_128Concat
+        let key = StorageKey::build_with_registry(
+            &meta.registry,
+            system,
+            "Account",
+            &["0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d"],
+        )
+        .unwrap();
+
+        assert_eq!(key.hashers.len(), 1);
+        assert!(
+            key.hashers[0].is_transparent(),
+            "System::Account uses a transparent hasher"
+        );
+        assert_eq!(key.hashers[0].key_prefix_len(), 16);
     }
 }

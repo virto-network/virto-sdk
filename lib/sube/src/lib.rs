@@ -132,17 +132,22 @@ pub async fn query(
             .into_iter()
             .map(|(key, data)| {
                 let key = &key[(key_res.pallet.len() + key_res.call.len())..];
-                let mut offset = 16; // TODO depends on the hasher used
+                let mut offset = 0;
                 let keys = key_res
                     .args
                     .iter()
-                    .map(|arg| match arg {
-                        KeyValue::Empty(type_id) | KeyValue::Value((type_id, _, _, _)) => {
-                            let entry = StorageEntry::new(key[offset..].to_vec(), *type_id);
-                            let size = entry.as_value(&meta.registry).size().unwrap_or(0);
-                            offset += size + 16;
-                            entry
-                        }
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        let type_id = match arg {
+                            KeyValue::Empty(ty) | KeyValue::Value((ty, _, _, _)) => *ty,
+                        };
+                        let hasher = &key_res.hashers[i];
+                        let prefix_len = hasher.key_prefix_len();
+                        offset += prefix_len;
+                        let entry = StorageEntry::new(key[offset..].to_vec(), type_id);
+                        let size = entry.as_value(&meta.registry).size().unwrap_or(0);
+                        offset += size;
+                        entry
                     })
                     .collect::<Vec<StorageEntry>>();
 
