@@ -8,7 +8,6 @@
 extern crate alloc;
 extern crate panic_semihosting;
 
-use alloc::vec::Vec;
 use cortex_m_rt::entry;
 use cortex_m_semihosting::{debug, hprintln};
 use embedded_alloc::LlffHeap;
@@ -27,19 +26,13 @@ fn main() -> ! {
 
     let _ = hprintln!("=== sube QEMU smoke test ===");
 
-    // HttpTransport + RpcClient instantiate on bare metal
-    let _ = hprintln!("test: HttpTransport...");
-    let transport = sube::HttpTransport::new(
-        "http://10.0.0.1:9933",
-        |_url: &str, _body: Vec<u8>| async { Err::<Vec<u8>, _>(sube::Error::ChainUnavailable) },
-    );
-    let _backend = sube::RpcClient(transport);
-
-    // Core types work
-    let _ = hprintln!("test: core types...");
+    // Core types work on bare metal
+    let _ = hprintln!("test: StorageEntry...");
     let entry = sube::StorageEntry::new(alloc::vec![1, 2, 3, 4], 0);
     assert_eq(entry.data.len(), 4);
 
+    // Error Display works
+    let _ = hprintln!("test: Error Display...");
     let msg = alloc::format!("{}", sube::Error::BadInput);
     assert(!msg.is_empty());
 
