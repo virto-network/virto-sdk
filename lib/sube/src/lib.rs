@@ -58,6 +58,8 @@ pub use serde_json::{json, Value as JsonValue};
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 pub use extrinsic::{EncodeCall, ExtrinsicBody, Text};
 pub use meta::Metadata;
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+pub use rpc::chainhead::ChainEvent;
 pub use rpc::Rpc;
 pub use signer::{Bytes, Signer, SignerFn};
 

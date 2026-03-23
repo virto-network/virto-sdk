@@ -72,6 +72,28 @@ impl Backend for AnyBackend {
     }
 }
 
+// --- Chain event forwarding ---
+
+#[cfg(any(feature = "ws", feature = "smoldot"))]
+impl AnyBackend {
+    pub(crate) async fn next_chain_event(
+        &mut self,
+    ) -> SubeResult<crate::rpc::chainhead::ChainEvent> {
+        dispatch!(self, next_chain_event())
+    }
+
+    pub(crate) fn try_next_chain_event(&mut self) -> Option<crate::rpc::chainhead::ChainEvent> {
+        match self {
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(b) => b.try_next_chain_event(),
+            #[cfg(all(feature = "smoldot", feature = "std"))]
+            AnyBackend::Smoldot(b) => b.try_next_chain_event(),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+}
+
 // --- Global metadata cache ---
 
 static META_CACHE: Mutex<Option<Map<CacheKey, Arc<Metadata>, 16>>> = Mutex::new(None);

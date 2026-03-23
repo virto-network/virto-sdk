@@ -3,7 +3,7 @@
 //! These tests require network access and are ignored by default.
 //! Run with: cargo test --features test --test integration -- --ignored
 
-use sube::{Response, Sube};
+use sube::{ChainEvent, Response, Sube};
 
 const CHAIN: &str = "wss://kreivo.io";
 const ADDR: &str = "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b";
@@ -126,6 +126,62 @@ fn text_format_output() {
         if let Response::Value(entry, meta) = response {
             let text = entry.to_text(&meta.registry).expect("text format works");
             assert!(!text.is_empty(), "text output is non-empty");
+        }
+    });
+}
+
+#[test]
+#[ignore]
+fn follow_chain_events() {
+    block_on(async {
+        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+
+        // Receive a few chain events
+        let mut saw_new_block = false;
+        let mut saw_finalized = false;
+        for _ in 0..20 {
+            let event = chain.next_event().await.expect("gets event");
+            match event {
+                ChainEvent::NewBlock { hash, parent, .. } => {
+                    assert!(hash.starts_with("0x"), "hash is hex");
+                    assert!(parent.starts_with("0x"), "parent is hex");
+                    saw_new_block = true;
+                }
+                ChainEvent::Finalized { hashes, .. } => {
+                    assert!(!hashes.is_empty(), "has finalized hashes");
+                    saw_finalized = true;
+                }
+                ChainEvent::BestBlock { hash } => {
+                    assert!(hash.starts_with("0x"), "best hash is hex");
+                }
+            }
+            if saw_new_block && saw_finalized {
+                break;
+            }
+        }
+        assert!(saw_new_block, "saw at least one NewBlock event");
+        assert!(saw_finalized, "saw at least one Finalized event");
+    });
+}
+
+#[test]
+#[ignore]
+fn query_after_finalization() {
+    block_on(async {
+        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+
+        // Wait for a finalization, then query storage
+        chain.next_finalized().await.expect("gets finalized");
+        let response = chain
+            .query(&format!("system/account/{ADDR}"))
+            .await
+            .expect("queries after finalization");
+        match response {
+            Response::Value(entry, meta) => {
+                let json = entry.to_json(&meta.registry).expect("decodes");
+                assert!(json.get("nonce").is_some(), "has nonce");
+            }
+            other => panic!("expected Value, got {other:?}"),
         }
     });
 }

@@ -7,7 +7,7 @@
 //! Between operations we drain queued events and unpin everything
 //! except the current finalized block.
 
-use alloc::{collections::BTreeMap, string::String, vec::Vec};
+use alloc::{collections::BTreeMap, collections::VecDeque, string::String, vec::Vec};
 
 use codec::Decode;
 use serde::Deserialize;
@@ -15,6 +15,27 @@ use serde::Deserialize;
 use super::{to_hex, Rpc, RpcSubscription};
 use crate::meta::{self, Metadata};
 use crate::prelude::*;
+
+/// A chain event visible to users — new blocks, finalization, best block changes.
+#[derive(Debug, Clone)]
+pub enum ChainEvent {
+    /// A new block was imported.
+    NewBlock {
+        hash: String,
+        parent: String,
+        /// True if the runtime was upgraded in this block.
+        is_new_runtime: bool,
+    },
+    /// The best (head) block changed.
+    BestBlock { hash: String },
+    /// One or more blocks were finalized.
+    Finalized {
+        /// Block hashes that were finalized (in order).
+        hashes: Vec<String>,
+        /// Block hashes that were pruned (fork branches).
+        pruned: Vec<String>,
+    },
+}
 
 /// A chainHead session that manages a `chainHead_v1_follow` subscription.
 pub struct ChainHead<R> {
@@ -30,6 +51,8 @@ pub struct ChainHead<R> {
     /// Set when a finalized event arrives after flush — means finalized_hash
     /// points to an already-unpinned block and we need to refollow.
     needs_refollow: bool,
+    /// User-visible events buffered during internal operations.
+    event_queue: VecDeque<ChainEvent>,
 }
 
 /// Result from a chainHead operation.
@@ -62,14 +85,14 @@ enum FollowEvent {
         #[serde(rename = "blockHash")]
         block_hash: String,
         #[serde(rename = "parentBlockHash")]
-        _parent_block_hash: String,
+        parent_block_hash: String,
         #[serde(rename = "newRuntime")]
-        _new_runtime: Option<serde_json::Value>,
+        new_runtime: Option<serde_json::Value>,
     },
     #[serde(rename = "bestBlockChanged")]
     BestBlockChanged {
         #[serde(rename = "bestBlockHash")]
-        _best_block_hash: String,
+        best_block_hash: String,
     },
     #[serde(rename = "finalized")]
     Finalized {
@@ -216,6 +239,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             storage_accum: BTreeMap::new(),
             pending_unpin: Vec::new(),
             needs_refollow: false,
+            event_queue: VecDeque::new(),
         };
 
         ch.wait_initialized().await?;
@@ -270,6 +294,55 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         log::trace!("discarding event from non-follow subscription");
     }
 
+    /// Wait for the next user-visible chain event.
+    ///
+    /// Drains buffered events first, then reads from the follow subscription.
+    /// Internal operation events are handled transparently.
+    pub async fn next_chain_event(&mut self) -> crate::Result<ChainEvent> {
+        if let Some(event) = self.event_queue.pop_front() {
+            return Ok(event);
+        }
+        loop {
+            let (sub_id, event_json) = self
+                .rpc
+                .next_event()
+                .await
+                .ok_or(crate::Error::SubscriptionClosed)?;
+
+            if sub_id != self.follow_sub_id {
+                continue;
+            }
+
+            let event: FollowEvent = serde_json::from_value(event_json)
+                .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
+
+            match event {
+                FollowEvent::Stop => {
+                    self.needs_refollow = true;
+                    return Err(crate::Error::SubscriptionClosed);
+                }
+                // Skip internal operation events
+                FollowEvent::OperationStorageItems { .. }
+                | FollowEvent::OperationStorageDone { .. }
+                | FollowEvent::OperationCallDone { .. }
+                | FollowEvent::OperationError { .. }
+                | FollowEvent::OperationInaccessible { .. }
+                | FollowEvent::OperationWaitingForContinue { .. } => continue,
+                other => {
+                    self.record_lifecycle_event(other);
+                    if let Some(event) = self.event_queue.pop_front() {
+                        return Ok(event);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Return a buffered chain event without blocking.
+    pub fn try_next_chain_event(&mut self) -> Option<ChainEvent> {
+        self.event_queue.pop_front()
+    }
+
     /// Flush all pending unpins in a single batch RPC call.
     async fn flush_unpins(&mut self) {
         let hashes = core::mem::take(&mut self.pending_unpin);
@@ -285,8 +358,8 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .await;
     }
 
-    /// Record a lifecycle event. Only updates state and queues unpins — never
-    /// actually calls unpin (that happens in flush_unpins/prepare_operation).
+    /// Record a lifecycle event. Updates internal state, queues unpins,
+    /// and buffers user-visible chain events.
     fn record_lifecycle_event(&mut self, event: FollowEvent) {
         match event {
             FollowEvent::Initialized {
@@ -297,7 +370,16 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     self.finalized_hash = h.clone();
                 }
             }
-            FollowEvent::NewBlock { block_hash, .. } => {
+            FollowEvent::NewBlock {
+                block_hash,
+                parent_block_hash,
+                new_runtime,
+            } => {
+                self.event_queue.push_back(ChainEvent::NewBlock {
+                    hash: block_hash.clone(),
+                    parent: parent_block_hash,
+                    is_new_runtime: new_runtime.is_some(),
+                });
                 self.pending_unpin.push(block_hash);
             }
             FollowEvent::Finalized {
@@ -309,8 +391,8 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 if !old.is_empty() {
                     self.pending_unpin.push(old);
                 }
-                for h in pruned_block_hashes {
-                    self.pending_unpin.push(h);
+                for h in &pruned_block_hashes {
+                    self.pending_unpin.push(h.clone());
                 }
                 for h in finalized_block_hashes.iter().rev().skip(1) {
                     self.pending_unpin.push(h.clone());
@@ -324,8 +406,16 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                         self.needs_refollow = true;
                     }
                 }
+
+                self.event_queue.push_back(ChainEvent::Finalized {
+                    hashes: finalized_block_hashes,
+                    pruned: pruned_block_hashes,
+                });
             }
-            FollowEvent::BestBlockChanged { .. } => {}
+            FollowEvent::BestBlockChanged { best_block_hash } => {
+                self.event_queue
+                    .push_back(ChainEvent::BestBlock { hash: best_block_hash });
+            }
             _ => {}
         }
     }
