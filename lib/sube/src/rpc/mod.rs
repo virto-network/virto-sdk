@@ -153,10 +153,11 @@ pub trait RpcSubscription: Rpc {
     async fn subscribe(&mut self, method: &str, params: serde_json::Value) -> RpcResult<String>;
 
     /// Read the next subscription event, blocking until one arrives.
-    async fn next_event(&mut self) -> Option<serde_json::Value>;
+    /// Returns `(subscription_id, event_value)`.
+    async fn next_event(&mut self) -> Option<(String, serde_json::Value)>;
 
     /// Non-blocking: return a buffered event if available.
-    fn try_next_event(&mut self) -> Option<serde_json::Value>;
+    fn try_next_event(&mut self) -> Option<(String, serde_json::Value)>;
 
     /// Unsubscribe from a subscription.
     async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> RpcResult<()>;

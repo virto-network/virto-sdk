@@ -30,7 +30,7 @@ use crate::Error;
 /// handshake has already been done externally.
 pub struct Backend<T> {
     stream: T,
-    event_buffer: VecDeque<serde_json::Value>,
+    event_buffer: VecDeque<(String, serde_json::Value)>,
     next_id: u32,
     frag_buf: Vec<u8>,
 }
@@ -165,7 +165,8 @@ impl<T: Read + Write> Rpc for Backend<T> {
                     log::warn!("unexpected response id: {:?}", r.id);
                 }
                 IncomingMessage::Notification(n) => {
-                    self.event_buffer.push_back(n.params.result);
+                    self.event_buffer
+                        .push_back((n.params.subscription, n.params.result));
                 }
             }
         }
@@ -179,13 +180,15 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
         Ok(sub_id)
     }
 
-    async fn next_event(&mut self) -> Option<serde_json::Value> {
+    async fn next_event(&mut self) -> Option<(String, serde_json::Value)> {
         if let Some(event) = self.event_buffer.pop_front() {
             return Some(event);
         }
         loop {
             match self.read_message().await {
-                Ok(IncomingMessage::Notification(n)) => return Some(n.params.result),
+                Ok(IncomingMessage::Notification(n)) => {
+                    return Some((n.params.subscription, n.params.result))
+                }
                 Ok(IncomingMessage::Response(r)) => {
                     log::warn!("unexpected response while waiting for event: {:?}", r.id);
                 }
@@ -197,7 +200,7 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
         }
     }
 
-    fn try_next_event(&mut self) -> Option<serde_json::Value> {
+    fn try_next_event(&mut self) -> Option<(String, serde_json::Value)> {
         self.event_buffer.pop_front()
     }
 

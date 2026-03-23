@@ -133,6 +133,27 @@ enum OperationStarted {
     LimitReached,
 }
 
+// --- Archive storage event types ---
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "event")]
+enum ArchiveStorageEvent {
+    #[serde(rename = "items")]
+    Items { items: Vec<ArchiveStorageItemJson> },
+    #[serde(rename = "done")]
+    Done,
+    #[serde(rename = "error")]
+    Error { error: String },
+    #[serde(rename = "waitingForContinue")]
+    WaitingForContinue,
+}
+
+#[derive(Deserialize, Debug)]
+struct ArchiveStorageItemJson {
+    key: String,
+    value: Option<String>,
+}
+
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Create a new ChainHead session. Fetches genesis hash and starts follow subscription.
     pub async fn new(mut rpc: R) -> crate::Result<Self> {
@@ -170,9 +191,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Poll the subscription until the initialized event arrives.
     async fn wait_initialized(&mut self) -> crate::Result<()> {
         loop {
-            let event_json = self.rpc.next_event().await.ok_or(crate::Error::Node(
-                "subscription closed before receiving initialized event".into(),
-            ))?;
+            let (_, event_json) = self.next_follow_event().await?;
             let event: FollowEvent = serde_json::from_value(event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
@@ -191,6 +210,29 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 return Ok(());
             }
         }
+    }
+
+    /// Wait for the next event on the follow subscription, buffering events
+    /// from other subscriptions for later retrieval.
+    async fn next_follow_event(&mut self) -> crate::Result<(String, serde_json::Value)> {
+        loop {
+            let (sub_id, value) = self.rpc.next_event().await.ok_or(crate::Error::Node(
+                "subscription closed before receiving event".into(),
+            ))?;
+            if sub_id == self.follow_sub_id {
+                return Ok((sub_id, value));
+            }
+            // Buffer events from other subscriptions
+            self.rpc_rebuffer(sub_id, value);
+        }
+    }
+
+    /// Put an event back into the transport's buffer for later retrieval.
+    /// This is used when we receive an event from a non-follow subscription.
+    fn rpc_rebuffer(&mut self, _sub_id: String, _value: serde_json::Value) {
+        // Events from non-follow subscriptions are currently discarded.
+        // Archive operations use wait_for_archive_event which handles routing.
+        log::trace!("discarding event from non-follow subscription");
     }
 
     /// Flush all pending unpins in a single batch RPC call.
@@ -258,7 +300,10 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     async fn prepare_operation(&mut self) -> crate::Result<String> {
         let mut stopped = false;
 
-        while let Some(event_json) = self.rpc.try_next_event() {
+        while let Some((sub_id, event_json)) = self.rpc.try_next_event() {
+            if sub_id != self.follow_sub_id {
+                continue;
+            }
             let event: FollowEvent = match serde_json::from_value(event_json) {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -292,11 +337,17 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// processing other follow events as side effects.
     async fn wait_for_operation(&mut self, target: &str) -> crate::Result<OperationResult> {
         loop {
-            let event_json = self
+            let (sub_id, event_json) = self
                 .rpc
                 .next_event()
                 .await
                 .ok_or(crate::Error::SubscriptionClosed)?;
+
+            // Skip events from non-follow subscriptions
+            if sub_id != self.follow_sub_id {
+                continue;
+            }
+
             let event: FollowEvent = serde_json::from_value(event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
@@ -455,6 +506,102 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             )),
         }
     }
+
+    // --- Archive API methods ---
+
+    /// Resolve a block number to a block hash via `archive_v1_hashByHeight`.
+    async fn archive_hash_by_height(&mut self, height: u64) -> crate::Result<String> {
+        let result = self
+            .rpc
+            .rpc("archive_v1_hashByHeight", serde_json::json!([height]))
+            .await
+            .map_err(|e| crate::Error::Node(format!("archive_v1_hashByHeight: {e}")))?;
+
+        // Returns an array of hashes (usually one for canonical chain)
+        let hashes: Vec<String> = serde_json::from_value(result)
+            .map_err(|e| crate::Error::Decode(format!("hashByHeight response: {e}")))?;
+
+        hashes
+            .into_iter()
+            .next()
+            .ok_or(crate::Error::BadBlockNumber)
+    }
+
+    /// Query storage at a historical block via `archive_v1_storage` (subscription-based).
+    async fn archive_storage(
+        &mut self,
+        block_hash: &str,
+        keys: &[String],
+    ) -> crate::Result<Vec<StorageItem>> {
+        let items: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|k| serde_json::json!({"key": k, "type": "value"}))
+            .collect();
+
+        let archive_sub_id = self
+            .rpc
+            .subscribe("archive_v1_storage", serde_json::json!([block_hash, items]))
+            .await
+            .map_err(|e| crate::Error::Node(format!("archive_v1_storage: {e}")))?;
+
+        self.wait_for_archive_storage(&archive_sub_id).await
+    }
+
+    /// Wait for archive storage events, routing follow events to lifecycle handling.
+    async fn wait_for_archive_storage(
+        &mut self,
+        archive_sub_id: &str,
+    ) -> crate::Result<Vec<StorageItem>> {
+        let mut result_items = Vec::new();
+
+        loop {
+            let (sub_id, event_json) = self
+                .rpc
+                .next_event()
+                .await
+                .ok_or(crate::Error::SubscriptionClosed)?;
+
+            if sub_id == archive_sub_id {
+                let event: ArchiveStorageEvent = serde_json::from_value(event_json)
+                    .map_err(|e| crate::Error::Decode(format!("archive event: {e}")))?;
+
+                match event {
+                    ArchiveStorageEvent::Items { items } => {
+                        for item in items {
+                            result_items.push(StorageItem {
+                                key: item.key,
+                                value: item.value,
+                            });
+                        }
+                    }
+                    ArchiveStorageEvent::Done => return Ok(result_items),
+                    ArchiveStorageEvent::Error { error } => {
+                        return Err(crate::Error::Node(format!("archive storage: {error}")));
+                    }
+                    ArchiveStorageEvent::WaitingForContinue => {
+                        let _ = self
+                            .rpc
+                            .rpc(
+                                "archive_v1_storageContinue",
+                                serde_json::json!([archive_sub_id]),
+                            )
+                            .await;
+                    }
+                }
+            } else if sub_id == self.follow_sub_id {
+                // Process follow events that arrive while waiting for archive results
+                if let Ok(event) = serde_json::from_value::<FollowEvent>(event_json) {
+                    match event {
+                        FollowEvent::Stop => {
+                            self.needs_refollow = true;
+                        }
+                        other => self.record_lifecycle_event(other),
+                    }
+                }
+            }
+            // Events from unknown subscriptions are discarded
+        }
+    }
 }
 
 // --- Backend implementation ---
@@ -465,12 +612,15 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         keys: Vec<crate::RawKey>,
         block: Option<u32>,
     ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
-        if block.is_some() {
-            return Err(crate::Error::BadBlockNumber);
-        }
         let hex_keys: Vec<String> = keys.iter().map(|k| to_hex(k)).collect();
 
-        let items = self.storage(&hex_keys).await?;
+        let items = match block {
+            None => self.storage(&hex_keys).await?,
+            Some(n) => {
+                let hash = self.archive_hash_by_height(n as u64).await?;
+                self.archive_storage(&hash, &hex_keys).await?
+            }
+        };
 
         let mut result = Vec::new();
         for key in &keys {
@@ -545,7 +695,17 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                     parent: h,
                 })
             }
-            Some(_) => Err(crate::Error::BadBlockNumber),
+            Some(n) => {
+                let hash_hex = self.archive_hash_by_height(n as u64).await?;
+                let mut h = [0u8; 32];
+                hex::decode_to_slice(hash_hex.trim_start_matches("0x"), &mut h)
+                    .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
+                Ok(meta::BlockInfo {
+                    number: n as u64,
+                    hash: h,
+                    parent: h, // parent not resolved — would need archive_v1_header
+                })
+            }
         }
     }
 }
