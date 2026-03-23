@@ -1,26 +1,74 @@
 # Sube
 
-A client library for Substrate chains, doing less by design than [subxt](https://github.com/paritytech/substrate-subxt) with a big focus on size and portability so it can run in constrainted environments like the browser.
+A lightweight Substrate client focused on size and portability.
+Runs in `no_std` environments including embedded targets (Cortex-M), the browser, and standard servers.
 
-Making use of the type information in a chain's metadata(`>= v15`) and powered by our [Scales](../scales/) library, Sube allows automatic conversion between the [SCALE](https://github.com/paritytech/parity-scale-codec) binary format used by the blockchain with a human-readable representation like JSON without having to hardcode type information for each network. 
-When submitting extrinsics Sube only does that, it's your responsability to sign the payload with a different tool first(e.g. [libwallet](../libwallet)) before you feed the extrinsic data to the library.
+Uses runtime metadata (≥ v15) and our [Scales](../scales/) library to automatically convert between SCALE binary and human-readable formats (JSON, text) without hardcoded type information.
 
-Sube supports multiple backends under different feature flags like `http`, `http-web` or `ws`/`wss`.  
+## Quick Start
 
+```rust
+use sube::sube;
 
-## Example Usage
+// One-liner query
+let response = sube("wss://kreivo.io/system/account/0x1234...").await?;
 
-To make Queries/Extrinsics using Sube, you can use the `SubeBuilder` or the convenient `sube!` macro. [here are the examples](./examples/)
+// Reusable handle
+let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
+let account = chain.query("system/account/0x1234...").await?;
 
+// Historical block query
+let old = chain.query_at("system/account/0x1234...", 1000).await?;
 
-## Progressive decentralization
+// Submit an extrinsic (waits for finalization)
+chain.call("balances/transfer_keep_alive")
+    .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
+    .signer(my_signer)
+    .await?;
 
-> 🛠️ ⚠️ [Upcoming feature](https://github.com/virto-network/sube/milestone/2)
+// Or use compact text format
+chain.call("system/remark")
+    .body_text("(remark:0x68656c6c6f)")
+    .signer(my_signer)
+    .await?;
+```
 
-The true _raison d'etre_ of Sube is not to create yet another Substrate client but to enable the Virto.Network and any project in the ecosystem to reach a broader audience of end-users and developers by lowering the technical entry barrier and drastically improving the overall user experience of interacting with blockchains. We call it **progressive decentralization**.
+## Backends
 
-When paired with our plugin runtime [Valor](https://github.com/virto-network/valor), Sube can be exposed as an HTTP API that runs both in the server and the browser and be composed with other plugins to create higher level APIs that a client aplication can use from any plattform thanks to the ubiquitousness of HTTP.
-We imagine existing centralized projects easily integrating with Substrate blockchains in the server with the option to progressively migrate to a decentralized set-up with whole backends later running in the user device(web browser included).  
+| Feature | Description |
+|---------|-------------|
+| `ws` | WebSocket via `async-tungstenite` + `smol` (std) |
+| `wss` | WebSocket with TLS (implies `ws`) |
+| `ws-edge` | WebSocket via `edge-ws` for embedded targets (no_std) |
+| `smoldot-std` | Embedded light client via `smoldot-light` (no external node) |
 
-But progressive decentralization goes beyond the migration of a centralized project, it's rather about giving users the the best experience by possibly combining the best of both worlds. A Sube powered application can start being served from a server to have an immediate response and 0 start-up time and since plugins can be hot-swapped, the blockchain backend can be switched from HTTP to lightnode transparently without the application code ever realizing, giving our users with bad connectivity and slower devices the opportunity to enjoy the best possible user experience without compromizing decentralization.
+### Light Client
 
+```rust
+let chain = sube::Sube::connect_light(include_str!("chain_spec.json")).await?;
+let r = chain.query("system/account/0x1234").await?;
+```
+
+## Other Features
+
+| Feature | Description |
+|---------|-------------|
+| `json` | JSON serialization via `scales` |
+| `text` | Compact text format via `scales` |
+| `std` | Standard library support |
+
+## Testing
+
+```sh
+# Unit tests
+cargo test
+
+# Integration tests (requires network)
+cargo test --features test --test integration -- --ignored
+
+# Embedded smoke test (requires qemu-system-arm)
+cd tests/qemu && cargo build --release
+qemu-system-arm -cpu cortex-m4 -machine lm3s6965evb \
+  -nographic -semihosting-config enable=on,target=native \
+  -kernel target/thumbv7em-none-eabihf/release/sube-qemu-test
+```

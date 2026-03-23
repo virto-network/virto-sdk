@@ -1,37 +1,49 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 /*!
-Sube is a lightweight blockchain client to query and submit extrinsics
-to Substrate based blockchains.
-It supports multiple backends and uses the chain's type information
-to automatically encode/decode data into human-readable formats like JSON.
+Lightweight Substrate client focused on size and portability.
+Runs in `no_std` (including embedded Cortex-M), browser, and standard environments.
+
+Uses runtime metadata (≥ v15) and [`scales`] to convert between SCALE binary
+and human-readable formats (JSON, text) without hardcoded type information.
 
 # Usage
 
 ```rust,ignore
-let chain = sube("wss://kreivo.io").await?;
+use sube::sube;
 
-// Query storage
-let result = chain.query("system/account/0x1234...").await?;
+// One-liner query
+let r = sube("wss://kreivo.io/system/account/0x1234").await?;
 
-// Submit an extrinsic
-chain.call("balances/transfer")
+// Reusable handle
+let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
+let r = chain.query("system/account/0x1234").await?;
+
+// Historical block query (via archive API)
+let old = chain.query_at("system/account/0x1234", 1000).await?;
+
+// Submit extrinsic (waits for finalization)
+chain.call("balances/transfer_keep_alive")
     .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
     .signer(my_signer)
     .await?;
 ```
 
-# Feature Flags
+# Backends
 
 | Feature | Description |
 |---------|-------------|
-| `json` | Enable JSON serialization support in `scales` |
-| `text` | Enable compact text format support in `scales` |
-| `std` | Enable standard library support across dependencies |
-| `ws` | WebSocket backend via `async-tungstenite` and `smol` (std) |
-| `wss` | WebSocket with TLS support (implies `ws`) |
-| `ws-edge` | WebSocket backend via `edge-ws` for embedded targets (no_std) |
-| `smoldot` | Embedded light client backend via `smoldot-light` |
-| `smoldot-std` | Smoldot with standard library and `smol` (implies `smoldot` + `std`) |
+| `ws` | WebSocket via `async-tungstenite` + `smol` (std) |
+| `wss` | WebSocket with TLS (implies `ws`) |
+| `ws-edge` | WebSocket via `edge-ws` for embedded targets (no_std) |
+| `smoldot-std` | Embedded light client via `smoldot-light` (no external node) |
+
+# Other Features
+
+| Feature | Description |
+|---------|-------------|
+| `json` | JSON serialization via `scales` |
+| `text` | Compact text format via `scales` |
+| `std` | Standard library support |
 */
 
 #[macro_use]
