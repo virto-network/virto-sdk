@@ -18,6 +18,10 @@ struct Cli {
     /// Output format: text (default) or json
     #[arg(short, long, default_value = "text")]
     format: String,
+
+    /// Watch for changes (re-query on each new finalized block)
+    #[arg(short, long)]
+    watch: bool,
 }
 
 fn main() -> Result<()> {
@@ -28,18 +32,14 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.path {
+        Some(path) if cli.watch => watch(&cli.chain, &path, &cli.format).await,
         Some(path) => oneshot(&cli.chain, &path, &cli.format).await,
         None => tui::run(&cli.chain).await,
     }
 }
 
-async fn oneshot(chain: &str, path: &str, format: &str) -> Result<()> {
+fn print_response(response: &sube::Response, format: &str) -> Result<()> {
     use sube::Response;
-
-    eprintln!("Connecting to {chain}...");
-    let mut chain = sube::Sube::connect(chain).await?;
-    let response = chain.query(path).await?;
-
     match format {
         "json" => {
             if let Some(json) = response.to_json()? {
@@ -74,6 +74,39 @@ async fn oneshot(chain: &str, path: &str, format: &str) -> Result<()> {
             Response::Void => {}
         },
     }
-
     Ok(())
+}
+
+async fn oneshot(chain: &str, path: &str, format: &str) -> Result<()> {
+    eprintln!("Connecting to {chain}...");
+    let mut chain = sube::Sube::connect(chain).await?;
+    let response = chain.query(path).await?;
+    print_response(&response, format)
+}
+
+async fn watch(chain_url: &str, path: &str, format: &str) -> Result<()> {
+    eprintln!("Connecting to {chain_url}...");
+    let mut chain = sube::Sube::connect(chain_url).await?;
+
+    let mut prev: Option<Vec<u8>> = None;
+
+    loop {
+        let response = chain.query(path).await?;
+        let current: Vec<u8> = Vec::from(response);
+
+        let changed = match &prev {
+            None => true,
+            Some(p) => *p != current,
+        };
+
+        if changed {
+            // Re-query to get a fresh Response (Vec::from consumed the original)
+            let response = chain.query(path).await?;
+            print_response(&response, format)?;
+            prev = Some(current);
+        }
+
+        // Wait for next finalization
+        chain.next_finalized().await?;
+    }
 }
