@@ -325,10 +325,11 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     ///
     /// Drains buffered events first, then reads from the follow subscription.
     /// Internal operation events are handled transparently.
-    /// `NewBlock` events include the block number (resolved via header RPC).
+    ///
+    /// `NewBlock` events have `number: 0` — call [`header()`](Self::header)
+    /// with the hash to get the block number if needed.
     pub async fn next_chain_event(&mut self) -> crate::Result<ChainEvent> {
-        let front = self.event_queue.pop_front();
-        if let Some(event) = self.resolve_event(front).await? {
+        if let Some(event) = self.event_queue.pop_front() {
             return Ok(event);
         }
         loop {
@@ -359,36 +360,11 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 | FollowEvent::OperationWaitingForContinue { .. } => continue,
                 other => {
                     self.record_lifecycle_event(other);
-                    let front = self.event_queue.pop_front();
-                    if let Some(event) = self.resolve_event(front).await? {
+                    if let Some(event) = self.event_queue.pop_front() {
                         return Ok(event);
                     }
                 }
             }
-        }
-    }
-
-    /// Resolve block number for NewBlock events via header RPC.
-    async fn resolve_event(
-        &mut self,
-        event: Option<ChainEvent>,
-    ) -> crate::Result<Option<ChainEvent>> {
-        match event {
-            Some(ChainEvent::NewBlock {
-                ref hash,
-                ref parent,
-                is_new_runtime,
-                ..
-            }) => {
-                let header = self.header(hash).await?;
-                Ok(Some(ChainEvent::NewBlock {
-                    hash: hash.clone(),
-                    parent: parent.clone(),
-                    number: header.number,
-                    is_new_runtime,
-                }))
-            }
-            other => Ok(other),
         }
     }
 

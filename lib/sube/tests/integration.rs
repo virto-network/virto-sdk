@@ -143,14 +143,10 @@ fn follow_chain_events() {
             let event = chain.next_event().await.expect("gets event");
             match event {
                 ChainEvent::NewBlock {
-                    hash,
-                    parent,
-                    number,
-                    ..
+                    hash, parent, ..
                 } => {
                     assert!(hash.starts_with("0x"), "hash is hex");
                     assert!(parent.starts_with("0x"), "parent is hex");
-                    assert!(number > 0, "block number is resolved");
                     saw_new_block = true;
                 }
                 ChainEvent::Finalized { hashes, .. } => {
