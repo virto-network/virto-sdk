@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run --example query --features wss,json,text
 
-use sube::{Response, Sube};
+use sube::Sube;
 
 fn main() -> sube::Result<()> {
     smol::block_on(async {
@@ -10,40 +10,24 @@ fn main() -> sube::Result<()> {
 
         // One-liner: connect, query and get the result in a single expression
         let response = sube::sube(&format!("wss://kreivo.io/system/account/{addr}")).await?;
-        print_value("Account (one-liner)", &response);
+        if let Some(json) = response.to_json()? {
+            println!("Account (one-liner): {}", serde_json::to_string_pretty(&json).unwrap());
+        }
 
         // Reusable handle: connect once, query many times
         let mut chain = Sube::connect("wss://kreivo.io").await?;
 
         let response = chain.query(&format!("system/account/{addr}")).await?;
-        print_value("Account (handle)", &response);
+        if let Some(text) = response.to_text()? {
+            println!("Account (text): {text}");
+        }
 
-        // Query with the identity pallet — SuperOf maps AccountId32 to (AccountId32, Data)
-        let response = chain.query(&format!("identity/superOf/{addr}")).await?;
-        print_value("Identity SuperOf", &response);
-
-        // Query a map with a u32 key (e.g. assets pallet)
-        let response = chain.query("assets/asset/1984").await?;
-        print_value("Asset 1984 (USDT)", &response);
+        // Query a constant
+        let response = chain.query("system/_constants/Version").await?;
+        if let Some(json) = response.to_json()? {
+            println!("Version: {}", serde_json::to_string_pretty(&json).unwrap());
+        }
 
         Ok(())
     })
-}
-
-fn print_value(label: &str, response: &Response) {
-    match response {
-        Response::Value(entry, meta) => {
-            // Display as text (compact, URL-safe format)
-            let text = entry.to_text(&meta.registry).expect("valid text");
-            println!("{label} (text): {text}");
-
-            // Also display as JSON for comparison
-            let json = entry.to_json(&meta.registry).expect("valid json");
-            println!(
-                "{label} (json): {}",
-                serde_json::to_string_pretty(&json).unwrap()
-            );
-        }
-        other => println!("{label}: {other:?}"),
-    }
 }

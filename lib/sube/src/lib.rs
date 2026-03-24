@@ -50,17 +50,14 @@ chain.call("balances/transfer_keep_alive")
 extern crate alloc;
 
 pub use alloc::sync::Arc;
-pub use codec;
-pub use core::fmt::Display;
-pub use scales::{self, Registry, Serializer, Value};
+pub use scales::{self, Registry, Value};
 pub use serde_json::{json, Value as JsonValue};
 
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
-pub use extrinsic::{EncodeCall, ExtrinsicBody, Text};
+pub use extrinsic::{EncodeCall, Text};
 pub use meta::Metadata;
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 pub use rpc::chainhead::{BlockHeader, ChainEvent};
-pub use rpc::Rpc;
 pub use signer::{Bytes, Signer, SignerFn};
 
 use core::fmt;
@@ -76,13 +73,13 @@ mod prelude {
 
 pub(crate) mod backend;
 pub mod builder;
-pub mod extrinsic;
+pub(crate) mod extrinsic;
 mod hasher;
 pub mod metadata;
 pub mod rpc;
 mod signer;
 pub(crate) mod url;
-pub mod util;
+pub(crate) mod util;
 
 /// Connect to a Substrate chain.
 ///
@@ -101,7 +98,7 @@ pub const DEFAULT_TIMEOUT: core::time::Duration = core::time::Duration::from_sec
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-pub async fn query(
+pub(crate) async fn query(
     chain: &mut (impl Backend + ?Sized),
     meta: &Arc<Metadata>,
     path: &str,
@@ -235,6 +232,49 @@ impl Response {
             }
             _ => None,
         }
+    }
+
+    /// Decode the response value as JSON.
+    ///
+    /// Returns `Ok(None)` for `None`/`Void`/`Meta` responses.
+    /// For `ValueSet`, returns the first value entry.
+    pub fn to_json(&self) -> Result<Option<JsonValue>> {
+        match self {
+            Response::Value(entry, meta) => entry.to_json(&meta.registry).map(Some),
+            Response::ValueSet(items, meta) => {
+                let values: Vec<JsonValue> = items
+                    .iter()
+                    .filter_map(|(_, v)| v.as_ref())
+                    .map(|e| e.to_json(&meta.registry))
+                    .collect::<Result<_>>()?;
+                Ok(Some(JsonValue::Array(values)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Decode the response value as compact text.
+    ///
+    /// Returns `Ok(None)` for `None`/`Void`/`Meta` responses.
+    pub fn to_text(&self) -> Result<Option<String>> {
+        match self {
+            Response::Value(entry, meta) => entry.to_text(&meta.registry).map(Some),
+            _ => Ok(None),
+        }
+    }
+
+    /// Extract the single storage entry, or error if not a `Value` response.
+    pub fn into_value(self) -> Result<(StorageEntry, Arc<Metadata>)> {
+        match self {
+            Response::Value(entry, meta) => Ok((entry, meta)),
+            Response::None => Err(Error::StorageKeyNotFound),
+            _ => Err(Error::BadInput),
+        }
+    }
+
+    /// Returns `true` if this is a `None` response (key exists but has no value).
+    pub fn is_none(&self) -> bool {
+        matches!(self, Response::None)
     }
 }
 

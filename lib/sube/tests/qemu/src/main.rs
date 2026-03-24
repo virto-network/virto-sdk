@@ -36,13 +36,9 @@ fn main() -> ! {
     let msg = alloc::format!("{}", sube::Error::BadInput);
     assert(!msg.is_empty());
 
-    // ExtrinsicBody with text format body
-    let _ = hprintln!("test: Text body...");
-    let _body = sube::ExtrinsicBody {
-        nonce: Some(0),
-        body: sube::Text("(remark:0x68656c6c6f)"),
-        extensions: alloc::vec![],
-    };
+    // Text type works on bare metal
+    let _ = hprintln!("test: Text type...");
+    let _text = sube::Text("(remark:0x68656c6c6f)");
 
     let _ = hprintln!("=== ALL PASSED ===");
     debug::exit(debug::EXIT_SUCCESS);
