@@ -379,6 +379,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         if hashes.is_empty() {
             return;
         }
+        log::debug!("unpinning {} blocks", hashes.len());
         let _ = self
             .rpc
             .rpc(
@@ -431,11 +432,8 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
                 if let Some(new) = finalized_block_hashes.last() {
                     self.finalized_hash = new.clone();
-                    let was_pending = self.pending_unpin.iter().any(|h| h == new);
+                    // Remove the new finalized hash from unpin queue — we need it pinned
                     self.pending_unpin.retain(|h| h != new);
-                    if !was_pending {
-                        self.needs_refollow = true;
-                    }
                 }
 
                 self.event_queue.push_back(ChainEvent::Finalized {
@@ -475,6 +473,11 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         if stopped || self.needs_refollow {
             self.needs_refollow = false;
+            // Unsubscribe old follow before creating a new one
+            let _ = self
+                .rpc
+                .unsubscribe("chainHead_v1_unfollow", &self.follow_sub_id)
+                .await;
             self.follow_sub_id = self
                 .rpc
                 .subscribe("chainHead_v1_follow", serde_json::json!([true]))

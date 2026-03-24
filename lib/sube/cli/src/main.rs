@@ -88,25 +88,32 @@ async fn watch(chain_url: &str, path: &str, format: &str) -> Result<()> {
     eprintln!("Connecting to {chain_url}...");
     let mut chain = sube::Sube::connect(chain_url).await?;
 
-    let mut prev: Option<Vec<u8>> = None;
+    // Print initial value
+    let response = chain.query(path).await?;
+    print_response(&response, format)?;
+    let mut prev_raw: Vec<u8> = match &response {
+        sube::Response::Value(entry, _) => entry.data.clone(),
+        _ => vec![],
+    };
 
     loop {
-        let response = chain.query(path).await?;
-        let current: Vec<u8> = Vec::from(response);
-
-        let changed = match &prev {
-            None => true,
-            Some(p) => *p != current,
+        // Wait for a new block and query at that specific block
+        let hash = loop {
+            match chain.next_event().await? {
+                sube::ChainEvent::NewBlock { hash, .. } => break hash,
+                _ => continue,
+            }
         };
 
-        if changed {
-            // Re-query to get a fresh Response (Vec::from consumed the original)
-            let response = chain.query(path).await?;
-            print_response(&response, format)?;
-            prev = Some(current);
-        }
+        let response = chain.query_at_hash(path, &hash).await?;
+        let current_raw = match &response {
+            sube::Response::Value(entry, _) => entry.data.clone(),
+            _ => vec![],
+        };
 
-        // Wait for next finalization
-        chain.next_finalized().await?;
+        if current_raw != prev_raw {
+            print_response(&response, format)?;
+            prev_raw = current_raw;
+        }
     }
 }
