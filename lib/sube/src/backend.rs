@@ -59,8 +59,8 @@ impl Backend for AnyBackend {
         dispatch!(self, get_keys_paged(from, size, to))
     }
 
-    async fn submit(&mut self, ext: &[u8]) -> SubeResult<()> {
-        dispatch!(self, submit(ext))
+    async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> SubeResult<()> {
+        dispatch!(self, submit(ext, wait_for_finalization))
     }
 
     async fn metadata(&mut self) -> SubeResult<Metadata> {

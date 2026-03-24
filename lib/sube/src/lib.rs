@@ -283,7 +283,9 @@ pub trait Backend {
         to: Option<RawKey>,
     ) -> crate::Result<Vec<RawValue>>;
 
-    async fn submit(&mut self, ext: &[u8]) -> Result<()>;
+    /// Submit an extrinsic. If `wait_for_finalization` is true, waits for
+    /// full finalization; otherwise returns after best-chain inclusion.
+    async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> Result<()>;
 
     async fn metadata(&mut self) -> Result<Metadata>;
 
@@ -311,7 +313,7 @@ impl Backend for Offline {
         Err(Error::ChainUnavailable)
     }
 
-    async fn submit(&mut self, _ext: &[u8]) -> Result<()> {
+    async fn submit(&mut self, _ext: &[u8], _wait_for_finalization: bool) -> Result<()> {
         Err(Error::ChainUnavailable)
     }
 

@@ -21,6 +21,7 @@ struct TxBuilder<Body, Sign> {
     signer: Sign,
     nonce: Option<u64>,
     extensions: Vec<(String, JsonValue)>,
+    wait_for_finalization: bool,
 }
 
 impl<S> TxBuilder<(), S> {
@@ -31,6 +32,7 @@ impl<S> TxBuilder<(), S> {
             signer: self.signer,
             nonce: self.nonce,
             extensions: self.extensions,
+            wait_for_finalization: self.wait_for_finalization,
         }
     }
 }
@@ -43,6 +45,7 @@ impl<B> TxBuilder<B, ()> {
             body: self.body,
             nonce: self.nonce,
             extensions: self.extensions,
+            wait_for_finalization: self.wait_for_finalization,
         }
     }
 }
@@ -62,13 +65,13 @@ impl<B, S> TxBuilder<B, S> {
         self
     }
 
-    fn into_parts(self) -> (String, ExtrinsicBody<B>, S) {
+    fn into_parts(self) -> (String, ExtrinsicBody<B>, S, bool) {
         let body = ExtrinsicBody {
             nonce: self.nonce,
             body: self.body,
             extensions: self.extensions,
         };
-        (self.path, body, self.signer)
+        (self.path, body, self.signer, self.wait_for_finalization)
     }
 }
 
@@ -129,6 +132,7 @@ impl SubeBuilder {
                 signer: (),
                 nonce: None,
                 extensions: Vec::new(),
+                wait_for_finalization: false,
             },
         }
     }
@@ -307,6 +311,7 @@ impl Sube {
                 signer: (),
                 nonce: None,
                 extensions: Vec::new(),
+                wait_for_finalization: false,
             },
         }
     }
@@ -317,19 +322,33 @@ impl Sube {
         path: &str,
         body: ExtrinsicBody<B>,
         signer: S,
+        wait_for_finalization: bool,
     ) -> SubeResult<Response>
     where
         B: EncodeCall + core::fmt::Debug,
         S: Signer,
     {
-        let result =
-            crate::extrinsic::submit(&mut self.backend, &self.metadata, path, &body, &signer)
-                .await;
+        let result = crate::extrinsic::submit(
+            &mut self.backend,
+            &self.metadata,
+            path,
+            &body,
+            &signer,
+            wait_for_finalization,
+        )
+        .await;
         match result {
             Err(ref e) if Self::is_connection_error(e) => {
                 self.reconnect().await?;
-                crate::extrinsic::submit(&mut self.backend, &self.metadata, path, &body, &signer)
-                    .await
+                crate::extrinsic::submit(
+                    &mut self.backend,
+                    &self.metadata,
+                    path,
+                    &body,
+                    &signer,
+                    wait_for_finalization,
+                )
+                .await
             }
             other => other,
         }
@@ -552,6 +571,12 @@ impl<'a, B> CallBuilder<'a, B, ()> {
 }
 
 impl<'a, B, S> CallBuilder<'a, B, S> {
+    /// Wait for full finalization instead of just best-chain inclusion.
+    pub fn finalize(mut self) -> Self {
+        self.tx.wait_for_finalization = true;
+        self
+    }
+
     pub fn nonce(mut self, nonce: u64) -> Self {
         self.tx = self.tx.nonce(nonce);
         self
@@ -580,8 +605,10 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (path, body, signer) = self.tx.into_parts();
-            self.sube.submit_with_reconnect(&path, body, signer).await
+            let (path, body, signer, finalize) = self.tx.into_parts();
+            self.sube
+                .submit_with_reconnect(&path, body, signer, finalize)
+                .await
         })
     }
 }
@@ -608,6 +635,12 @@ impl<B> OneShotCall<B, ()> {
 }
 
 impl<B, S> OneShotCall<B, S> {
+    /// Wait for full finalization instead of just best-chain inclusion.
+    pub fn finalize(mut self) -> Self {
+        self.tx.wait_for_finalization = true;
+        self
+    }
+
     pub fn nonce(mut self, nonce: u64) -> Self {
         self.tx = self.tx.nonce(nonce);
         self
@@ -634,8 +667,8 @@ where
             let mut backend = connect(&url, self.timeout).await?;
             let meta = get_metadata(&mut backend, &url, self.preloaded_meta).await?;
 
-            let (_, body, signer) = self.tx.into_parts();
-            crate::extrinsic::submit(&mut backend, &meta, path, &body, &signer).await
+            let (_, body, signer, finalize) = self.tx.into_parts();
+            crate::extrinsic::submit(&mut backend, &meta, path, &body, &signer, finalize).await
         })
     }
 }

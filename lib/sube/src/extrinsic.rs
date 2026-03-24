@@ -165,6 +165,7 @@ pub async fn submit<V>(
     path: &str,
     tx_data: &ExtrinsicBody<V>,
     signer: &(impl crate::Signer + ?Sized),
+    wait_for_finalization: bool,
 ) -> Result<Response>
 where
     V: EncodeCall + core::fmt::Debug,
@@ -248,7 +249,9 @@ where
     )
     .encode();
 
-    chain.submit(&[len, encoded_inner].concat()).await?;
+    chain
+        .submit(&[len, encoded_inner].concat(), wait_for_finalization)
+        .await?;
 
     Ok(Response::Void)
 }

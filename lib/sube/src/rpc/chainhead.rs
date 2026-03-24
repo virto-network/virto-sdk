@@ -941,7 +941,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .collect()
     }
 
-    async fn submit(&mut self, ext: &[u8]) -> crate::Result<()> {
+    async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> crate::Result<()> {
         let hex = to_hex(ext);
 
         let sub_id = self
@@ -953,7 +953,9 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .await
             .map_err(|e| crate::Error::Node(format!("tx watch: {e}")))?;
 
-        // Wait for finalization or terminal error
+        let mut included = false;
+
+        // Wait for inclusion or finalization
         loop {
             let (event_sub_id, event_json) = self
                 .rpc
@@ -966,6 +968,12 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                     .map_err(|e| crate::Error::Decode(format!("tx event: {e}")))?;
 
                 match event {
+                    TxEvent::BestChainBlockIncluded { block: Some(_) } => {
+                        if !wait_for_finalization {
+                            return Ok(());
+                        }
+                        included = true;
+                    }
                     TxEvent::Finalized { .. } => return Ok(()),
                     TxEvent::Invalid { error } => {
                         return Err(crate::Error::OperationFailed(format!(
@@ -973,6 +981,11 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                         )));
                     }
                     TxEvent::Dropped { error } => {
+                        // If already included in best chain, a drop during
+                        // finalization wait is not fatal
+                        if included {
+                            return Ok(());
+                        }
                         return Err(crate::Error::OperationFailed(format!(
                             "tx dropped: {error}"
                         )));
@@ -980,7 +993,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                     TxEvent::Error { error } => {
                         return Err(crate::Error::OperationFailed(format!("tx error: {error}")));
                     }
-                    // Validated, Broadcasted, BestChainBlockIncluded — keep waiting
+                    // Validated, Broadcasted, BestChainBlockIncluded(None) — keep waiting
                     _ => {}
                 }
             } else if event_sub_id == self.follow_sub_id {
