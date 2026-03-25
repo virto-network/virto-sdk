@@ -8,8 +8,10 @@ use alloc::string::String;
 use crate::Error;
 
 /// A zero-copy cursor over a SCALE-encoded byte slice.
-pub(super) struct Cursor<'a> {
+pub struct Cursor<'a> {
+    /// The underlying byte slice.
     pub data: &'a [u8],
+    /// Current read position.
     pub pos: usize,
 }
 

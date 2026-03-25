@@ -5,7 +5,9 @@
 //!
 //! Enable with the `frame` feature flag.
 
-pub(crate) mod cursor;
+/// Low-level SCALE binary cursor for frame decoders.
+pub mod cursor;
+pub mod extrinsic;
 pub mod metadata;
 
 #[cfg(feature = "compress")]
