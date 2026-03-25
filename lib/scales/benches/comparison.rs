@@ -1,7 +1,7 @@
 use codec::{Decode, Encode};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use scale_info::{meta_type, PortableRegistry, Registry as SiRegistry, TypeInfo};
-use scale_serialization::{compress, Registry, Value};
+use scale_serialization::{frame::compress, Registry, Value};
 use std::collections::BTreeMap;
 
 // -- helpers --

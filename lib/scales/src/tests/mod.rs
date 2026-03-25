@@ -3,7 +3,7 @@ mod serializer;
 mod textfmt;
 mod value;
 
-use crate::compress;
+use crate::frame::compress;
 use crate::registry::*;
 use alloc::vec::Vec;
 use codec::Encode;

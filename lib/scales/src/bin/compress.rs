@@ -1,6 +1,6 @@
 use codec::Decode;
 use scale_info::PortableRegistry;
-use scale_serialization::{compress, to_vec};
+use scale_serialization::{frame::compress, to_vec};
 use std::io::{self, Read, Write};
 
 fn main() {

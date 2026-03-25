@@ -441,7 +441,7 @@ fn test_bytes_as_hex_string() -> Result<()> {
 fn test_extrincic_call() -> Result<()> {
     let bytes = include_bytes!("../registry.bin");
     let portable = PortableRegistry::decode(&mut &bytes[..]).expect("hello");
-    let registry = crate::compress::compress(&portable).expect("compress");
+    let registry = crate::frame::compress::compress(&portable).expect("compress");
 
     let transfer_call = serde_json::json!({
         "transfer_keep_alive": {

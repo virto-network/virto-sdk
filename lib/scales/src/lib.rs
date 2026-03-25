@@ -7,9 +7,9 @@
 #[cfg_attr(feature = "serializer", macro_use)]
 extern crate alloc;
 
-#[cfg(feature = "scale-info")]
-pub mod compress;
 pub mod error;
+#[cfg(feature = "frame")]
+pub mod frame;
 pub mod registry;
 #[cfg(feature = "serializer")]
 mod serializer;

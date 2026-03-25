@@ -291,7 +291,7 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
         _ => return Err(codec::Error::from("Metadata version not supported")),
     };
 
-    let registry = scales::compress::compress(&types)
+    let registry = scales::frame::compress::compress(&types)
         .map_err(|_| codec::Error::from("Failed to compress registry"))?;
 
     Ok(Metadata {
@@ -409,7 +409,7 @@ pub fn from_bytes_filtered(
 
     // Filtered compress — only types reachable from selected pallets
     let (registry, id_map) =
-        scales::compress::compress_filtered(&portable_registry, &root_ids)
+        scales::frame::compress::compress_filtered(&portable_registry, &root_ids)
             .map_err(|_| codec::Error::from("Failed to compress filtered registry"))?;
 
     // Drop the heavy PortableRegistry before building the final Metadata
