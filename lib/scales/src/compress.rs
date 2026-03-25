@@ -122,6 +122,120 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> Result<TypeDef, Error
     })
 }
 
+/// Compress only the types reachable from `root_ids`, producing a smaller
+/// registry with remapped (contiguous) type IDs.
+/// Returns `(registry, id_map)` where `id_map[old_id] = new_id`.
+pub fn compress_filtered(
+    source: &PortableRegistry,
+    root_ids: &[u32],
+) -> Result<(Registry, alloc::vec::Vec<Option<u32>>), Error> {
+    use alloc::collections::BTreeSet;
+
+    // Walk all reachable types from roots
+    let mut visited = BTreeSet::new();
+    let mut stack: alloc::vec::Vec<u32> = root_ids.to_vec();
+    while let Some(id) = stack.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        if let Some(ty) = source.resolve(id) {
+            collect_type_refs(&ty.type_def, &mut stack);
+        }
+    }
+
+    // Build old→new mapping
+    let max_id = source.types.len() as u32;
+    let mut id_map: alloc::vec::Vec<Option<u32>> = alloc::vec![None; max_id as usize];
+    let mut new_id = 0u32;
+    for &old_id in &visited {
+        if (old_id as usize) < id_map.len() {
+            id_map[old_id as usize] = Some(new_id);
+            new_id += 1;
+        }
+    }
+
+    // Convert only visited types with remapped IDs
+    let types: Result<alloc::vec::Vec<TypeDef>, Error> = visited
+        .iter()
+        .map(|&old_id| {
+            let ty = source
+                .resolve(old_id)
+                .ok_or(Error::BadInput("missing type in filtered set".into()))?;
+            let mut td = convert_type(&ty, source)?;
+            remap_type_ids(&mut td, &id_map);
+            Ok(td)
+        })
+        .collect();
+
+    Ok((Registry::new(types?), id_map))
+}
+
+fn collect_type_refs(def: &SiTypeDef, out: &mut alloc::vec::Vec<u32>) {
+    match def {
+        SiTypeDef::Primitive(_) => {}
+        SiTypeDef::Composite(c) => {
+            for f in &c.fields {
+                out.push(f.ty.id);
+            }
+        }
+        SiTypeDef::Variant(v) => {
+            for var in &v.variants {
+                for f in &var.fields {
+                    out.push(f.ty.id);
+                }
+            }
+        }
+        SiTypeDef::Sequence(s) => out.push(s.type_param.id),
+        SiTypeDef::Array(a) => out.push(a.type_param.id),
+        SiTypeDef::Tuple(t) => {
+            for f in &t.fields {
+                out.push(f.id);
+            }
+        }
+        SiTypeDef::Compact(c) => out.push(c.type_param.id),
+        SiTypeDef::BitSequence(b) => {
+            out.push(b.bit_store_type.id);
+            out.push(b.bit_order_type.id);
+        }
+    }
+}
+
+fn remap_type_ids(td: &mut TypeDef, id_map: &[Option<u32>]) {
+    fn remap(id: &mut TypeId, map: &[Option<u32>]) {
+        if let Some(new) = map.get(*id as usize).copied().flatten() {
+            *id = new;
+        }
+    }
+
+    match td {
+        TypeDef::Sequence(id) | TypeDef::StructNewType(id) | TypeDef::Compact(id) => {
+            remap(id, id_map);
+        }
+        TypeDef::Map(k, v) | TypeDef::BitSequence(k, v) => {
+            remap(k, id_map);
+            remap(v, id_map);
+        }
+        TypeDef::Array(id, _) => remap(id, id_map),
+        TypeDef::Tuple(ids) | TypeDef::StructTuple(ids) => {
+            for id in ids { remap(id, id_map); }
+        }
+        TypeDef::Struct(fields) => {
+            for f in fields { remap(&mut f.ty, id_map); }
+        }
+        TypeDef::Variant(vdef) => {
+            for v in &mut vdef.variants {
+                match &mut v.fields {
+                    Fields::NewType(id) => remap(id, id_map),
+                    Fields::Tuple(ids) => { for id in ids { remap(id, id_map); } }
+                    Fields::Struct(fields) => { for f in fields { remap(&mut f.ty, id_map); } }
+                    Fields::Unit => {}
+                }
+            }
+        }
+        _ => {} // primitives, Bytes, StructUnit
+    }
+}
+
 fn is_tuple(c: &SiComposite) -> bool {
     c.fields.first().and_then(|f| f.name.as_ref()).is_none()
 }

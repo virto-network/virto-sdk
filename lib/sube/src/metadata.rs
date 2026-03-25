@@ -152,72 +152,71 @@ impl Serialize for Metadata {
 /// Supports V14, V15, and V16 depending on enabled features.
 /// The full PortableRegistry is compressed into a scales::Registry
 /// and then dropped — only the compressed form is kept.
-pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
-    use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
-    use scale_info::form::PortableForm;
+type FmHasher = frame_metadata::v14::StorageHasher;
 
-    type FmHasher = frame_metadata::v14::StorageHasher;
-
-    fn convert_hasher(h: &FmHasher) -> Hasher {
-        match h {
-            FmHasher::Blake2_128 => Hasher::Blake2_128,
-            FmHasher::Blake2_256 => Hasher::Blake2_256,
-            FmHasher::Blake2_128Concat => Hasher::Blake2_128Concat,
-            FmHasher::Twox128 => Hasher::Twox128,
-            FmHasher::Twox256 => Hasher::Twox256,
-            FmHasher::Twox64Concat => Hasher::Twox64Concat,
-            FmHasher::Identity => Hasher::Identity,
-        }
+fn convert_hasher(h: &FmHasher) -> Hasher {
+    match h {
+        FmHasher::Blake2_128 => Hasher::Blake2_128,
+        FmHasher::Blake2_256 => Hasher::Blake2_256,
+        FmHasher::Blake2_128Concat => Hasher::Blake2_128Concat,
+        FmHasher::Twox128 => Hasher::Twox128,
+        FmHasher::Twox256 => Hasher::Twox256,
+        FmHasher::Twox64Concat => Hasher::Twox64Concat,
+        FmHasher::Identity => Hasher::Identity,
     }
+}
 
-    fn convert_entry_type(
-        ty: &frame_metadata::v14::StorageEntryType<PortableForm>,
-    ) -> StorageEntryType {
-        match ty {
-            frame_metadata::v14::StorageEntryType::Plain(t) => StorageEntryType::Plain(t.id),
-            frame_metadata::v14::StorageEntryType::Map {
-                hashers,
-                key,
-                value,
-            } => StorageEntryType::Map {
-                hashers: hashers.iter().map(convert_hasher).collect(),
-                key: key.id,
-                value: value.id,
-            },
-        }
+fn convert_entry_type(
+    ty: &frame_metadata::v14::StorageEntryType<scale_info::form::PortableForm>,
+) -> StorageEntryType {
+    match ty {
+        frame_metadata::v14::StorageEntryType::Plain(t) => StorageEntryType::Plain(t.id),
+        frame_metadata::v14::StorageEntryType::Map {
+            hashers,
+            key,
+            value,
+        } => StorageEntryType::Map {
+            hashers: hashers.iter().map(convert_hasher).collect(),
+            key: key.id,
+            value: value.id,
+        },
     }
+}
 
-    // V14/V15/V16 PalletMetadata are distinct types with identical fields.
-    macro_rules! convert_pallet {
-        ($p:expr) => {{
-            let p = $p;
-            PalletMeta {
-                name: p.name,
-                index: p.index,
-                calls_ty: p.calls.map(|c| c.ty.id),
-                storage: p.storage.map(|s| StorageMeta {
-                    prefix: s.prefix,
-                    entries: s
-                        .entries
-                        .into_iter()
-                        .map(|e| StorageEntryMeta {
-                            name: e.name,
-                            ty: convert_entry_type(&e.ty),
-                        })
-                        .collect(),
-                }),
-                constants: p
-                    .constants
+// V14/V15/V16 PalletMetadata are distinct types with identical fields.
+macro_rules! convert_pallet {
+    ($p:expr) => {{
+        let p = $p;
+        PalletMeta {
+            name: p.name,
+            index: p.index,
+            calls_ty: p.calls.map(|c| c.ty.id),
+            storage: p.storage.map(|s| StorageMeta {
+                prefix: s.prefix,
+                entries: s
+                    .entries
                     .into_iter()
-                    .map(|c| ConstantMeta {
-                        name: c.name,
-                        ty: c.ty.id,
-                        value: c.value,
+                    .map(|e| StorageEntryMeta {
+                        name: e.name,
+                        ty: convert_entry_type(&e.ty),
                     })
                     .collect(),
-            }
-        }};
-    }
+            }),
+            constants: p
+                .constants
+                .into_iter()
+                .map(|c| ConstantMeta {
+                    name: c.name,
+                    ty: c.ty.id,
+                    value: c.value,
+                })
+                .collect(),
+        }
+    }};
+}
+
+pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Error> {
+    use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
 
     let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
     let (types, pallets, extrinsic) = match meta.1 {
@@ -298,6 +297,186 @@ pub fn from_bytes(bytes: &mut &[u8]) -> core::result::Result<Metadata, codec::Er
     Ok(Metadata {
         pallets,
         extrinsic,
+        registry,
+    })
+}
+
+/// Decode metadata keeping only the specified pallets and their referenced types.
+///
+/// Produces a much smaller `Metadata` suitable for memory-constrained targets.
+/// The `System` pallet and extrinsic extension types are always included.
+pub fn from_bytes_filtered(
+    bytes: &mut &[u8],
+    pallet_filter: &[&str],
+) -> core::result::Result<Metadata, codec::Error> {
+    use frame_metadata::{RuntimeMetadata, RuntimeMetadataPrefixed};
+
+    // Single decode — extract PortableRegistry + pallets + extrinsic in one pass
+    let meta: RuntimeMetadataPrefixed = Decode::decode(bytes)?;
+
+    // Extract types and convert pallets in one pass, then drop the heavy frame_metadata types
+    let (portable_registry, all_pallets, extrinsic_meta) = match meta.1 {
+        RuntimeMetadata::V14(m) => {
+            let pallets: Vec<PalletMeta> =
+                m.pallets.into_iter().map(|p| convert_pallet!(p)).collect();
+            let ext = ExtrinsicMeta {
+                version: m.extrinsic.version,
+                address_ty: None,
+                signature_ty: None,
+                extensions: m
+                    .extrinsic
+                    .signed_extensions
+                    .into_iter()
+                    .map(|e| SignedExtensionMeta {
+                        identifier: e.identifier,
+                        ty: e.ty.id,
+                        additional_signed: e.additional_signed.id,
+                    })
+                    .collect(),
+            };
+            (m.types, pallets, ext)
+        }
+        RuntimeMetadata::V15(m) => {
+            let pallets: Vec<PalletMeta> =
+                m.pallets.into_iter().map(|p| convert_pallet!(p)).collect();
+            let ext = ExtrinsicMeta {
+                version: m.extrinsic.version,
+                address_ty: Some(m.extrinsic.address_ty.id),
+                signature_ty: Some(m.extrinsic.signature_ty.id),
+                extensions: m
+                    .extrinsic
+                    .signed_extensions
+                    .into_iter()
+                    .map(|e| SignedExtensionMeta {
+                        identifier: e.identifier,
+                        ty: e.ty.id,
+                        additional_signed: e.additional_signed.id,
+                    })
+                    .collect(),
+            };
+            (m.types, pallets, ext)
+        }
+        _ => return Err(codec::Error::from("filtered parse requires V14 or V15")),
+    };
+
+    // Filter pallets — always include System
+    let keep: Vec<&str> = {
+        let mut v: Vec<&str> = pallet_filter.to_vec();
+        if !v.iter().any(|n| *n == "System") {
+            v.push("System");
+        }
+        v
+    };
+
+    let selected_pallets: Vec<PalletMeta> = all_pallets
+        .into_iter()
+        .filter(|p| keep.iter().any(|n| p.name == *n))
+        .collect();
+
+    // Collect all TypeIds referenced by selected pallets + extrinsic
+    let mut root_ids: Vec<u32> = Vec::new();
+
+    for p in &selected_pallets {
+        if let Some(calls_ty) = p.calls_ty {
+            root_ids.push(calls_ty);
+        }
+        if let Some(ref storage) = p.storage {
+            for e in &storage.entries {
+                match &e.ty {
+                    StorageEntryType::Plain(t) => root_ids.push(*t),
+                    StorageEntryType::Map { key, value, .. } => {
+                        root_ids.push(*key);
+                        root_ids.push(*value);
+                    }
+                }
+            }
+        }
+        for c in &p.constants {
+            root_ids.push(c.ty);
+        }
+    }
+
+    if let Some(addr) = extrinsic_meta.address_ty {
+        root_ids.push(addr);
+    }
+    if let Some(sig) = extrinsic_meta.signature_ty {
+        root_ids.push(sig);
+    }
+    for ext in &extrinsic_meta.extensions {
+        root_ids.push(ext.ty);
+        root_ids.push(ext.additional_signed);
+    }
+
+    // Filtered compress — only types reachable from selected pallets
+    let (registry, id_map) =
+        scales::compress::compress_filtered(&portable_registry, &root_ids)
+            .map_err(|_| codec::Error::from("Failed to compress filtered registry"))?;
+
+    // Drop the heavy PortableRegistry before building the final Metadata
+    drop(portable_registry);
+
+    let remap = |id: u32| -> u32 {
+        id_map.get(id as usize).copied().flatten().unwrap_or(id)
+    };
+
+    fn remap_entry_type(ty: StorageEntryType, remap: &dyn Fn(u32) -> u32) -> StorageEntryType {
+        match ty {
+            StorageEntryType::Plain(t) => StorageEntryType::Plain(remap(t)),
+            StorageEntryType::Map { hashers, key, value } => StorageEntryType::Map {
+                hashers,
+                key: remap(key),
+                value: remap(value),
+            },
+        }
+    }
+
+    let pallets = selected_pallets
+        .into_iter()
+        .map(|p| PalletMeta {
+            name: p.name,
+            index: p.index,
+            calls_ty: p.calls_ty.map(&remap),
+            storage: p.storage.map(|s| StorageMeta {
+                prefix: s.prefix,
+                entries: s
+                    .entries
+                    .into_iter()
+                    .map(|e| StorageEntryMeta {
+                        name: e.name,
+                        ty: remap_entry_type(e.ty, &remap),
+                    })
+                    .collect(),
+            }),
+            constants: p
+                .constants
+                .into_iter()
+                .map(|c| ConstantMeta {
+                    name: c.name,
+                    ty: remap(c.ty),
+                    value: c.value,
+                })
+                .collect(),
+        })
+        .collect();
+
+    let extrinsic_meta = ExtrinsicMeta {
+        version: extrinsic_meta.version,
+        address_ty: extrinsic_meta.address_ty.map(&remap),
+        signature_ty: extrinsic_meta.signature_ty.map(&remap),
+        extensions: extrinsic_meta
+            .extensions
+            .into_iter()
+            .map(|e| SignedExtensionMeta {
+                identifier: e.identifier,
+                ty: remap(e.ty),
+                additional_signed: remap(e.additional_signed),
+            })
+            .collect(),
+    };
+
+    Ok(Metadata {
+        pallets,
+        extrinsic: extrinsic_meta,
         registry,
     })
 }
@@ -462,6 +641,17 @@ impl StorageEntryType {
 impl Metadata {
     pub fn from_bytes(bytes: &[u8]) -> core::result::Result<Metadata, codec::Error> {
         from_bytes(&mut &bytes[..])
+    }
+
+    /// Decode metadata keeping only the specified pallets and their referenced types.
+    ///
+    /// Much smaller result for memory-constrained targets. System pallet is
+    /// always included. Example: `Metadata::from_bytes_filtered(bytes, &["Balances"])`
+    pub fn from_bytes_filtered(
+        bytes: &[u8],
+        pallet_filter: &[&str],
+    ) -> core::result::Result<Metadata, codec::Error> {
+        from_bytes_filtered(&mut &bytes[..], pallet_filter)
     }
 }
 
