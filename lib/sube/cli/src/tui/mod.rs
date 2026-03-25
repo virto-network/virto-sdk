@@ -15,7 +15,7 @@ use sube::Metadata;
 mod form;
 mod types;
 
-use form::FormState;
+use form::{field_from_type, FormState};
 
 // --- Messages between UI and chain task ---
 
@@ -181,22 +181,24 @@ impl App {
             .as_ref()
             .and_then(|s| s.entries.iter().find(|e| e.name == item_name));
         if let Some(entry) = entry {
+            let reg = sube::Arc::clone(&self.meta);
             match &entry.ty {
                 StorageEntryType::Plain(_) => {
-                    self.storage_form = Some(FormState::new(vec![]));
+                    self.storage_form =
+                        Some(FormState::new(vec![], sube::Arc::new(reg.registry.clone())));
                 }
                 StorageEntryType::Map { hashers, key, .. } => {
                     let key_types =
                         types::extract_key_types(*key, hashers.len(), &self.meta.registry);
-                    let fields: Vec<(String, String)> = key_types
+                    let fields: Vec<form::Field> = key_types
                         .iter()
                         .enumerate()
                         .map(|(i, ty_id)| {
-                            let desc = types::describe(*ty_id, &self.meta.registry);
-                            (format!("key{i}"), desc)
+                            field_from_type(&format!("key{i}"), *ty_id, &self.meta.registry)
                         })
                         .collect();
-                    self.storage_form = Some(FormState::new(fields));
+                    self.storage_form =
+                        Some(FormState::new(fields, sube::Arc::new(reg.registry.clone())));
                 }
             }
         }
@@ -221,8 +223,25 @@ impl App {
                 self.meta.registry.resolve(calls_ty)
             {
                 if let Some(variant) = vdef.variants.iter().find(|v| v.name == item_name) {
-                    let fields = types::variant_fields(variant, &self.meta.registry);
-                    self.call_form = Some(FormState::new(fields));
+                    let fields = match &variant.fields {
+                        sube::scales::registry::Fields::Unit => vec![],
+                        sube::scales::registry::Fields::NewType(ty_id) => {
+                            vec![field_from_type("value", *ty_id, &self.meta.registry)]
+                        }
+                        sube::scales::registry::Fields::Tuple(ids) => ids
+                            .iter()
+                            .enumerate()
+                            .map(|(i, id)| field_from_type(&format!("field{i}"), *id, &self.meta.registry))
+                            .collect(),
+                        sube::scales::registry::Fields::Struct(fields) => fields
+                            .iter()
+                            .map(|f| field_from_type(&f.name, f.ty, &self.meta.registry))
+                            .collect(),
+                    };
+                    self.call_form = Some(FormState::new(
+                        fields,
+                        sube::Arc::new(self.meta.registry.clone()),
+                    ));
                 }
             }
         }
@@ -859,6 +878,11 @@ fn handle_form(app: &mut App, key: KeyCode) {
         }
         KeyCode::Up | KeyCode::BackTab => form.prev_field(),
         KeyCode::Down | KeyCode::Tab => form.next_field(),
+        KeyCode::Right => form.toggle(),
+        KeyCode::Left => form.toggle_back(),
+        KeyCode::Char(' ') => form.toggle(),
+        KeyCode::Char('+') => form.add_list_item(),
+        KeyCode::Char('-') => form.remove_list_item(),
         KeyCode::Backspace => form.backspace(),
         KeyCode::Char(c) => form.push_char(c),
         _ => {}
@@ -934,7 +958,7 @@ fn draw(f: &mut Frame, app: &App) {
 
     let help = match (&app.focus, &app.panel) {
         (Focus::Search, _) => " / filter  Enter confirm  Esc cancel",
-        (Focus::Form, _) => " ↑↓ fields  Enter next/submit  Esc cancel",
+        (Focus::Form, _) => " ↑↓ fields  ←→ enum  Space toggle  +/- list  Enter next/submit  Esc cancel",
         (Focus::BlockDetail, _) => " ↑↓ navigate  Esc back",
         (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  q quit",
         (_, Panel::Storage) => " ↑↓ navigate  Tab panel  Enter query  q quit",
