@@ -1,4 +1,3 @@
-use sube::scales::registry::{Fields, Variant};
 use sube::scales::{Registry, TypeDef, TypeId};
 
 /// Produce a short human-readable description of a type.
@@ -73,21 +72,3 @@ pub fn extract_key_types(key_id: TypeId, num_hashers: usize, registry: &Registry
     }
 }
 
-/// Extract form fields from a call variant.
-pub fn variant_fields(variant: &Variant, registry: &Registry) -> Vec<(String, String)> {
-    match &variant.fields {
-        Fields::Unit => vec![],
-        Fields::NewType(ty_id) => {
-            vec![("value".into(), describe(*ty_id, registry))]
-        }
-        Fields::Tuple(ids) => ids
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (format!("field{i}"), describe(*id, registry)))
-            .collect(),
-        Fields::Struct(fields) => fields
-            .iter()
-            .map(|f| (f.name.clone(), describe(f.ty, registry)))
-            .collect(),
-    }
-}

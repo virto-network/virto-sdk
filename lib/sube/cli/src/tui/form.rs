@@ -34,8 +34,6 @@ pub enum Field {
         name: String,
         item_ty: TypeId,
         items: Vec<Vec<Field>>,
-        /// Which item is focused (if any).
-        focus_item: usize,
     },
 }
 
@@ -50,6 +48,7 @@ impl Field {
     }
 
     /// Produce the text-format value for sube submission.
+    #[allow(clippy::only_used_in_recursion)]
     fn to_value(&self, registry: &Registry) -> String {
         match self {
             Field::Text { input, is_bytes, .. } => {
@@ -161,7 +160,6 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
                     name: name.into(),
                     item_ty: *inner,
                     items: vec![],
-                    focus_item: 0,
                 }
             }
         }
@@ -212,23 +210,6 @@ impl FormState {
         }
     }
 
-    /// Convenience: create from old-style (name, desc) pairs (plain text fields).
-    pub fn from_pairs(
-        pairs: Vec<(String, String)>,
-        registry: sube::Arc<sube::Registry>,
-    ) -> Self {
-        let fields = pairs
-            .into_iter()
-            .map(|(name, desc)| Field::Text {
-                name,
-                type_desc: desc,
-                input: String::new(),
-                is_bytes: false,
-            })
-            .collect();
-        Self::new(fields, registry)
-    }
-
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }
@@ -266,20 +247,14 @@ impl FormState {
     }
 
     pub fn push_char(&mut self, c: char) {
-        if let Some(field) = self.field_at_cursor_mut() {
-            match field {
-                Field::Text { input, .. } => input.push(c),
-                _ => {}
-            }
+        if let Some(Field::Text { input, .. }) = self.field_at_cursor_mut() {
+            input.push(c);
         }
     }
 
     pub fn backspace(&mut self) {
-        if let Some(field) = self.field_at_cursor_mut() {
-            match field {
-                Field::Text { input, .. } => { input.pop(); }
-                _ => {}
-            }
+        if let Some(Field::Text { input, .. }) = self.field_at_cursor_mut() {
+            input.pop();
         }
     }
 
@@ -339,20 +314,16 @@ impl FormState {
         };
         if let Some(ty) = item_ty {
             let new_item = vec![field_from_type("item", ty, &self.registry)];
-            if let Some(field) = self.field_at_cursor_mut() {
-                if let Field::List { items, .. } = field {
-                    items.push(new_item);
-                }
+            if let Some(Field::List { items, .. }) = self.field_at_cursor_mut() {
+                items.push(new_item);
             }
         }
     }
 
     /// Remove the last item from a list field at cursor.
     pub fn remove_list_item(&mut self) {
-        if let Some(field) = self.field_at_cursor_mut() {
-            if let Field::List { items, .. } = field {
-                items.pop();
-            }
+        if let Some(Field::List { items, .. }) = self.field_at_cursor_mut() {
+            items.pop();
         }
     }
 
@@ -416,46 +387,6 @@ fn find_field_at<'a>(field: &'a mut Field, target: usize, pos: &mut usize) -> Op
                 for sf in item.iter_mut() {
                     if let Some(f) = find_field_at(sf, target, pos) {
                         return Some(f);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    None
-}
-
-/// Find enum info at cursor (for variant resolution without borrow conflict).
-fn find_enum_info_at(
-    field: &Field,
-    target: usize,
-    pos: &mut usize,
-) -> Option<(TypeId, usize, usize)> {
-    if *pos == target {
-        if let Field::Enum {
-            ty_id,
-            selected,
-            variants,
-            ..
-        } = field
-        {
-            return Some((*ty_id, *selected, variants.len()));
-        }
-    }
-    *pos += 1;
-    match field {
-        Field::Enum { sub_fields, .. } => {
-            for sf in sub_fields {
-                if let Some(info) = find_enum_info_at(sf, target, pos) {
-                    return Some(info);
-                }
-            }
-        }
-        Field::List { items, .. } => {
-            for item in items {
-                for sf in item {
-                    if let Some(info) = find_enum_info_at(sf, target, pos) {
-                        return Some(info);
                     }
                 }
             }
@@ -543,6 +474,7 @@ fn find_list_ty(field: &Field, target: usize, pos: &mut usize) -> Option<TypeId>
 }
 
 /// Render a field recursively, returning the next y position.
+#[allow(clippy::too_many_arguments)]
 fn render_field(
     f: &mut Frame,
     field: &Field,

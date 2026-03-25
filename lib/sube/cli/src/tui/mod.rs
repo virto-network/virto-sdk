@@ -21,6 +21,7 @@ use form::{field_from_type, FormState};
 
 enum ToChain {
     Query(String),
+    #[allow(dead_code)]
     QueryAtHash(String, String),
     FetchBlockDetail(String), // block hash
 }
@@ -1147,7 +1148,7 @@ fn draw_block_detail_dialog(f: &mut Frame, app: &App, detail: &BlockDetail) {
                     Span::styled(status, Style::default().fg(status_color)),
                 ]),
                 Line::from(Span::styled(
-                    format!("{}", b.hash),
+                    b.hash.to_string(),
                     Style::default().fg(Color::DarkGray),
                 )),
                 Line::from(format!("{} events", b.event_count)),
