@@ -27,7 +27,7 @@ unsafe impl GlobalAlloc for TrackingAlloc {
 #[global_allocator]
 static A: TrackingAlloc = TrackingAlloc;
 
-const META_BYTES: &[u8] = include_bytes!("../../../sdk/js/.papi/metadata/kreivo.scale");
+const META_BYTES: &[u8] = include_bytes!("../tests/fixtures/kreivo.scale");
 
 fn count_types(meta: &sube::Metadata) -> u32 {
     let mut n = 0u32;

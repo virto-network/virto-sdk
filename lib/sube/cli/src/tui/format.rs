@@ -27,65 +27,126 @@ pub fn is_interesting_event(event: &JsonValue) -> bool {
     )
 }
 
-/// Format block events JSON into readable detail text.
+/// Format block events JSON into readable detail text, grouped by extrinsic.
 pub fn format_events_detail(json: &JsonValue) -> String {
     let events = match json.as_array() {
         Some(arr) => arr,
         None => return "(invalid events)".into(),
     };
 
-    let mut out = String::new();
-    for (i, event) in events.iter().enumerate() {
+    // Group events by phase
+    struct EventInfo<'a> {
+        pallet: &'a str,
+        name: &'a str,
+        data: Option<&'a JsonValue>,
+    }
+
+    fn parse_event(event: &JsonValue) -> Option<(Phase, EventInfo)> {
         let phase = match event.get("phase") {
-            Some(p) => {
-                if let Some(n) = p.get("ApplyExtrinsic") {
-                    format!("extrinsic #{n}")
-                } else if p.get("Initialization").is_some() {
-                    "initialization".into()
-                } else if p.get("Finalization").is_some() {
-                    "finalization".into()
-                } else {
-                    format!("{p}")
-                }
+            Some(p) if p.get("ApplyExtrinsic").is_some() => {
+                Phase::Extrinsic(p["ApplyExtrinsic"].as_u64().unwrap_or(0) as u32)
             }
-            None => "?".into(),
+            Some(p) if p.get("Initialization").is_some() => Phase::Init,
+            Some(p) if p.get("Finalization").is_some() => Phase::Finalize,
+            _ => return None,
         };
-
-        let (pallet, event_name, fields) = match event.get("event").and_then(|e| e.as_object()) {
-            Some(obj) => {
-                if let Some((pallet, inner)) = obj.iter().next() {
-                    match inner.as_object().and_then(|o| o.iter().next()) {
-                        Some((name, data)) => (pallet.as_str(), name.as_str(), Some(data)),
-                        None => (pallet.as_str(), "?", None),
-                    }
-                } else {
-                    ("?", "?", None)
-                }
-            }
-            None => ("?", "?", None),
+        let obj = event.get("event")?.as_object()?;
+        let (pallet, inner) = obj.iter().next()?;
+        let (name, data) = match inner.as_object().and_then(|o| o.iter().next()) {
+            Some((n, d)) => (n.as_str(), Some(d)),
+            None => ("?", None),
         };
+        Some((phase, EventInfo { pallet, name, data }))
+    }
 
-        out.push_str(&format!(
-            "{}. {} » {pallet}::{event_name}\n",
-            i + 1,
-            phase
-        ));
+    #[derive(PartialEq)]
+    enum Phase { Init, Extrinsic(u32), Finalize }
 
-        if let Some(data) = fields {
-            if let Some(obj) = data.as_object() {
-                for (key, val) in obj {
-                    out.push_str(&format!("   {key}: {}\n", format_value(val)));
-                }
-            } else {
-                let val_str = format_value(data);
-                if val_str != "null" {
-                    out.push_str(&format!("   {val_str}\n"));
-                }
-            }
+    let mut out = String::new();
+
+    // Initialization events
+    let init_events: Vec<_> = events.iter().filter_map(|e| {
+        let (phase, info) = parse_event(e)?;
+        (phase == Phase::Init).then_some(info)
+    }).collect();
+    if !init_events.is_empty() {
+        out.push_str("─── initialization ───\n");
+        for e in &init_events {
+            format_single_event(&mut out, e.pallet, e.name, e.data);
         }
         out.push('\n');
     }
+
+    // Group by extrinsic index
+    let max_ext = events.iter().filter_map(|e| {
+        if let Some(n) = e.get("phase").and_then(|p| p.get("ApplyExtrinsic")).and_then(|n| n.as_u64()) {
+            Some(n as u32)
+        } else { None }
+    }).max();
+
+    if let Some(max) = max_ext {
+        for ext_idx in 0..=max {
+            let ext_events: Vec<_> = events.iter().filter_map(|e| {
+                let (phase, info) = parse_event(e)?;
+                (phase == Phase::Extrinsic(ext_idx)).then_some(info)
+            }).collect();
+            if ext_events.is_empty() { continue; }
+
+            // Check if this extrinsic succeeded or failed
+            let status = ext_events.iter().find_map(|e| {
+                if e.pallet == "System" && e.name == "ExtrinsicSuccess" { Some("✓") }
+                else if e.pallet == "System" && e.name == "ExtrinsicFailed" { Some("✗") }
+                else { None }
+            }).unwrap_or("?");
+
+            // Find the main action (first non-System event)
+            let action = ext_events.iter().find(|e| e.pallet != "System" && e.pallet != "TransactionPayment");
+
+            let action_str = action
+                .map(|a| format!("{}::{}", a.pallet, a.name))
+                .unwrap_or_else(|| "system".into());
+
+            out.push_str(&format!("─── extrinsic #{ext_idx} {status} {action_str} ───\n"));
+
+            for e in &ext_events {
+                if e.pallet == "System" && (e.name == "ExtrinsicSuccess" || e.name == "ExtrinsicFailed") {
+                    continue; // already shown in header
+                }
+                format_single_event(&mut out, e.pallet, e.name, e.data);
+            }
+            out.push('\n');
+        }
+    }
+
+    // Finalization events
+    let fin_events: Vec<_> = events.iter().filter_map(|e| {
+        let (phase, info) = parse_event(e)?;
+        (phase == Phase::Finalize).then_some(info)
+    }).collect();
+    if !fin_events.is_empty() {
+        out.push_str("─── finalization ───\n");
+        for e in &fin_events {
+            format_single_event(&mut out, e.pallet, e.name, e.data);
+        }
+    }
+
     out
+}
+
+fn format_single_event(out: &mut String, pallet: &str, name: &str, data: Option<&JsonValue>) {
+    out.push_str(&format!("  {pallet}::{name}\n"));
+    if let Some(data) = data {
+        if let Some(obj) = data.as_object() {
+            for (key, val) in obj {
+                out.push_str(&format!("    {key}: {}\n", format_value(val)));
+            }
+        } else {
+            let val_str = format_value(data);
+            if val_str != "null" {
+                out.push_str(&format!("    {val_str}\n"));
+            }
+        }
+    }
 }
 
 /// Format a JSON value concisely for display.

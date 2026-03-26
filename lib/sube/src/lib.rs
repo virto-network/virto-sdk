@@ -471,9 +471,7 @@ mod tests {
 
     #[test]
     fn storage_entry_to_json() {
-        let meta = Metadata::from_bytes(include_bytes!(
-            "../../../sdk/js/.papi/metadata/kreivo.scale"
-        ))
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale"))
         .unwrap();
         let system = meta.pallet_by_name("System").unwrap();
         let version = system
@@ -490,9 +488,7 @@ mod tests {
     fn encode_call_json_and_text_match() {
         use crate::extrinsic::{EncodeCall, Text};
 
-        let meta = Metadata::from_bytes(include_bytes!(
-            "../../../sdk/js/.papi/metadata/kreivo.scale"
-        ))
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale"))
         .unwrap();
         let system = meta.pallet_by_name("System").unwrap();
         let calls_ty = system.calls_ty.unwrap();
@@ -519,9 +515,7 @@ mod tests {
     fn encode_call_text_with_enum_arg() {
         use crate::extrinsic::{EncodeCall, Text};
 
-        let meta = Metadata::from_bytes(include_bytes!(
-            "../../../sdk/js/.papi/metadata/kreivo.scale"
-        ))
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale"))
         .unwrap();
         let balances = meta.pallet_by_name("Balances").unwrap();
         let calls_ty = balances.calls_ty.unwrap();

@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use sube::{Metadata, StorageEntry};
 
-const META_BYTES: &[u8] = include_bytes!("../../../sdk/js/.papi/metadata/kreivo.scale");
+const META_BYTES: &[u8] = include_bytes!("../tests/fixtures/kreivo.scale");
 const ITERATIONS: u32 = 100;
 
 fn bench<F: FnMut()>(name: &str, mut f: F) {

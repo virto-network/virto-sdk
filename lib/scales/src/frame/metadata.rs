@@ -661,7 +661,7 @@ fn decode_extrinsic(c: &mut Cursor, version: u8) -> Result<RawExtrinsic, Error> 
 mod tests {
     use super::*;
 
-    const KREIVO_META: &[u8] = include_bytes!("../../../../sdk/js/.papi/metadata/kreivo.scale");
+    const KREIVO_META: &[u8] = include_bytes!("../../tests/fixtures/kreivo.scale");
 
     #[test]
     fn decode_full_kreivo() {
