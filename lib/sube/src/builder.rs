@@ -210,11 +210,22 @@ impl Sube {
     /// ```rust,ignore
     /// let mut chain = Sube::connect_filtered("wss://kreivo.io", &["Balances"]).await?;
     /// ```
+    /// Connect with filtered metadata — only fetch and decode types for
+    /// the specified pallets. Never fetches the full unfiltered metadata.
+    ///
+    /// This is the low-memory path: peak is ~200KB for 2 pallets vs ~1.5MB
+    /// for a full connect.
     #[cfg(any(feature = "ws", feature = "smoldot"))]
     pub async fn connect_filtered(url: &str, pallets: &[&str]) -> SubeResult<Self> {
-        let mut sube = Self::connect(url).await?;
-        sube.load_filtered_metadata(pallets).await?;
-        Ok(sube)
+        let parsed = chain_string_to_url(url)?;
+        let mut backend = connect(&parsed, crate::DEFAULT_TIMEOUT).await?;
+        let metadata = backend.metadata_filtered(pallets).await?;
+        Ok(Sube {
+            backend,
+            metadata: Arc::new(metadata),
+            url: url.into(),
+            timeout: crate::DEFAULT_TIMEOUT,
+        })
     }
 
     async fn connect_with_options(
