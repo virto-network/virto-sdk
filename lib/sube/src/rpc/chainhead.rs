@@ -1026,7 +1026,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
 // --- Two-request metadata fetch helpers ---
 
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
-    /// Fetch raw metadata bytes (after stripping the compact length prefix).
+    /// Fetch raw metadata bytes, stripping the compact length prefix.
     async fn fetch_raw_metadata(&mut self) -> crate::Result<Vec<u8>> {
         let raw = self.runtime_call("Metadata_metadata", "0x").await?;
         let mut cursor = raw.as_slice();

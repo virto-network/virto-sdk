@@ -129,6 +129,36 @@ impl core::fmt::Display for JsonRpcError {
 
 pub type RpcResult<T> = Result<T, JsonRpcError>;
 
+/// Extract and hex-decode the `"result":"0x..."` value from raw JSON-RPC text.
+///
+/// This avoids parsing the full JSON with serde, which would allocate the
+/// entire hex string as a `Value::String`. Instead, we scan for the hex data
+/// and decode it directly.
+pub(crate) fn extract_hex_result(json: &str) -> Result<crate::prelude::Vec<u8>, JsonRpcError> {
+    // Check for error first (small, safe to parse)
+    if json.contains("\"error\"") {
+        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(json) {
+            if let Some(err) = resp.error {
+                return Err(err);
+            }
+        }
+    }
+
+    // Find "result":"0x and extract hex chars until closing quote
+    let marker = "\"result\":\"0x";
+    let start = json
+        .find(marker)
+        .ok_or_else(|| JsonRpcError::new(-32603, "no result in response"))?;
+    let hex_start = start + marker.len();
+
+    let hex_end = json[hex_start..]
+        .find('"')
+        .ok_or_else(|| JsonRpcError::new(-32603, "unterminated hex string"))?;
+
+    let hex_str = &json[hex_start..hex_start + hex_end];
+    hex::decode(hex_str).map_err(|_| JsonRpcError::new(-32603, "invalid hex"))
+}
+
 // --- Rpc trait ---
 
 /// Async JSON-RPC request/response interface.
@@ -139,6 +169,26 @@ pub trait Rpc {
         method: &str,
         params: serde_json::Value,
     ) -> RpcResult<serde_json::Value>;
+
+    /// Make an RPC call and hex-decode the result directly, bypassing serde_json.
+    ///
+    /// For large hex responses (like metadata), this avoids allocating the
+    /// intermediate `serde_json::Value` string (~770KB for Kreivo metadata).
+    /// Returns the decoded bytes.
+    async fn rpc_raw_hex(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> RpcResult<crate::prelude::Vec<u8>> {
+        // Default impl: falls back to normal rpc + hex decode
+        let val = self.rpc(method, params).await?;
+        let hex_str = val
+            .as_str()
+            .ok_or_else(|| JsonRpcError::new(-32603, "expected hex string result"))?;
+        let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+        hex::decode(hex)
+            .map_err(|_| JsonRpcError::new(-32603, "invalid hex in result"))
+    }
 }
 
 /// Backends that support JSON-RPC subscriptions (WebSocket, smoldot).
