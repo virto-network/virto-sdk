@@ -10,17 +10,11 @@ repository = "https://github.com/valibre-org/virto-dk/sube"
 [dependencies]
 blake2 = { version = "0.10", default-features = false }
 codec = { workspace = true }
-frame-metadata = { version = "23", default-features = false, features = [
-	"decode",
-	"current",
-] }
 hex = { workspace = true }
 log = { workspace = true }
-scale-info = { version = "2.11", default-features = false }
 scales = { path = "../scales", package = "scale-serialization", default-features = false, features = [
 	"serializer",
 	"frame",
-	"compress",
 	"json",
 	"text",
 ] }

@@ -989,11 +989,12 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     async fn metadata(&mut self) -> crate::Result<Metadata> {
         let raw = self.runtime_call("Metadata_metadata", "0x").await?;
 
+        // Metadata_metadata returns: compact_len || RuntimeMetadataPrefixed
         let mut cursor = raw.as_slice();
         let _len = <codec::Compact<u32>>::decode(&mut cursor)
             .map_err(|_| crate::Error::Decode("compact prefix".into()))?;
 
-        meta::from_bytes(&mut cursor).map_err(|_| crate::Error::BadMetadata)
+        meta::from_bytes(cursor)
     }
 
     async fn block_info(&mut self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {

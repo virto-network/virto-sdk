@@ -89,7 +89,7 @@ pub fn decode_metadata_filtered(data: &[u8], pallet_filter: &[&str]) -> Result<R
     let pallet_count = c.read_compact_u32()?;
     let mut all_pallets = Vec::with_capacity(pallet_count as usize);
     for _ in 0..pallet_count {
-        all_pallets.push(decode_pallet(&mut c)?);
+        all_pallets.push(decode_pallet(&mut c, version)?);
     }
     let extrinsic = decode_extrinsic(&mut c, version)?;
 
@@ -175,7 +175,7 @@ pub fn decode_metadata(data: &[u8]) -> Result<RawMetadata, Error> {
     let pallet_count = c.read_compact_u32()?;
     let mut pallets = Vec::with_capacity(pallet_count as usize);
     for _ in 0..pallet_count {
-        pallets.push(decode_pallet(&mut c)?);
+        pallets.push(decode_pallet(&mut c, version)?);
     }
     let extrinsic = decode_extrinsic(&mut c, version)?;
 
@@ -483,7 +483,7 @@ fn remap_type_ids(td: &mut TypeDef, id_map: &[Option<u32>]) {
 
 // --- Pallet/extrinsic decode ---
 
-fn decode_pallet(c: &mut Cursor) -> Result<RawPallet, Error> {
+fn decode_pallet(c: &mut Cursor, version: u8) -> Result<RawPallet, Error> {
     let name = c.read_string()?;
 
     let storage = if c.read_byte()? != 0 {
@@ -510,7 +510,9 @@ fn decode_pallet(c: &mut Cursor) -> Result<RawPallet, Error> {
 
     if c.read_byte()? != 0 { c.read_compact_u32()?; } // error
     let index = c.read_byte()?;
-    c.skip_vec_string()?; // docs (V15)
+    if version >= 15 {
+        c.skip_vec_string()?; // docs (V15+ only)
+    }
 
     Ok(RawPallet { name, index, calls_ty, storage, constants })
 }
