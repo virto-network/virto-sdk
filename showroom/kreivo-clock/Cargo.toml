@@ -1,0 +1,93 @@
+[package]
+edition      = "2024"
+name         = "kreivo-clock"
+rust-version = "1.88"
+version      = "0.1.0"
+
+[[bin]]
+name = "kreivo-clock"
+path = "./src/bin/main.rs"
+
+[workspace]
+
+[dependencies]
+sube = { path = "../../lib/sube", default-features = false, features = ["ws-edge", "json", "text"] }
+esp-hal = { version = "~1.0", features = ["esp32s3", "log-04", "unstable"] }
+
+esp-rtos = { version = "0.2.0", features = [
+  "embassy",
+  "esp-alloc",
+  "esp-radio",
+  "esp32s3",
+  "log-04",
+] }
+
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3", "log-04"] }
+log                    = "0.4.27"
+
+embassy-net = { version = "0.9", features = [
+  "dhcpv4",
+  "dns",
+  "log",
+  "medium-ethernet",
+  "tcp",
+  "udp",
+] }
+embedded-io = "0.7.1"
+embedded-io-async = "0.7.0"
+esp-alloc = "0.9.0"
+esp-backtrace = { version = "0.18.1", features = [
+  "esp32s3",
+  "panic-handler",
+  "println",
+] }
+esp-println = { version = "0.16.1", features = ["esp32s3", "log-04"] }
+# for more networking protocol support see https://crates.io/crates/edge-net
+embassy-executor = { version = "0.9.1", features = ["log"] }
+embassy-time = { version = "0.5.0", features = ["log"] }
+esp-radio = { version = "0.17.0", features = [
+  "esp-alloc",
+  "esp32s3",
+  "log-04",
+  "smoltcp",
+  "unstable",
+  "wifi",
+] }
+smoltcp = { version = "0.12.0", default-features = false, features = [
+  "log",
+  "medium-ethernet",
+  "multicast",
+  "proto-dhcpv4",
+  "proto-dns",
+  "proto-ipv4",
+  "socket-dns",
+  "socket-icmp",
+  "socket-raw",
+  "socket-tcp",
+  "socket-udp",
+] }
+
+critical-section = "1.2.0"
+static_cell      = "2.1.1"
+
+# Display (T-Watch S3: ST7789 240x240 via SPI)
+mipidsi = "0.10"
+display-interface-spi = "0.5"
+embedded-graphics = "0.8"
+embedded-hal-bus = "0.3"
+embedded-hal = "1.0"
+
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units    = 1     # LLVM can perform better optimizations using a single thread
+debug            = 2
+debug-assertions = false
+incremental      = false
+lto              = 'fat'
+opt-level        = 's'
+overflow-checks  = false
