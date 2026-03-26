@@ -109,7 +109,7 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
         }
         TypeDef::StructUnit => {}
         TypeDef::StructNewType(inner) => {
-            fmt_value(&Value::new(data, *inner, reg), out, depth)?;
+            fmt_value(&Value::new(data, inner, reg), out, depth)?;
         }
         TypeDef::StructTuple(tys) => {
             out.write_char('(')?;
@@ -138,15 +138,15 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
         TypeDef::Variant(vdef) => {
             let idx = *data.first().ok_or(Error::Eof)?;
             let var = vdef.variant(idx)?;
-            out.write_str(&vdef.name)?;
+            out.write_str(vdef.name())?;
             out.write_str("::")?;
-            out.write_str(&var.name)?;
+            out.write_str(var.name())?;
             let inner = &data[1..];
-            match &var.fields {
+            match var.fields() {
                 Fields::Unit => {}
                 Fields::NewType(ty_id) => {
                     out.write_char('(')?;
-                    fmt_value(&Value::new(inner, *ty_id, reg), out, depth)?;
+                    fmt_value(&Value::new(inner, ty_id, reg), out, depth)?;
                     out.write_char(')')?;
                 }
                 Fields::Tuple(tys) => {
@@ -183,25 +183,25 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
                 if i > 0 {
                     out.write_char(';')?;
                 }
-                fmt_value(&cursor.next_value(*inner_ty)?, out, depth)?;
+                fmt_value(&cursor.next_value(inner_ty)?, out, depth)?;
             }
             out.write_char('.')?;
         }
         TypeDef::Array(inner_ty, len) => {
             // For byte arrays [u8; N], use compact 0x hex notation
-            let is_u8 = matches!(reg.resolve(*inner_ty), Some(TypeDef::U8));
+            let is_u8 = matches!(reg.resolve(inner_ty), Some(TypeDef::U8));
             if is_u8 {
-                let byte_len = *len as usize;
+                let byte_len = len as usize;
                 let bytes = data.get(..byte_len).ok_or(Error::Eof)?;
                 write_hex(bytes, out)?;
             } else {
                 out.write_str("..")?;
                 let mut cursor = Cursor::new(data, reg);
-                for i in 0..*len {
+                for i in 0..len {
                     if i > 0 {
                         out.write_char(';')?;
                     }
-                    fmt_value(&cursor.next_value(*inner_ty)?, out, depth)?;
+                    fmt_value(&cursor.next_value(inner_ty)?, out, depth)?;
                 }
                 out.write_char('.')?;
             }
@@ -215,9 +215,9 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
                     out.write_char(';')?;
                 }
                 out.write_char('(')?;
-                fmt_value(&cursor.next_value(*ty_k)?, out, depth)?;
+                fmt_value(&cursor.next_value(ty_k)?, out, depth)?;
                 out.write_char(';')?;
-                fmt_value(&cursor.next_value(*ty_v)?, out, depth)?;
+                fmt_value(&cursor.next_value(ty_v)?, out, depth)?;
                 out.write_char(')')?;
             }
             out.write_char('.')?;
@@ -475,7 +475,6 @@ impl<'a> Parser<'a> {
             }
             TypeDef::StructUnit => {}
             TypeDef::StructNewType(inner) => {
-                let inner = *inner;
                 self.parse_value(inner, out)?;
             }
             TypeDef::StructTuple(tys) => {
@@ -506,29 +505,29 @@ impl<'a> Parser<'a> {
                 self.expect(')')?;
             }
             TypeDef::Variant(vdef) => {
-                if !self.remaining().starts_with(vdef.name.as_str()) {
+                let vdef_name = vdef.name();
+                if !self.remaining().starts_with(vdef_name) {
                     return Err(Error::BadInput(alloc::format!(
                         "expected enum '{}'",
-                        vdef.name
+                        vdef_name
                     )));
                 }
-                self.advance(vdef.name.len());
+                self.advance(vdef_name.len());
                 self.expect(':')?;
                 self.expect(':')?;
                 let var_name = self.take_while(|c| c.is_alphanumeric() || c == '_');
                 let var = vdef
-                    .variants
-                    .iter()
-                    .find(|v| v.name == var_name)
+                    .variants()
+                    .find(|v| v.name() == var_name)
                     .ok_or_else(|| {
                         Error::BadInput(alloc::format!("unknown variant '{var_name}'"))
                     })?;
-                out.push(var.index);
-                match &var.fields {
+                out.push(var.index());
+                match var.fields() {
                     Fields::Unit => {}
                     Fields::NewType(ty_id) => {
                         self.expect('(')?;
-                        self.parse_value(*ty_id, out)?;
+                        self.parse_value(ty_id, out)?;
                         self.expect(')')?;
                     }
                     Fields::Tuple(tys) => {
@@ -547,7 +546,7 @@ impl<'a> Parser<'a> {
                             if i > 0 {
                                 self.expect(';')?;
                             }
-                            if !self.consume(&f.name) {
+                            if !self.consume(f.name) {
                                 return Err(Error::BadInput(alloc::format!(
                                     "expected field '{}'",
                                     f.name
@@ -561,7 +560,6 @@ impl<'a> Parser<'a> {
                 }
             }
             TypeDef::Sequence(inner_ty) => {
-                let inner_ty = *inner_ty;
                 if !self.consume("..") {
                     return Err(Error::BadInput("expected '..' for sequence".into()));
                 }
@@ -581,7 +579,6 @@ impl<'a> Parser<'a> {
                 out.extend_from_slice(&items);
             }
             TypeDef::Array(inner_ty, len) => {
-                let (inner_ty, len) = (*inner_ty, *len);
                 // For byte arrays [u8; N], accept 0x-prefixed hex as shorthand
                 let is_u8 = matches!(self.registry.resolve(inner_ty), Some(TypeDef::U8));
                 if is_u8 && self.remaining().starts_with("0x") {
@@ -608,7 +605,6 @@ impl<'a> Parser<'a> {
                 }
             }
             TypeDef::Map(ty_k, ty_v) => {
-                let (ty_k, ty_v) = (*ty_k, *ty_v);
                 if !self.consume("..") {
                     return Err(Error::BadInput("expected '..' for map".into()));
                 }

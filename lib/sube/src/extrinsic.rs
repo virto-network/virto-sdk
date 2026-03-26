@@ -64,7 +64,7 @@ impl EncodeCall for Text<'_> {
             Some(scales::TypeDef::Variant(vdef)) => vdef,
             _ => return Err(Error::Encode("calls type is not a variant".into())),
         };
-        let full_text = alloc::format!("{}::{}{}", vdef.name, variant, self.0);
+        let full_text = alloc::format!("{}::{}{}", vdef.name(), variant, self.0);
         scales::from_text(&full_text, registry, calls_ty).map_err(|e| Error::Encode(e.to_string()))
     }
 }
@@ -226,10 +226,9 @@ where
         .signature_ty
         .and_then(|ty| match meta.registry.resolve(ty) {
             Some(scales::TypeDef::Variant(vdef)) => vdef
-                .variants
-                .iter()
-                .find(|v| v.name.contains("Sr25519"))
-                .map(|v| v.index),
+                .variants()
+                .find(|v| v.name().contains("Sr25519"))
+                .map(|v| v.index()),
             _ => None,
         })
         .unwrap_or(0x01);

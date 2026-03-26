@@ -155,13 +155,13 @@ fn registry_size_reduction() {
                 }
             }
             TypeDef::Variant(vdef) => {
-                compressed_wire += 1 + vdef.name.len(); // compact len + name
+                compressed_wire += 1 + vdef.name().len(); // compact len + name
                 compressed_wire += 1; // compact variants len
-                for v in &vdef.variants {
+                for v in vdef.variants() {
                     compressed_wire += 1; // index
-                    compressed_wire += 1 + v.name.len(); // compact len + name
+                    compressed_wire += 1 + v.name().len(); // compact len + name
                     compressed_wire += 1; // fields discriminant
-                    match &v.fields {
+                    match v.fields() {
                         Fields::Unit => {}
                         Fields::NewType(_) => {
                             compressed_wire += 4;

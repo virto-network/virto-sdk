@@ -44,18 +44,18 @@ fn strings() {
 
 #[test]
 fn integer_overflow_rejected() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
-    let reg = Registry::new(alloc::vec![TypeDef::U8]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::U8]);
     assert!(from_text("256", &reg, 0).is_err());
     assert!(from_text("0", &reg, 0).is_ok());
     assert!(from_text("255", &reg, 0).is_ok());
 
-    let reg = Registry::new(alloc::vec![TypeDef::U16]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::U16]);
     assert!(from_text("65536", &reg, 0).is_err());
     assert!(from_text("65535", &reg, 0).is_ok());
 
-    let reg = Registry::new(alloc::vec![TypeDef::I8]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::I8]);
     assert!(from_text("-129", &reg, 0).is_err());
     assert!(from_text("128", &reg, 0).is_err());
     assert!(from_text("-128", &reg, 0).is_ok());
@@ -66,10 +66,10 @@ fn integer_overflow_rejected() {
 
 #[test]
 fn recursive_type_depth_limit() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
     // StructNewType(0) at index 0 creates a self-referencing cycle
-    let reg = Registry::new(alloc::vec![TypeDef::StructNewType(0)]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::StructNewType(0)]);
     let err = from_text("42", &reg, 0);
     assert!(err.is_err());
     let msg = alloc::format!("{}", err.unwrap_err());
@@ -78,9 +78,9 @@ fn recursive_type_depth_limit() {
 
 #[test]
 fn trailing_input_truncated_in_error() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
-    let reg = Registry::new(alloc::vec![TypeDef::U8]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::U8]);
     let long_trail = alloc::format!("1{}", "x".repeat(200));
     let err = from_text(&long_trail, &reg, 0).unwrap_err();
     let msg = alloc::format!("{err}");
@@ -91,9 +91,9 @@ fn trailing_input_truncated_in_error() {
 
 #[test]
 fn bool_rejects_prefix_match() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
-    let reg = Registry::new(alloc::vec![TypeDef::Bool]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::Bool]);
     // "truer" should not parse as true — the 'r' isn't a valid delimiter
     assert!(from_text("truer", &reg, 0).is_err());
     assert!(from_text("falsehood", &reg, 0).is_err());
@@ -104,18 +104,18 @@ fn bool_rejects_prefix_match() {
 
 #[test]
 fn unterminated_string_rejected() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
-    let reg = Registry::new(alloc::vec![TypeDef::Str]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::Str]);
     assert!(from_text("'hello", &reg, 0).is_err());
     assert!(from_text("'", &reg, 0).is_err());
 }
 
 #[test]
 fn odd_hex_rejected() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
-    let reg = Registry::new(alloc::vec![TypeDef::Bytes]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::Bytes]);
     assert!(from_text("0xabc", &reg, 0).is_err()); // 3 hex digits
     assert!(from_text("0xab", &reg, 0).is_ok());
 }
@@ -147,18 +147,18 @@ fn wrong_field_name_rejected() {
 
 #[test]
 fn empty_input_for_non_unit_rejected() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
-    let reg = Registry::new(alloc::vec![TypeDef::U32]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::U32]);
     assert!(from_text("", &reg, 0).is_err());
 }
 
 #[test]
 fn missing_sequence_close_rejected() {
-    use crate::registry::{Registry, TypeDef};
+    use crate::registry::{Registry, TypeDefOwned};
 
     // Sequence(U8) at index 0, U8 at index 1
-    let reg = Registry::new(alloc::vec![TypeDef::Sequence(1), TypeDef::U8]);
+    let reg = Registry::new(alloc::vec![TypeDefOwned::Sequence(1), TypeDefOwned::U8]);
     assert!(from_text("..1;2;3", &reg, 0).is_err()); // no closing .
     assert!(from_text("..1;2;3.", &reg, 0).is_ok());
 }

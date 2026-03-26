@@ -136,7 +136,7 @@ impl App {
             if let Some(sube::scales::TypeDef::Variant(vdef)) =
                 self.meta.registry.resolve(calls_ty)
             {
-                self.call_items = vdef.variants.iter().map(|v| v.name.clone()).collect();
+                self.call_items = vdef.variants().map(|v| v.name().to_string()).collect();
             }
         }
     }
@@ -199,22 +199,22 @@ impl App {
             if let Some(sube::scales::TypeDef::Variant(vdef)) =
                 self.meta.registry.resolve(calls_ty)
             {
-                if let Some(variant) = vdef.variants.iter().find(|v| v.name == item_name) {
-                    let fields = match &variant.fields {
-                        sube::scales::registry::Fields::Unit => vec![],
-                        sube::scales::registry::Fields::NewType(ty_id) => {
-                            vec![field_from_type("value", *ty_id, &self.meta.registry)]
+                if let Some(variant) = vdef.variants().find(|v| v.name() == item_name) {
+                    let fields = match variant.fields() {
+                        sube::scales::Fields::Unit => vec![],
+                        sube::scales::Fields::NewType(ty_id) => {
+                            vec![field_from_type("value", ty_id, &self.meta.registry)]
                         }
-                        sube::scales::registry::Fields::Tuple(ids) => ids
+                        sube::scales::Fields::Tuple(ids) => ids
                             .iter()
                             .enumerate()
                             .map(|(i, id)| {
                                 field_from_type(&format!("field{i}"), *id, &self.meta.registry)
                             })
                             .collect(),
-                        sube::scales::registry::Fields::Struct(fields) => fields
+                        sube::scales::Fields::Struct(fields) => fields
                             .iter()
-                            .map(|f| field_from_type(&f.name, f.ty, &self.meta.registry))
+                            .map(|f| field_from_type(f.name, f.ty, &self.meta.registry))
                             .collect(),
                     };
                     self.call_form = Some(FormState::new(

@@ -126,9 +126,9 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             value: false,
         },
         Some(TypeDef::Variant(vdef)) => {
-            let variants: Vec<String> = vdef.variants.iter().map(|v| v.name.clone()).collect();
+            let variants: Vec<String> = vdef.variants().map(|v| v.name().to_string()).collect();
             let sub_fields = if !variants.is_empty() {
-                variant_sub_fields(&vdef.variants[0], registry)
+                vdef.variants().next().map(|v| variant_sub_fields(&v, registry)).unwrap_or_default()
             } else {
                 vec![]
             };
@@ -148,7 +148,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
         },
         Some(TypeDef::Sequence(inner)) => {
             // Vec<u8> is Bytes, but Sequence(u8) might also appear
-            if matches!(registry.resolve(*inner), Some(TypeDef::U8)) {
+            if matches!(registry.resolve(inner), Some(TypeDef::U8)) {
                 Field::Text {
                     name: name.into(),
                     type_desc: "Vec<u8> (text auto-encodes to hex)".into(),
@@ -158,7 +158,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             } else {
                 Field::List {
                     name: name.into(),
-                    item_ty: *inner,
+                    item_ty: inner,
                     items: vec![],
                 }
             }
@@ -173,22 +173,22 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
 }
 
 fn variant_sub_fields(
-    variant: &sube::scales::registry::Variant,
+    variant: &sube::scales::Variant,
     registry: &Registry,
 ) -> Vec<Field> {
-    match &variant.fields {
-        sube::scales::registry::Fields::Unit => vec![],
-        sube::scales::registry::Fields::NewType(ty_id) => {
-            vec![field_from_type("value", *ty_id, registry)]
+    match variant.fields() {
+        sube::scales::Fields::Unit => vec![],
+        sube::scales::Fields::NewType(ty_id) => {
+            vec![field_from_type("value", ty_id, registry)]
         }
-        sube::scales::registry::Fields::Tuple(ids) => ids
+        sube::scales::Fields::Tuple(ids) => ids
             .iter()
             .enumerate()
             .map(|(i, id)| field_from_type(&format!("field{i}"), *id, registry))
             .collect(),
-        sube::scales::registry::Fields::Struct(fields) => fields
+        sube::scales::Fields::Struct(fields) => fields
             .iter()
-            .map(|f| field_from_type(&f.name, f.ty, registry))
+            .map(|f| field_from_type(f.name, f.ty, registry))
             .collect(),
     }
 }
@@ -361,8 +361,8 @@ fn resolve_variant_sub_fields(
     registry: &Registry,
 ) -> Vec<Field> {
     if let Some(TypeDef::Variant(vdef)) = registry.resolve(ty_id) {
-        if let Some(variant) = vdef.variants.get(selected) {
-            return variant_sub_fields(variant, registry);
+        if let Some(variant) = vdef.variants().nth(selected) {
+            return variant_sub_fields(&variant, registry);
         }
     }
     vec![]

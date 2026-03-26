@@ -150,21 +150,21 @@ mod tests {
         // 5=Variant{None,Some(U32)} (for MultiAddress-like),
         // 6=Variant{Ed25519([u8;64]),Sr25519([u8;64])} (for MultiSignature-like)
         Registry::new(vec![
-            TypeDef::U8,                    // 0
-            TypeDef::U32,                   // 1
-            TypeDef::Bool,                  // 2
-            TypeDef::Bytes,                 // 3
-            TypeDef::Compact(1),            // 4: Compact<u32>
-            TypeDef::Variant(VariantDef {   // 5: simple address enum
+            TypeDefOwned::U8,                    // 0
+            TypeDefOwned::U32,                   // 1
+            TypeDefOwned::Bool,                  // 2
+            TypeDefOwned::Bytes,                 // 3
+            TypeDefOwned::Compact(1),            // 4: Compact<u32>
+            TypeDefOwned::Variant(VariantDefOwned {   // 5: simple address enum
                 name: "Address".into(),
                 variants: vec![
-                    Variant { index: 0, name: "Id".into(), fields: Fields::NewType(3) },
+                    VariantOwned { index: 0, name: "Id".into(), fields: FieldsOwned::NewType(3) },
                 ],
             }),
-            TypeDef::Variant(VariantDef {   // 6: signature enum
+            TypeDefOwned::Variant(VariantDefOwned {   // 6: signature enum
                 name: "Signature".into(),
                 variants: vec![
-                    Variant { index: 1, name: "Sr25519".into(), fields: Fields::NewType(3) },
+                    VariantOwned { index: 1, name: "Sr25519".into(), fields: FieldsOwned::NewType(3) },
                 ],
             }),
         ])
@@ -323,12 +323,12 @@ pub fn skip_type(c: &mut Cursor, ty_id: TypeId, registry: &Registry) -> Result<(
         TypeDef::Sequence(inner) => {
             let count = c.read_compact_u32()?;
             for _ in 0..count {
-                skip_type(c, *inner, registry)?;
+                skip_type(c, inner, registry)?;
             }
         }
         TypeDef::Array(inner, len) => {
-            for _ in 0..*len {
-                skip_type(c, *inner, registry)?;
+            for _ in 0..len {
+                skip_type(c, inner, registry)?;
             }
         }
         TypeDef::Tuple(ids) | TypeDef::StructTuple(ids) => {
@@ -343,16 +343,16 @@ pub fn skip_type(c: &mut Cursor, ty_id: TypeId, registry: &Registry) -> Result<(
         }
         TypeDef::StructUnit => {}
         TypeDef::StructNewType(inner) => {
-            skip_type(c, *inner, registry)?;
+            skip_type(c, inner, registry)?;
         }
         TypeDef::Variant(vdef) => {
             let index = c.read_byte()?;
             let variant = vdef
                 .variant(index)
                 .map_err(|_| Error::BadInput("invalid variant index in extrinsic".into()))?;
-            match &variant.fields {
+            match variant.fields() {
                 crate::registry::Fields::Unit => {}
-                crate::registry::Fields::NewType(id) => skip_type(c, *id, registry)?,
+                crate::registry::Fields::NewType(id) => skip_type(c, id, registry)?,
                 crate::registry::Fields::Tuple(ids) => {
                     for id in ids {
                         skip_type(c, *id, registry)?;
@@ -371,8 +371,8 @@ pub fn skip_type(c: &mut Cursor, ty_id: TypeId, registry: &Registry) -> Result<(
         TypeDef::Map(k, v) => {
             let count = c.read_compact_u32()?;
             for _ in 0..count {
-                skip_type(c, *k, registry)?;
-                skip_type(c, *v, registry)?;
+                skip_type(c, k, registry)?;
+                skip_type(c, v, registry)?;
             }
         }
         TypeDef::BitSequence(_, _) => {

@@ -20,7 +20,7 @@ pub(crate) fn ty_size(registry: &Registry, data: &[u8], ty: TypeId) -> Result<us
             Ok(l + p)
         }
         TypeDef::StructUnit => Ok(0),
-        TypeDef::StructNewType(inner) => ty_size(registry, data, *inner),
+        TypeDef::StructNewType(inner) => ty_size(registry, data, inner),
         TypeDef::Struct(fields) => fields.iter().try_fold(0usize, |c, f| {
             Ok(c + ty_size(registry, data.get(c..).ok_or(Error::Eof)?, f.ty)?)
         }),
@@ -30,10 +30,10 @@ pub(crate) fn ty_size(registry: &Registry, data: &[u8], ty: TypeId) -> Result<us
         TypeDef::Variant(vdef) => {
             let &idx = data.first().ok_or(Error::Eof)?;
             let var = vdef.variant(idx)?;
-            match &var.fields {
+            match var.fields() {
                 Fields::Unit => Ok(1),
                 Fields::NewType(ty) => {
-                    Ok(1 + ty_size(registry, data.get(1..).ok_or(Error::Eof)?, *ty)?)
+                    Ok(1 + ty_size(registry, data.get(1..).ok_or(Error::Eof)?, ty)?)
                 }
                 Fields::Tuple(tys) => tys.iter().try_fold(1usize, |c, ty| {
                     Ok(c + ty_size(registry, data.get(c..).ok_or(Error::Eof)?, *ty)?)
@@ -46,19 +46,19 @@ pub(crate) fn ty_size(registry: &Registry, data: &[u8], ty: TypeId) -> Result<us
         TypeDef::Sequence(ty_id) => {
             let (len, prefix_size) = sequence_size(data)?;
             (0..len).try_fold(prefix_size, |c, _| {
-                Ok(c + ty_size(registry, data.get(c..).ok_or(Error::Eof)?, *ty_id)?)
+                Ok(c + ty_size(registry, data.get(c..).ok_or(Error::Eof)?, ty_id)?)
             })
         }
         TypeDef::Array(ty_id, len) => {
-            let element_size = ty_size(registry, data, *ty_id)?;
-            element_size.checked_mul(*len as usize).ok_or(Error::Eof)
+            let element_size = ty_size(registry, data, ty_id)?;
+            element_size.checked_mul(len as usize).ok_or(Error::Eof)
         }
         TypeDef::Map(ty_k, ty_v) => {
             let (len, prefix_size) = sequence_size(data)?;
             (0..len).try_fold(prefix_size, |c, _| {
                 let d = data.get(c..).ok_or(Error::Eof)?;
-                let k = ty_size(registry, d, *ty_k)?;
-                let v = ty_size(registry, d.get(k..).ok_or(Error::Eof)?, *ty_v)?;
+                let k = ty_size(registry, d, ty_k)?;
+                let v = ty_size(registry, d.get(k..).ok_or(Error::Eof)?, ty_v)?;
                 Ok(c + k + v)
             })
         }
@@ -91,7 +91,7 @@ impl<'a> Value<'a> {
 
     /// The underlying type definition.
     #[inline]
-    pub fn ty(&self) -> Option<&'a TypeDef> {
+    pub fn ty(&self) -> Option<TypeDef<'a>> {
         self.registry.resolve(self.ty_id)
     }
 
@@ -253,7 +253,7 @@ impl<'a> Value<'a> {
         if index >= len {
             return None;
         }
-        let ty_id = *inner_ty;
+        let ty_id = inner_ty;
         let mut cursor = Cursor::new(&self.data[prefix_size..], self.registry);
         for _ in 0..index {
             cursor.next_value(ty_id).ok()?;
@@ -268,7 +268,7 @@ impl<'a> Value<'a> {
         let (len, prefix_size) = sequence_size(self.data).ok()?;
         Some(SeqIter {
             cursor: Cursor::new(&self.data[prefix_size..], self.registry),
-            ty_id: *inner_ty,
+            ty_id: inner_ty,
             remaining: len,
         })
     }
@@ -279,17 +279,16 @@ impl<'a> Value<'a> {
         let TypeDef::Array(_, len) = self.ty()? else {
             return None;
         };
-        Some(*len)
+        Some(len)
     }
 
     pub fn array_get(&self, index: u32) -> Option<Value<'a>> {
         let TypeDef::Array(ty_id, len) = self.ty()? else {
             return None;
         };
-        if index >= *len {
+        if index >= len {
             return None;
         }
-        let ty_id = *ty_id;
         let element_size = ty_size(self.registry, self.data, ty_id).ok()?;
         let start = (index as usize).checked_mul(element_size)?;
         let end = start.checked_add(element_size)?;
@@ -309,7 +308,7 @@ impl<'a> Value<'a> {
         let TypeDef::Struct(fields) = self.ty()? else {
             return None;
         };
-        let field = fields.get(index)?;
+        let field = fields.iter().nth(index)?;
         let mut offset = 0;
         for f in fields.iter().take(index) {
             offset += ty_size(self.registry, self.data.get(offset..)?, f.ty).ok()?;
@@ -345,9 +344,10 @@ impl<'a> Value<'a> {
         let TypeDef::Struct(fields) = self.ty()? else {
             return None;
         };
+        let field_vec: alloc::vec::Vec<Field<'a>> = fields.iter().collect();
         Some(FieldIter {
             cursor: self.cursor(),
-            fields: fields.as_slice(),
+            fields: field_vec,
             index: 0,
         })
     }
@@ -384,7 +384,7 @@ impl<'a> Value<'a> {
         };
         Some(TupleIter {
             cursor: self.cursor(),
-            types: tys.as_slice(),
+            types: tys,
             index: 0,
         })
     }
@@ -403,7 +403,7 @@ impl<'a> Value<'a> {
             return None;
         };
         let idx = *self.data.first()?;
-        vdef.variant(idx).ok().map(|v| v.name.as_str())
+        vdef.variant(idx).ok().map(|v| v.name())
     }
 
     pub fn variant_data(&self) -> Option<Value<'a>> {
@@ -411,10 +411,10 @@ impl<'a> Value<'a> {
             return None;
         };
         let var = vdef.variant(*self.data.first()?).ok()?;
-        let Fields::NewType(ty_id) = &var.fields else {
+        let Fields::NewType(ty_id) = var.fields() else {
             return None;
         };
-        Some(Value::new(&self.data[1..], *ty_id, self.registry))
+        Some(Value::new(&self.data[1..], ty_id, self.registry))
     }
 }
 
@@ -478,7 +478,7 @@ impl ExactSizeIterator for SeqIter<'_> {}
 /// Iterator over named fields of a SCALE-encoded struct.
 pub struct FieldIter<'a> {
     cursor: Cursor<'a>,
-    fields: &'a [Field],
+    fields: alloc::vec::Vec<Field<'a>>,
     index: usize,
 }
 
@@ -489,7 +489,7 @@ impl<'a> Iterator for FieldIter<'a> {
         let field = self.fields.get(self.index)?;
         self.index += 1;
         let val = self.cursor.next_value(field.ty).ok()?;
-        Some((&field.name, val))
+        Some((field.name, val))
     }
 
     #[inline]
@@ -581,7 +581,7 @@ impl Serialize for Value<'_> {
                 let mut cursor = Cursor::new(data, self.registry);
                 let mut seq = ser.serialize_seq(Some(len))?;
                 for _ in 0..len {
-                    seq.serialize_element(&cursor.next_value(*ty_id).map_err(S::Error::custom)?)?;
+                    seq.serialize_element(&cursor.next_value(ty_id).map_err(S::Error::custom)?)?;
                 }
                 seq.end()
             }
@@ -591,18 +591,18 @@ impl Serialize for Value<'_> {
                 let mut cursor = Cursor::new(data, self.registry);
                 let mut state = ser.serialize_map(Some(len))?;
                 for _ in 0..len {
-                    let key = cursor.next_value(*ty_k).map_err(S::Error::custom)?;
-                    let val = cursor.next_value(*ty_v).map_err(S::Error::custom)?;
+                    let key = cursor.next_value(ty_k).map_err(S::Error::custom)?;
+                    let val = cursor.next_value(ty_v).map_err(S::Error::custom)?;
                     state.serialize_entry(&key, &val)?;
                 }
                 state.end()
             }
             TypeDef::Array(ty_id, len) => {
                 let mut cursor = Cursor::new(data, self.registry);
-                let mut state = ser.serialize_tuple(*len as usize)?;
-                for _ in 0..*len {
+                let mut state = ser.serialize_tuple(len as usize)?;
+                for _ in 0..len {
                     state
-                        .serialize_element(&cursor.next_value(*ty_id).map_err(S::Error::custom)?)?;
+                        .serialize_element(&cursor.next_value(ty_id).map_err(S::Error::custom)?)?;
                 }
                 state.end()
             }
@@ -629,7 +629,7 @@ impl Serialize for Value<'_> {
                 let mut cursor = Cursor::new(data, self.registry);
                 ser.serialize_newtype_struct(
                     "",
-                    &cursor.next_value(*ty_id).map_err(S::Error::custom)?,
+                    &cursor.next_value(ty_id).map_err(S::Error::custom)?,
                 )
             }
             TypeDef::StructTuple(fields) => {
@@ -646,31 +646,33 @@ impl Serialize for Value<'_> {
                 }
                 let idx = data.get_u8();
                 let var = vdef.variant(idx).map_err(S::Error::custom)?;
-                let is_option = vdef.name == "Option";
+                let is_option = vdef.name() == "Option";
+                let var_name = var.name();
+                let var_fields = var.fields();
                 let mut cursor = Cursor::new(data, self.registry);
 
-                match &var.fields {
+                match var_fields {
                     Fields::Unit => {
-                        if is_option && var.name == "None" {
+                        if is_option && var_name == "None" {
                             ser.serialize_none()
                         } else {
-                            ser.serialize_str(&var.name)
+                            ser.serialize_str(var_name)
                         }
                     }
                     Fields::NewType(ty_id) => {
-                        let v = cursor.next_value(*ty_id).map_err(S::Error::custom)?;
-                        if is_option && var.name == "Some" {
+                        let v = cursor.next_value(ty_id).map_err(S::Error::custom)?;
+                        if is_option && var_name == "Some" {
                             ser.serialize_some(&v)
                         } else {
                             let mut s = ser.serialize_map(Some(1))?;
-                            s.serialize_key(&var.name)?;
+                            s.serialize_key(var_name)?;
                             s.serialize_value(&v)?;
                             s.end()
                         }
                     }
                     Fields::Tuple(tys) => {
                         let mut s = ser.serialize_map(Some(1))?;
-                        s.serialize_key(&var.name)?;
+                        s.serialize_key(var_name)?;
                         let vals: Result<alloc::vec::Vec<_>, _> = tys
                             .iter()
                             .map(|ty| cursor.next_value(*ty).map_err(S::Error::custom))
@@ -679,9 +681,10 @@ impl Serialize for Value<'_> {
                         s.end()
                     }
                     Fields::Struct(fields) => {
+                        let field_vec: alloc::vec::Vec<Field<'_>> = fields.iter().collect();
                         let mut s = ser.serialize_map(Some(1))?;
-                        s.serialize_key(&var.name)?;
-                        s.serialize_value(&StructFields(&mut cursor, fields))?;
+                        s.serialize_key(var_name)?;
+                        s.serialize_value(&VariantStructFields(&mut cursor, &field_vec))?;
                         s.end()
                     }
                 }
@@ -700,14 +703,10 @@ impl Serialize for Value<'_> {
 }
 
 /// Helper to serialize variant struct fields as a map without intermediate allocation.
-struct StructFields<'a, 'b>(&'b mut Cursor<'a>, &'a [Field]);
+struct VariantStructFields<'a, 'b>(&'b mut Cursor<'a>, &'b [Field<'a>]);
 
-impl Serialize for StructFields<'_, '_> {
+impl Serialize for VariantStructFields<'_, '_> {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        // We need &mut access to the cursor, but Serialize takes &self.
-        // Since this is only ever serialized once, we use a cell to get interior mutability.
-        // Actually we can't do that cleanly, fall back to collecting.
-        // TODO: consider a custom Serializer approach to avoid this allocation.
         let mut data = self.0.remaining();
         let mut state = ser.serialize_map(Some(self.1.len()))?;
         for f in self.1 {

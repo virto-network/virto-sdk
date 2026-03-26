@@ -754,7 +754,7 @@ fn test_size_calculation() {
 
 #[test]
 fn test_registry_resolve_invalid_id() {
-    let reg = Registry::new(vec![TypeDef::U8]);
+    let reg = Registry::new(vec![TypeDefOwned::U8]);
     assert!(reg.resolve(0).is_some());
     assert!(reg.resolve(1).is_none());
     assert!(reg.resolve(u32::MAX).is_none());

@@ -1,6 +1,6 @@
 use codec::Decode;
 use scale_info::PortableRegistry;
-use scale_serialization::{frame::compress, to_vec};
+use scale_serialization::frame::compress;
 use std::io::{self, Read, Write};
 
 fn main() {
@@ -21,11 +21,11 @@ fn main() {
         std::process::exit(1);
     });
 
-    let registry = compress::compress(&portable).unwrap_or_else(|e| {
+    let types = compress::compress_to_types(&portable).unwrap_or_else(|e| {
         eprintln!("failed to compress registry: {e}");
         std::process::exit(1);
     });
-    let encoded = to_vec(&registry).unwrap_or_else(|e| {
+    let encoded = serde_json::to_vec(&types).unwrap_or_else(|e| {
         eprintln!("failed to encode registry: {e}");
         std::process::exit(1);
     });

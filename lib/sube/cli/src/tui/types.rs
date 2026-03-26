@@ -19,17 +19,17 @@ pub fn describe(ty_id: TypeId, registry: &Registry) -> String {
             TypeDef::Char => "char".into(),
             TypeDef::Str => "String".into(),
             TypeDef::Bytes => "Vec<u8>".into(),
-            TypeDef::Sequence(inner) => format!("Vec<{}>", describe(*inner, registry)),
+            TypeDef::Sequence(inner) => format!("Vec<{}>", describe(inner, registry)),
             TypeDef::Map(k, v) => {
-                format!("Map<{}, {}>", describe(*k, registry), describe(*v, registry))
+                format!("Map<{}, {}>", describe(k, registry), describe(v, registry))
             }
-            TypeDef::Array(inner, len) => format!("[{}; {len}]", describe(*inner, registry)),
+            TypeDef::Array(inner, len) => format!("[{}; {len}]", describe(inner, registry)),
             TypeDef::Tuple(ids) => {
                 let parts: Vec<String> = ids.iter().map(|id| describe(*id, registry)).collect();
                 format!("({})", parts.join(", "))
             }
             TypeDef::StructUnit => "()".into(),
-            TypeDef::StructNewType(inner) => describe(*inner, registry),
+            TypeDef::StructNewType(inner) => describe(inner, registry),
             TypeDef::StructTuple(ids) => {
                 let parts: Vec<String> = ids.iter().map(|id| describe(*id, registry)).collect();
                 format!("({})", parts.join(", "))
@@ -46,14 +46,15 @@ pub fn describe(ty_id: TypeId, registry: &Registry) -> String {
                 }
             }
             TypeDef::Variant(vdef) => {
-                if vdef.variants.len() <= 4 {
-                    let names: Vec<&str> = vdef.variants.iter().map(|v| v.name.as_str()).collect();
+                let count = vdef.variants().count();
+                if count <= 4 {
+                    let names: Vec<&str> = vdef.variants().map(|v| v.name()).collect();
                     names.join("|")
                 } else {
-                    format!("enum({} variants)", vdef.variants.len())
+                    format!("enum({count} variants)")
                 }
             }
-            TypeDef::Compact(inner) => format!("Compact<{}>", describe(*inner, registry)),
+            TypeDef::Compact(inner) => format!("Compact<{}>", describe(inner, registry)),
             TypeDef::BitSequence(_, _) => "BitVec".into(),
         },
     }
@@ -66,9 +67,8 @@ pub fn extract_key_types(key_id: TypeId, num_hashers: usize, registry: &Registry
     }
     match registry.resolve(key_id) {
         Some(TypeDef::Tuple(types) | TypeDef::StructTuple(types)) if types.len() == num_hashers => {
-            types.clone()
+            types.to_vec()
         }
         _ => vec![key_id],
     }
 }
-

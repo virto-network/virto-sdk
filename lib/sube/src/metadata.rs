@@ -1,7 +1,6 @@
 use crate::prelude::*;
 
 use scales::to_bytes_with_info;
-use serde::Serialize;
 
 use crate::hasher::hash;
 
@@ -144,14 +143,7 @@ pub struct Metadata {
     pub registry: scales::Registry,
 }
 
-impl Serialize for Metadata {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> core::result::Result<S::Ok, S::Error> {
-        self.registry.serialize(serializer)
-    }
-}
+// Note: Registry does not implement Serialize (arena-backed, internal types are private)
 
 // --- Decode from raw SCALE bytes using the lean decoder ---
 
@@ -342,7 +334,7 @@ impl core::fmt::Display for StorageKey {
 
 fn extract_tuple_type(key_id: TypeId, registry: &scales::Registry) -> Vec<TypeId> {
     match registry.resolve(key_id) {
-        Some(scales::TypeDef::Tuple(types) | scales::TypeDef::StructTuple(types)) => types.clone(),
+        Some(scales::TypeDef::Tuple(types) | scales::TypeDef::StructTuple(types)) => types.to_vec(),
         _ => vec![key_id],
     }
 }

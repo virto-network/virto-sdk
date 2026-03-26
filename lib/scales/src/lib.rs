@@ -18,7 +18,7 @@ mod textfmt;
 mod value;
 
 pub use error::Error;
-pub use registry::{Registry, TypeDef, TypeId};
+pub use registry::*;
 #[cfg(feature = "json")]
 pub use serde_json::Value as JsonValue;
 #[cfg(feature = "serializer")]

@@ -58,7 +58,7 @@ pub struct RawExtension {
 }
 
 pub struct RawMetadata {
-    pub types: Vec<TypeDef>,
+    pub types: Vec<TypeDefOwned>,
     pub pallets: Vec<RawPallet>,
     pub extrinsic: RawExtrinsic,
 }
@@ -252,7 +252,7 @@ pub fn decode_metadata(data: &[u8]) -> Result<RawMetadata, Error> {
     for _ in 0..type_count {
         let (id, _, td) = decode_portable_type(&mut c)?;
         while types.len() < id as usize {
-            types.push(TypeDef::StructUnit);
+            types.push(TypeDefOwned::StructUnit);
         }
         types.push(td);
     }
@@ -283,23 +283,23 @@ fn read_header(c: &mut Cursor) -> Result<u8, Error> {
     Ok(version)
 }
 
-fn postprocess_types(types: &mut [TypeDef]) {
+fn postprocess_types(types: &mut [TypeDefOwned]) {
     // Vec<u8> → Bytes
     for i in 0..types.len() {
-        if let TypeDef::Sequence(inner) = types[i] {
-            if matches!(types.get(inner as usize), Some(TypeDef::U8)) {
-                types[i] = TypeDef::Bytes;
+        if let TypeDefOwned::Sequence(inner) = types[i] {
+            if matches!(types.get(inner as usize), Some(TypeDefOwned::U8)) {
+                types[i] = TypeDefOwned::Bytes;
             }
         }
     }
     // BTreeMap: resolve inner Sequence→Tuple(K, V)
     for i in 0..types.len() {
-        if let TypeDef::Map(inner, _) = types[i] {
-            if let Some(TypeDef::Sequence(tuple_id)) = types.get(inner as usize) {
+        if let TypeDefOwned::Map(inner, _) = types[i] {
+            if let Some(TypeDefOwned::Sequence(tuple_id)) = types.get(inner as usize) {
                 let tuple_id = *tuple_id;
-                if let Some(TypeDef::Tuple(ids)) = types.get(tuple_id as usize) {
+                if let Some(TypeDefOwned::Tuple(ids)) = types.get(tuple_id as usize) {
                     if ids.len() == 2 {
-                        types[i] = TypeDef::Map(ids[0], ids[1]);
+                        types[i] = TypeDefOwned::Map(ids[0], ids[1]);
                     }
                 }
             }
@@ -358,7 +358,7 @@ fn remap_extrinsic_ids(mut ext: RawExtrinsic, remap: &dyn Fn(u32) -> u32) -> Raw
 
 // --- Type decode/skip ---
 
-fn decode_portable_type(c: &mut Cursor) -> Result<(u32, String, TypeDef), Error> {
+fn decode_portable_type(c: &mut Cursor) -> Result<(u32, String, TypeDefOwned), Error> {
     let id = c.read_compact_u32()?;
 
     // path: last segment = short name
@@ -380,7 +380,7 @@ fn decode_portable_type(c: &mut Cursor) -> Result<(u32, String, TypeDef), Error>
 
     let mut td = decode_type_def(c, is_btreemap)?;
 
-    if let TypeDef::Variant(ref mut vdef) = td {
+    if let TypeDefOwned::Variant(ref mut vdef) = td {
         vdef.name = short_name.clone();
     }
 
@@ -402,27 +402,27 @@ fn skip_portable_type(c: &mut Cursor) -> Result<(), Error> {
     Ok(())
 }
 
-fn decode_type_def(c: &mut Cursor, is_btreemap: bool) -> Result<TypeDef, Error> {
+fn decode_type_def(c: &mut Cursor, is_btreemap: bool) -> Result<TypeDefOwned, Error> {
     let idx = c.read_byte()?;
     match idx {
         0 => decode_composite(c, is_btreemap),
         1 => decode_variant(c),
-        2 => Ok(TypeDef::Sequence(c.read_compact_u32()?)),
-        3 => { let len = c.read_u32_le()?; Ok(TypeDef::Array(c.read_compact_u32()?, len)) }
+        2 => Ok(TypeDefOwned::Sequence(c.read_compact_u32()?)),
+        3 => { let len = c.read_u32_le()?; Ok(TypeDefOwned::Array(c.read_compact_u32()?, len)) }
         4 => {
             let count = c.read_compact_u32()?;
             let mut ids = Vec::with_capacity(count as usize);
             for _ in 0..count { ids.push(c.read_compact_u32()?); }
-            Ok(TypeDef::Tuple(ids))
+            Ok(TypeDefOwned::Tuple(ids))
         }
         5 => decode_primitive(c),
-        6 => Ok(TypeDef::Compact(c.read_compact_u32()?)),
-        7 => Ok(TypeDef::BitSequence(c.read_compact_u32()?, c.read_compact_u32()?)),
+        6 => Ok(TypeDefOwned::Compact(c.read_compact_u32()?)),
+        7 => Ok(TypeDefOwned::BitSequence(c.read_compact_u32()?, c.read_compact_u32()?)),
         _ => Err(Error::BadInput("unknown TypeDef variant".into())),
     }
 }
 
-fn decode_composite(c: &mut Cursor, is_btreemap: bool) -> Result<TypeDef, Error> {
+fn decode_composite(c: &mut Cursor, is_btreemap: bool) -> Result<TypeDefOwned, Error> {
     let count = c.read_compact_u32()?;
     let mut named = Vec::new();
     let mut unnamed = Vec::new();
@@ -432,17 +432,17 @@ fn decode_composite(c: &mut Cursor, is_btreemap: bool) -> Result<TypeDef, Error>
         let ty = c.read_compact_u32()?;
         if c.read_byte()? != 0 { c.skip_string()?; } // type_name
         c.skip_vec_string()?; // docs
-        if let Some(name) = name { named.push(Field { name, ty }); }
+        if let Some(name) = name { named.push(FieldOwned { name, ty }); }
         unnamed.push(ty);
     }
-    Ok(if count == 0 { TypeDef::StructUnit }
-       else if is_btreemap && count == 1 { TypeDef::Map(unnamed[0], unnamed[0]) }
-       else if !has_names && count == 1 { TypeDef::StructNewType(unnamed[0]) }
-       else if !has_names { TypeDef::StructTuple(unnamed) }
-       else { TypeDef::Struct(named) })
+    Ok(if count == 0 { TypeDefOwned::StructUnit }
+       else if is_btreemap && count == 1 { TypeDefOwned::Map(unnamed[0], unnamed[0]) }
+       else if !has_names && count == 1 { TypeDefOwned::StructNewType(unnamed[0]) }
+       else if !has_names { TypeDefOwned::StructTuple(unnamed) }
+       else { TypeDefOwned::Struct(named) })
 }
 
-fn decode_variant(c: &mut Cursor) -> Result<TypeDef, Error> {
+fn decode_variant(c: &mut Cursor) -> Result<TypeDefOwned, Error> {
     let count = c.read_compact_u32()?;
     let mut variants = Vec::with_capacity(count as usize);
     for _ in 0..count {
@@ -456,30 +456,30 @@ fn decode_variant(c: &mut Cursor) -> Result<TypeDef, Error> {
             let ty = c.read_compact_u32()?;
             if c.read_byte()? != 0 { c.skip_string()?; }
             c.skip_vec_string()?;
-            if let Some(fname) = fname { named.push(Field { name: fname, ty }); }
+            if let Some(fname) = fname { named.push(FieldOwned { name: fname, ty }); }
             unnamed.push(ty);
         }
         let index = c.read_byte()?;
         c.skip_vec_string()?; // docs
 
-        let fields = if field_count == 0 { Fields::Unit }
-            else if !has_names && field_count == 1 { Fields::NewType(unnamed[0]) }
-            else if !has_names { Fields::Tuple(unnamed) }
-            else { Fields::Struct(named) };
+        let fields = if field_count == 0 { FieldsOwned::Unit }
+            else if !has_names && field_count == 1 { FieldsOwned::NewType(unnamed[0]) }
+            else if !has_names { FieldsOwned::Tuple(unnamed) }
+            else { FieldsOwned::Struct(named) };
 
-        variants.push(Variant { index, name, fields });
+        variants.push(VariantOwned { index, name, fields });
     }
-    Ok(TypeDef::Variant(VariantDef { name: String::new(), variants }))
+    Ok(TypeDefOwned::Variant(VariantDefOwned { name: String::new(), variants }))
 }
 
-fn decode_primitive(c: &mut Cursor) -> Result<TypeDef, Error> {
+fn decode_primitive(c: &mut Cursor) -> Result<TypeDefOwned, Error> {
     Ok(match c.read_byte()? {
-        0 => TypeDef::Bool, 1 => TypeDef::Char, 2 => TypeDef::Str,
-        3 => TypeDef::U8, 4 => TypeDef::U16, 5 => TypeDef::U32,
-        6 => TypeDef::U64, 7 => TypeDef::U128,
-        8 => TypeDef::U128, // U256 mapped to U128
-        9 => TypeDef::I8, 10 => TypeDef::I16, 11 => TypeDef::I32,
-        12 => TypeDef::I64, 13 => TypeDef::I128,
+        0 => TypeDefOwned::Bool, 1 => TypeDefOwned::Char, 2 => TypeDefOwned::Str,
+        3 => TypeDefOwned::U8, 4 => TypeDefOwned::U16, 5 => TypeDefOwned::U32,
+        6 => TypeDefOwned::U64, 7 => TypeDefOwned::U128,
+        8 => TypeDefOwned::U128, // U256 mapped to U128
+        9 => TypeDefOwned::I8, 10 => TypeDefOwned::I16, 11 => TypeDefOwned::I32,
+        12 => TypeDefOwned::I64, 13 => TypeDefOwned::I128,
         _ => return Err(Error::BadInput("unknown primitive kind".into())),
     })
 }
@@ -523,20 +523,20 @@ fn skip_type_def(c: &mut Cursor) -> Result<(), Error> {
 
 // --- Type reference collection and remapping ---
 
-fn collect_type_refs(td: &TypeDef, out: &mut Vec<u32>) {
+fn collect_type_refs(td: &TypeDefOwned, out: &mut Vec<u32>) {
     match td {
-        TypeDef::Sequence(id) | TypeDef::StructNewType(id) | TypeDef::Compact(id) => out.push(*id),
-        TypeDef::Map(k, v) | TypeDef::BitSequence(k, v) => { out.push(*k); out.push(*v); }
-        TypeDef::Array(id, _) => out.push(*id),
-        TypeDef::Tuple(ids) | TypeDef::StructTuple(ids) => out.extend(ids),
-        TypeDef::Struct(fields) => { for f in fields { out.push(f.ty); } }
-        TypeDef::Variant(vdef) => {
+        TypeDefOwned::Sequence(id) | TypeDefOwned::StructNewType(id) | TypeDefOwned::Compact(id) => out.push(*id),
+        TypeDefOwned::Map(k, v) | TypeDefOwned::BitSequence(k, v) => { out.push(*k); out.push(*v); }
+        TypeDefOwned::Array(id, _) => out.push(*id),
+        TypeDefOwned::Tuple(ids) | TypeDefOwned::StructTuple(ids) => out.extend(ids),
+        TypeDefOwned::Struct(fields) => { for f in fields { out.push(f.ty); } }
+        TypeDefOwned::Variant(vdef) => {
             for v in &vdef.variants {
                 match &v.fields {
-                    Fields::NewType(id) => out.push(*id),
-                    Fields::Tuple(ids) => out.extend(ids),
-                    Fields::Struct(fields) => { for f in fields { out.push(f.ty); } }
-                    Fields::Unit => {}
+                    FieldsOwned::NewType(id) => out.push(*id),
+                    FieldsOwned::Tuple(ids) => out.extend(ids),
+                    FieldsOwned::Struct(fields) => { for f in fields { out.push(f.ty); } }
+                    FieldsOwned::Unit => {}
                 }
             }
         }
@@ -544,23 +544,23 @@ fn collect_type_refs(td: &TypeDef, out: &mut Vec<u32>) {
     }
 }
 
-fn remap_type_ids(td: &mut TypeDef, id_map: &[Option<u32>]) {
+fn remap_type_ids(td: &mut TypeDefOwned, id_map: &[Option<u32>]) {
     fn r(id: &mut u32, map: &[Option<u32>]) {
         if let Some(new) = map.get(*id as usize).copied().flatten() { *id = new; }
     }
     match td {
-        TypeDef::Sequence(id) | TypeDef::StructNewType(id) | TypeDef::Compact(id) => r(id, id_map),
-        TypeDef::Map(k, v) | TypeDef::BitSequence(k, v) => { r(k, id_map); r(v, id_map); }
-        TypeDef::Array(id, _) => r(id, id_map),
-        TypeDef::Tuple(ids) | TypeDef::StructTuple(ids) => { for id in ids { r(id, id_map); } }
-        TypeDef::Struct(fields) => { for f in fields { r(&mut f.ty, id_map); } }
-        TypeDef::Variant(vdef) => {
+        TypeDefOwned::Sequence(id) | TypeDefOwned::StructNewType(id) | TypeDefOwned::Compact(id) => r(id, id_map),
+        TypeDefOwned::Map(k, v) | TypeDefOwned::BitSequence(k, v) => { r(k, id_map); r(v, id_map); }
+        TypeDefOwned::Array(id, _) => r(id, id_map),
+        TypeDefOwned::Tuple(ids) | TypeDefOwned::StructTuple(ids) => { for id in ids { r(id, id_map); } }
+        TypeDefOwned::Struct(fields) => { for f in fields { r(&mut f.ty, id_map); } }
+        TypeDefOwned::Variant(vdef) => {
             for v in &mut vdef.variants {
                 match &mut v.fields {
-                    Fields::NewType(id) => r(id, id_map),
-                    Fields::Tuple(ids) => { for id in ids { r(id, id_map); } }
-                    Fields::Struct(fields) => { for f in fields { r(&mut f.ty, id_map); } }
-                    Fields::Unit => {}
+                    FieldsOwned::NewType(id) => r(id, id_map),
+                    FieldsOwned::Tuple(ids) => { for id in ids { r(id, id_map); } }
+                    FieldsOwned::Struct(fields) => { for f in fields { r(&mut f.ty, id_map); } }
+                    FieldsOwned::Unit => {}
                 }
             }
         }

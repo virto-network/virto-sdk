@@ -283,7 +283,7 @@ impl From<Response> for Vec<u8> {
         match res {
             Response::Value(v, _) => v.data,
             Response::None => vec![0],
-            Response::Meta(m) => serde_json::to_vec(m.as_ref()).unwrap_or_default(),
+            Response::Meta(_) => vec![],
             Response::ValueSet(_, _) => vec![],
             Response::Void => vec![],
         }
