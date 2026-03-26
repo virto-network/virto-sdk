@@ -63,6 +63,93 @@ pub struct RawMetadata {
     pub extrinsic: RawExtrinsic,
 }
 
+// --- Lightweight pallet scan (for two-request metadata fetch) ---
+
+/// Pallet summary from a lightweight metadata scan.
+pub struct PalletSummary {
+    pub name: String,
+    pub index: u8,
+}
+
+/// Scan metadata to extract pallet names without decoding types or constant values.
+///
+/// This is the cheapest possible metadata parse — only allocates pallet names.
+/// Use with a second call to [`decode_metadata_filtered`] to decode only needed types.
+pub fn scan_pallets(data: &[u8]) -> Result<Vec<PalletSummary>, Error> {
+    let mut c = Cursor::new(data);
+    let version = read_header(&mut c)?;
+
+    // Skip all types
+    let type_count = c.read_compact_u32()?;
+    for _ in 0..type_count {
+        c.read_compact_u32()?; // id
+        skip_portable_type(&mut c)?;
+    }
+
+    // Decode pallets (lightweight — skip storage, constants, etc.)
+    let pallet_count = c.read_compact_u32()?;
+    let mut pallets = Vec::with_capacity(pallet_count as usize);
+    for _ in 0..pallet_count {
+        pallets.push(scan_single_pallet(&mut c, version)?);
+    }
+    Ok(pallets)
+}
+
+/// Scan a single pallet — extract name and index, skip everything else.
+fn scan_single_pallet(c: &mut Cursor, version: u8) -> Result<PalletSummary, Error> {
+    let name = c.read_string()?;
+
+    // storage: Option<StorageMetadata>
+    if c.read_byte()? != 0 {
+        c.skip_string()?; // prefix
+        let entry_count = c.read_compact_u32()?;
+        for _ in 0..entry_count {
+            skip_storage_entry(c)?;
+        }
+    }
+
+    // calls: Option<{ ty }>
+    if c.read_byte()? != 0 { c.read_compact_u32()?; }
+    // event: Option<{ ty }>
+    if c.read_byte()? != 0 { c.read_compact_u32()?; }
+
+    // constants: Vec<ConstantMetadata>
+    let const_count = c.read_compact_u32()?;
+    for _ in 0..const_count {
+        c.skip_string()?; // name
+        c.read_compact_u32()?; // ty
+        let value_len = c.read_compact_u32()? as usize;
+        c.read_bytes(value_len)?; // value
+        c.skip_vec_string()?; // docs
+    }
+
+    // error: Option<{ ty }>
+    if c.read_byte()? != 0 { c.read_compact_u32()?; }
+    let index = c.read_byte()?;
+    if version >= 15 { c.skip_vec_string()?; }
+
+    Ok(PalletSummary { name, index })
+}
+
+fn skip_storage_entry(c: &mut Cursor) -> Result<(), Error> {
+    c.skip_string()?; // name
+    c.read_byte()?; // modifier
+    match c.read_byte()? {
+        0 => { c.read_compact_u32()?; } // Plain
+        1 => { // Map
+            let hc = c.read_compact_u32()?;
+            for _ in 0..hc { c.read_byte()?; }
+            c.read_compact_u32()?; // key
+            c.read_compact_u32()?; // value
+        }
+        _ => return Err(Error::BadInput("unknown storage entry type".into())),
+    }
+    let default_len = c.read_compact_u32()? as usize;
+    c.read_bytes(default_len)?;
+    c.skip_vec_string()?; // docs
+    Ok(())
+}
+
 // --- Two-pass filtered decode ---
 
 /// Decode metadata keeping only selected pallets and their referenced types.

@@ -987,14 +987,8 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     }
 
     async fn metadata(&mut self) -> crate::Result<Metadata> {
-        let raw = self.runtime_call("Metadata_metadata", "0x").await?;
-
-        // Metadata_metadata returns: compact_len || RuntimeMetadataPrefixed
-        let mut cursor = raw.as_slice();
-        let _len = <codec::Compact<u32>>::decode(&mut cursor)
-            .map_err(|_| crate::Error::Decode("compact prefix".into()))?;
-
-        meta::from_bytes(cursor)
+        let raw = self.fetch_raw_metadata().await?;
+        meta::from_bytes(&raw)
     }
 
     async fn block_info(&mut self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
@@ -1026,5 +1020,32 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 })
             }
         }
+    }
+}
+
+// --- Two-request metadata fetch helpers ---
+
+impl<R: Rpc + RpcSubscription> ChainHead<R> {
+    /// Fetch raw metadata bytes (after stripping the compact length prefix).
+    async fn fetch_raw_metadata(&mut self) -> crate::Result<Vec<u8>> {
+        let raw = self.runtime_call("Metadata_metadata", "0x").await?;
+        let mut cursor = raw.as_slice();
+        let _len = <codec::Compact<u32>>::decode(&mut cursor)
+            .map_err(|_| crate::Error::Decode("compact prefix".into()))?;
+        Ok(cursor.to_vec())
+    }
+
+    /// Scan pallet names from metadata without decoding types.
+    pub async fn scan_pallets(&mut self) -> crate::Result<Vec<String>> {
+        let raw = self.fetch_raw_metadata().await?;
+        let pallets = scales::frame::metadata::scan_pallets(&raw)
+            .map_err(|_| crate::Error::BadMetadata)?;
+        Ok(pallets.into_iter().map(|p| p.name).collect())
+    }
+
+    /// Fetch metadata keeping only the specified pallets and their referenced types.
+    pub async fn metadata_filtered(&mut self, pallets: &[&str]) -> crate::Result<Metadata> {
+        let raw = self.fetch_raw_metadata().await?;
+        meta::from_bytes_filtered(&raw, pallets)
     }
 }

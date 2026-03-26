@@ -98,6 +98,17 @@ impl AnyBackend {
         dispatch!(self, header(block_hash))
     }
 
+    pub(crate) async fn scan_pallets(&mut self) -> SubeResult<Vec<String>> {
+        dispatch!(self, scan_pallets())
+    }
+
+    pub(crate) async fn metadata_filtered(
+        &mut self,
+        pallets: &[&str],
+    ) -> SubeResult<Metadata> {
+        dispatch!(self, metadata_filtered(pallets))
+    }
+
     pub(crate) async fn get_storage_at_hash(
         &mut self,
         block_hash: &str,

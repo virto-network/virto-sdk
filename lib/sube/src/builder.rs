@@ -359,6 +359,32 @@ impl Sube {
         &self.metadata
     }
 
+    /// Scan available pallet names from the chain (lightweight, no type decode).
+    ///
+    /// First step of the two-request low-memory pattern:
+    /// ```rust,ignore
+    /// let pallets = chain.scan_pallets().await?;
+    /// // user picks pallets...
+    /// chain.load_filtered_metadata(&["Balances"]).await?;
+    /// ```
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub async fn scan_pallets(&mut self) -> crate::Result<Vec<String>> {
+        self.backend.scan_pallets().await
+    }
+
+    /// Reload metadata keeping only the specified pallets.
+    ///
+    /// Makes a fresh metadata request and decodes only types referenced
+    /// by the selected pallets. Reduces memory from ~400KB to ~170KB
+    /// for a typical 2-pallet selection.
+    #[cfg(any(feature = "ws", feature = "smoldot"))]
+    pub async fn load_filtered_metadata(&mut self, pallets: &[&str]) -> crate::Result<()> {
+        let refs: Vec<&str> = pallets.to_vec();
+        let meta = self.backend.metadata_filtered(&refs).await?;
+        self.metadata = Arc::new(meta);
+        Ok(())
+    }
+
     /// Get a shared reference-counted handle to the metadata.
     pub fn metadata_arc(&self) -> Arc<Metadata> {
         Arc::clone(&self.metadata)
