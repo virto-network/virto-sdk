@@ -1,4 +1,4 @@
-use core::{convert::TryInto, fmt::Debug};
+use core::fmt::Debug;
 pub use derive::Derive;
 
 type Bytes<const N: usize> = [u8; N];
@@ -7,7 +7,7 @@ type Bytes<const N: usize> = [u8; N];
 pub trait Pair: Signer + Derive {
     type Public: Public;
 
-    fn from_bytes(seed: &[u8]) -> Self
+    fn from_bytes(seed: &[u8]) -> Option<Self>
     where
         Self: Sized;
 
@@ -17,11 +17,7 @@ pub trait Pair: Signer + Derive {
 pub trait Public: AsRef<[u8]> + Debug {}
 impl<const N: usize> Public for Bytes<N> {}
 
-pub trait Signature: AsRef<[u8]> + Debug + PartialEq {
-    fn as_bytes<const N: usize>(&self) -> Bytes<N> {
-        self.as_ref().try_into().expect("error")
-    }
-}
+pub trait Signature: AsRef<[u8]> + Debug + PartialEq {}
 impl<const N: usize> Signature for Bytes<N> {}
 
 /// Something that can sign messages
@@ -30,7 +26,7 @@ pub trait Signer {
     fn sign_msg(
         &self,
         data: impl AsRef<[u8]>,
-    ) -> impl core::future::Future<Output = Result<Self::Signature, ()>>;
+    ) -> impl core::future::Future<Output = Result<Self::Signature, SigningError>>;
 
     fn verify(
         &self,
@@ -38,39 +34,42 @@ pub trait Signer {
         sig: impl AsRef<[u8]>,
     ) -> impl core::future::Future<Output = bool>;
 }
+
+#[derive(Debug)]
+pub enum SigningError {
+    Locked,
+    NoAccount,
+}
+
+impl core::fmt::Display for SigningError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            SigningError::Locked => write!(f, "Wallet is locked"),
+            SigningError::NoAccount => write!(f, "No account available"),
+        }
+    }
+}
 /// Wrappers to represent any supported key pair.
 pub mod any {
-    use super::{Public, Signature};
+    use super::{Public, Signature, SigningError};
     use core::fmt;
 
     #[derive(Debug)]
+    #[non_exhaustive]
     pub enum Pair {
-        #[cfg(feature = "sr25519")]
         Sr25519(super::sr25519::Pair),
-        #[cfg(not(feature = "sr25519"))]
-        _None,
     }
 
     impl super::Pair for Pair {
         type Public = AnyPublic;
 
-        fn from_bytes(seed: &[u8]) -> Self
-        where
-            Self: Sized,
-        {
-            #[cfg(feature = "sr25519")]
-            let p = Self::Sr25519(<super::sr25519::Pair as super::Pair>::from_bytes(seed));
-            #[cfg(not(feature = "sr25519"))]
-            let p = Self::_None;
-            p
+        fn from_bytes(seed: &[u8]) -> Option<Self> {
+            Some(Self::Sr25519(<super::sr25519::Pair as super::Pair>::from_bytes(seed)?))
         }
 
         fn public(&self) -> Self::Public {
             match self {
-                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => AnyPublic::Sr25519(p.public()),
-                #[cfg(not(feature = "sr25519"))]
-                Pair::_None => unreachable!(),
             }
         }
     }
@@ -78,20 +77,13 @@ pub mod any {
     impl super::Derive for Pair {
         type Pair = Pair;
 
-        fn derive(&self, path: &str) -> Self::Pair
-        where
-            Self: Sized,
-        {
+        fn derive(&self, path: &str) -> Self::Pair {
             match self {
-                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(kp) => Pair::Sr25519(kp.derive(path)),
-                #[cfg(not(feature = "sr25519"))]
-                Pair::_None => unreachable!(),
             }
         }
     }
 
-    #[cfg(feature = "sr25519")]
     impl From<super::sr25519::Pair> for Pair {
         fn from(p: super::sr25519::Pair) -> Self {
             Self::Sr25519(p)
@@ -101,36 +93,29 @@ pub mod any {
     impl super::Signer for Pair {
         type Signature = AnySignature;
 
-        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, SigningError> {
             match self {
-                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => Ok(p.sign_msg(msg).await?.into()),
             }
         }
 
         async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
             match self {
-                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => super::Signer::verify(p, msg, sig).await,
             }
         }
     }
 
     #[derive(Debug)]
+    #[non_exhaustive]
     pub enum AnyPublic {
-        #[cfg(feature = "sr25519")]
         Sr25519(super::Bytes<{ super::sr25519::SEED_LEN }>),
-        #[cfg(not(feature = "sr25519"))]
-        _None,
     }
 
     impl AsRef<[u8]> for AnyPublic {
         fn as_ref(&self) -> &[u8] {
             match self {
-                #[cfg(feature = "sr25519")]
                 AnyPublic::Sr25519(p) => p.as_ref(),
-                #[cfg(not(feature = "sr25519"))]
-                AnyPublic::_None => unreachable!(),
             }
         }
     }
@@ -146,23 +131,19 @@ pub mod any {
     impl Public for AnyPublic {}
 
     #[derive(Debug, PartialEq)]
+    #[non_exhaustive]
     pub enum AnySignature {
-        #[cfg(feature = "sr25519")]
         Sr25519(super::Bytes<{ super::sr25519::SIG_LEN }>),
-
-        #[cfg(not(feature = "sr25519"))]
-        _None,
     }
 
     impl AsRef<[u8]> for AnySignature {
         fn as_ref(&self) -> &[u8] {
             match self {
-                #[cfg(feature = "sr25519")]
                 AnySignature::Sr25519(s) => s.as_ref(),
             }
         }
     }
-    #[cfg(feature = "sr25519")]
+
     impl From<super::sr25519::Signature> for AnySignature {
         fn from(s: super::sr25519::Signature) -> Self {
             AnySignature::Sr25519(s)
@@ -183,7 +164,6 @@ pub mod sr25519 {
     pub use schnorrkel::Keypair as Pair;
     pub(super) const SEED_LEN: usize = MINI_SECRET_KEY_LENGTH;
     pub(super) const SIG_LEN: usize = 64;
-    pub type Seed = Bytes<SEED_LEN>;
     pub type Public = Bytes<32>;
     pub type Signature = Bytes<64>;
     const SIGNING_CTX: &[u8] = b"substrate";
@@ -191,10 +171,9 @@ pub mod sr25519 {
     impl super::Pair for Pair {
         type Public = Public;
 
-        fn from_bytes(bytes: &[u8]) -> Self {
-            assert!(bytes.len() >= SEED_LEN);
-            let minikey = MiniSecretKey::from_bytes(&bytes[..SEED_LEN]).unwrap();
-            minikey.expand_to_keypair(ExpansionMode::Ed25519)
+        fn from_bytes(bytes: &[u8]) -> Option<Self> {
+            let minikey = MiniSecretKey::from_bytes(bytes.get(..SEED_LEN)?).ok()?;
+            Some(minikey.expand_to_keypair(ExpansionMode::Ed25519))
         }
 
         fn public(&self) -> Self::Public {
@@ -207,7 +186,7 @@ pub mod sr25519 {
     impl Signer for Pair {
         type Signature = Signature;
 
-        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, super::SigningError> {
             let context = signing_context(SIGNING_CTX);
             Ok(self.sign(context.bytes(msg.as_ref())).to_bytes())
         }
@@ -244,23 +223,15 @@ pub mod sr25519 {
         }
     }
 
-    #[cfg(not(feature = "rand_chacha"))]
     fn derive_simple(key: SecretKey, j: Junction) -> SecretKey {
-        key.derived_key_simple(ChainCode(j), []).0
-    }
-    #[cfg(feature = "rand_chacha")]
-    fn derive_simple(key: SecretKey, j: Junction) -> SecretKey {
-        use rand_core::SeedableRng;
-        // As noted in https://docs.rs/schnorrkel/latest/schnorrkel/context/fn.attach_rng.html
-        // it's not recommended but should be ok for our simple use cases
+        use rand_chacha::rand_core::SeedableRng;
         let rng = rand_chacha::ChaChaRng::from_seed([0; 32]);
         key.derived_key_simple_rng(ChainCode(j), &[], rng).0
     }
 
     #[cfg(test)]
     mod tests {
-        use crate::Mnemonic;
-        use crate::{util::Pin, Derive, Pair};
+        use crate::{Derive, Pair};
 
         #[test]
         fn derive_substrate_keypair() {
@@ -286,14 +257,16 @@ pub mod sr25519 {
                     b"\x48\xce\x4b\x7e\x7c\xe5\x87\xf6\xad\x1e\x14\x96\x51\x77\x94\xf1\x28\x82\xb9\xff\x69\xc9\x11\xf7\xda\x7c\x15\x7a\xdc\x9d\x24\x4e",
                 ),
             ] {
-                let root: super::Pair = Pair::from_bytes(seed);
+                let root: super::Pair = Pair::from_bytes(seed).unwrap();
                 let derived = root.derive(path);
                 assert_eq!(&derived.public(), pubkey);
             }
         }
 
         #[test]
+        #[cfg(feature = "mnemonic")]
         fn derive_keypair_from_phrase() {
+            use mnemonic::Mnemonic;
             // 0x708a2be996b87d1e7bb23f3cfa9bac804c83359e308598b0cb20728290684757
             let phrase =
                 "rotate increase color sustain print future moon rigid hunt wild diagram online";
@@ -320,7 +293,7 @@ pub mod sr25519 {
                 let phrase = Mnemonic::from_phrase(phrase).unwrap();
                 let seed = Pin::from("").protect::<64>(&phrase.entropy());
 
-                let root: super::Pair = Pair::from_bytes(&seed);
+                let root: super::Pair = Pair::from_bytes(&seed).expect("valid seed");
                 let derived = root.derive(path);
                 assert_eq!(&derived.public(), pubkey);
             }

@@ -32,9 +32,9 @@ impl<S> OSKeyring<S> {
         }
     }
 
-    /// Relace the stored backap phrase with a new one.
-    pub fn update(&self, phrase: &str) -> Result<(), ()> {
-        self.entry.set_password(phrase).map_err(|_| ())
+    /// Replace the stored backup phrase with a new one.
+    pub fn update(&self, phrase: &str) -> Result<(), Error> {
+        self.entry.set_password(phrase).map_err(|_| Error::Keyring)
     }
 
     /// Returned the stored phrase from the OS secure storage
@@ -55,26 +55,19 @@ impl<S> OSKeyring<S> {
 
         let seed = phrase.entropy();
         seed_from_entropy!(seed, pin);
-        Ok(RootAccount::from_bytes(seed))
+        RootAccount::from_bytes(seed).ok_or(Error::BadPhrase)
     }
 
-    // Create new random seed and save it in the OS keyring.
     fn generate(&self, pin: Pin, lang: Language) -> Result<RootAccount, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
         let seed = phrase.entropy();
         seed_from_entropy!(seed, pin);
-        let root = RootAccount::from_bytes(seed);
+        let root = RootAccount::from_bytes(seed).ok_or(Error::BadPhrase)?;
 
         self.entry
             .set_password(phrase.phrase())
-            // .inspect_err(|e| {
-            //     dbg!(e);
-            // })
-            .map_err(|e| {
-                dbg!(e);
-                Error::Keyring
-            })?;
+            .map_err(|_| Error::Keyring)?;
 
         Ok(root)
     }

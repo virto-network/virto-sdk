@@ -62,16 +62,11 @@ impl<Id> Pass<Id> {
 
         let seed = phrase.entropy();
         seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
-        Ok(RootAccount::from_bytes(seed))
+        RootAccount::from_bytes(seed).ok_or(Error::Plaintext)
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
     fn generate(&self, credentials: &PassCreds, lang: Language) -> Result<RootAccount, Error> {
-        let map_encrypt_error = |e| {
-            dbg!(e);
-            Error::Encrypt
-        };
-
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
         let mut secret_path = String::from(DEFAULT_DIR);
@@ -79,22 +74,22 @@ impl<Id> Pass<Id> {
         let secret_path = self
             .store
             .normalize_secret_path(secret_path, None, true)
-            .map_err(map_encrypt_error)?;
+            .map_err(|_| Error::Encrypt)?;
 
         let plaintext = Plaintext::from(phrase.to_string());
 
         crypto::context(Proto::Gpg)
-            .map_err(|_e| Error::Encrypt)?
+            .map_err(|_| Error::Encrypt)?
             .encrypt_file(
-                &self.store.recipients().map_err(map_encrypt_error)?,
+                &self.store.recipients().map_err(|_| Error::Encrypt)?,
                 plaintext,
                 &secret_path,
             )
-            .map_err(map_encrypt_error)?;
+            .map_err(|_| Error::Encrypt)?;
 
         let seed = phrase.entropy();
         seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
-        Ok(RootAccount::from_bytes(seed))
+        RootAccount::from_bytes(seed).ok_or(Error::Plaintext)
     }
 }
 

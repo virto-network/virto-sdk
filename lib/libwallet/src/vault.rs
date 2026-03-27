@@ -38,37 +38,25 @@ mod utils {
     /// and use accounts with the wallet.
     #[derive(Debug)]
     pub struct RootAccount {
-        #[cfg(feature = "substrate")]
         sub: crate::key_pair::sr25519::Pair,
     }
 
     impl RootAccount {
-        pub fn from_bytes(seed: &[u8]) -> Self {
-            #[cfg(not(feature = "substrate"))]
-            let _ = seed;
-            RootAccount {
-                #[cfg(feature = "substrate")]
-                sub: <crate::key_pair::sr25519::Pair as crate::Pair>::from_bytes(seed),
-            }
+        pub fn from_bytes(seed: &[u8]) -> Option<Self> {
+            Some(RootAccount {
+                sub: <crate::key_pair::sr25519::Pair as crate::Pair>::from_bytes(seed)?,
+            })
         }
     }
 
     impl Derive for &RootAccount {
         type Pair = any::Pair;
 
-        fn derive(&self, path: &str) -> Self::Pair
-        where
-            Self: Sized,
-        {
+        fn derive(&self, path: &str) -> Self::Pair {
             log::info!("derive: {}", path);
-            match &path[..2] {
-                #[cfg(feature = "substrate")]
-                "//" => self.sub.derive(path).into(),
-                "m/" => unimplemented!(),
-                #[cfg(feature = "substrate")]
+            match path.get(..2) {
+                Some("//") => self.sub.derive(path).into(),
                 _ => self.sub.derive("//default").into(),
-                #[cfg(not(feature = "substrate"))]
-                _ => unreachable!(),
             }
         }
     }
@@ -85,7 +73,10 @@ mod utils {
 
     impl Account for AccountSigner {
         fn public(&self) -> impl Public {
-            self.pair.as_ref().expect("account unlocked").public()
+            self.pair
+                .as_ref()
+                .map(|p| p.public())
+                .expect("account unlocked")
         }
     }
 
@@ -133,20 +124,19 @@ mod utils {
     impl crate::Signer for AccountSigner {
         type Signature = AnySignature;
 
-        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, ()> {
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, crate::SigningError> {
             self.pair
                 .as_ref()
-                .expect("account unlocked")
+                .ok_or(crate::SigningError::Locked)?
                 .sign_msg(msg)
                 .await
         }
 
         async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
-            self.pair
-                .as_ref()
-                .expect("account unlocked")
-                .verify(msg, sig)
-                .await
+            match self.pair.as_ref() {
+                Some(p) => p.verify(msg, sig).await,
+                None => false,
+            }
         }
     }
 

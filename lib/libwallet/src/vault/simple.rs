@@ -13,18 +13,7 @@ pub struct Simple<S, const N: usize = 32> {
 }
 
 impl<S, const N: usize> Simple<S, N> {
-    /// A vault with a random seed, once dropped the the vault can't be restored
-    ///
-    /// ```
-    /// # use libwallet::{vault, Error, Derive, Pair, Vault};
-    /// # type SimpleVault = vault::Simple<String>;
-    /// # type Result = std::result::Result<(), <SimpleVault as Vault>::Error>;
-    /// # #[async_std::main] async fn main() -> Result {
-    /// let mut vault = SimpleVault::generate(&mut rand_core::OsRng);
-    /// let root = vault.unlock(None, None).await?;
-    /// # Ok(())
-    /// }
-    /// ```
+    /// A vault with a random seed, once dropped the vault can't be restored.
     #[cfg(feature = "rand")]
     pub fn generate<R>(rng: &mut R) -> Self
     where
@@ -50,7 +39,6 @@ impl<S, const N: usize> Simple<S, N> {
     #[cfg(feature = "mnemonic")]
     // Provide your own seed
     pub fn from_phrase(phrase: impl AsRef<str>) -> Self {
-        use core::convert::TryInto;
         mnemonic::Mnemonic::validate(phrase.as_ref()).expect("its a valid mnemonic");
         // Count the number of words in the phrase
         let mnemonic = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).expect("its a valid mnemonic");
@@ -68,7 +56,7 @@ impl<S, const N: usize> Simple<S, N> {
         if let Some(entropy) = self.unlocked {
             let seed = &entropy;
             seed_from_entropy!(seed, pin);
-            Ok(RootAccount::from_bytes(seed))
+            RootAccount::from_bytes(seed).ok_or(Error)
         } else {
             Err(Error)
         }

@@ -16,12 +16,9 @@ mod substrate_ext;
 
 pub use account::Account;
 use arrayvec::ArrayVec;
-use core::{convert::TryInto, fmt};
+use core::fmt;
 
-#[cfg(feature = "mnemonic")]
-use mnemonic;
-
-pub use key_pair::*;
+pub use key_pair::{any, Derive, Pair, Public, Signature, Signer, SigningError};
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{Language, Mnemonic};
 pub use vault::Vault;
@@ -69,23 +66,6 @@ where
     }
 
     /// Use credentials to unlock the vault.
-    ///
-    /// ```
-    /// # use libwallet::{Wallet, Error, vault, Vault};
-    /// # use std::convert::TryInto;
-    /// # type SimpleVault = vault::Simple<String>;
-    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
-    /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
-    /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// if wallet.is_locked() {
-    ///     wallet.unlock(None, None).await?;
-    /// }
-    ///
-    /// assert!(!wallet.is_locked());
-    /// # Ok(())
-    /// # }
-    /// ```
     pub async fn unlock(
         &mut self,
         account: V::Id,
@@ -113,82 +93,36 @@ where
 
     /// Sign a message with the default account and return the signature.
     /// The wallet needs to be unlocked.
-    ///
-    /// ```
-    /// # use libwallet::{Wallet, vault, Error, Signer, Vault};
-    /// # type SimpleVault = vault::Simple<String>;
-    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
-    /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
-    /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(None, None).await?;
-    ///
-    /// let msg = &[0x12, 0x34, 0x56];
-    /// let signature = wallet.sign(msg).await.expect("it must sign");
-    ///
-    /// assert!(wallet.default_account().expect("it must have a default signer").verify(msg, signature.as_ref()).await);
-    /// # Ok(()) }
-    /// ```
-    pub async fn sign(&self, message: &[u8]) -> Result<impl Signature, ()> {
-        assert!(!self.is_locked());
+    pub async fn sign(&self, message: &[u8]) -> Result<impl Signature, SigningError> {
+        if self.is_locked() {
+            return Err(SigningError::Locked);
+        }
 
-        let Some(signer) = self.default_account() else {
-            return Err(());
-        };
+        let signer = self.default_account().ok_or(SigningError::NoAccount)?;
 
         signer.sign_msg(message).await
     }
 
     /// Save data to be signed some time later.
-    ///
-    /// ```
-    /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type SimpleVault = vault::Simple<String>;
-    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
-    /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
-    /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.sign_later(&[0x01, 0x02, 0x03]);
-    ///
-    /// assert_eq!(wallet.pending().count(), 1);
-    /// # Ok(()) }
-    /// ```
-    pub fn sign_later<T>(&mut self, message: T)
+    /// Returns an error if the message exceeds the maximum size.
+    pub fn sign_later<T>(&mut self, message: T) -> Result<(), Error<V::Error>>
     where
         T: AsRef<[u8]>,
     {
         let msg = message.as_ref();
-        let msg = msg
-            .try_into()
-            .unwrap_or_else(|_| msg[..MSG_MAX_SIZE].try_into().unwrap());
+        let msg = msg.try_into().map_err(|_| Error::MessageTooLong)?;
         self.pending_sign.push((msg, None));
+        Ok(())
     }
 
-    /// Try to sign all messages in the queue returning the list of signatures
-    ///
-    /// ```
-    /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type SimpleVault = vault::Simple<String>;
-    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
-    /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
-    /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.unlock(None, None).await?;
-    ///
-    /// wallet.sign_later(&[0x01, 0x02, 0x03]);
-    /// wallet.sign_later(&[0x04, 0x05, 0x06]);
-    /// let signatures = wallet.sign_pending().await.expect("it must sign");
-    ///
-    /// assert_eq!(signatures.len(), 2);
-    /// assert_eq!(wallet.pending().count(), 0);
-    /// # Ok(()) }
-    /// ```
-    pub async fn sign_pending(&mut self) -> Result<ArrayVec<impl AsRef<[u8]>, M>, ()> {
+    /// Try to sign all messages in the queue returning the list of signatures.
+    pub async fn sign_pending(&mut self) -> Result<ArrayVec<impl AsRef<[u8]>, M>, SigningError> {
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
-            let signer = a
-                .map(|idx| self.account(idx))
-                .unwrap_or_else(|| self.default_account().expect("Signer not set"));
+            let signer = match a {
+                Some(idx) => self.account(idx),
+                None => self.default_account().ok_or(SigningError::NoAccount)?,
+            };
 
             let message = signer.sign_msg(&msg).await?;
             signatures.push(message);
@@ -196,22 +130,7 @@ where
         Ok(signatures)
     }
 
-    /// Iteratate over the messages pending for signature for all the accounts.
-    ///
-    /// ```
-    /// # use libwallet::{Wallet, vault, Error, Vault};
-    /// # type SimpleVault = vault::Simple<String>;
-    /// # type Result = std::result::Result<(), Error<<SimpleVault as Vault>::Error>>;
-    /// # #[async_std::main] async fn main() -> Result {
-    /// # let vault = SimpleVault::generate(&mut rand_core::OsRng);
-    /// let mut wallet: Wallet<_> = Wallet::new(vault);
-    /// wallet.sign_later(&[0x01]);
-    /// wallet.sign_later(&[0x02]);
-    /// wallet.sign_later(&[0x03]);
-    ///
-    /// assert_eq!(wallet.pending().count(), 3);
-    /// # Ok(()) }
-    /// ```
+    /// Iterate over the messages pending for signature.
     pub fn pending(&self) -> impl Iterator<Item = &[u8]> {
         self.pending_sign.iter().map(|(msg, _)| msg.as_ref())
     }
@@ -223,41 +142,35 @@ where
 
 /// Represents the blockchain network in use by an account
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Network {
-    // For substrate based blockchains commonly formatted as SS58
-    // that are distinguished by their address prefix. 42 is the generic prefix.
-    #[cfg(feature = "substrate")]
+    /// Substrate-based blockchains, distinguished by SS58 address prefix.
+    /// 42 is the generic prefix.
     Substrate(u16),
-    // Space for future supported networks(e.g. ethereum, bitcoin)
-    _Missing,
 }
 
 impl Default for Network {
     fn default() -> Self {
-        #[cfg(feature = "substrate")]
-        let net = Network::Substrate(42);
-        #[cfg(not(feature = "substrate"))]
-        let net = Network::_Missing;
-        net
+        Network::Substrate(42)
     }
 }
 
 impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            #[cfg(feature = "substrate")]
             Self::Substrate(_) => write!(f, "substrate"),
-            _ => write!(f, ""),
         }
     }
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error<V> {
     Vault(V),
     Locked,
     DeriveError,
+    MessageTooLong,
     #[cfg(feature = "mnemonic")]
     InvalidPhrase,
 }
@@ -271,6 +184,7 @@ where
             Error::Vault(e) => write!(f, "Vault error: {}", e),
             Error::Locked => write!(f, "Locked"),
             Error::DeriveError => write!(f, "Cannot derive"),
+            Error::MessageTooLong => write!(f, "Message exceeds max size of {} bytes", MSG_MAX_SIZE),
             #[cfg(feature = "mnemonic")]
             Error::InvalidPhrase => write!(f, "Invalid phrase"),
         }

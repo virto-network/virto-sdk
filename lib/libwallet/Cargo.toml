@@ -1,7 +1,7 @@
 [package]
 authors = ["Daniel Olano <me@olanod.com>"]
 autoexamples = true
-edition = "2018"
+edition = "2021"
 name = "libwallet"
 version = "0.3.0"
 
@@ -40,7 +40,7 @@ dirs = "4.0"
 default = ["substrate"]
 # default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os", "util_pin"]
 rand = ["rand_core", "schnorrkel?/getrandom"]
-sr25519 = ["dep:schnorrkel"]
+sr25519 = ["dep:schnorrkel", "dep:rand_chacha"]
 std = [
   "rand_core/getrandom",
 ]
@@ -51,6 +51,3 @@ vault_pass = ["prs-lib"]
 vault_simple = ["mnemonic", "rand"]
 
 [workspace]
-members = [
-  "js",
-]
