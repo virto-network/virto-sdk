@@ -91,6 +91,13 @@ where
         self.is_locked
     }
 
+    /// Lock the wallet, zeroizing key material from accounts.
+    pub fn lock(&mut self) {
+        self.accounts.clear();
+        self.default_account = None;
+        self.is_locked = true;
+    }
+
     /// Sign a message with the default account and return the signature.
     /// The wallet needs to be unlocked.
     pub async fn sign(&self, message: &[u8]) -> Result<impl Signature, SigningError> {

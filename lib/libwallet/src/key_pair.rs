@@ -53,11 +53,27 @@ impl core::fmt::Display for SigningError {
 pub mod any {
     use super::{Public, Signature, SigningError};
     use core::fmt;
+    use zeroize::Zeroize;
 
-    #[derive(Debug)]
     #[non_exhaustive]
     pub enum Pair {
         Sr25519(super::sr25519::Pair),
+    }
+
+    impl Drop for Pair {
+        fn drop(&mut self) {
+            match self {
+                Pair::Sr25519(ref mut kp) => kp.zeroize(),
+            }
+        }
+    }
+
+    impl fmt::Debug for Pair {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Pair::Sr25519(_) => f.debug_tuple("Sr25519").field(&"<redacted>").finish(),
+            }
+        }
     }
 
     impl super::Pair for Pair {

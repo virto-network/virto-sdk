@@ -36,9 +36,14 @@ mod utils {
     /// The root account is a container of the key pairs stored in the vault and cannot be
     /// used to sign messages directly, we always derive new key pairs from it to create
     /// and use accounts with the wallet.
-    #[derive(Debug)]
     pub struct RootAccount {
         sub: crate::key_pair::sr25519::Pair,
+    }
+
+    impl core::fmt::Debug for RootAccount {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("RootAccount").field("key", &"<redacted>").finish()
+        }
     }
 
     impl RootAccount {
@@ -61,14 +66,29 @@ mod utils {
         }
     }
 
-    /// Account is an abstration around public/private key pairs that are more convenient to use and
+    /// Account is an abstraction around public/private key pairs that are more convenient to use and
     /// can hold extra metadata. Accounts are constructed by the wallet and are used to sign messages.
-    #[derive(Debug)]
     pub struct AccountSigner {
         pair: Option<any::Pair>,
         network: Network,
         path: ArrayString<MAX_PATH_LEN>,
         name: ArrayString<{ MAX_PATH_LEN - 2 }>,
+    }
+
+    impl core::fmt::Debug for AccountSigner {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("AccountSigner")
+                .field("network", &self.network)
+                .field("name", &self.name.as_str())
+                .field("locked", &self.pair.is_none())
+                .finish()
+        }
+    }
+
+    impl Drop for AccountSigner {
+        fn drop(&mut self) {
+            self.pair = None;
+        }
     }
 
     impl Account for AccountSigner {
@@ -93,11 +113,9 @@ mod utils {
             }
         }
 
-        pub fn switch_network(self, net: impl Into<Network>) -> Self {
-            AccountSigner {
-                network: net.into(),
-                ..self
-            }
+        pub fn switch_network(mut self, net: impl Into<Network>) -> Self {
+            self.network = net.into();
+            self
         }
 
         pub fn name(&self) -> &str {

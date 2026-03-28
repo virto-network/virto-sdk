@@ -31,9 +31,9 @@ pub struct Pin(u16);
 macro_rules! seed_from_entropy {
     ($seed: ident, $pin: expr) => {
         #[cfg(feature = "util_pin")]
-        let protected_seed = $pin.protect::<64>($seed);
+        let protected_seed = zeroize::Zeroizing::new($pin.protect::<64>($seed));
         #[cfg(feature = "util_pin")]
-        let $seed = &protected_seed;
+        let $seed: &[u8] = &*protected_seed;
         #[cfg(not(feature = "util_pin"))]
         let _ = &$pin; // use the variable to avoid warning
     };

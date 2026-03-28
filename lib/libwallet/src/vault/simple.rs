@@ -4,6 +4,7 @@ use crate::{
     Vault,
 };
 use core::marker::PhantomData;
+use zeroize::Zeroize;
 
 /// A vault that holds secrets in memory
 pub struct Simple<S, const N: usize = 32> {
@@ -52,6 +53,13 @@ impl<S, const N: usize> Simple<S, N> {
         }
     }
 
+    pub fn lock(&mut self) {
+        if let Some(ref mut data) = self.unlocked {
+            data.zeroize();
+        }
+        self.unlocked = None;
+    }
+
     fn get_key(&self, pin: Pin) -> Result<RootAccount, Error> {
         if let Some(entropy) = self.unlocked {
             let seed = &entropy;
@@ -63,7 +71,16 @@ impl<S, const N: usize> Simple<S, N> {
     }
 }
 
-    
+impl<S, const N: usize> Drop for Simple<S, N> {
+    fn drop(&mut self) {
+        if let Some(ref mut data) = self.locked {
+            data.zeroize();
+        }
+        if let Some(ref mut data) = self.unlocked {
+            data.zeroize();
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Error;
@@ -86,7 +103,7 @@ impl<S: AsRef<str>, const N: usize> Vault for Simple<S, N> {
         path: Self::Id,
         creds: impl Into<Self::Credentials>,
     ) -> Result<Self::Account, Self::Error> {
-        self.unlocked = self.locked.take();
+        self.unlocked = self.locked.clone();
         let pin = creds.into();
         let root_account = self.get_key(pin.unwrap_or_default())?;
         let path = path.as_ref().map(|x| x.as_ref());
