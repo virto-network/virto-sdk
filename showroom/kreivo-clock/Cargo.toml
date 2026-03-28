@@ -76,6 +76,9 @@ display-interface-spi = "0.5"
 embedded-graphics = "0.8"
 embedded-hal-bus = "0.3"
 embedded-hal = "1.0"
+embedded-tls = { version = "0.18", default-features = false, features = ["alloc"] }
+heapless = "0.8"
+rand_core_06 = { package = "rand_core", version = "0.6", default-features = false }
 
 
 [profile.dev]
