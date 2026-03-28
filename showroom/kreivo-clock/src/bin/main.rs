@@ -82,6 +82,20 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
+/// Format a block number with space-separated groups: 1234567 → "1 234 567".
+fn format_block(n: u32) -> alloc::string::String {
+    let s = alloc::format!("{n}");
+    let len = s.len();
+    let mut out = alloc::string::String::with_capacity(len + len / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Poll AXP2101 for battery level and power key presses.
 #[embassy_executor::task]
 async fn pmu_task(mut pmu: Pmu) {
@@ -128,8 +142,18 @@ fn ui_core(
             match event {
                 UiEvent::Wifi(on) => app.set_wifi(on),
                 UiEvent::Live(on) => app.set_live(on),
-                UiEvent::Block(n) => app.set_block_number(n as i32),
-                UiEvent::Finalized(n) => app.set_finalized_count(n as i32),
+                UiEvent::Block(n) => {
+                    app.set_block_number(n as i32);
+                    app.set_block_text(format_block(n).into());
+                }
+                UiEvent::Collators(blocks) => {
+                    app.set_c0(blocks[0] as i32);
+                    app.set_c1(blocks[1] as i32);
+                    app.set_c2(blocks[2] as i32);
+                    app.set_c3(blocks[3] as i32);
+                    app.set_c4(blocks[4] as i32);
+                    app.set_c5(blocks[5] as i32);
+                }
                 UiEvent::Status(s) => {
                     let (msg, color) = match s {
                         Status::Dim(m) => (m, slint::Color::from_rgb_u8(100, 100, 100)),

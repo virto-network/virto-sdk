@@ -34,6 +34,28 @@ component KreivoLogo inherits Rectangle {
     LogoLayer { index: 7; on: p7; }
 }
 
+component CollatorBox inherits Rectangle {
+    in property <int> block: 0;
+    in property <int> current: 0;
+    property <int> ago: current - block;
+    property <bool> active: block > 0 && ago < 100;
+
+    width: 66px;
+    height: 24px;
+    border-radius: 4px;
+    background: active ? #1a2e24 : #141414;
+
+    HorizontalLayout {
+        alignment: center;
+        padding-top: 5px;
+        Text {
+            text: block > 0 ? "\{block}" : "—";
+            color: active ? #b5f1b1 : #444;
+            font-size: 9px;
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     width: 240px;
     height: 240px;
@@ -42,10 +64,16 @@ export component MainWindow inherits Window {
     in property <string> status: "starting...";
     in property <color> status-color: #555555;
     in property <int> block-number: 0;
-    in property <int> finalized-count: 0;
+    in property <string> block-text: "";
     in property <bool> live: false;
     in property <bool> wifi: false;
-    in property <int> battery-level: -1; // -1 = unknown, 0-100 = percentage
+    in property <int> battery-level: -1;
+    in property <int> c0: 0;
+    in property <int> c1: 0;
+    in property <int> c2: 0;
+    in property <int> c3: 0;
+    in property <int> c4: 0;
+    in property <int> c5: 0;
 
     property <color> grey: #3a3a3a;
     property <color> accent: #00a9e0;
@@ -111,40 +139,39 @@ export component MainWindow inherits Window {
     }
 
     // --- Block number ---
-    if block-number > 0: VerticalLayout {
+    if block-number > 0: HorizontalLayout {
         padding-top: 112px;
-        spacing: 8px;
+        alignment: center;
+        Text {
+            text: block-text;
+            color: #fff;
+            font-size: 30px;
+            font-weight: 700;
+        }
+    }
+
+    // --- Collator grid (3×2) ---
+    if block-number > 0: VerticalLayout {
+        padding-top: 152px;
+        spacing: 4px;
         HorizontalLayout {
             alignment: center;
-            Text {
-                text: "#\{block-number}";
-                color: #fff;
-                font-size: 30px;
-                font-weight: 700;
-            }
+            spacing: 4px;
+            CollatorBox { block: c0; current: block-number; }
+            CollatorBox { block: c1; current: block-number; }
+            CollatorBox { block: c2; current: block-number; }
         }
-        if finalized-count > 0: HorizontalLayout {
+        HorizontalLayout {
             alignment: center;
-            Rectangle {
-                width: 60px;
-                height: 22px;
-                border-radius: 6px;
-                background: #1a2e24;
-                HorizontalLayout {
-                    alignment: center;
-                    padding-top: 3px;
-                    Text {
-                        text: "fin \{finalized-count}";
-                        color: #b5f1b1;
-                        font-size: 12px;
-                    }
-                }
-            }
+            spacing: 4px;
+            CollatorBox { block: c3; current: block-number; }
+            CollatorBox { block: c4; current: block-number; }
+            CollatorBox { block: c5; current: block-number; }
         }
     }
 
     // --- Status ---
-    Rectangle {
+    if status != "": Rectangle {
         y: 214px; height: 24px; width: 240px;
         HorizontalLayout {
             alignment: center;

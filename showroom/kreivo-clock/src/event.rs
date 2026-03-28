@@ -5,7 +5,7 @@ pub enum UiEvent {
     Wifi(bool),
     Live(bool),
     Block(u32),
-    Finalized(u16),
+    Collators([u32; 6]),
     Status(Status),
 }
 
