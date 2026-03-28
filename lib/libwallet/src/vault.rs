@@ -56,14 +56,20 @@ pub(crate) mod utils {
         }
     }
 
+    const MAX_PATH_LEN: usize = 16;
+
     /// A signer backed by a vault-derived keypair.
     pub struct DerivedSigner {
         pair: any::Pair,
+        path: arrayvec::ArrayString<MAX_PATH_LEN>,
     }
 
     impl DerivedSigner {
-        pub(crate) fn new(pair: any::Pair) -> Self {
-            DerivedSigner { pair }
+        pub(crate) fn new(pair: any::Pair, path: &str) -> Self {
+            let mut p = arrayvec::ArrayString::new();
+            let len = path.len().min(MAX_PATH_LEN);
+            let _ = p.try_push_str(&path[..len]);
+            DerivedSigner { pair, path: p }
         }
 
         pub fn public(&self) -> impl crate::Public {
@@ -79,6 +85,10 @@ pub(crate) mod utils {
 
     impl crate::Signer for DerivedSigner {
         type Signature = AnySignature;
+
+        fn account_id(&self) -> &str {
+            &self.path
+        }
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, crate::SigningError> {
             self.pair.sign_msg(msg).await

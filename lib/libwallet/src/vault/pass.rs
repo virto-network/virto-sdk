@@ -56,7 +56,7 @@ impl<Id> Pass<Id> {
         let seed = crate::substrate_seed(phrase.entropy(), "");
         let root = RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)?;
         let pair = root.derive(&format!("//{account}"));
-        Ok(DerivedSigner::new(pair))
+        Ok(DerivedSigner::new(pair, account))
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
@@ -84,7 +84,7 @@ impl<Id> Pass<Id> {
         let seed = crate::substrate_seed(phrase.entropy(), "");
         let root = RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)?;
         let pair = root.derive(&format!("//{account}"));
-        Ok(DerivedSigner::new(pair))
+        Ok(DerivedSigner::new(pair, account))
     }
 }
 

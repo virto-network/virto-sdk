@@ -59,8 +59,9 @@ impl<S, const N: usize> Simple<S, N> {
         if let Some(entropy) = self.unlocked {
             let seed = crate::substrate_seed(&entropy, "");
             let root = RootAccount::from_bytes(&*seed).ok_or(Error)?;
-            let pair = root.derive(path.unwrap_or("//default"));
-            Ok(DerivedSigner::new(pair))
+            let path = path.unwrap_or("//default");
+            let pair = root.derive(path);
+            Ok(DerivedSigner::new(pair, path))
         } else {
             Err(Error)
         }

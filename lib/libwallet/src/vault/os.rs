@@ -46,8 +46,9 @@ impl<S> OSKeyring<S> {
 
         let seed = crate::substrate_seed(phrase.entropy(), "");
         let root = RootAccount::from_bytes(&*seed).ok_or(Error::BadPhrase)?;
-        let pair = root.derive(path.unwrap_or("//default"));
-        Ok(DerivedSigner::new(pair))
+        let path = path.unwrap_or("//default");
+        let pair = root.derive(path);
+        Ok(DerivedSigner::new(pair, path))
     }
 
     fn generate(&self, path: Option<&str>, lang: Language) -> Result<DerivedSigner, Error> {
@@ -60,8 +61,9 @@ impl<S> OSKeyring<S> {
             .set_password(phrase.phrase())
             .map_err(|_| Error::Keyring)?;
 
-        let pair = root.derive(path.unwrap_or("//default"));
-        Ok(DerivedSigner::new(pair))
+        let path = path.unwrap_or("//default");
+        let pair = root.derive(path);
+        Ok(DerivedSigner::new(pair, path))
     }
 }
 

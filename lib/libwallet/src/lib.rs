@@ -59,10 +59,11 @@ where
         }
     }
 
-    /// Add an account to the wallet. The first account added becomes the default.
-    pub fn add(&mut self, name: &str, signer: S) -> usize {
+    /// Add a signer to the wallet. The account name comes from `signer.account_id()`.
+    /// The first account added becomes the default.
+    pub fn add(&mut self, signer: S) -> usize {
         let idx = self.accounts.len();
-        self.accounts.push(Account::new(name, signer));
+        self.accounts.push(Account::new(signer));
         if self.default_account.is_none() {
             self.default_account = Some(idx as u8);
         }

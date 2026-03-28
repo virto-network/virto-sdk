@@ -20,9 +20,13 @@ impl<const N: usize> Public for Bytes<N> {}
 pub trait Signature: AsRef<[u8]> + Debug + PartialEq {}
 impl<const N: usize> Signature for Bytes<N> {}
 
-/// Something that can sign messages
+/// Something that can sign messages and identify itself.
 pub trait Signer {
     type Signature: Signature;
+
+    /// A human-readable identifier for this signer (e.g. "//Alice", "ledger-1").
+    fn account_id(&self) -> &str;
+
     fn sign_msg(
         &self,
         data: impl AsRef<[u8]>,
@@ -108,6 +112,12 @@ pub mod any {
 
     impl super::Signer for Pair {
         type Signature = AnySignature;
+
+        fn account_id(&self) -> &str {
+            match self {
+                Pair::Sr25519(_) => "sr25519",
+            }
+        }
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, SigningError> {
             match self {
@@ -201,6 +211,10 @@ pub mod sr25519 {
 
     impl Signer for Pair {
         type Signature = Signature;
+
+        fn account_id(&self) -> &str {
+            "sr25519"
+        }
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, super::SigningError> {
             let context = signing_context(SIGNING_CTX);
