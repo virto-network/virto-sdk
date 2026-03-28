@@ -1,6 +1,5 @@
 use core::marker::PhantomData;
 
-use arrayvec::ArrayVec;
 use mnemonic::Language;
 use prs_lib::{
     crypto::{self, IsContext, Proto},
@@ -9,8 +8,6 @@ use prs_lib::{
 };
 
 use crate::{
-    account,
-    util::{seed_from_entropy, Pin},
     vault::utils::{AccountSigner, RootAccount},
     Vault,
 };
@@ -27,7 +24,7 @@ const DEFAULT_DIR: &str = "libwallet_accounts/";
 
 impl<Id> Pass<Id> {
     /// Create a new `Pass` vault in the given location.
-    /// The optional `lang` instructs the vault to generarte a backup phrase
+    /// The optional `lang` instructs the vault to generate a backup phrase
     /// in the given language in case one does not exist.
     pub fn new<P: AsRef<str>>(store_path: P, lang: impl Into<Option<Language>>) -> Self {
         let store = Store::open(store_path).unwrap();
@@ -40,9 +37,9 @@ impl<Id> Pass<Id> {
         }
     }
 
-    fn get_key(&self, credentials: &PassCreds) -> Result<RootAccount, Error> {
+    fn get_key(&self, account: &str) -> Result<RootAccount, Error> {
         let mut secret_path = String::from(DEFAULT_DIR);
-        secret_path.push_str(&credentials.account);
+        secret_path.push_str(account);
 
         let secret = match self.store.find(Some(secret_path)) {
             FindSecret::Exact(secret) => Some(secret),
@@ -61,17 +58,16 @@ impl<Id> Pass<Id> {
             .parse::<mnemonic::Mnemonic>()
             .map_err(|_e| Error::Plaintext)?;
 
-        let seed = phrase.entropy();
-        seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
-        RootAccount::from_bytes(seed).ok_or(Error::Plaintext)
+        let seed = crate::substrate_seed(phrase.entropy(), "");
+        RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
-    fn generate(&self, credentials: &PassCreds, lang: Language) -> Result<RootAccount, Error> {
+    fn generate(&self, account: &str, lang: Language) -> Result<RootAccount, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
         let mut secret_path = String::from(DEFAULT_DIR);
-        secret_path.push_str(&credentials.account);
+        secret_path.push_str(account);
         let secret_path = self
             .store
             .normalize_secret_path(secret_path, None, true)
@@ -88,9 +84,8 @@ impl<Id> Pass<Id> {
             )
             .map_err(|_| Error::Encrypt)?;
 
-        let seed = phrase.entropy();
-        seed_from_entropy!(seed, credentials.pin.unwrap_or_default());
-        RootAccount::from_bytes(seed).ok_or(Error::Plaintext)
+        let seed = crate::substrate_seed(phrase.entropy(), "");
+        RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)
     }
 }
 
@@ -122,42 +117,27 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-#[derive(Clone)]
-pub struct PassCreds {
-    account: String,
-    pin: Option<Pin>,
-}
-
-impl From<String> for PassCreds {
-    fn from(account: String) -> Self {
-        PassCreds {
-            account,
-            pin: Some(Pin::from("")),
-        }
-    }
-}
-
 impl<Id: AsRef<str>> Vault for Pass<Id> {
     type Id = Option<Id>;
-    type Credentials = PassCreds;
+    type Credentials = ();
     type Account = AccountSigner;
     type Error = Error;
 
     async fn unlock(
         &mut self,
         path: Self::Id,
-        creds: impl Into<Self::Credentials>,
+        _creds: impl Into<Self::Credentials>,
     ) -> Result<Self::Account, Self::Error> {
-        let credentials = creds.into();
+        let account = path.as_ref().map(|x| x.as_ref()).unwrap_or("default");
 
-        self.get_key(&credentials)
+        self.get_key(account)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
-                    .and_then(|l| self.generate(&credentials, l))
+                    .and_then(|l| self.generate(account, l))
             })
             .map(|r| {
-                let acc = AccountSigner::new(path.as_ref().map(|x| x.as_ref())).unlock(&r);
+                let acc = AccountSigner::new(Some(account)).unlock(&r);
                 self.root = Some(r);
                 acc
             })

@@ -2,11 +2,9 @@ use core::marker::PhantomData;
 
 use crate::{
     mnemonic::{Language, Mnemonic},
-    util::{seed_from_entropy, Pin},
     vault::utils::{AccountSigner, RootAccount},
     Vault,
 };
-use arrayvec::ArrayVec;
 use keyring;
 
 const SERVICE: &str = "libwallet_account";
@@ -21,11 +19,11 @@ pub struct OSKeyring<S> {
 
 impl<S> OSKeyring<S> {
     /// Create a new OSKeyring vault for the given user.
-    /// The optional `lang` instructs the vault to generarte a backup phrase
+    /// The optional `lang` instructs the vault to generate a backup phrase
     /// in the given language in case one does not exist.
     pub fn new(uname: &str, lang: impl Into<Option<Language>>) -> Self {
         OSKeyring {
-            entry: keyring::Entry::new(SERVICE, &uname),
+            entry: keyring::Entry::new(SERVICE, uname),
             root: None,
             auto_generate: lang.into(),
             _phantom: PhantomData::default(),
@@ -45,23 +43,21 @@ impl<S> OSKeyring<S> {
             .map_err(|_| Error::Keyring)
     }
 
-    fn get_key(&self, pin: Pin) -> Result<RootAccount, Error> {
+    fn get_key(&self) -> Result<RootAccount, Error> {
         let phrase = self
             .get()?
             .parse::<Mnemonic>()
             .map_err(|_| Error::BadPhrase)?;
 
-        let seed = phrase.entropy();
-        seed_from_entropy!(seed, pin);
-        RootAccount::from_bytes(seed).ok_or(Error::BadPhrase)
+        let seed = crate::substrate_seed(phrase.entropy(), "");
+        RootAccount::from_bytes(&seed).ok_or(Error::BadPhrase)
     }
 
-    fn generate(&self, pin: Pin, lang: Language) -> Result<RootAccount, Error> {
+    fn generate(&self, lang: Language) -> Result<RootAccount, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
-        let seed = phrase.entropy();
-        seed_from_entropy!(seed, pin);
-        let root = RootAccount::from_bytes(seed).ok_or(Error::BadPhrase)?;
+        let seed = crate::substrate_seed(phrase.entropy(), "");
+        let root = RootAccount::from_bytes(&seed).ok_or(Error::BadPhrase)?;
 
         self.entry
             .set_password(phrase.phrase())
@@ -92,7 +88,7 @@ impl core::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl<S: AsRef<str>> Vault for OSKeyring<S> {
-    type Credentials = Pin;
+    type Credentials = ();
     type Error = Error;
     type Id = Option<S>;
     type Account = AccountSigner;
@@ -100,14 +96,13 @@ impl<S: AsRef<str>> Vault for OSKeyring<S> {
     async fn unlock(
         &mut self,
         account: Self::Id,
-        cred: impl Into<Self::Credentials>,
+        _cred: impl Into<Self::Credentials>,
     ) -> Result<Self::Account, Self::Error> {
-        let pin = cred.into();
-        self.get_key(pin)
+        self.get_key()
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
-                    .and_then(|l| self.generate(pin, l))
+                    .and_then(|l| self.generate(l))
             })
             .map(|r| {
                 let acc = AccountSigner::new(account.as_ref().map(|x| x.as_ref())).unlock(&r);

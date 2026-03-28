@@ -285,15 +285,13 @@ pub mod sr25519 {
         }
 
         #[test]
-        #[cfg(feature = "mnemonic")]
+        #[cfg(all(feature = "substrate", feature = "mnemonic"))]
         fn derive_keypair_from_phrase() {
             use mnemonic::Mnemonic;
-            // 0x708a2be996b87d1e7bb23f3cfa9bac804c83359e308598b0cb20728290684757
             let phrase =
                 "rotate increase color sustain print future moon rigid hunt wild diagram online";
 
             for (path, pubkey) in [
-                // from subkey
                 (
                     "//test",
                     b"\x0a\x04\x17\x5e\x09\x7c\x49\x26\x45\xa9\x8e\x1f\x28\x18\xa3\x95\x07\xb9\xfc\xba\x02\x03\x4d\x24\x4d\x27\xa3\x4d\xd3\xea\x2a\x11",
@@ -312,9 +310,9 @@ pub mod sr25519 {
                 ),
             ] {
                 let phrase = Mnemonic::from_phrase(phrase).unwrap();
-                let seed = Pin::from("").protect::<64>(&phrase.entropy());
+                let seed = crate::substrate_seed(phrase.entropy(), "");
 
-                let root: super::Pair = Pair::from_bytes(&seed).expect("valid seed");
+                let root: super::Pair = Pair::from_bytes(&*seed).expect("valid seed");
                 let derived = root.derive(path);
                 assert_eq!(&derived.public(), pubkey);
             }

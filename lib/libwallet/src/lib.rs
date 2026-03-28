@@ -13,6 +13,8 @@ pub mod util;
 
 #[cfg(feature = "substrate")]
 mod substrate_ext;
+#[cfg(feature = "substrate")]
+pub use substrate_ext::substrate_seed;
 
 pub use account::Account;
 use arrayvec::ArrayVec;

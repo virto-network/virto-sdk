@@ -1,4 +1,3 @@
-use crate::util::{seed_from_entropy, Pin};
 use crate::{
     vault::utils::{AccountSigner, RootAccount},
     Vault,
@@ -36,14 +35,10 @@ impl<S, const N: usize> Simple<S, N> {
         (Self::from_phrase(&phrase), phrase)
     }
 
-
     #[cfg(feature = "mnemonic")]
-    // Provide your own seed
     pub fn from_phrase(phrase: impl AsRef<str>) -> Self {
         mnemonic::Mnemonic::validate(phrase.as_ref()).expect("its a valid mnemonic");
-        // Count the number of words in the phrase
         let mnemonic = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).expect("its a valid mnemonic");
-
         let raw_entropy = mnemonic.entropy();
 
         Simple {
@@ -60,11 +55,10 @@ impl<S, const N: usize> Simple<S, N> {
         self.unlocked = None;
     }
 
-    fn get_key(&self, pin: Pin) -> Result<RootAccount, Error> {
+    fn get_key(&self) -> Result<RootAccount, Error> {
         if let Some(entropy) = self.unlocked {
-            let seed = &entropy;
-            seed_from_entropy!(seed, pin);
-            RootAccount::from_bytes(seed).ok_or(Error)
+            let seed = crate::substrate_seed(&entropy, "");
+            RootAccount::from_bytes(&*seed).ok_or(Error)
         } else {
             Err(Error)
         }
@@ -93,7 +87,7 @@ impl core::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl<S: AsRef<str>, const N: usize> Vault for Simple<S, N> {
-    type Credentials = Option<Pin>;
+    type Credentials = ();
     type Error = Error;
     type Id = Option<S>;
     type Account = AccountSigner;
@@ -101,11 +95,10 @@ impl<S: AsRef<str>, const N: usize> Vault for Simple<S, N> {
     async fn unlock(
         &mut self,
         path: Self::Id,
-        creds: impl Into<Self::Credentials>,
+        _creds: impl Into<Self::Credentials>,
     ) -> Result<Self::Account, Self::Error> {
         self.unlocked = self.locked.clone();
-        let pin = creds.into();
-        let root_account = self.get_key(pin.unwrap_or_default())?;
+        let root_account = self.get_key()?;
         let path = path.as_ref().map(|x| x.as_ref());
         Ok(AccountSigner::new(path).unlock(&root_account))
     }

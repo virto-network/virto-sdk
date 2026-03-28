@@ -11,7 +11,7 @@ arrayvec = {version = "0.7.2", default-features = false}
 
 serde = {version = "1.0", default-features = false, features = ["derive"], optional = true}
 
-# feature util_pin
+# substrate seed derivation (PBKDF2-HMAC-SHA512)
 hmac = {version = "0.12.1", default-features = false, optional = true}
 pbkdf2 = {version = "0.11.0", default-features = false, optional = true}
 sha2 = {version = "0.10.2", default-features = false, optional = true}
@@ -39,14 +39,13 @@ dirs = "4.0"
 
 [features]
 default = ["substrate"]
-# default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os", "util_pin"]
+# default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os"]
 rand = ["rand_core", "schnorrkel?/getrandom"]
 sr25519 = ["dep:schnorrkel", "dep:rand_chacha"]
 std = [
   "rand_core/getrandom",
 ]
-substrate = ["sr25519"]
-util_pin = ["pbkdf2", "hmac", "sha2"]
+substrate = ["sr25519", "pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = ["mnemonic", "rand"]
