@@ -1,25 +1,40 @@
 //! Network connectivity: WiFi, TLS, WebSocket, chain subscription.
+//!
+//! All functions push [`UiEvent`]s to a lock-free queue consumed by the UI core.
 
 use embassy_net::tcp::TcpSocket;
 use embassy_time::{Duration, Timer};
+use heapless::spsc::Producer;
 use sube::rpc::chainhead::{ChainEvent, ChainHead};
 
+use crate::event::{Status, UiEvent};
+
 /// Connect WiFi with retry loop.
-pub async fn wifi_connect(controller: &mut esp_radio::wifi::WifiController<'static>) {
+pub async fn wifi_connect(
+    controller: &mut esp_radio::wifi::WifiController<'static>,
+    tx: &mut Producer<'static, UiEvent, 16>,
+) {
+    tx.enqueue(UiEvent::Status(Status::Dim("connecting wifi..."))).ok();
     loop {
         match controller.connect_async().await {
             Ok(()) => break,
             Err(e) => {
                 log::warn!("WiFi: {:?}, retry in 5s", e);
+                tx.enqueue(UiEvent::Status(Status::Error("wifi retry..."))).ok();
                 Timer::after(Duration::from_secs(5)).await;
             }
         }
     }
     log::info!("WiFi: connected");
+    tx.enqueue(UiEvent::Wifi(true)).ok();
 }
 
 /// Wait for DHCP to assign an IP address.
-pub async fn wait_for_ip(stack: embassy_net::Stack<'static>) {
+pub async fn wait_for_ip(
+    stack: embassy_net::Stack<'static>,
+    tx: &mut Producer<'static, UiEvent, 16>,
+) {
+    tx.enqueue(UiEvent::Status(Status::Dim("getting IP..."))).ok();
     loop {
         if stack.is_config_up() {
             break;
@@ -27,24 +42,20 @@ pub async fn wait_for_ip(stack: embassy_net::Stack<'static>) {
         Timer::after(Duration::from_millis(200)).await;
     }
     log::info!("IP: {:?}", stack.config_v4().map(|c| c.address));
+    tx.enqueue(UiEvent::Status(Status::Good("wifi ok"))).ok();
 }
 
-/// Block event from the chain.
-pub enum BlockEvent {
-    NewBlock { number: u64 },
-    Finalized { count: usize },
-}
-
-/// Connect to kreivo.io and stream block events to the callback.
+/// Connect to kreivo.io and stream block events to the UI.
 /// Returns on disconnect so the caller can retry.
 pub async fn watch_chain(
     stack: embassy_net::Stack<'static>,
-    mut on_event: impl FnMut(BlockEvent),
+    tx: &mut Producer<'static, UiEvent, 16>,
 ) -> Result<(), &'static str> {
-    // TCP
-    let mut rx = [0u8; 4096];
-    let mut tx = [0u8; 4096];
-    let mut socket = TcpSocket::new(stack, &mut rx, &mut tx);
+    tx.enqueue(UiEvent::Status(Status::Dim("connecting..."))).ok();
+
+    let mut rx_buf = [0u8; 4096];
+    let mut tx_buf = [0u8; 4096];
+    let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
     socket.set_timeout(Some(Duration::from_secs(15)));
 
     let remote = stack
@@ -58,6 +69,7 @@ pub async fn watch_chain(
     log::info!("TCP connected");
 
     // TLS (mbedtls, software crypto)
+    tx.enqueue(UiEvent::Status(Status::Dim("TLS..."))).ok();
     let mut rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG failed")?;
     let tls_ctx = mbedtls_rs::Tls::new(&mut rng)
         .map_err(|e| { log::error!("TLS init: {:?}", e); "TLS failed" })?;
@@ -75,29 +87,31 @@ pub async fn watch_chain(
     log::info!("TLS connected");
 
     // WebSocket
+    tx.enqueue(UiEvent::Status(Status::Dim("websocket..."))).ok();
     let ws = sube::rpc::edge::Backend::connect(session, "kreivo.io", "/")
         .await
         .map_err(|e| { log::error!("WS: {e}"); "WS failed" })?;
     log::info!("WebSocket connected");
 
     // ChainHead subscription
+    tx.enqueue(UiEvent::Status(Status::Dim("chain..."))).ok();
     let mut chain = ChainHead::new(ws)
         .await
         .map_err(|e| { log::error!("ChainHead: {e}"); "ChainHead failed" })?;
     log::info!("ChainHead started");
 
-    on_event(BlockEvent::NewBlock { number: 0 }); // signal "connected"
+    tx.enqueue(UiEvent::Live(true)).ok();
+    tx.enqueue(UiEvent::Status(Status::Good("LIVE"))).ok();
 
-    // Stream events
     loop {
         match chain.next_chain_event().await {
             Ok(ChainEvent::NewBlock { hash, .. }) => {
                 if let Ok(header) = chain.header(&hash).await {
-                    on_event(BlockEvent::NewBlock { number: header.number });
+                    tx.enqueue(UiEvent::Block(header.number as u32)).ok();
                 }
             }
             Ok(ChainEvent::Finalized { hashes, .. }) => {
-                on_event(BlockEvent::Finalized { count: hashes.len() });
+                tx.enqueue(UiEvent::Finalized(hashes.len() as u16)).ok();
             }
             Ok(_) => {}
             Err(e) => {

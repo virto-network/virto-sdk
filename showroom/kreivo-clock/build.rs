@@ -1,6 +1,17 @@
 fn main() {
+    slint_build::compile_with_config(
+        "ui/main.slint",
+        slint_build::CompilerConfiguration::new()
+            .embed_resources(slint_build::EmbedResourcesKind::EmbedForSoftwareRenderer),
+    )
+    .unwrap();
+
+    // rodata-fix.x must come before linkall.x to merge DROM segments
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    println!("cargo:rustc-link-search={manifest_dir}");
+    println!("cargo:rustc-link-arg=-Trodata-fix.x");
+
     linker_be_nice();
-    // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
 }
 
@@ -13,53 +24,25 @@ fn linker_be_nice() {
         match kind.as_str() {
             "undefined-symbol" => match what.as_str() {
                 what if what.starts_with("_defmt_") => {
-                    eprintln!();
                     eprintln!(
-                        "💡 `defmt` not found - make sure `defmt.x` is added as a linker script and you have included `use defmt_rtt as _;`"
+                        "\n💡 `defmt` not found - make sure `defmt.x` is added as a linker script\n"
                     );
-                    eprintln!();
                 }
                 "_stack_start" => {
-                    eprintln!();
-                    eprintln!("💡 Is the linker script `linkall.x` missing?");
-                    eprintln!();
+                    eprintln!("\n💡 Is the linker script `linkall.x` missing?\n");
                 }
                 what if what.starts_with("esp_rtos_") => {
-                    eprintln!();
-                    eprintln!(
-                        "💡 `esp-radio` has no scheduler enabled. Make sure you have initialized `esp-rtos` or provided an external scheduler."
-                    );
-                    eprintln!();
+                    eprintln!("\n💡 `esp-radio` has no scheduler enabled. Initialize `esp-rtos`.\n");
                 }
-                "embedded_test_linker_file_not_added_to_rustflags" => {
-                    eprintln!();
-                    eprintln!(
-                        "💡 `embedded-test` not found - make sure `embedded-test.x` is added as a linker script for tests"
-                    );
-                    eprintln!();
-                }
-                "free"
-                | "malloc"
-                | "calloc"
-                | "get_free_internal_heap_size"
-                | "malloc_internal"
-                | "realloc_internal"
-                | "calloc_internal"
-                | "free_internal" => {
-                    eprintln!();
-                    eprintln!(
-                        "💡 Did you forget the `esp-alloc` dependency or didn't enable the `compat` feature on it?"
-                    );
-                    eprintln!();
+                "free" | "malloc" | "calloc" => {
+                    eprintln!("\n💡 Did you forget the `esp-alloc` dependency?\n");
                 }
                 _ => (),
             },
-            // we don't have anything helpful for "missing-lib" yet
             _ => {
                 std::process::exit(1);
             }
         }
-
         std::process::exit(0);
     }
 

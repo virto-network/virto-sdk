@@ -1,0 +1,145 @@
+// Kreivo logo from sprite sheet: 8 paths × 2 states (grey/color), 80×70 each.
+// Layout: [p0_grey .. p7_grey | p0_color .. p7_color] = 1280×70
+component LogoLayer inherits Image {
+    in property <int> index;
+    in property <bool> on;
+    source: @image-url("logo_sprite.png");
+    width: 80px;
+    height: 70px;
+    source-clip-y: 0;
+    source-clip-width: 80;
+    source-clip-height: 70;
+    source-clip-x: on ? (index + 8) * 80 : index * 80;
+}
+
+component KreivoLogo inherits Rectangle {
+    in property <bool> p0: false;
+    in property <bool> p1: false;
+    in property <bool> p2: false;
+    in property <bool> p3: false;
+    in property <bool> p4: false;
+    in property <bool> p5: false;
+    in property <bool> p6: false;
+    in property <bool> p7: false;
+    width: 80px;
+    height: 70px;
+    // Stack all 8 path layers
+    LogoLayer { index: 0; on: p0; }
+    LogoLayer { index: 1; on: p1; }
+    LogoLayer { index: 2; on: p2; }
+    LogoLayer { index: 3; on: p3; }
+    LogoLayer { index: 4; on: p4; }
+    LogoLayer { index: 5; on: p5; }
+    LogoLayer { index: 6; on: p6; }
+    LogoLayer { index: 7; on: p7; }
+}
+
+export component MainWindow inherits Window {
+    width: 240px;
+    height: 240px;
+    background: #0d1f18;
+
+    in property <string> status: "starting...";
+    in property <color> status-color: #555555;
+    in property <int> block-number: 0;
+    in property <int> finalized-count: 0;
+    in property <bool> live: false;
+    in property <bool> wifi: false;
+
+    property <color> grey: #3a3a3a;
+    property <color> accent: #00a9e0;
+
+    // --- Status bar ---
+    Rectangle {
+        y: 8px; height: 14px; width: 240px;
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            alignment: space-between;
+            HorizontalLayout {
+                spacing: 4px;
+                Rectangle {
+                    width: 6px; height: 6px; y: 4px;
+                    border-radius: 3px;
+                    background: wifi ? #32cd32 : grey;
+                }
+                Text {
+                    text: "wifi";
+                    color: wifi ? #555 : #333;
+                    font-size: 9px;
+                }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                Rectangle {
+                    width: 6px; height: 6px; y: 4px;
+                    border-radius: 3px;
+                    background: live ? accent : grey;
+                }
+                Text {
+                    text: "chain";
+                    color: live ? #555 : #333;
+                    font-size: 9px;
+                }
+            }
+        }
+    }
+
+    // --- Logo ---
+    HorizontalLayout {
+        alignment: center;
+        padding-top: 30px;
+        KreivoLogo {
+            // All paths light up when live
+            p0: live; p1: live; p2: live; p3: live;
+            p4: live; p5: live; p6: live; p7: live;
+        }
+    }
+
+    // --- Block number ---
+    if block-number > 0: VerticalLayout {
+        padding-top: 112px;
+        spacing: 8px;
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                text: "#\{block-number}";
+                color: #fff;
+                font-size: 30px;
+                font-weight: 700;
+            }
+        }
+        if finalized-count > 0: HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 60px;
+                height: 22px;
+                border-radius: 6px;
+                background: #1a2e24;
+                HorizontalLayout {
+                    alignment: center;
+                    padding-top: 3px;
+                    Text {
+                        text: "fin \{finalized-count}";
+                        color: #b5f1b1;
+                        font-size: 12px;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Status ---
+    Rectangle {
+        y: 214px; height: 24px; width: 240px;
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 6px;
+            Text {
+                text: status;
+                color: status-color;
+                font-size: 10px;
+            }
+        }
+    }
+}

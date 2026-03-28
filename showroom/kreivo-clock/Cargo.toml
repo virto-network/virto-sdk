@@ -38,16 +38,24 @@ mbedtls-rs = { git = "https://github.com/esp-rs/mbedtls-rs", features = ["embass
 tinyrlibc  = { version = "0.5", default-features = false, features = ["memchr"] }
 
 # Display (T-Watch S3: ST7789 240x240 via SPI)
-mipidsi            = "0.10"
-embedded-graphics  = "0.8"
-embedded-hal-bus   = "0.3"
-embedded-hal       = "1.0"
+mipidsi                = "0.10"
+embedded-graphics-core = "0.4"
+embedded-hal-bus       = "0.3"
+embedded-hal           = "1.0"
+
+# UI
+slint = { version = "1.15", default-features = false, features = [
+  "compat-1-2", "unsafe-single-threaded", "libm", "renderer-software",
+] }
 
 # Shared
 log              = "0.4"
 critical-section = "1.2"
 static_cell      = "2.1"
 heapless         = "0.8"
+
+[build-dependencies]
+slint-build = "1.15"
 
 [profile.dev]
 opt-level = "s"

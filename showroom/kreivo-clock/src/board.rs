@@ -1,4 +1,6 @@
 //! T-Watch S3 hardware: PMU, display, WiFi, network stack.
+//!
+//! Init is split for dual-core: system peripherals on core 0, display moved to core 1.
 
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
@@ -13,6 +15,9 @@ use esp_hal::timer::timg::TimerGroup;
 use mipidsi::interface::SpiInterface;
 use mipidsi::options::{ColorInversion, Orientation};
 use static_cell::StaticCell;
+
+pub const DISPLAY_WIDTH: usize = 240;
+pub const DISPLAY_HEIGHT: usize = 240;
 
 const AXP: u8 = 0x34;
 const SSID: &str = env!("WIFI_SSID");
@@ -32,16 +37,18 @@ pub type Display = mipidsi::Display<
     Output<'static>,
 >;
 
-pub struct Board {
+/// Everything initialized on core 0.
+pub struct System<'a> {
     pub display: Display,
     pub wifi: esp_radio::wifi::WifiController<'static>,
     pub stack: embassy_net::Stack<'static>,
+    pub cpu_ctrl: esp_hal::peripherals::CPU_CTRL<'a>,
 }
 
-pub async fn init(spawner: Spawner) -> Board {
+pub async fn init(spawner: Spawner) -> System<'static> {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
-    esp_alloc::heap_allocator!(size: 196608);
+    esp_alloc::heap_allocator!(size: 163840); // 160KB — leave room for app core stack
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
@@ -53,16 +60,15 @@ pub async fn init(spawner: Spawner) -> Board {
     .unwrap()
     .with_sda(peripherals.GPIO10)
     .with_scl(peripherals.GPIO11);
-    let _ = i2c.write(AXP, &[0x90, 0xFF]); // enable all LDOs
-    let _ = i2c.write(AXP, &[0x91, 0x01]); // DLDO1 enable
+    let _ = i2c.write(AXP, &[0x90, 0xFF]);
+    let _ = i2c.write(AXP, &[0x91, 0x01]);
     for reg in 0x92..=0x9Au8 {
-        let _ = i2c.write(AXP, &[reg, 0x1C]); // 3.3V
+        let _ = i2c.write(AXP, &[reg, 0x1C]);
     }
     Timer::after(Duration::from_millis(50)).await;
 
     // --- Display (ST7789 240x240 via SPI) ---
     let _bl = Output::new(peripherals.GPIO45, Level::High, Default::default());
-    // Leak backlight pin so it stays high for 'static
     core::mem::forget(_bl);
 
     let spi = Spi::new(
@@ -83,7 +89,7 @@ pub async fn init(spawner: Spawner) -> Board {
     let rst = Output::new(peripherals.GPIO40, Level::High, Default::default());
 
     let display = mipidsi::Builder::new(mipidsi::models::ST7789, spi_iface)
-        .display_size(240, 240)
+        .display_size(DISPLAY_WIDTH as u16, DISPLAY_HEIGHT as u16)
         .orientation(Orientation::new())
         .invert_colors(ColorInversion::Inverted)
         .reset_pin(rst)
@@ -106,7 +112,6 @@ pub async fn init(spawner: Spawner) -> Board {
     controller.start_async().await.unwrap();
 
     // --- Network stack ---
-    // TrngSource needs RNG + ADC1 for HW entropy (required by mbedtls CryptoRng)
     static TRNG_SRC: StaticCell<esp_hal::rng::TrngSource<'static>> = StaticCell::new();
     TRNG_SRC.init(esp_hal::rng::TrngSource::new(peripherals.RNG, peripherals.ADC1));
 
@@ -120,10 +125,17 @@ pub async fn init(spawner: Spawner) -> Board {
     );
     spawner.spawn(net_task(runner)).ok();
 
-    Board { display, wifi: controller, stack }
+    System {
+        display,
+        wifi: controller,
+        stack,
+        cpu_ctrl: peripherals.CPU_CTRL,
+    }
 }
 
 #[embassy_executor::task]
-async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>) {
+async fn net_task(
+    mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>,
+) {
     runner.run().await;
 }
