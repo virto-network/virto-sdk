@@ -47,7 +47,10 @@ use core::fmt;
 pub use key_pair::{any, Derive, Pair, Public, Signature, Signer, SigningError};
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{Language, Mnemonic};
+pub mod proxy;
 pub mod vault;
+
+pub use proxy::ProxySigner;
 
 /// Wallet manages a collection of named accounts backed by a single signer type.
 ///
