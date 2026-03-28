@@ -355,6 +355,8 @@ mod derive {
             .flatten()
     }
 
+    /// Encode a junction name into a fixed-size byte array.
+    /// Names longer than 31 bytes are silently truncated, matching Substrate behavior.
     fn encoded_junction(part: &str) -> Junction {
         let mut code = [0; JUNCTION_LEN];
         if let Ok(n) = part.parse::<u64>() {

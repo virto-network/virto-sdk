@@ -23,7 +23,13 @@ where
 }
 
 /// A simple pin credential that can be used to add some
-/// extra level of protection to seeds stored in vaults
+/// extra level of protection to seeds stored in vaults.
+///
+/// # Security Note
+///
+/// Pin is a 16-bit keyspace (65,536 values) and serves as a **UX convenience**,
+/// not a security boundary. The entire keyspace is brutable in under a second
+/// even with the PBKDF2 stretching. Do not rely on Pin alone to protect secrets.
 #[derive(Default, Copy, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Pin(u16);
@@ -71,7 +77,9 @@ impl Pin {
     }
 }
 
-// Use 4 chars long hex string as pin. i.e. "ABCD", "1234"
+/// Parse a 4-character hex string as a pin (e.g. "ABCD", "1234").
+/// Non-hex characters are silently treated as 0 (e.g. "ZZZZ" becomes 0x0000).
+/// Input longer than 4 characters is truncated to the first 4.
 impl From<&str> for Pin {
     fn from(s: &str) -> Self {
         let l = s.len().min(Pin::LEN);

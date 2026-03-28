@@ -37,13 +37,11 @@ impl<S> OSKeyring<S> {
         self.entry.set_password(phrase).map_err(|_| Error::Keyring)
     }
 
-    /// Returned the stored phrase from the OS secure storage
-    pub fn get(&self) -> Result<String, Error> {
+    /// Return the stored phrase from the OS secure storage.
+    pub(crate) fn get(&self) -> Result<zeroize::Zeroizing<String>, Error> {
         self.entry
             .get_password()
-            // .inspect_err(|e| {
-            //     dbg!(e);
-            // })
+            .map(zeroize::Zeroizing::new)
             .map_err(|_| Error::Keyring)
     }
 
