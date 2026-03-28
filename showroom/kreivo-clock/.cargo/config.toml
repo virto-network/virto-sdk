@@ -7,6 +7,7 @@ ESP_LOG="info"
 [build]
 rustflags = [
   "-C", "link-arg=-nostartfiles",
+  "-C", "link-arg=-mdynconfig=/home/daniel/.rustup/toolchains/esp/xtensa-esp-elf/esp-15.2.0_20250920/xtensa-esp-elf/lib/xtensa_esp32s3.so",
 ]
 
 target = "xtensa-esp32s3-none-elf"
