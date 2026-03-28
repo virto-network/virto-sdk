@@ -61,13 +61,19 @@ pub mod any {
 
     #[non_exhaustive]
     pub enum Pair {
+        #[cfg(feature = "sr25519")]
         Sr25519(super::sr25519::Pair),
+        #[cfg(feature = "secp256k1")]
+        Secp256k1(super::secp256k1::Pair),
     }
 
     impl Drop for Pair {
         fn drop(&mut self) {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(ref mut kp) => kp.zeroize(),
+                #[cfg(feature = "secp256k1")]
+                Pair::Secp256k1(_) => {} // k256 zeroizes internally
             }
         }
     }
@@ -75,7 +81,10 @@ pub mod any {
     impl fmt::Debug for Pair {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(_) => f.debug_tuple("Sr25519").field(&"<redacted>").finish(),
+                #[cfg(feature = "secp256k1")]
+                Pair::Secp256k1(_) => f.debug_tuple("Secp256k1").field(&"<redacted>").finish(),
             }
         }
     }
@@ -84,12 +93,24 @@ pub mod any {
         type Public = AnyPublic;
 
         fn from_bytes(seed: &[u8]) -> Option<Self> {
-            Some(Self::Sr25519(<super::sr25519::Pair as super::Pair>::from_bytes(seed)?))
+            // Try sr25519 first, then secp256k1
+            #[cfg(feature = "sr25519")]
+            if let Some(p) = <super::sr25519::Pair as super::Pair>::from_bytes(seed) {
+                return Some(Self::Sr25519(p));
+            }
+            #[cfg(feature = "secp256k1")]
+            if let Some(p) = <super::secp256k1::Pair as super::Pair>::from_bytes(seed) {
+                return Some(Self::Secp256k1(p));
+            }
+            None
         }
 
         fn public(&self) -> Self::Public {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => AnyPublic::Sr25519(p.public()),
+                #[cfg(feature = "secp256k1")]
+                Pair::Secp256k1(p) => AnyPublic::Secp256k1(p.public()),
             }
         }
     }
@@ -99,14 +120,25 @@ pub mod any {
 
         fn derive(&self, path: &str) -> Self::Pair {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(kp) => Pair::Sr25519(kp.derive(path)),
+                #[cfg(feature = "secp256k1")]
+                Pair::Secp256k1(kp) => Pair::Secp256k1(kp.derive(path)),
             }
         }
     }
 
+    #[cfg(feature = "sr25519")]
     impl From<super::sr25519::Pair> for Pair {
         fn from(p: super::sr25519::Pair) -> Self {
             Self::Sr25519(p)
+        }
+    }
+
+    #[cfg(feature = "secp256k1")]
+    impl From<super::secp256k1::Pair> for Pair {
+        fn from(p: super::secp256k1::Pair) -> Self {
+            Self::Secp256k1(p)
         }
     }
 
@@ -115,19 +147,28 @@ pub mod any {
 
         fn account_id(&self) -> &str {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(_) => "sr25519",
+                #[cfg(feature = "secp256k1")]
+                Pair::Secp256k1(_) => "secp256k1",
             }
         }
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, SigningError> {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => Ok(p.sign_msg(msg).await?.into()),
+                #[cfg(feature = "secp256k1")]
+                Pair::Secp256k1(p) => Ok(p.sign_msg(msg).await?.into()),
             }
         }
 
         async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
             match self {
+                #[cfg(feature = "sr25519")]
                 Pair::Sr25519(p) => super::Signer::verify(p, msg, sig).await,
+                #[cfg(feature = "secp256k1")]
+                Pair::Secp256k1(p) => super::Signer::verify(p, msg, sig).await,
             }
         }
     }
@@ -135,13 +176,19 @@ pub mod any {
     #[derive(Debug)]
     #[non_exhaustive]
     pub enum AnyPublic {
+        #[cfg(feature = "sr25519")]
         Sr25519(super::Bytes<{ super::sr25519::SEED_LEN }>),
+        #[cfg(feature = "secp256k1")]
+        Secp256k1(super::Bytes<33>),
     }
 
     impl AsRef<[u8]> for AnyPublic {
         fn as_ref(&self) -> &[u8] {
             match self {
+                #[cfg(feature = "sr25519")]
                 AnyPublic::Sr25519(p) => p.as_ref(),
+                #[cfg(feature = "secp256k1")]
+                AnyPublic::Secp256k1(p) => p.as_ref(),
             }
         }
     }
@@ -159,20 +206,34 @@ pub mod any {
     #[derive(Debug, PartialEq)]
     #[non_exhaustive]
     pub enum AnySignature {
+        #[cfg(feature = "sr25519")]
         Sr25519(super::Bytes<{ super::sr25519::SIG_LEN }>),
+        #[cfg(feature = "secp256k1")]
+        Secp256k1(super::Bytes<{ super::secp256k1::SIG_LEN }>),
     }
 
     impl AsRef<[u8]> for AnySignature {
         fn as_ref(&self) -> &[u8] {
             match self {
+                #[cfg(feature = "sr25519")]
                 AnySignature::Sr25519(s) => s.as_ref(),
+                #[cfg(feature = "secp256k1")]
+                AnySignature::Secp256k1(s) => s.as_ref(),
             }
         }
     }
 
+    #[cfg(feature = "sr25519")]
     impl From<super::sr25519::Signature> for AnySignature {
         fn from(s: super::sr25519::Signature) -> Self {
             AnySignature::Sr25519(s)
+        }
+    }
+
+    #[cfg(feature = "secp256k1")]
+    impl From<super::secp256k1::Signature> for AnySignature {
+        fn from(s: super::secp256k1::Signature) -> Self {
+            AnySignature::Secp256k1(s)
         }
     }
 
@@ -330,6 +391,91 @@ pub mod sr25519 {
                 let derived = root.derive(path);
                 assert_eq!(&derived.public(), pubkey);
             }
+        }
+    }
+}
+
+#[cfg(feature = "secp256k1")]
+pub mod secp256k1 {
+    use super::{Bytes, Signer};
+    use k256::ecdsa::{self, signature::Verifier};
+
+    pub const SEED_LEN: usize = 32;
+    pub const SIG_LEN: usize = 65; // r(32) + s(32) + recovery_id(1)
+    pub type Public = Bytes<33>; // compressed public key
+    pub type Signature = Bytes<SIG_LEN>;
+
+    pub struct Pair {
+        secret: k256::ecdsa::SigningKey,
+    }
+
+    impl super::Pair for Pair {
+        type Public = Public;
+
+        fn from_bytes(bytes: &[u8]) -> Option<Self> {
+            let secret = ecdsa::SigningKey::from_slice(bytes.get(..SEED_LEN)?).ok()?;
+            Some(Pair { secret })
+        }
+
+        fn public(&self) -> Self::Public {
+            let vk = self.secret.verifying_key();
+            let compressed = vk.to_encoded_point(true);
+            let mut key = [0u8; 33];
+            key.copy_from_slice(compressed.as_bytes());
+            key
+        }
+    }
+
+    impl Signer for Pair {
+        type Signature = Signature;
+
+        fn account_id(&self) -> &str {
+            "secp256k1"
+        }
+
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, super::SigningError> {
+            let (sig, recid) = self.secret
+                .sign_prehash_recoverable(msg.as_ref())
+                .map_err(|_| super::SigningError::Locked)?;
+            let mut out = [0u8; SIG_LEN];
+            out[..64].copy_from_slice(&sig.to_bytes());
+            out[64] = recid.to_byte();
+            Ok(out)
+        }
+
+        async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
+            let sig_bytes = sig.as_ref();
+            if sig_bytes.len() < 64 {
+                return false;
+            }
+            let Ok(sig) = ecdsa::Signature::from_slice(&sig_bytes[..64]) else {
+                return false;
+            };
+            self.secret.verifying_key().verify(msg.as_ref(), &sig).is_ok()
+        }
+    }
+
+    impl super::Derive for Pair {
+        type Pair = Self;
+
+        fn derive(&self, _path: &str) -> Self {
+            // BIP32 derivation is handled by the chain-specific vault wrapper,
+            // not by the raw key pair. This is a no-op placeholder.
+            Pair {
+                secret: self.secret.clone(),
+            }
+        }
+    }
+
+    impl Drop for Pair {
+        fn drop(&mut self) {
+            // k256::SigningKey zeroizes on drop internally
+        }
+    }
+
+    impl core::fmt::Debug for Pair {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("secp256k1::Pair").field("key", &"<redacted>").finish()
         }
     }
 }

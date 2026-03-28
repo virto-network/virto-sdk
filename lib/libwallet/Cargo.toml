@@ -23,6 +23,10 @@ rand_core = {version = "0.6.3", optional = true}
 schnorrkel = {version = "0.11.4", default-features = false, optional = true}# soft derivation in no_std
 rand_chacha = {version = "0.3.1", default-features = false, optional = true}
 
+# secp256k1/ethereum
+k256 = {version = "0.13", default-features = false, features = ["ecdsa", "schnorr"], optional = true}
+sha3 = {version = "0.10", default-features = false, optional = true}
+
 # vault os
 keyring = {version = "1.1.2", optional = true}
 # vault pass
@@ -41,11 +45,13 @@ dirs = "4.0"
 default = ["substrate"]
 # default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os"]
 rand = ["rand_core", "schnorrkel?/getrandom"]
+secp256k1 = ["dep:k256"]
 sr25519 = ["dep:schnorrkel", "dep:rand_chacha"]
 std = [
   "rand_core/getrandom",
 ]
 substrate = ["sr25519", "pbkdf2", "hmac", "sha2"]
+ethereum = ["secp256k1", "dep:sha3", "pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = ["mnemonic", "rand"]

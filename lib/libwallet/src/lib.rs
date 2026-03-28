@@ -5,8 +5,8 @@
 //!
 //! For cross-chain flows, use [`Wallet::sign_with`] on multiple typed
 //! wallets to batch-sign messages across different chains.
-#[cfg(not(any(feature = "sr25519")))]
-compile_error!("Enable at least one type of signature algorithm");
+#[cfg(not(any(feature = "sr25519", feature = "secp256k1")))]
+compile_error!("Enable at least one signature algorithm: sr25519, secp256k1");
 
 mod account;
 mod key_pair;
@@ -16,6 +16,11 @@ pub mod util;
 pub mod substrate_ext;
 #[cfg(feature = "substrate")]
 pub use substrate_ext::{substrate_seed, KeyStore, Substrate};
+
+#[cfg(feature = "ethereum")]
+pub mod ethereum_ext;
+#[cfg(feature = "ethereum")]
+pub use ethereum_ext::Ethereum;
 
 pub use account::Account;
 use arrayvec::ArrayVec;
@@ -138,6 +143,11 @@ pub enum Network {
     /// Substrate-based blockchains, distinguished by SS58 address prefix.
     /// 42 is the generic prefix.
     Substrate(u16),
+    /// Ethereum-compatible chains, distinguished by chain ID.
+    /// 1 = mainnet, 137 = Polygon, etc.
+    Ethereum(u64),
+    /// Bitcoin networks.
+    Bitcoin,
 }
 
 impl Default for Network {
@@ -150,6 +160,8 @@ impl fmt::Display for Network {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Substrate(_) => write!(f, "substrate"),
+            Self::Ethereum(id) => write!(f, "ethereum:{}", id),
+            Self::Bitcoin => write!(f, "bitcoin"),
         }
     }
 }

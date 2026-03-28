@@ -7,7 +7,10 @@ impl From<&str> for Network {
             "polkadot" => Network::Substrate(0),
             "kusama" => Network::Substrate(2),
             "karura" => Network::Substrate(8),
-            "substrate" | _ => Network::Substrate(42),
+            "ethereum" => Network::Ethereum(1),
+            "polygon" => Network::Ethereum(137),
+            "bitcoin" => Network::Bitcoin,
+            _ => Network::Substrate(42),
         }
     }
 }
