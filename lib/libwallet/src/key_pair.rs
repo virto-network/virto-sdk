@@ -225,7 +225,12 @@ pub mod sr25519 {
 
     fn derive_simple(key: SecretKey, j: Junction) -> SecretKey {
         use rand_chacha::rand_core::SeedableRng;
-        let rng = rand_chacha::ChaChaRng::from_seed([0; 32]);
+        // Seed from secret key bytes for a per-key deterministic nonce
+        // instead of a globally predictable zero seed.
+        let key_bytes = key.to_bytes();
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&key_bytes[..32]);
+        let rng = rand_chacha::ChaChaRng::from_seed(seed);
         key.derived_key_simple_rng(ChainCode(j), &[], rng).0
     }
 
