@@ -1,11 +1,9 @@
-use crate::vault::{
-    utils::{DerivedSigner, RootAccount},
-    Vault,
-};
 use core::marker::PhantomData;
 use zeroize::Zeroize;
 
-/// A vault that holds secrets in memory
+/// A simple in-memory key store holding raw entropy.
+/// Not a vault by itself — wrap with a chain-specific vault like
+/// `Substrate<Simple<..>>` to produce usable signers.
 pub struct Simple<S, const N: usize = 32> {
     locked: Option<[u8; N]>,
     unlocked: Option<[u8; N]>,
@@ -13,7 +11,7 @@ pub struct Simple<S, const N: usize = 32> {
 }
 
 impl<S, const N: usize> Simple<S, N> {
-    /// A vault with a random seed, once dropped the vault can't be restored.
+    /// A key store with a random seed, once dropped it can't be restored.
     #[cfg(feature = "rand")]
     pub fn generate<R>(rng: &mut R) -> Self
     where
@@ -48,6 +46,12 @@ impl<S, const N: usize> Simple<S, N> {
         }
     }
 
+    /// Unlock the key store, making the raw entropy available.
+    pub fn unlock(&mut self) -> Result<&[u8; N], Error> {
+        self.unlocked = self.locked.clone();
+        self.unlocked.as_ref().ok_or(Error)
+    }
+
     pub fn lock(&mut self) {
         if let Some(ref mut data) = self.unlocked {
             data.zeroize();
@@ -55,16 +59,9 @@ impl<S, const N: usize> Simple<S, N> {
         self.unlocked = None;
     }
 
-    fn get_key(&self, path: Option<&str>) -> Result<DerivedSigner, Error> {
-        if let Some(entropy) = self.unlocked {
-            let seed = crate::substrate_seed(&entropy, "");
-            let root = RootAccount::from_bytes(&*seed).ok_or(Error)?;
-            let path = path.unwrap_or("//default");
-            let pair = root.derive(path);
-            Ok(DerivedSigner::new(pair, path))
-        } else {
-            Err(Error)
-        }
+    /// Access the raw entropy (must be unlocked).
+    pub fn entropy(&self) -> Option<&[u8; N]> {
+        self.unlocked.as_ref()
     }
 }
 
@@ -88,20 +85,3 @@ impl core::fmt::Display for Error {
 }
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
-
-impl<S: AsRef<str>, const N: usize> Vault for Simple<S, N> {
-    type Credentials = ();
-    type Error = Error;
-    type Id = Option<S>;
-    type Signer = DerivedSigner;
-
-    async fn unlock(
-        &mut self,
-        path: Self::Id,
-        _creds: impl Into<Self::Credentials>,
-    ) -> Result<Self::Signer, Self::Error> {
-        self.unlocked = self.locked.clone();
-        let path = path.as_ref().map(|x| x.as_ref());
-        self.get_key(path)
-    }
-}

@@ -1,4 +1,5 @@
 use crate::Network;
+use crate::vault::{utils::{DerivedSigner, RootAccount}, Vault};
 
 impl From<&str> for Network {
     fn from(s: &str) -> Self {
@@ -26,7 +27,6 @@ pub fn substrate_seed(entropy: &[u8], passphrase: &str) -> zeroize::Zeroizing<[u
     if passphrase.is_empty() {
         pbkdf2::<Hmac<Sha512>>(entropy, b"mnemonic", 2048, seed.as_mut());
     } else {
-        // salt = "mnemonic" + passphrase bytes (BIP39 spec)
         let pass_bytes = passphrase.as_bytes();
         let salt_len = 8 + pass_bytes.len();
         let mut salt = [0u8; 8 + 256];
@@ -37,4 +37,58 @@ pub fn substrate_seed(entropy: &[u8], passphrase: &str) -> zeroize::Zeroizing<[u
     }
 
     seed
+}
+
+/// A vault wrapper that applies Substrate-compatible key derivation.
+///
+/// Wraps any entropy source (e.g. `Simple`) and produces sr25519 signers
+/// derived using PBKDF2 + Substrate derivation paths.
+///
+/// ```ignore
+/// let keys = Simple::from_phrase("...");
+/// let mut vault = Substrate::new(keys);
+/// let signer = vault.unlock(Some("//alice"), ()).await?;
+/// ```
+pub struct Substrate<K> {
+    keys: K,
+}
+
+impl<K> Substrate<K> {
+    pub fn new(keys: K) -> Self {
+        Substrate { keys }
+    }
+}
+
+/// Trait for types that can provide raw entropy for key derivation.
+pub trait KeyStore {
+    type Error;
+    fn unlock(&mut self) -> Result<&[u8], Self::Error>;
+}
+
+// Simple<S, N> is a KeyStore
+impl<S, const N: usize> KeyStore for crate::vault::Simple<S, N> {
+    type Error = crate::vault::simple::Error;
+    fn unlock(&mut self) -> Result<&[u8], Self::Error> {
+        self.unlock().map(|b| b.as_slice())
+    }
+}
+
+impl<K: KeyStore> Vault for Substrate<K> {
+    type Credentials = ();
+    type Error = K::Error;
+    type Id = Option<&'static str>;
+    type Signer = DerivedSigner;
+
+    async fn unlock(
+        &mut self,
+        path: Self::Id,
+        _creds: impl Into<Self::Credentials>,
+    ) -> Result<Self::Signer, Self::Error> {
+        let entropy = self.keys.unlock()?;
+        let seed = substrate_seed(entropy, "");
+        let root = RootAccount::from_bytes(&*seed).expect("valid seed");
+        let path = path.unwrap_or("//default");
+        let pair = root.derive(path);
+        Ok(DerivedSigner::new(pair, path))
+    }
 }

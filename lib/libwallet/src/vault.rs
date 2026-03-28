@@ -1,18 +1,21 @@
-//! Collection of supported Vault backends
+//! Collection of supported key store and vault backends.
+//!
+//! Key stores (Simple, OSKeyring, Pass) hold raw entropy.
+//! Wrap them with a chain-specific vault like `Substrate<K>` to
+//! produce signers compatible with a specific blockchain.
 #[cfg(feature = "vault_os")]
-mod os;
+pub mod os;
 #[cfg(feature = "vault_pass")]
-mod pass;
-mod simple;
+pub mod pass;
+pub mod simple;
 
+pub use simple::Simple;
 #[cfg(feature = "vault_os")]
-pub use os::*;
+pub use os::OSKeyring;
 #[cfg(feature = "vault_pass")]
-pub use pass::*;
-pub use simple::*;
+pub use pass::Pass;
 
-/// Abstraction for storage of private keys that are protected by some credentials.
-/// A vault is a signer factory — it produces signers, but the wallet doesn't depend on it.
+/// A vault produces signers from stored key material.
 pub trait Vault {
     type Credentials;
     type Error;
@@ -26,7 +29,7 @@ pub trait Vault {
     ) -> impl core::future::Future<Output = Result<Self::Signer, Self::Error>>;
 }
 
-pub(crate) mod utils {
+pub mod utils {
     use crate::{any, any::AnySignature, Derive, Pair};
 
     /// The root account holds the master keypair from which child keys are derived.
@@ -65,7 +68,7 @@ pub(crate) mod utils {
     }
 
     impl DerivedSigner {
-        pub(crate) fn new(pair: any::Pair, path: &str) -> Self {
+        pub fn new(pair: any::Pair, path: &str) -> Self {
             let mut p = arrayvec::ArrayString::new();
             let len = path.len().min(MAX_PATH_LEN);
             let _ = p.try_push_str(&path[..len]);

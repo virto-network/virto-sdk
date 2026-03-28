@@ -7,15 +7,13 @@ use prs_lib::{
     Plaintext,
 };
 
-use crate::vault::{
-    utils::{DerivedSigner, RootAccount},
-    Vault,
-};
-
-/// A vault that stores secrets in a `pass` compatible repository
+/// A key store backed by a `pass`-compatible GPG repository.
+/// Wrap with `Substrate<Pass<..>>` to produce substrate-compatible signers.
 pub struct Pass<Id> {
     store: Store,
+    entropy: Option<zeroize::Zeroizing<Vec<u8>>>,
     auto_generate: Option<Language>,
+    account: Option<arrayvec::ArrayString<32>>,
     _phantom_data: PhantomData<Id>,
 }
 
@@ -27,12 +25,40 @@ impl<Id> Pass<Id> {
 
         Pass {
             store,
+            entropy: None,
             auto_generate: lang.into(),
+            account: None,
             _phantom_data: Default::default(),
         }
     }
 
-    fn get_signer(&self, account: &str) -> Result<DerivedSigner, Error> {
+    pub fn account(mut self, name: &str) -> Self {
+        let mut buf = arrayvec::ArrayString::new();
+        let len = name.len().min(32);
+        let _ = buf.try_push_str(&name[..len]);
+        self.account = Some(buf);
+        self
+    }
+
+    fn load_entropy(&mut self) -> Result<(), Error> {
+        let account = self.account.as_deref().unwrap_or("default");
+
+        let phrase = self.get_phrase(account)
+            .or_else(|err| {
+                self.auto_generate
+                    .ok_or(err)
+                    .and_then(|l| self.generate_phrase(account, l))
+            })?;
+
+        let mnemonic = phrase
+            .parse::<mnemonic::Mnemonic>()
+            .map_err(|_| Error::Plaintext)?;
+
+        self.entropy = Some(zeroize::Zeroizing::new(mnemonic.entropy().to_vec()));
+        Ok(())
+    }
+
+    fn get_phrase(&self, account: &str) -> Result<String, Error> {
         let mut secret_path = String::from(DEFAULT_DIR);
         secret_path.push_str(account);
 
@@ -48,19 +74,13 @@ impl<Id> Pass<Id> {
             .decrypt_file(&secret.path)
             .map_err(|_e| Error::Decrypt)?;
 
-        let phrase = plaintext.unsecure_to_str().map_err(|_e| Error::Plaintext)?;
-        let phrase = phrase
-            .parse::<mnemonic::Mnemonic>()
-            .map_err(|_e| Error::Plaintext)?;
-
-        let seed = crate::substrate_seed(phrase.entropy(), "");
-        let root = RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)?;
-        let pair = root.derive(&format!("//{account}"));
-        Ok(DerivedSigner::new(pair, account))
+        plaintext.unsecure_to_str()
+            .map(|s| s.to_string())
+            .map_err(|_e| Error::Plaintext)
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
-    fn generate(&self, account: &str, lang: Language) -> Result<DerivedSigner, Error> {
+    fn generate_phrase(&self, account: &str, lang: Language) -> Result<String, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
         let mut secret_path = String::from(DEFAULT_DIR);
@@ -81,10 +101,7 @@ impl<Id> Pass<Id> {
             )
             .map_err(|_| Error::Encrypt)?;
 
-        let seed = crate::substrate_seed(phrase.entropy(), "");
-        let root = RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)?;
-        let pair = root.derive(&format!("//{account}"));
-        Ok(DerivedSigner::new(pair, account))
+        Ok(phrase.phrase().to_string())
     }
 }
 
@@ -116,24 +133,13 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-impl<Id: AsRef<str>> Vault for Pass<Id> {
-    type Id = Option<Id>;
-    type Credentials = ();
-    type Signer = DerivedSigner;
+#[cfg(feature = "substrate")]
+impl<Id> crate::substrate_ext::KeyStore for Pass<Id> {
     type Error = Error;
-
-    async fn unlock(
-        &mut self,
-        path: Self::Id,
-        _creds: impl Into<Self::Credentials>,
-    ) -> Result<Self::Signer, Self::Error> {
-        let account = path.as_ref().map(|x| x.as_ref()).unwrap_or("default");
-
-        self.get_signer(account)
-            .or_else(|err| {
-                self.auto_generate
-                    .ok_or(err)
-                    .and_then(|l| self.generate(account, l))
-            })
+    fn unlock(&mut self) -> Result<&[u8], Self::Error> {
+        if self.entropy.is_none() {
+            self.load_entropy()?;
+        }
+        self.entropy.as_deref().ok_or(Error::NotFound)
     }
 }

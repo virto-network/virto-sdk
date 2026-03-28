@@ -13,9 +13,9 @@ mod key_pair;
 pub mod util;
 
 #[cfg(feature = "substrate")]
-mod substrate_ext;
+pub mod substrate_ext;
 #[cfg(feature = "substrate")]
-pub use substrate_ext::substrate_seed;
+pub use substrate_ext::{substrate_seed, KeyStore, Substrate};
 
 pub use account::Account;
 use arrayvec::ArrayVec;
