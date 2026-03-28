@@ -4,4 +4,5 @@ extern crate alloc;
 pub mod board;
 pub mod event;
 pub mod net;
+pub mod pmu;
 pub mod ui;

@@ -45,6 +45,7 @@ export component MainWindow inherits Window {
     in property <int> finalized-count: 0;
     in property <bool> live: false;
     in property <bool> wifi: false;
+    in property <int> battery-level: -1; // -1 = unknown, 0-100 = percentage
 
     property <color> grey: #3a3a3a;
     property <color> accent: #00a9e0;
@@ -79,6 +80,19 @@ export component MainWindow inherits Window {
                 Text {
                     text: "chain";
                     color: live ? #555 : #333;
+                    font-size: 9px;
+                }
+            }
+            HorizontalLayout {
+                spacing: 4px;
+                Rectangle {
+                    width: 6px; height: 6px; y: 4px;
+                    border-radius: 3px;
+                    background: battery-level > 20 ? #32cd32 : battery-level >= 0 ? #ff4500 : grey;
+                }
+                Text {
+                    text: battery-level >= 0 ? "\{battery-level}%" : "—";
+                    color: battery-level > 20 ? #555 : battery-level >= 0 ? #ff4500 : #333;
                     font-size: 9px;
                 }
             }

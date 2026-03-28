@@ -11,6 +11,8 @@
 extern crate alloc;
 extern crate tinyrlibc;
 
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
@@ -19,8 +21,9 @@ use heapless::spsc::Queue;
 use slint::platform::software_renderer::Rgb565Pixel;
 use static_cell::StaticCell;
 
-use kreivo_clock::board::DISPLAY_WIDTH;
+use kreivo_clock::board::{self, DISPLAY_WIDTH};
 use kreivo_clock::event::{Status, UiEvent};
+use kreivo_clock::pmu::Pmu;
 use kreivo_clock::ui::DisplayBuffer;
 
 slint::include_modules!();
@@ -29,10 +32,14 @@ esp_bootloader_esp_idf::esp_app_desc!();
 static EVENT_QUEUE: StaticCell<Queue<UiEvent, 16>> = StaticCell::new();
 static APP_CORE_STACK: StaticCell<Stack<32768>> = StaticCell::new();
 
+/// Battery percentage shared between cores (255 = unknown, 0-100 = valid).
+static BATTERY_LEVEL: AtomicU8 = AtomicU8::new(255);
+/// Set by PMU task on button press, consumed by UI core.
+static SCREEN_TOGGLE: AtomicBool = AtomicBool::new(false);
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     let system = kreivo_clock::board::init(spawner).await;
-    log::info!("Board init complete");
 
     // Let WiFi ppTask finish its late init before starting core 1
     Timer::after(Duration::from_millis(500)).await;
@@ -40,15 +47,17 @@ async fn main(spawner: Spawner) -> ! {
     let queue = EVENT_QUEUE.init(Queue::new());
     let (mut producer, consumer) = queue.split();
 
+    // Start PMU polling task (battery + button)
+    spawner.spawn(pmu_task(system.pmu)).ok();
+
     // Start core 1: UI render loop
-    let display = system.display;
     let mut cpu_control = CpuControl::new(system.cpu_ctrl);
     let stack = APP_CORE_STACK.init(Stack::new());
     let _guard = cpu_control
-        .start_app_core(stack, move || ui_core(consumer, display))
+        .start_app_core(stack, move || {
+            ui_core(consumer, system.display, system.backlight)
+        })
         .expect("start core 1");
-
-    log::info!("Core 1 started");
 
     // Core 0: chain watcher loop
     let mut wifi = system.wifi;
@@ -62,7 +71,9 @@ async fn main(spawner: Spawner) -> ! {
             log::error!("{e}");
             producer.enqueue(UiEvent::Live(false)).ok();
             producer.enqueue(UiEvent::Wifi(false)).ok();
-            producer.enqueue(UiEvent::Status(Status::Error("reconnecting..."))).ok();
+            producer
+                .enqueue(UiEvent::Status(Status::Error("reconnecting...")))
+                .ok();
             Timer::after(Duration::from_secs(3)).await;
         }
 
@@ -71,16 +82,48 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
+/// Poll AXP2101 for battery level and power key presses.
+#[embassy_executor::task]
+async fn pmu_task(mut pmu: Pmu) {
+    let mut tick = 0u32;
+    loop {
+        if pmu.button_pressed() {
+            SCREEN_TOGGLE.store(true, Ordering::Relaxed);
+        }
+
+        // Read battery every ~30s (150 × 200ms)
+        if tick % 150 == 0 {
+            if let Some(pct) = pmu.battery_percent() {
+                BATTERY_LEVEL.store(pct, Ordering::Relaxed);
+            }
+        }
+
+        tick = tick.wrapping_add(1);
+        Timer::after(Duration::from_millis(200)).await;
+    }
+}
+
 /// Core 1 entry: owns display + Slint, renders in a tight loop.
 fn ui_core(
     mut rx: heapless::spsc::Consumer<'static, UiEvent, 16>,
-    mut display: kreivo_clock::board::Display,
+    mut display: board::Display,
+    mut backlight: board::Backlight,
 ) -> ! {
     let window = kreivo_clock::ui::init();
     let app = MainWindow::new().expect("slint ui");
     let mut line_buf = [Rgb565Pixel(0); DISPLAY_WIDTH];
+    let mut screen_on = true;
 
     loop {
+        if SCREEN_TOGGLE.swap(false, Ordering::Relaxed) {
+            screen_on = !screen_on;
+            if screen_on {
+                backlight.set_high();
+            } else {
+                backlight.set_low();
+            }
+        }
+
         while let Some(event) = rx.dequeue() {
             match event {
                 UiEvent::Wifi(on) => app.set_wifi(on),
@@ -99,12 +142,17 @@ fn ui_core(
             }
         }
 
-        slint::platform::update_timers_and_animations();
-        window.draw_if_needed(|renderer| {
-            renderer.render_by_line(&mut DisplayBuffer {
-                display: &mut display,
-                line_buf: &mut line_buf,
+        let batt = BATTERY_LEVEL.load(Ordering::Relaxed);
+        app.set_battery_level(if batt <= 100 { batt as i32 } else { -1 });
+
+        if screen_on {
+            slint::platform::update_timers_and_animations();
+            window.draw_if_needed(|renderer| {
+                renderer.render_by_line(&mut DisplayBuffer {
+                    display: &mut display,
+                    line_buf: &mut line_buf,
+                });
             });
-        });
+        }
     }
 }

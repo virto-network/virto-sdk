@@ -16,10 +16,11 @@ use mipidsi::interface::SpiInterface;
 use mipidsi::options::{ColorInversion, Orientation};
 use static_cell::StaticCell;
 
+use crate::pmu::Pmu;
+
 pub const DISPLAY_WIDTH: usize = 240;
 pub const DISPLAY_HEIGHT: usize = 240;
 
-const AXP: u8 = 0x34;
 const SSID: &str = env!("WIFI_SSID");
 const PASS: &str = env!("WIFI_PASS");
 
@@ -37,9 +38,13 @@ pub type Display = mipidsi::Display<
     Output<'static>,
 >;
 
+pub type Backlight = Output<'static>;
+
 /// Everything initialized on core 0.
 pub struct System<'a> {
     pub display: Display,
+    pub backlight: Backlight,
+    pub pmu: Pmu,
     pub wifi: esp_radio::wifi::WifiController<'static>,
     pub stack: embassy_net::Stack<'static>,
     pub cpu_ctrl: esp_hal::peripherals::CPU_CTRL<'a>,
@@ -52,24 +57,21 @@ pub async fn init(spawner: Spawner) -> System<'static> {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
-    // --- PMU (AXP2101): enable all LDOs at 3.3V ---
-    let mut i2c = I2c::new(
+    // --- PMU (AXP2101): power rails + monitoring ---
+    let i2c = I2c::new(
         peripherals.I2C0,
         I2cConfig::default().with_frequency(esp_hal::time::Rate::from_khz(100)),
     )
     .unwrap()
     .with_sda(peripherals.GPIO10)
     .with_scl(peripherals.GPIO11);
-    let _ = i2c.write(AXP, &[0x90, 0xFF]);
-    let _ = i2c.write(AXP, &[0x91, 0x01]);
-    for reg in 0x92..=0x9Au8 {
-        let _ = i2c.write(AXP, &[reg, 0x1C]);
-    }
+    let mut pmu = Pmu::new(i2c);
+    pmu.enable_power();
     Timer::after(Duration::from_millis(50)).await;
+    pmu.enable_monitoring();
 
     // --- Display (ST7789 240x240 via SPI) ---
-    let _bl = Output::new(peripherals.GPIO45, Level::High, Default::default());
-    core::mem::forget(_bl);
+    let backlight = Output::new(peripherals.GPIO45, Level::High, Default::default());
 
     let spi = Spi::new(
         peripherals.SPI2,
@@ -127,6 +129,8 @@ pub async fn init(spawner: Spawner) -> System<'static> {
 
     System {
         display,
+        backlight,
+        pmu,
         wifi: controller,
         stack,
         cpu_ctrl: peripherals.CPU_CTRL,
