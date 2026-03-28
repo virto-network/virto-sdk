@@ -1,4 +1,3 @@
-use core::{iter, ops};
 #[cfg(feature = "mnemonic")]
 use mnemonic::{Language, Mnemonic};
 
@@ -18,21 +17,30 @@ where
     R: rand_core::CryptoRng + rand_core::RngCore,
 {
     let seed = random_bytes::<_, 32>(rng);
-    let phrase = mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid");
-    phrase
+    mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid")
 }
 
-/// A simple pin credential that can be used to add some
-/// extra level of protection to seeds stored in vaults.
+const MAX_PIN_LEN: usize = 64;
+
+/// A passphrase credential used to protect seeds stored in vaults.
 ///
-/// # Security Note
+/// Accepts inputs from short numeric PINs to full passphrases.
+/// The raw bytes are fed into PBKDF2-HMAC-SHA512 (210,000 rounds) as part
+/// of the salt. Longer passphrases provide proportionally more security.
 ///
-/// Pin is a 16-bit keyspace (65,536 values) and serves as a **UX convenience**,
-/// not a security boundary. The entire keyspace is brutable in under a second
-/// even with the PBKDF2 stretching. Do not rely on Pin alone to protect secrets.
-#[derive(Default, Copy, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Pin(u16);
+/// When empty, produces Substrate-compatible addresses (salt = `"mnemonic"`).
+#[derive(Clone)]
+pub struct Pin {
+    #[allow(dead_code)] // used by protect() behind util_pin feature
+    buf: [u8; MAX_PIN_LEN],
+    len: u8,
+}
+
+impl Default for Pin {
+    fn default() -> Self {
+        Pin { buf: [0u8; MAX_PIN_LEN], len: 0 }
+    }
+}
 
 macro_rules! seed_from_entropy {
     ($seed: ident, $pin: expr) => {
@@ -47,8 +55,19 @@ macro_rules! seed_from_entropy {
 
 pub(crate) use seed_from_entropy;
 
+#[cfg(feature = "util_pin")]
+const PBKDF2_ROUNDS: u32 = 210_000;
+
 impl Pin {
-    const LEN: usize = 4;
+    /// Returns true if the pin is empty (no passphrase set).
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[allow(dead_code)] // used by protect() behind util_pin and by tests
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len as usize]
+    }
 
     #[cfg(feature = "util_pin")]
     pub fn protect<const S: usize>(&self, data: &[u8]) -> [u8; S] {
@@ -56,43 +75,31 @@ impl Pin {
         use pbkdf2::pbkdf2;
         use sha2::Sha512;
 
-        let salt = {
-            let mut s = [0; 10];
-            s.copy_from_slice(b"mnemonic\0\0");
-            let [b1, b2] = self.to_le_bytes();
-            s[8] = b1;
-            s[9] = b2;
-            s
-        };
         let mut seed = [0; S];
-        // using same hashing strategy as Substrate to have some compatibility
-        // when pin is 0(no pin) we produce the same addresses
-        let len = if self.eq(&0) {
-            salt.len() - 2
+        if self.is_empty() {
+            // Substrate-compatible: salt is just "mnemonic", same iteration count
+            pbkdf2::<Hmac<Sha512>>(data, b"mnemonic", 2048, &mut seed);
         } else {
-            salt.len()
-        };
-        pbkdf2::<Hmac<Sha512>>(data, &salt[..len], 2048, &mut seed);
+            // Build salt: "mnemonic" prefix + raw passphrase bytes
+            let pin_bytes = self.as_bytes();
+            let salt_len = 8 + pin_bytes.len();
+            // Stack-allocate salt: "mnemonic" + up to 64 bytes of passphrase
+            let mut salt = [0u8; 8 + MAX_PIN_LEN];
+            salt[..8].copy_from_slice(b"mnemonic");
+            salt[8..salt_len].copy_from_slice(pin_bytes);
+            pbkdf2::<Hmac<Sha512>>(data, &salt[..salt_len], PBKDF2_ROUNDS, &mut seed);
+        }
         seed
     }
 }
 
-/// Parse a 4-character hex string as a pin (e.g. "ABCD", "1234").
-/// Non-hex characters are silently treated as 0 (e.g. "ZZZZ" becomes 0x0000).
-/// Input longer than 4 characters is truncated to the first 4.
 impl From<&str> for Pin {
     fn from(s: &str) -> Self {
-        let l = s.len().min(Pin::LEN);
-        let chars = s
-            .chars()
-            .take(l)
-            .chain(iter::repeat('0').take(Pin::LEN - l));
-        Pin(chars
-            .map(|c| c.to_digit(16).unwrap_or(0))
-            .enumerate()
-            .fold(0, |pin, (i, d)| {
-                pin | ((d as u16) << ((Pin::LEN - 1 - i) * Pin::LEN))
-            }))
+        let bytes = s.as_bytes();
+        let len = bytes.len().min(MAX_PIN_LEN);
+        let mut buf = [0u8; MAX_PIN_LEN];
+        buf[..len].copy_from_slice(&bytes[..len]);
+        Pin { buf, len: len as u8 }
     }
 }
 
@@ -104,42 +111,37 @@ impl<'a> From<Option<&'a str>> for Pin {
 
 impl From<()> for Pin {
     fn from(_: ()) -> Self {
-        Self(0)
+        Self::default()
     }
 }
 
-impl From<u16> for Pin {
-    fn from(n: u16) -> Self {
-        Self(n)
+#[cfg(test)]
+mod tests {
+    use super::Pin;
+
+    #[test]
+    fn empty_pin() {
+        let pin = Pin::from("");
+        assert!(pin.is_empty());
     }
-}
 
-impl ops::Deref for Pin {
-    type Target = u16;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    #[test]
+    fn short_pin() {
+        let pin = Pin::from("1234");
+        assert!(!pin.is_empty());
+        assert_eq!(pin.as_bytes(), b"1234");
     }
-}
 
-#[test]
-fn pin_parsing() {
-    for (s, expected) in [
-        ("0000", 0),
-        // we only take the first 4 characters and ignore the rest
-        ("0000001", 0),
-        // non hex chars are ignored and defaulted to 0, here a,d are kept
-        ("zasdasjgkadg", 0x0A0D),
-        ("ABCD", 0xABCD),
-        ("1000", 0x1000),
-        ("000F", 0x000F),
-        ("FFFF", 0xFFFF),
-    ] {
-        let pin = Pin::from(s);
-        assert_eq!(
-            *pin, expected,
-            "(input:\"{}\", l:{:X} == r:{:X})",
-            s, *pin, expected
-        );
+    #[test]
+    fn long_passphrase() {
+        let pin = Pin::from("correct horse battery staple");
+        assert_eq!(pin.as_bytes(), b"correct horse battery staple");
+    }
+
+    #[test]
+    fn truncates_at_max() {
+        let long = "a]".repeat(64); // 128 chars
+        let pin = Pin::from(long.as_str());
+        assert_eq!(pin.as_bytes().len(), 64);
     }
 }
