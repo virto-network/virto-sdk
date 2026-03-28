@@ -1,0 +1,164 @@
+//! Minimal BIP32 hierarchical deterministic key derivation.
+//! Uses HMAC-SHA512 + k256 scalar arithmetic. No alloc, no_std.
+
+use hmac::{Hmac, Mac};
+use sha2::Sha512;
+
+type HmacSha512 = Hmac<Sha512>;
+
+/// A BIP32 extended private key (key + chain code).
+pub struct ExtendedKey {
+    key: [u8; 32],
+    chain_code: [u8; 32],
+}
+
+impl ExtendedKey {
+    /// Derive master key from BIP39 seed using HMAC-SHA512("Bitcoin seed", seed).
+    pub fn from_seed(seed: &[u8]) -> Option<Self> {
+        let mut mac = HmacSha512::new_from_slice(b"Bitcoin seed").ok()?;
+        mac.update(seed);
+        let result = mac.finalize().into_bytes();
+
+        let mut key = [0u8; 32];
+        let mut chain_code = [0u8; 32];
+        key.copy_from_slice(&result[..32]);
+        chain_code.copy_from_slice(&result[32..64]);
+
+        // Validate key is valid (non-zero, < curve order)
+        let _ = k256::ecdsa::SigningKey::from_slice(&key).ok()?;
+
+        Some(ExtendedKey { key, chain_code })
+    }
+
+    /// Derive a child key at the given index.
+    /// Hardened indices have bit 31 set (>= 0x80000000).
+    pub fn derive_child(&self, index: u32) -> Option<Self> {
+        let is_hardened = index >= 0x80000000;
+
+        let mut mac = HmacSha512::new_from_slice(&self.chain_code).ok()?;
+
+        if is_hardened {
+            // Data = 0x00 || key || index_be
+            mac.update(&[0x00]);
+            mac.update(&self.key);
+        } else {
+            // Data = compressed_pubkey || index_be
+            let signing_key = k256::ecdsa::SigningKey::from_slice(&self.key).ok()?;
+            let pubkey = signing_key.verifying_key().to_encoded_point(true);
+            mac.update(pubkey.as_bytes());
+        }
+        mac.update(&index.to_be_bytes());
+
+        let result = mac.finalize().into_bytes();
+
+        let mut il = [0u8; 32];
+        let mut chain_code = [0u8; 32];
+        il.copy_from_slice(&result[..32]);
+        chain_code.copy_from_slice(&result[32..64]);
+
+        // child_key = (parse256(IL) + parent_key) mod n
+        use k256::elliptic_curve::ops::Reduce;
+        let tweak = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&il.into());
+        let parent = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&self.key.into());
+        let child = tweak + parent;
+
+        if child.is_zero().into() {
+            return None;
+        }
+
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&child.to_bytes());
+
+        Some(ExtendedKey { key, chain_code })
+    }
+
+    /// Derive a key following a BIP32 path (e.g. m/44'/60'/0'/0/0).
+    pub fn derive_path(mut self, path: &str) -> Option<Self> {
+        for segment in path.split('/') {
+            match segment {
+                "m" | "" => continue,
+                s => {
+                    let (num, hardened) = if let Some(n) = s.strip_suffix('\'') {
+                        (n, true)
+                    } else {
+                        (s, false)
+                    };
+                    let index: u32 = num.parse().ok()?;
+                    let index = if hardened { index | 0x80000000 } else { index };
+                    self = self.derive_child(index)?;
+                }
+            }
+        }
+        Some(self)
+    }
+
+    /// Get the raw 32-byte private key.
+    pub fn secret_key(&self) -> &[u8; 32] {
+        &self.key
+    }
+}
+
+impl Drop for ExtendedKey {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.key.zeroize();
+        self.chain_code.zeroize();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate alloc;
+    use super::*;
+    use alloc::{format, string::String, vec::Vec};
+
+    #[test]
+    fn bip32_test_vector_1() {
+        // BIP32 test vector 1
+        // Seed: 000102030405060708090a0b0c0d0e0f
+        let seed = hex_to_bytes("000102030405060708090a0b0c0d0e0f");
+        let master = ExtendedKey::from_seed(&seed).unwrap();
+
+        // Master key (from BIP32 spec)
+        assert_eq!(
+            bytes_to_hex(master.secret_key()),
+            "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35"
+        );
+
+        // m/0' derivation
+        let child = master.derive_child(0x80000000).unwrap();
+        assert_eq!(
+            bytes_to_hex(child.secret_key()),
+            "edb2e14f9ee77d26dd93b4ecede8d16ed408ce149b6cd80b0715a2d911a0afea"
+        );
+    }
+
+    #[test]
+    fn derive_ethereum_default_path() {
+        // Seed from "abandon" x11 + "about" mnemonic (well-known test vector)
+        let seed = hex_to_bytes(
+            "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4"
+        );
+        let key = ExtendedKey::from_seed(&seed)
+            .unwrap()
+            .derive_path("m/44'/60'/0'/0/0")
+            .unwrap();
+
+        // Known Ethereum private key for this mnemonic at m/44'/60'/0'/0/0
+        assert_eq!(
+            bytes_to_hex(key.secret_key()),
+            "1ab42cc412b618bdea3a599e3c9bae199ebf030895b039e9db1e30dafb12b727"
+        );
+    }
+
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn bytes_to_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+}

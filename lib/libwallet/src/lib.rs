@@ -17,10 +17,18 @@ pub mod substrate_ext;
 #[cfg(feature = "substrate")]
 pub use substrate_ext::{substrate_seed, KeyStore, Substrate};
 
+#[cfg(feature = "secp256k1")]
+pub mod bip32;
+
 #[cfg(feature = "ethereum")]
 pub mod ethereum_ext;
 #[cfg(feature = "ethereum")]
 pub use ethereum_ext::Ethereum;
+
+#[cfg(feature = "bitcoin")]
+pub mod bitcoin_ext;
+#[cfg(feature = "bitcoin")]
+pub use bitcoin_ext::Bitcoin;
 
 pub use account::Account;
 use arrayvec::ArrayVec;

@@ -1,42 +1,33 @@
 use crate::bip32::ExtendedKey;
 use crate::vault::{utils::DerivedSigner, Vault};
 
-const DEFAULT_PATH: &str = "m/44'/60'/0'/0/0";
+/// BIP44 path for Bitcoin
+const DEFAULT_PATH: &str = "m/44'/0'/0'/0/0";
+/// BIP84 path for native SegWit (bech32)
+pub const SEGWIT_PATH: &str = "m/84'/0'/0'/0/0";
 
-/// A vault wrapper that produces Ethereum-compatible secp256k1 signers
+/// A vault wrapper that produces Bitcoin-compatible secp256k1 signers
 /// using BIP32 hierarchical deterministic derivation.
 ///
 /// ```ignore
 /// let keys = Simple::from_phrase("...");
-/// let mut vault = Ethereum::new(keys);
-/// // Default path: m/44'/60'/0'/0/0
+/// let mut vault = Bitcoin::new(keys);
+/// // Default BIP44 path: m/44'/0'/0'/0/0
 /// let signer = vault.unlock(None, ()).await?;
-/// // Custom path:
-/// let signer = vault.unlock(Some("m/44'/60'/0'/0/1"), ()).await?;
+/// // SegWit path:
+/// let signer = vault.unlock(Some("m/84'/0'/0'/0/0"), ()).await?;
 /// ```
-pub struct Ethereum<K> {
+pub struct Bitcoin<K> {
     keys: K,
 }
 
-impl<K> Ethereum<K> {
+impl<K> Bitcoin<K> {
     pub fn new(keys: K) -> Self {
-        Ethereum { keys }
+        Bitcoin { keys }
     }
 }
 
-/// Derive an Ethereum address (last 20 bytes of keccak256(uncompressed_pubkey))
-pub fn eth_address(pubkey: &k256::ecdsa::VerifyingKey) -> [u8; 20] {
-    use sha3::{Keccak256, Digest};
-    let uncompressed = pubkey.to_encoded_point(false);
-    let mut hasher = Keccak256::new();
-    hasher.update(&uncompressed.as_bytes()[1..]); // skip 0x04 prefix
-    let hash = hasher.finalize();
-    let mut addr = [0u8; 20];
-    addr.copy_from_slice(&hash[12..32]);
-    addr
-}
-
-impl<K: crate::substrate_ext::KeyStore> Vault for Ethereum<K> {
+impl<K: crate::substrate_ext::KeyStore> Vault for Bitcoin<K> {
     type Credentials = ();
     type Error = K::Error;
     type Id = Option<&'static str>;
@@ -48,7 +39,6 @@ impl<K: crate::substrate_ext::KeyStore> Vault for Ethereum<K> {
         _creds: impl Into<Self::Credentials>,
     ) -> Result<Self::Signer, Self::Error> {
         let entropy = self.keys.unlock()?;
-        // BIP39 seed (same PBKDF2 as Substrate/BIP39 standard)
         let seed = crate::substrate_ext::substrate_seed(entropy, "");
 
         let path = path.unwrap_or(DEFAULT_PATH);

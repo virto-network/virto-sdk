@@ -52,6 +52,7 @@ std = [
 ]
 substrate = ["sr25519", "pbkdf2", "hmac", "sha2"]
 ethereum = ["secp256k1", "dep:sha3", "pbkdf2", "hmac", "sha2"]
+bitcoin = ["secp256k1", "pbkdf2", "hmac", "sha2"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = ["mnemonic", "rand"]
