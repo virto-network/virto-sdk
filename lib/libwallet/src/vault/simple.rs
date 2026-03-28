@@ -1,5 +1,5 @@
-use crate::{
-    vault::utils::{AccountSigner, RootAccount},
+use crate::vault::{
+    utils::{DerivedSigner, RootAccount},
     Vault,
 };
 use core::marker::PhantomData;
@@ -55,10 +55,12 @@ impl<S, const N: usize> Simple<S, N> {
         self.unlocked = None;
     }
 
-    fn get_key(&self) -> Result<RootAccount, Error> {
+    fn get_key(&self, path: Option<&str>) -> Result<DerivedSigner, Error> {
         if let Some(entropy) = self.unlocked {
             let seed = crate::substrate_seed(&entropy, "");
-            RootAccount::from_bytes(&*seed).ok_or(Error)
+            let root = RootAccount::from_bytes(&*seed).ok_or(Error)?;
+            let pair = root.derive(path.unwrap_or("//default"));
+            Ok(DerivedSigner::new(pair))
         } else {
             Err(Error)
         }
@@ -90,16 +92,15 @@ impl<S: AsRef<str>, const N: usize> Vault for Simple<S, N> {
     type Credentials = ();
     type Error = Error;
     type Id = Option<S>;
-    type Account = AccountSigner;
+    type Signer = DerivedSigner;
 
     async fn unlock(
         &mut self,
         path: Self::Id,
         _creds: impl Into<Self::Credentials>,
-    ) -> Result<Self::Account, Self::Error> {
+    ) -> Result<Self::Signer, Self::Error> {
         self.unlocked = self.locked.clone();
-        let root_account = self.get_key()?;
         let path = path.as_ref().map(|x| x.as_ref());
-        Ok(AccountSigner::new(path).unlock(&root_account))
+        self.get_key(path)
     }
 }

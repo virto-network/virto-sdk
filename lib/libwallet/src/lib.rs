@@ -1,9 +1,7 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
-//! `libwallet` is the one-stop tool to build easy, slightly opinionated crypto wallets
-//! that run in all kinds of environments and plattforms including embedded hardware,
-//! mobile apps or the Web.
-//! It's easy to extend implementing different vault backends and it's designed to
-//! be compatible with all kinds of key formats found in many different blockchains.
+//! `libwallet` is a high-level wallet abstraction that manages accounts
+//! backed by any signer implementation — from vault-derived keypairs to
+//! hardware wallets and remote signers.
 #[cfg(not(any(feature = "sr25519")))]
 compile_error!("Enable at least one type of signature algorithm");
 
@@ -23,99 +21,92 @@ use core::fmt;
 pub use key_pair::{any, Derive, Pair, Public, Signature, Signer, SigningError};
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{Language, Mnemonic};
-pub use vault::Vault;
 pub mod vault;
 
 const MSG_MAX_SIZE: usize = u8::MAX as usize;
 type Message = ArrayVec<u8, { MSG_MAX_SIZE }>;
 
-/// Wallet is the main interface to interact with the accounts of a user.
+/// Wallet manages a collection of named accounts, each wrapping any signer.
 ///
-/// Before being able to sign messages a wallet must be unlocked using valid credentials
-/// supported by the underlying vault.
-///
-/// Wallets can hold many user defined accounts and always have one account set as "default",
-/// if no account is set as default one is generated and will be used to sign messages when no account is specified.
-///
-/// Wallets also support queuing and bulk signing of messages in case transactions need to be reviewed before signing.
-#[derive(Debug)]
-pub struct Wallet<V: Vault, const A: usize = 5, const M: usize = A> {
-    vault: V,
-    is_locked: bool,
+/// Accounts can come from vaults, hardware wallets, browser extensions, or
+/// any other source that implements `Signer`.
+pub struct Wallet<S: Signer, const A: usize = 5, const M: usize = A> {
     default_account: Option<u8>,
-    accounts: ArrayVec<V::Account, A>,
-    pending_sign: ArrayVec<(Message, Option<u8>), M>, // message -> account index or default
+    accounts: ArrayVec<Account<S>, A>,
+    pending_sign: ArrayVec<(Message, Option<u8>), M>,
 }
 
-impl<V, const A: usize, const M: usize> Wallet<V, A, M>
+impl<S: Signer + fmt::Debug> fmt::Debug for Wallet<S, 5, 5> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Wallet")
+            .field("accounts", &self.accounts.len())
+            .field("default", &self.default_account)
+            .field("pending", &self.pending_sign.len())
+            .finish()
+    }
+}
+
+impl<S, const A: usize, const M: usize> Wallet<S, A, M>
 where
-    V: Vault,
+    S: Signer,
 {
-    /// Create a new Wallet with a default account
-    pub fn new(vault: V) -> Self {
+    /// Create a new empty wallet.
+    pub fn new() -> Self {
         Wallet {
-            vault,
             default_account: None,
             accounts: ArrayVec::new_const(),
             pending_sign: ArrayVec::new(),
-            is_locked: true,
         }
     }
 
-    /// Get the account currently set as default
-    pub fn default_account(&self) -> Option<&V::Account> {
+    /// Add an account to the wallet. The first account added becomes the default.
+    pub fn add(&mut self, name: &str, signer: S) -> usize {
+        let idx = self.accounts.len();
+        self.accounts.push(Account::new(name, signer));
+        if self.default_account.is_none() {
+            self.default_account = Some(idx as u8);
+        }
+        idx
+    }
+
+    /// Set the default account by index.
+    pub fn set_default(&mut self, idx: usize) {
+        if idx < self.accounts.len() {
+            self.default_account = Some(idx as u8);
+        }
+    }
+
+    /// Get the account currently set as default.
+    pub fn default_account(&self) -> Option<&Account<S>> {
         self.default_account
             .and_then(|x| self.accounts.get(x as usize))
     }
 
-    /// Use credentials to unlock the vault.
-    pub async fn unlock(
-        &mut self,
-        account: V::Id,
-        cred: impl Into<V::Credentials>,
-    ) -> Result<(), Error<V::Error>> {
-        if self.is_locked() {
-            let vault = &mut self.vault;
-            let signer = vault.unlock(account, cred).await.map_err(Error::Vault)?;
-
-            if self.default_account.is_none() {
-                self.default_account = Some(0);
-            }
-
-            self.accounts.push(signer);
-
-            self.is_locked = false;
-        }
-        Ok(())
+    /// Get an account by index.
+    pub fn account(&self, idx: usize) -> Option<&Account<S>> {
+        self.accounts.get(idx)
     }
 
-    /// Check if the vault has been unlocked.
-    pub fn is_locked(&self) -> bool {
-        self.is_locked
+    /// Number of accounts in the wallet.
+    pub fn accounts(&self) -> usize {
+        self.accounts.len()
     }
 
-    /// Lock the wallet, zeroizing key material from accounts.
+    /// Clear all accounts, triggering zeroization via Drop.
     pub fn lock(&mut self) {
         self.accounts.clear();
         self.default_account = None;
-        self.is_locked = true;
     }
 
-    /// Sign a message with the default account and return the signature.
-    /// The wallet needs to be unlocked.
+    /// Sign a message with the default account.
     pub async fn sign(&self, message: &[u8]) -> Result<impl Signature, SigningError> {
-        if self.is_locked() {
-            return Err(SigningError::Locked);
-        }
-
         let signer = self.default_account().ok_or(SigningError::NoAccount)?;
-
         signer.sign_msg(message).await
     }
 
     /// Save data to be signed some time later.
     /// Returns an error if the message exceeds the maximum size.
-    pub fn sign_later<T>(&mut self, message: T) -> Result<(), Error<V::Error>>
+    pub fn sign_later<T>(&mut self, message: T) -> Result<(), Error>
     where
         T: AsRef<[u8]>,
     {
@@ -130,7 +121,7 @@ where
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
             let signer = match a {
-                Some(idx) => self.account(idx)?,
+                Some(idx) => self.accounts.get(idx as usize).ok_or(SigningError::NoAccount)?,
                 None => self.default_account().ok_or(SigningError::NoAccount)?,
             };
 
@@ -143,10 +134,6 @@ where
     /// Iterate over the messages pending for signature.
     pub fn pending(&self) -> impl Iterator<Item = &[u8]> {
         self.pending_sign.iter().map(|(msg, _)| msg.as_ref())
-    }
-
-    fn account(&self, idx: u8) -> Result<&V::Account, SigningError> {
-        self.accounts.get(idx as usize).ok_or(SigningError::NoAccount)
     }
 }
 
@@ -176,37 +163,17 @@ impl fmt::Display for Network {
 
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum Error<V> {
-    Vault(V),
-    Locked,
-    DeriveError,
+pub enum Error {
     MessageTooLong,
-    #[cfg(feature = "mnemonic")]
-    InvalidPhrase,
 }
 
-impl<V> fmt::Display for Error<V>
-where
-    V: fmt::Debug + fmt::Display,
-{
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Vault(e) => write!(f, "Vault error: {}", e),
-            Error::Locked => write!(f, "Locked"),
-            Error::DeriveError => write!(f, "Cannot derive"),
             Error::MessageTooLong => write!(f, "Message exceeds max size of {} bytes", MSG_MAX_SIZE),
-            #[cfg(feature = "mnemonic")]
-            Error::InvalidPhrase => write!(f, "Invalid phrase"),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl<V> std::error::Error for Error<V> where V: fmt::Debug + fmt::Display {}
-
-#[cfg(feature = "mnemonic")]
-impl<V> From<mnemonic::Error> for Error<V> {
-    fn from(_: mnemonic::Error) -> Self {
-        Error::InvalidPhrase
-    }
-}
+impl std::error::Error for Error {}

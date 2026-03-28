@@ -2,8 +2,10 @@ use core::marker::PhantomData;
 
 use crate::{
     mnemonic::{Language, Mnemonic},
-    vault::utils::{AccountSigner, RootAccount},
-    Vault,
+    vault::{
+        utils::{DerivedSigner, RootAccount},
+        Vault,
+    },
 };
 use keyring;
 
@@ -12,30 +14,23 @@ const SERVICE: &str = "libwallet_account";
 /// A vault that stores keys in the default OS secure store
 pub struct OSKeyring<S> {
     entry: keyring::Entry,
-    root: Option<RootAccount>,
     auto_generate: Option<Language>,
     _phantom: PhantomData<S>,
 }
 
 impl<S> OSKeyring<S> {
-    /// Create a new OSKeyring vault for the given user.
-    /// The optional `lang` instructs the vault to generate a backup phrase
-    /// in the given language in case one does not exist.
     pub fn new(uname: &str, lang: impl Into<Option<Language>>) -> Self {
         OSKeyring {
             entry: keyring::Entry::new(SERVICE, uname),
-            root: None,
             auto_generate: lang.into(),
             _phantom: PhantomData::default(),
         }
     }
 
-    /// Replace the stored backup phrase with a new one.
     pub fn update(&self, phrase: &str) -> Result<(), Error> {
         self.entry.set_password(phrase).map_err(|_| Error::Keyring)
     }
 
-    /// Return the stored phrase from the OS secure storage.
     pub(crate) fn get(&self) -> Result<zeroize::Zeroizing<String>, Error> {
         self.entry
             .get_password()
@@ -43,27 +38,30 @@ impl<S> OSKeyring<S> {
             .map_err(|_| Error::Keyring)
     }
 
-    fn get_key(&self) -> Result<RootAccount, Error> {
+    fn get_signer(&self, path: Option<&str>) -> Result<DerivedSigner, Error> {
         let phrase = self
             .get()?
             .parse::<Mnemonic>()
             .map_err(|_| Error::BadPhrase)?;
 
         let seed = crate::substrate_seed(phrase.entropy(), "");
-        RootAccount::from_bytes(&seed).ok_or(Error::BadPhrase)
+        let root = RootAccount::from_bytes(&*seed).ok_or(Error::BadPhrase)?;
+        let pair = root.derive(path.unwrap_or("//default"));
+        Ok(DerivedSigner::new(pair))
     }
 
-    fn generate(&self, lang: Language) -> Result<RootAccount, Error> {
+    fn generate(&self, path: Option<&str>, lang: Language) -> Result<DerivedSigner, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
         let seed = crate::substrate_seed(phrase.entropy(), "");
-        let root = RootAccount::from_bytes(&seed).ok_or(Error::BadPhrase)?;
+        let root = RootAccount::from_bytes(&*seed).ok_or(Error::BadPhrase)?;
 
         self.entry
             .set_password(phrase.phrase())
             .map_err(|_| Error::Keyring)?;
 
-        Ok(root)
+        let pair = root.derive(path.unwrap_or("//default"));
+        Ok(DerivedSigner::new(pair))
     }
 }
 
@@ -91,23 +89,19 @@ impl<S: AsRef<str>> Vault for OSKeyring<S> {
     type Credentials = ();
     type Error = Error;
     type Id = Option<S>;
-    type Account = AccountSigner;
+    type Signer = DerivedSigner;
 
     async fn unlock(
         &mut self,
         account: Self::Id,
         _cred: impl Into<Self::Credentials>,
-    ) -> Result<Self::Account, Self::Error> {
-        self.get_key()
+    ) -> Result<Self::Signer, Self::Error> {
+        let path = account.as_ref().map(|x| x.as_ref());
+        self.get_signer(path)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
-                    .and_then(|l| self.generate(l))
-            })
-            .map(|r| {
-                let acc = AccountSigner::new(account.as_ref().map(|x| x.as_ref())).unlock(&r);
-                self.root = Some(r);
-                acc
+                    .and_then(|l| self.generate(path, l))
             })
     }
 }

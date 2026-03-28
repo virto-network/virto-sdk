@@ -7,15 +7,14 @@ use prs_lib::{
     Plaintext,
 };
 
-use crate::{
-    vault::utils::{AccountSigner, RootAccount},
+use crate::vault::{
+    utils::{DerivedSigner, RootAccount},
     Vault,
 };
 
 /// A vault that stores secrets in a `pass` compatible repository
 pub struct Pass<Id> {
     store: Store,
-    root: Option<RootAccount>,
     auto_generate: Option<Language>,
     _phantom_data: PhantomData<Id>,
 }
@@ -23,21 +22,17 @@ pub struct Pass<Id> {
 const DEFAULT_DIR: &str = "libwallet_accounts/";
 
 impl<Id> Pass<Id> {
-    /// Create a new `Pass` vault in the given location.
-    /// The optional `lang` instructs the vault to generate a backup phrase
-    /// in the given language in case one does not exist.
     pub fn new<P: AsRef<str>>(store_path: P, lang: impl Into<Option<Language>>) -> Self {
         let store = Store::open(store_path).unwrap();
 
         Pass {
             store,
-            root: None,
             auto_generate: lang.into(),
             _phantom_data: Default::default(),
         }
     }
 
-    fn get_key(&self, account: &str) -> Result<RootAccount, Error> {
+    fn get_signer(&self, account: &str) -> Result<DerivedSigner, Error> {
         let mut secret_path = String::from(DEFAULT_DIR);
         secret_path.push_str(account);
 
@@ -59,11 +54,13 @@ impl<Id> Pass<Id> {
             .map_err(|_e| Error::Plaintext)?;
 
         let seed = crate::substrate_seed(phrase.entropy(), "");
-        RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)
+        let root = RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)?;
+        let pair = root.derive(&format!("//{account}"));
+        Ok(DerivedSigner::new(pair))
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
-    fn generate(&self, account: &str, lang: Language) -> Result<RootAccount, Error> {
+    fn generate(&self, account: &str, lang: Language) -> Result<DerivedSigner, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
 
         let mut secret_path = String::from(DEFAULT_DIR);
@@ -85,7 +82,9 @@ impl<Id> Pass<Id> {
             .map_err(|_| Error::Encrypt)?;
 
         let seed = crate::substrate_seed(phrase.entropy(), "");
-        RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)
+        let root = RootAccount::from_bytes(&*seed).ok_or(Error::Plaintext)?;
+        let pair = root.derive(&format!("//{account}"));
+        Ok(DerivedSigner::new(pair))
     }
 }
 
@@ -120,26 +119,21 @@ impl std::error::Error for Error {}
 impl<Id: AsRef<str>> Vault for Pass<Id> {
     type Id = Option<Id>;
     type Credentials = ();
-    type Account = AccountSigner;
+    type Signer = DerivedSigner;
     type Error = Error;
 
     async fn unlock(
         &mut self,
         path: Self::Id,
         _creds: impl Into<Self::Credentials>,
-    ) -> Result<Self::Account, Self::Error> {
+    ) -> Result<Self::Signer, Self::Error> {
         let account = path.as_ref().map(|x| x.as_ref()).unwrap_or("default");
 
-        self.get_key(account)
+        self.get_signer(account)
             .or_else(|err| {
                 self.auto_generate
                     .ok_or(err)
                     .and_then(|l| self.generate(account, l))
-            })
-            .map(|r| {
-                let acc = AccountSigner::new(Some(account)).unlock(&r);
-                self.root = Some(r);
-                acc
             })
     }
 }

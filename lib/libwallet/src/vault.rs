@@ -11,31 +11,25 @@ pub use os::*;
 pub use pass::*;
 pub use simple::*;
 
-use crate::account::Account;
-
 /// Abstraction for storage of private keys that are protected by some credentials.
+/// A vault is a signer factory — it produces signers, but the wallet doesn't depend on it.
 pub trait Vault {
     type Credentials;
     type Error;
     type Id;
-    type Account: Account;
+    type Signer: crate::Signer;
 
     fn unlock(
         &mut self,
         account: Self::Id,
         cred: impl Into<Self::Credentials>,
-    ) -> impl core::future::Future<Output = Result<Self::Account, Self::Error>>;
+    ) -> impl core::future::Future<Output = Result<Self::Signer, Self::Error>>;
 }
 
-mod utils {
-    const MAX_PATH_LEN: usize = 16;
-    use arrayvec::ArrayString;
+pub(crate) mod utils {
+    use crate::{any, any::AnySignature, Derive, Pair};
 
-    use crate::{account::Account, any, any::AnySignature, Derive, Network, Pair, Public};
-
-    /// The root account is a container of the key pairs stored in the vault and cannot be
-    /// used to sign messages directly, we always derive new key pairs from it to create
-    /// and use accounts with the wallet.
+    /// The root account holds the master keypair from which child keys are derived.
     pub struct RootAccount {
         sub: crate::key_pair::sr25519::Pair,
     }
@@ -52,12 +46,8 @@ mod utils {
                 sub: <crate::key_pair::sr25519::Pair as crate::Pair>::from_bytes(seed)?,
             })
         }
-    }
 
-    impl Derive for &RootAccount {
-        type Pair = any::Pair;
-
-        fn derive(&self, path: &str) -> Self::Pair {
+        pub fn derive(&self, path: &str) -> any::Pair {
             log::debug!("derive: {}", path);
             match path.get(..2) {
                 Some("//") => self.sub.derive(path).into(),
@@ -66,124 +56,40 @@ mod utils {
         }
     }
 
-    /// Account is an abstraction around public/private key pairs that are more convenient to use and
-    /// can hold extra metadata. Accounts are constructed by the wallet and are used to sign messages.
-    pub struct AccountSigner {
-        pair: Option<any::Pair>,
-        network: Network,
-        path: ArrayString<MAX_PATH_LEN>,
-        name: ArrayString<{ MAX_PATH_LEN - 2 }>,
+    /// A signer backed by a vault-derived keypair.
+    pub struct DerivedSigner {
+        pair: any::Pair,
     }
 
-    impl core::fmt::Debug for AccountSigner {
+    impl DerivedSigner {
+        pub(crate) fn new(pair: any::Pair) -> Self {
+            DerivedSigner { pair }
+        }
+
+        pub fn public(&self) -> impl crate::Public {
+            self.pair.public()
+        }
+    }
+
+    impl core::fmt::Debug for DerivedSigner {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            f.debug_struct("AccountSigner")
-                .field("network", &self.network)
-                .field("name", &self.name.as_str())
-                .field("locked", &self.pair.is_none())
-                .finish()
+            f.debug_struct("DerivedSigner").field("key", &"<redacted>").finish()
         }
     }
 
-    impl Drop for AccountSigner {
-        fn drop(&mut self) {
-            self.pair = None;
-        }
-    }
-
-    impl Account for AccountSigner {
-        fn public(&self) -> impl Public {
-            self.pair
-                .as_ref()
-                .map(|p| p.public())
-                .expect("account unlocked")
-        }
-    }
-
-    impl AccountSigner {
-        pub(crate) fn new<'a>(name: impl Into<Option<&'a str>>) -> Self {
-            let raw = name.into().unwrap_or("default");
-            // Strip path separators to prevent derivation path injection
-            let mut name_buf: ArrayString<{ MAX_PATH_LEN - 2 }> = ArrayString::new();
-            for ch in raw.chars() {
-                if ch != '/' && !name_buf.is_full() {
-                    name_buf.push(ch);
-                }
-            }
-            if name_buf.is_empty() {
-                let _ = name_buf.try_push_str("default");
-            }
-            let mut path = ArrayString::from("//").unwrap();
-            path.push_str(&name_buf);
-            AccountSigner {
-                pair: None,
-                network: Network::default(),
-                name: name_buf,
-                path,
-            }
-        }
-
-        pub fn switch_network(mut self, net: impl Into<Network>) -> Self {
-            self.network = net.into();
-            self
-        }
-
-        pub fn name(&self) -> &str {
-            &self.name
-        }
-
-        pub fn network(&self) -> &Network {
-            &self.network
-        }
-
-        pub fn is_locked(&self) -> bool {
-            self.pair.is_none()
-        }
-
-        pub(crate) fn unlock(mut self, root: &RootAccount) -> Self {
-            if self.is_locked() {
-                log::debug!("unlock: {}", self.path);
-                self.pair = Some(root.derive(&self.path));
-            }
-            self
-        }
-    }
-
-    impl crate::Signer for AccountSigner {
+    impl crate::Signer for DerivedSigner {
         type Signature = AnySignature;
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, crate::SigningError> {
-            self.pair
-                .as_ref()
-                .ok_or(crate::SigningError::Locked)?
-                .sign_msg(msg)
-                .await
+            self.pair.sign_msg(msg).await
         }
 
         async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
-            match self.pair.as_ref() {
-                Some(p) => p.verify(msg, sig).await,
-                None => false,
-            }
+            self.pair.verify(msg, sig).await
         }
     }
 
-    #[cfg(feature = "serde")]
-    impl serde::Serialize for AccountSigner {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            use serde::ser::SerializeStruct;
-
-            let mut state = serializer.serialize_struct("Account", 2)?;
-            state.serialize_field("network", &self.network)?;
-            state.serialize_field("name", self.name.as_str())?;
-            state.end()
-        }
-    }
-
-    impl core::fmt::Display for AccountSigner {
+    impl core::fmt::Display for DerivedSigner {
         fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
             for byte in self.public().as_ref() {
                 write!(f, "{:02x}", byte)?;
