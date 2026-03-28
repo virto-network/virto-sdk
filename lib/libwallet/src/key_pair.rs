@@ -65,6 +65,8 @@ pub mod any {
         Sr25519(super::sr25519::Pair),
         #[cfg(feature = "secp256k1")]
         Secp256k1(super::secp256k1::Pair),
+        #[cfg(feature = "ed25519")]
+        Ed25519(super::ed25519::Pair),
     }
 
     impl Drop for Pair {
@@ -73,7 +75,9 @@ pub mod any {
                 #[cfg(feature = "sr25519")]
                 Pair::Sr25519(ref mut kp) => kp.zeroize(),
                 #[cfg(feature = "secp256k1")]
-                Pair::Secp256k1(_) => {} // k256 zeroizes internally
+                Pair::Secp256k1(_) => {},
+                #[cfg(feature = "ed25519")]
+                Pair::Ed25519(_) => {},
             }
         }
     }
@@ -85,6 +89,8 @@ pub mod any {
                 Pair::Sr25519(_) => f.debug_tuple("Sr25519").field(&"<redacted>").finish(),
                 #[cfg(feature = "secp256k1")]
                 Pair::Secp256k1(_) => f.debug_tuple("Secp256k1").field(&"<redacted>").finish(),
+                #[cfg(feature = "ed25519")]
+                Pair::Ed25519(_) => f.debug_tuple("Ed25519").field(&"<redacted>").finish(),
             }
         }
     }
@@ -93,7 +99,6 @@ pub mod any {
         type Public = AnyPublic;
 
         fn from_bytes(seed: &[u8]) -> Option<Self> {
-            // Try sr25519 first, then secp256k1
             #[cfg(feature = "sr25519")]
             if let Some(p) = <super::sr25519::Pair as super::Pair>::from_bytes(seed) {
                 return Some(Self::Sr25519(p));
@@ -101,6 +106,10 @@ pub mod any {
             #[cfg(feature = "secp256k1")]
             if let Some(p) = <super::secp256k1::Pair as super::Pair>::from_bytes(seed) {
                 return Some(Self::Secp256k1(p));
+            }
+            #[cfg(feature = "ed25519")]
+            if let Some(p) = <super::ed25519::Pair as super::Pair>::from_bytes(seed) {
+                return Some(Self::Ed25519(p));
             }
             None
         }
@@ -111,6 +120,8 @@ pub mod any {
                 Pair::Sr25519(p) => AnyPublic::Sr25519(p.public()),
                 #[cfg(feature = "secp256k1")]
                 Pair::Secp256k1(p) => AnyPublic::Secp256k1(p.public()),
+                #[cfg(feature = "ed25519")]
+                Pair::Ed25519(p) => AnyPublic::Ed25519(p.public()),
             }
         }
     }
@@ -124,6 +135,8 @@ pub mod any {
                 Pair::Sr25519(kp) => Pair::Sr25519(kp.derive(path)),
                 #[cfg(feature = "secp256k1")]
                 Pair::Secp256k1(kp) => Pair::Secp256k1(kp.derive(path)),
+                #[cfg(feature = "ed25519")]
+                Pair::Ed25519(kp) => Pair::Ed25519(kp.derive(path)),
             }
         }
     }
@@ -142,6 +155,13 @@ pub mod any {
         }
     }
 
+    #[cfg(feature = "ed25519")]
+    impl From<super::ed25519::Pair> for Pair {
+        fn from(p: super::ed25519::Pair) -> Self {
+            Self::Ed25519(p)
+        }
+    }
+
     impl super::Signer for Pair {
         type Signature = AnySignature;
 
@@ -151,15 +171,19 @@ pub mod any {
                 Pair::Sr25519(_) => "sr25519",
                 #[cfg(feature = "secp256k1")]
                 Pair::Secp256k1(_) => "secp256k1",
+                #[cfg(feature = "ed25519")]
+                Pair::Ed25519(_) => "ed25519",
             }
         }
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, SigningError> {
             match self {
                 #[cfg(feature = "sr25519")]
-                Pair::Sr25519(p) => Ok(p.sign_msg(msg).await?.into()),
+                Pair::Sr25519(p) => Ok(AnySignature::Sr25519(p.sign_msg(msg).await?)),
                 #[cfg(feature = "secp256k1")]
-                Pair::Secp256k1(p) => Ok(p.sign_msg(msg).await?.into()),
+                Pair::Secp256k1(p) => Ok(AnySignature::Secp256k1(p.sign_msg(msg).await?)),
+                #[cfg(feature = "ed25519")]
+                Pair::Ed25519(p) => Ok(AnySignature::Ed25519(p.sign_msg(msg).await?)),
             }
         }
 
@@ -169,6 +193,8 @@ pub mod any {
                 Pair::Sr25519(p) => super::Signer::verify(p, msg, sig).await,
                 #[cfg(feature = "secp256k1")]
                 Pair::Secp256k1(p) => super::Signer::verify(p, msg, sig).await,
+                #[cfg(feature = "ed25519")]
+                Pair::Ed25519(p) => super::Signer::verify(p, msg, sig).await,
             }
         }
     }
@@ -180,6 +206,8 @@ pub mod any {
         Sr25519(super::Bytes<{ super::sr25519::SEED_LEN }>),
         #[cfg(feature = "secp256k1")]
         Secp256k1(super::Bytes<33>),
+        #[cfg(feature = "ed25519")]
+        Ed25519(super::Bytes<32>),
     }
 
     impl AsRef<[u8]> for AnyPublic {
@@ -189,6 +217,8 @@ pub mod any {
                 AnyPublic::Sr25519(p) => p.as_ref(),
                 #[cfg(feature = "secp256k1")]
                 AnyPublic::Secp256k1(p) => p.as_ref(),
+                #[cfg(feature = "ed25519")]
+                AnyPublic::Ed25519(p) => p.as_ref(),
             }
         }
     }
@@ -210,6 +240,8 @@ pub mod any {
         Sr25519(super::Bytes<{ super::sr25519::SIG_LEN }>),
         #[cfg(feature = "secp256k1")]
         Secp256k1(super::Bytes<{ super::secp256k1::SIG_LEN }>),
+        #[cfg(feature = "ed25519")]
+        Ed25519(super::Bytes<{ super::ed25519::SIG_LEN }>),
     }
 
     impl AsRef<[u8]> for AnySignature {
@@ -219,23 +251,12 @@ pub mod any {
                 AnySignature::Sr25519(s) => s.as_ref(),
                 #[cfg(feature = "secp256k1")]
                 AnySignature::Secp256k1(s) => s.as_ref(),
+                #[cfg(feature = "ed25519")]
+                AnySignature::Ed25519(s) => s.as_ref(),
             }
         }
     }
 
-    #[cfg(feature = "sr25519")]
-    impl From<super::sr25519::Signature> for AnySignature {
-        fn from(s: super::sr25519::Signature) -> Self {
-            AnySignature::Sr25519(s)
-        }
-    }
-
-    #[cfg(feature = "secp256k1")]
-    impl From<super::secp256k1::Signature> for AnySignature {
-        fn from(s: super::secp256k1::Signature) -> Self {
-            AnySignature::Secp256k1(s)
-        }
-    }
 
     impl Signature for AnySignature {}
 }
@@ -391,6 +412,77 @@ pub mod sr25519 {
                 let derived = root.derive(path);
                 assert_eq!(&derived.public(), pubkey);
             }
+        }
+    }
+}
+
+#[cfg(feature = "ed25519")]
+pub mod ed25519 {
+    use super::{Bytes, Signer};
+
+    pub const SEED_LEN: usize = 32;
+    pub const SIG_LEN: usize = 64;
+    pub type Public = Bytes<32>;
+    pub type Signature = Bytes<SIG_LEN>;
+
+    pub struct Pair {
+        secret: ed25519_dalek::SigningKey,
+    }
+
+    impl super::Pair for Pair {
+        type Public = Public;
+
+        fn from_bytes(bytes: &[u8]) -> Option<Self> {
+            let seed: [u8; 32] = bytes.get(..SEED_LEN)?.try_into().ok()?;
+            Some(Pair {
+                secret: ed25519_dalek::SigningKey::from_bytes(&seed),
+            })
+        }
+
+        fn public(&self) -> Self::Public {
+            self.secret.verifying_key().to_bytes()
+        }
+    }
+
+    impl Signer for Pair {
+        type Signature = Signature;
+
+        fn account_id(&self) -> &str {
+            "ed25519"
+        }
+
+        async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, super::SigningError> {
+            use ed25519_dalek::Signer;
+            let sig = self.secret.sign(msg.as_ref());
+            Ok(sig.to_bytes())
+        }
+
+        async fn verify(&self, msg: impl AsRef<[u8]>, sig: impl AsRef<[u8]>) -> bool {
+            use ed25519_dalek::Verifier;
+            let Ok(sig) = ed25519_dalek::Signature::from_slice(sig.as_ref()) else {
+                return false;
+            };
+            self.secret.verifying_key().verify(msg.as_ref(), &sig).is_ok()
+        }
+    }
+
+    impl super::Derive for Pair {
+        type Pair = Self;
+        fn derive(&self, _path: &str) -> Self {
+            // SLIP-0010 derivation handled by chain-specific vault wrapper
+            Pair { secret: self.secret.clone() }
+        }
+    }
+
+    impl Drop for Pair {
+        fn drop(&mut self) {
+            // ed25519-dalek zeroizes on drop via the zeroize feature
+        }
+    }
+
+    impl core::fmt::Debug for Pair {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("ed25519::Pair").field("key", &"<redacted>").finish()
         }
     }
 }

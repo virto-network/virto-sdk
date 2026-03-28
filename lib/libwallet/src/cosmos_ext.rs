@@ -1,0 +1,49 @@
+use crate::bip32::ExtendedKey;
+use crate::vault::{utils::DerivedSigner, Vault};
+
+/// Cosmos/Tendermint default BIP44 path (coin type 118)
+const DEFAULT_PATH: &str = "m/44'/118'/0'/0/0";
+
+/// A vault wrapper that produces Cosmos-compatible secp256k1 signers
+/// using BIP32 hierarchical deterministic derivation.
+///
+/// ```ignore
+/// let keys = Simple::from_phrase("...");
+/// let mut vault = Cosmos::new(keys);
+/// let signer = vault.unlock(None, ()).await?;
+/// ```
+pub struct Cosmos<K> {
+    keys: K,
+}
+
+impl<K> Cosmos<K> {
+    pub fn new(keys: K) -> Self {
+        Cosmos { keys }
+    }
+}
+
+impl<K: crate::substrate_ext::KeyStore> Vault for Cosmos<K> {
+    type Credentials = ();
+    type Error = K::Error;
+    type Id = Option<&'static str>;
+    type Signer = DerivedSigner;
+
+    async fn unlock(
+        &mut self,
+        path: Self::Id,
+        _creds: impl Into<Self::Credentials>,
+    ) -> Result<Self::Signer, Self::Error> {
+        let entropy = self.keys.unlock()?;
+        let seed = crate::substrate_ext::substrate_seed(entropy, "");
+
+        let path = path.unwrap_or(DEFAULT_PATH);
+        let derived = ExtendedKey::from_seed(&*seed)
+            .and_then(|master| master.derive_path(path))
+            .expect("valid BIP32 derivation");
+
+        let pair = <crate::key_pair::secp256k1::Pair as crate::Pair>::from_bytes(derived.secret_key())
+            .expect("valid secp256k1 key");
+
+        Ok(DerivedSigner::new(pair.into(), path))
+    }
+}

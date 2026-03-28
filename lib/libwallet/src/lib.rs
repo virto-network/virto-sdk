@@ -5,8 +5,8 @@
 //!
 //! For cross-chain flows, use [`Wallet::sign_with`] on multiple typed
 //! wallets to batch-sign messages across different chains.
-#[cfg(not(any(feature = "sr25519", feature = "secp256k1")))]
-compile_error!("Enable at least one signature algorithm: sr25519, secp256k1");
+#[cfg(not(any(feature = "sr25519", feature = "secp256k1", feature = "ed25519")))]
+compile_error!("Enable at least one signature algorithm: sr25519, secp256k1, ed25519");
 
 mod account;
 mod key_pair;
@@ -17,7 +17,7 @@ pub mod substrate_ext;
 #[cfg(feature = "substrate")]
 pub use substrate_ext::{substrate_seed, KeyStore, Substrate};
 
-#[cfg(feature = "secp256k1")]
+#[cfg(any(feature = "secp256k1", feature = "ed25519"))]
 pub mod bip32;
 
 #[cfg(feature = "ethereum")]
@@ -29,6 +29,16 @@ pub use ethereum_ext::Ethereum;
 pub mod bitcoin_ext;
 #[cfg(feature = "bitcoin")]
 pub use bitcoin_ext::Bitcoin;
+
+#[cfg(feature = "solana")]
+pub mod solana_ext;
+#[cfg(feature = "solana")]
+pub use solana_ext::Solana;
+
+#[cfg(feature = "cosmos")]
+pub mod cosmos_ext;
+#[cfg(feature = "cosmos")]
+pub use cosmos_ext::Cosmos;
 
 pub use account::Account;
 use arrayvec::ArrayVec;

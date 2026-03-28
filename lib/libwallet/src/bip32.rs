@@ -1,17 +1,20 @@
-//! Minimal BIP32 hierarchical deterministic key derivation.
-//! Uses HMAC-SHA512 + k256 scalar arithmetic. No alloc, no_std.
+//! Minimal BIP32/SLIP-0010 hierarchical deterministic key derivation.
+//! BIP32 (secp256k1) uses HMAC-SHA512 + k256 scalar arithmetic.
+//! SLIP-0010 (ed25519) uses HMAC-SHA512 with hardened-only derivation.
 
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
 
 type HmacSha512 = Hmac<Sha512>;
 
-/// A BIP32 extended private key (key + chain code).
+/// A BIP32 extended private key (key + chain code) for secp256k1.
+#[cfg(feature = "secp256k1")]
 pub struct ExtendedKey {
     key: [u8; 32],
     chain_code: [u8; 32],
 }
 
+#[cfg(feature = "secp256k1")]
 impl ExtendedKey {
     /// Derive master key from BIP39 seed using HMAC-SHA512("Bitcoin seed", seed).
     pub fn from_seed(seed: &[u8]) -> Option<Self> {
@@ -98,6 +101,76 @@ impl ExtendedKey {
     }
 }
 
+/// SLIP-0010 master key derivation for ed25519.
+/// Uses "ed25519 seed" as the HMAC key instead of "Bitcoin seed".
+/// All child derivations must be hardened for ed25519.
+pub struct Slip10Key {
+    key: [u8; 32],
+    chain_code: [u8; 32],
+}
+
+impl Slip10Key {
+    pub fn from_seed(seed: &[u8]) -> Option<Self> {
+        let mut mac = HmacSha512::new_from_slice(b"ed25519 seed").ok()?;
+        mac.update(seed);
+        let result = mac.finalize().into_bytes();
+
+        let mut key = [0u8; 32];
+        let mut chain_code = [0u8; 32];
+        key.copy_from_slice(&result[..32]);
+        chain_code.copy_from_slice(&result[32..64]);
+
+        Some(Slip10Key { key, chain_code })
+    }
+
+    /// Derive a hardened child. For ed25519, only hardened derivation is valid.
+    pub fn derive_child(&self, index: u32) -> Option<Self> {
+        let index = index | 0x80000000; // force hardened
+
+        let mut mac = HmacSha512::new_from_slice(&self.chain_code).ok()?;
+        mac.update(&[0x00]);
+        mac.update(&self.key);
+        mac.update(&index.to_be_bytes());
+
+        let result = mac.finalize().into_bytes();
+
+        let mut key = [0u8; 32];
+        let mut chain_code = [0u8; 32];
+        key.copy_from_slice(&result[..32]);
+        chain_code.copy_from_slice(&result[32..64]);
+
+        Some(Slip10Key { key, chain_code })
+    }
+
+    /// Derive following a BIP32 path. All indices are forced hardened.
+    pub fn derive_path(mut self, path: &str) -> Option<Self> {
+        for segment in path.split('/') {
+            match segment {
+                "m" | "" => continue,
+                s => {
+                    let num = s.strip_suffix('\'').unwrap_or(s);
+                    let index: u32 = num.parse().ok()?;
+                    self = self.derive_child(index)?;
+                }
+            }
+        }
+        Some(self)
+    }
+
+    pub fn secret_key(&self) -> &[u8; 32] {
+        &self.key
+    }
+}
+
+impl Drop for Slip10Key {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.key.zeroize();
+        self.chain_code.zeroize();
+    }
+}
+
+#[cfg(feature = "secp256k1")]
 impl Drop for ExtendedKey {
     fn drop(&mut self) {
         use zeroize::Zeroize;
@@ -113,6 +186,7 @@ mod tests {
     use alloc::{format, string::String, vec::Vec};
 
     #[test]
+    #[cfg(feature = "secp256k1")]
     fn bip32_test_vector_1() {
         // BIP32 test vector 1
         // Seed: 000102030405060708090a0b0c0d0e0f
@@ -134,6 +208,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "secp256k1")]
     fn derive_ethereum_default_path() {
         // Seed from "abandon" x11 + "about" mnemonic (well-known test vector)
         let seed = hex_to_bytes(
