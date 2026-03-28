@@ -62,7 +62,8 @@ where
 
     /// Get the account currently set as default
     pub fn default_account(&self) -> Option<&V::Account> {
-        self.default_account.map(|x| &self.accounts[x as usize])
+        self.default_account
+            .and_then(|x| self.accounts.get(x as usize))
     }
 
     /// Use credentials to unlock the vault.
@@ -127,7 +128,7 @@ where
         let mut signatures = ArrayVec::new();
         for (msg, a) in self.pending_sign.take() {
             let signer = match a {
-                Some(idx) => self.account(idx),
+                Some(idx) => self.account(idx)?,
                 None => self.default_account().ok_or(SigningError::NoAccount)?,
             };
 
@@ -142,8 +143,8 @@ where
         self.pending_sign.iter().map(|(msg, _)| msg.as_ref())
     }
 
-    fn account(&self, idx: u8) -> &V::Account {
-        &self.accounts[idx as usize]
+    fn account(&self, idx: u8) -> Result<&V::Account, SigningError> {
+        self.accounts.get(idx as usize).ok_or(SigningError::NoAccount)
     }
 }
 

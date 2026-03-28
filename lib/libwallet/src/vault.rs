@@ -58,7 +58,7 @@ mod utils {
         type Pair = any::Pair;
 
         fn derive(&self, path: &str) -> Self::Pair {
-            log::info!("derive: {}", path);
+            log::debug!("derive: {}", path);
             match path.get(..2) {
                 Some("//") => self.sub.derive(path).into(),
                 _ => self.sub.derive("//default").into(),
@@ -102,13 +102,23 @@ mod utils {
 
     impl AccountSigner {
         pub(crate) fn new<'a>(name: impl Into<Option<&'a str>>) -> Self {
-            let n = name.into().unwrap_or("default");
+            let raw = name.into().unwrap_or("default");
+            // Strip path separators to prevent derivation path injection
+            let mut name_buf: ArrayString<{ MAX_PATH_LEN - 2 }> = ArrayString::new();
+            for ch in raw.chars() {
+                if ch != '/' && !name_buf.is_full() {
+                    name_buf.push(ch);
+                }
+            }
+            if name_buf.is_empty() {
+                let _ = name_buf.try_push_str("default");
+            }
             let mut path = ArrayString::from("//").unwrap();
-            path.push_str(n);
+            path.push_str(&name_buf);
             AccountSigner {
                 pair: None,
                 network: Network::default(),
-                name: ArrayString::from(n).expect("short name"),
+                name: name_buf,
                 path,
             }
         }
@@ -132,7 +142,7 @@ mod utils {
 
         pub(crate) fn unlock(mut self, root: &RootAccount) -> Self {
             if self.is_locked() {
-                log::info!("unlock: {}", self.path);
+                log::debug!("unlock: {}", self.path);
                 self.pair = Some(root.derive(&self.path));
             }
             self
@@ -166,9 +176,8 @@ mod utils {
         {
             use serde::ser::SerializeStruct;
 
-            let mut state = serializer.serialize_struct("Account", 1)?;
+            let mut state = serializer.serialize_struct("Account", 2)?;
             state.serialize_field("network", &self.network)?;
-            state.serialize_field("path", self.path.as_str())?;
             state.serialize_field("name", self.name.as_str())?;
             state.end()
         }

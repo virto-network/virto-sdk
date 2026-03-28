@@ -46,7 +46,8 @@ impl<Id> Pass<Id> {
 
         let secret = match self.store.find(Some(secret_path)) {
             FindSecret::Exact(secret) => Some(secret),
-            FindSecret::Many(secrets) => secrets.first().cloned(),
+            FindSecret::Many(secrets) if secrets.len() == 1 => secrets.into_iter().next(),
+            FindSecret::Many(_) => return Err(Error::AmbiguousMatch),
         };
 
         let secret = secret.ok_or(Error::NotFound)?;
@@ -97,6 +98,7 @@ impl<Id> Pass<Id> {
 pub enum Error {
     Store,
     NotFound,
+    AmbiguousMatch,
     SecretPath,
     Encrypt,
     Decrypt,
@@ -108,6 +110,7 @@ impl core::fmt::Display for Error {
         match self {
             Error::Store => write!(f, "Store load error"),
             Error::NotFound => write!(f, "Secret not found"),
+            Error::AmbiguousMatch => write!(f, "Multiple secrets match, specify a unique name"),
             Error::SecretPath => write!(f, "Could not unwrap the secret path"),
             Error::Encrypt => write!(f, "Could not encrypt the secret"),
             Error::Decrypt => write!(f, "Could not decrypt the secret"),
