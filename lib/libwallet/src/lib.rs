@@ -48,6 +48,7 @@ pub use key_pair::{any, Derive, Pair, Public, Signature, Signer, SigningError};
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{Language, Mnemonic};
 pub mod proxy;
+pub mod transport;
 pub mod vault;
 
 pub use proxy::ProxySigner;

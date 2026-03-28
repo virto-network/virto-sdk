@@ -30,6 +30,10 @@ sha3 = {version = "0.10", default-features = false, optional = true}
 # ed25519/solana
 ed25519-dalek = {version = "2", default-features = false, features = ["zeroize"], optional = true}
 
+# transports (std-only)
+ledger-transport = {version = "0.11", optional = true}
+ledger-apdu = {version = "0.11", optional = true}
+
 # vault os
 keyring = {version = "1.1.2", optional = true}
 # vault pass
@@ -59,6 +63,7 @@ ethereum = ["secp256k1", "dep:sha3", "pbkdf2", "hmac", "sha2"]
 bitcoin = ["secp256k1", "pbkdf2", "hmac", "sha2"]
 solana = ["ed25519", "hmac", "sha2", "pbkdf2"]
 cosmos = ["secp256k1", "hmac", "sha2", "pbkdf2"]
+ledger = ["dep:ledger-transport", "dep:ledger-apdu", "std"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = ["mnemonic", "rand"]
