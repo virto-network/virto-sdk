@@ -142,7 +142,7 @@ fn ui_core(
         // Loading animation: cycle segments 0-7 while not live (~200ms per step)
         if !app.get_live() {
             loading_frame = loading_frame.wrapping_add(1);
-            app.set_loading_step((loading_frame / 20 % 8) as i32);
+            app.set_loading_step((loading_frame / 100 % 8) as i32);
         } else {
             app.set_loading_step(-1);
         }
