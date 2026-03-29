@@ -53,7 +53,7 @@ pub struct System<'a> {
 pub async fn init(spawner: Spawner) -> System<'static> {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
-    esp_alloc::heap_allocator!(size: 163840); // 160KB — leave room for app core stack
+    esp_alloc::heap_allocator!(size: 180224); // 176KB — leave room for app core stack
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 

@@ -164,7 +164,7 @@ pub async fn watch_chain(
     tx.enqueue(UiEvent::Live(true)).ok();
     tx.enqueue(UiEvent::Status(Status::Good(""))).ok();
 
-    let collator_keys = collator_keys();
+    let mut block_count = 0u32;
 
     loop {
         match chain.next_chain_event().await {
@@ -172,23 +172,28 @@ pub async fn watch_chain(
                 if let Ok(header) = chain.header(&hash).await {
                     tx.enqueue(UiEvent::Block(header.number as u32)).ok();
                 }
-                // Query collator last authored blocks
-                if let Ok(items) = chain
-                    .get_storage_at_hash(&hash, collator_keys.clone())
-                    .await
-                {
-                    let mut blocks = [0u32; 6];
-                    for (key, value) in &items {
-                        if let Some(i) = collator_keys.iter().position(|k| k == key) {
-                            if let Some(val) = value {
-                                if val.len() >= 4 {
-                                    blocks[i] =
-                                        u32::from_le_bytes([val[0], val[1], val[2], val[3]]);
+                // Query collator storage every 5th block to reduce heap pressure
+                block_count += 1;
+                if block_count % 5 == 1 {
+                    let keys = collator_keys();
+                    match chain.get_storage_at_hash(&hash, keys.clone()).await {
+                        Ok(items) => {
+                            let mut blocks = [0u32; 6];
+                            for (key, value) in &items {
+                                if let Some(i) = keys.iter().position(|k| k == key) {
+                                    if let Some(val) = value {
+                                        if val.len() >= 4 {
+                                            blocks[i] = u32::from_le_bytes([
+                                                val[0], val[1], val[2], val[3],
+                                            ]);
+                                        }
+                                    }
                                 }
                             }
+                            tx.enqueue(UiEvent::Collators(blocks)).ok();
                         }
+                        Err(e) => log::warn!("storage query: {e}"),
                     }
-                    tx.enqueue(UiEvent::Collators(blocks)).ok();
                 }
             }
             Ok(ChainEvent::Finalized { .. }) => {}
