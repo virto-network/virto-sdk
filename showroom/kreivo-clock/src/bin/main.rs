@@ -127,6 +127,7 @@ fn ui_core(
     let app = MainWindow::new().expect("slint ui");
     let mut line_buf = [Rgb565Pixel(0); DISPLAY_WIDTH];
     let mut screen_on = true;
+    let mut loading_frame = 0u32;
 
     loop {
         if SCREEN_TOGGLE.swap(false, Ordering::Relaxed) {
@@ -136,6 +137,14 @@ fn ui_core(
             } else {
                 backlight.set_low();
             }
+        }
+
+        // Loading animation: cycle segments 0-7 while not live (~200ms per step)
+        if !app.get_live() {
+            loading_frame = loading_frame.wrapping_add(1);
+            app.set_loading_step((loading_frame / 20 % 8) as i32);
+        } else {
+            app.set_loading_step(-1);
         }
 
         while let Some(event) = rx.dequeue() {

@@ -12,25 +12,23 @@ component LogoLayer inherits Image {
     source-clip-x: on ? (index + 8) * 80 : index * 80;
 }
 
-component KreivoLogo inherits Rectangle {
-    in property <bool> p0: false;
-    in property <bool> p1: false;
-    in property <bool> p2: false;
-    in property <bool> p3: false;
-    in property <bool> p4: false;
-    in property <bool> p5: false;
-    in property <bool> p6: false;
-    in property <bool> p7: false;
+export component KreivoLogo inherits Rectangle {
+    in property <bool> live: false;
+    /// Set to 0-7 to light up one segment at a time, or -1 for no loading highlight.
+    in property <int> loading-step: -1;
+
+    property <bool> loading: !live && loading-step >= 0;
+
     width: 80px;
     height: 70px;
-    LogoLayer { index: 0; on: p0; }
-    LogoLayer { index: 1; on: p1; }
-    LogoLayer { index: 2; on: p2; }
-    LogoLayer { index: 3; on: p3; }
-    LogoLayer { index: 4; on: p4; }
-    LogoLayer { index: 5; on: p5; }
-    LogoLayer { index: 6; on: p6; }
-    LogoLayer { index: 7; on: p7; }
+    LogoLayer { index: 0; on: live || (loading && loading-step == 0); }
+    LogoLayer { index: 1; on: live || (loading && loading-step == 1); }
+    LogoLayer { index: 2; on: live || (loading && loading-step == 2); }
+    LogoLayer { index: 3; on: live || (loading && loading-step == 3); }
+    LogoLayer { index: 4; on: live || (loading && loading-step == 4); }
+    LogoLayer { index: 5; on: live || (loading && loading-step == 5); }
+    LogoLayer { index: 6; on: live || (loading && loading-step == 6); }
+    LogoLayer { index: 7; on: live || (loading && loading-step == 7); }
 }
 
 component CollatorBox inherits Rectangle {
@@ -65,6 +63,7 @@ export component MainWindow inherits Window {
     in property <bool> live: false;
     in property <bool> wifi: false;
     in property <int> battery-level: -1;
+    in property <int> loading-step: -1;
     in property <string> c0; in property <bool> c0-active;
     in property <string> c1; in property <bool> c1-active;
     in property <string> c2; in property <bool> c2-active;
@@ -115,8 +114,8 @@ export component MainWindow inherits Window {
         alignment: center;
         padding-top: 30px;
         KreivoLogo {
-            p0: live; p1: live; p2: live; p3: live;
-            p4: live; p5: live; p6: live; p7: live;
+            live: root.live;
+            loading-step: root.loading-step;
         }
     }
 
