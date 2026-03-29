@@ -147,12 +147,19 @@ fn ui_core(
                     app.set_block_text(format_block(n).into());
                 }
                 UiEvent::Collators(blocks) => {
-                    app.set_c0(blocks[0] as i32);
-                    app.set_c1(blocks[1] as i32);
-                    app.set_c2(blocks[2] as i32);
-                    app.set_c3(blocks[3] as i32);
-                    app.set_c4(blocks[4] as i32);
-                    app.set_c5(blocks[5] as i32);
+                    let current = app.get_block_number() as u32;
+                    let fmt = |b: u32| -> slint::SharedString {
+                        if b > 0 { format_block(b).into() } else { "".into() }
+                    };
+                    let active = |b: u32| -> bool {
+                        b > 0 && current.saturating_sub(b) < 100
+                    };
+                    app.set_c0(fmt(blocks[0])); app.set_c0_active(active(blocks[0]));
+                    app.set_c1(fmt(blocks[1])); app.set_c1_active(active(blocks[1]));
+                    app.set_c2(fmt(blocks[2])); app.set_c2_active(active(blocks[2]));
+                    app.set_c3(fmt(blocks[3])); app.set_c3_active(active(blocks[3]));
+                    app.set_c4(fmt(blocks[4])); app.set_c4_active(active(blocks[4]));
+                    app.set_c5(fmt(blocks[5])); app.set_c5_active(active(blocks[5]));
                 }
                 UiEvent::Status(s) => {
                     let (msg, color) = match s {

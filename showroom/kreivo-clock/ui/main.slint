@@ -23,7 +23,6 @@ component KreivoLogo inherits Rectangle {
     in property <bool> p7: false;
     width: 80px;
     height: 70px;
-    // Stack all 8 path layers
     LogoLayer { index: 0; on: p0; }
     LogoLayer { index: 1; on: p1; }
     LogoLayer { index: 2; on: p2; }
@@ -35,10 +34,8 @@ component KreivoLogo inherits Rectangle {
 }
 
 component CollatorBox inherits Rectangle {
-    in property <int> block: 0;
-    in property <int> current: 0;
-    property <int> ago: current - block;
-    property <bool> active: block > 0 && ago < 100;
+    in property <string> text: "";
+    in property <bool> active: false;
 
     width: 66px;
     height: 24px;
@@ -49,9 +46,9 @@ component CollatorBox inherits Rectangle {
         alignment: center;
         padding-top: 5px;
         Text {
-            text: block > 0 ? "\{block}" : "—";
+            text: root.text != "" ? root.text : "—";
             color: active ? #b5f1b1 : #444;
-            font-size: 9px;
+            font-size: 10px;
         }
     }
 }
@@ -68,22 +65,21 @@ export component MainWindow inherits Window {
     in property <bool> live: false;
     in property <bool> wifi: false;
     in property <int> battery-level: -1;
-    in property <int> c0: 0;
-    in property <int> c1: 0;
-    in property <int> c2: 0;
-    in property <int> c3: 0;
-    in property <int> c4: 0;
-    in property <int> c5: 0;
+    in property <string> c0; in property <bool> c0-active;
+    in property <string> c1; in property <bool> c1-active;
+    in property <string> c2; in property <bool> c2-active;
+    in property <string> c3; in property <bool> c3-active;
+    in property <string> c4; in property <bool> c4-active;
+    in property <string> c5; in property <bool> c5-active;
 
     property <color> grey: #3a3a3a;
-    property <color> accent: #00a9e0;
 
     // --- Status bar ---
     Rectangle {
         y: 8px; height: 14px; width: 240px;
         HorizontalLayout {
             padding-left: 16px;
-            padding-right: 16px;
+            padding-right: 12px;
             alignment: space-between;
             HorizontalLayout {
                 spacing: 4px;
@@ -100,28 +96,15 @@ export component MainWindow inherits Window {
             }
             HorizontalLayout {
                 spacing: 4px;
-                Rectangle {
-                    width: 6px; height: 6px; y: 4px;
-                    border-radius: 3px;
-                    background: live ? accent : grey;
-                }
-                Text {
-                    text: "chain";
-                    color: live ? #555 : #333;
-                    font-size: 9px;
-                }
-            }
-            HorizontalLayout {
-                spacing: 4px;
-                Rectangle {
-                    width: 6px; height: 6px; y: 4px;
-                    border-radius: 3px;
-                    background: battery-level > 20 ? #32cd32 : battery-level >= 0 ? #ff4500 : grey;
-                }
                 Text {
                     text: battery-level >= 0 ? "\{battery-level}%" : "—";
                     color: battery-level > 20 ? #555 : battery-level >= 0 ? #ff4500 : #333;
                     font-size: 9px;
+                }
+                Rectangle {
+                    width: 6px; height: 6px; y: 4px;
+                    border-radius: 3px;
+                    background: battery-level > 20 ? #32cd32 : battery-level >= 0 ? #ff4500 : grey;
                 }
             }
         }
@@ -132,7 +115,6 @@ export component MainWindow inherits Window {
         alignment: center;
         padding-top: 30px;
         KreivoLogo {
-            // All paths light up when live
             p0: live; p1: live; p2: live; p3: live;
             p4: live; p5: live; p6: live; p7: live;
         }
@@ -145,28 +127,28 @@ export component MainWindow inherits Window {
         Text {
             text: block-text;
             color: #fff;
-            font-size: 30px;
+            font-size: 36px;
             font-weight: 700;
         }
     }
 
     // --- Collator grid (3×2) ---
     if block-number > 0: VerticalLayout {
-        padding-top: 152px;
+        padding-top: 178px;
         spacing: 4px;
         HorizontalLayout {
             alignment: center;
             spacing: 4px;
-            CollatorBox { block: c0; current: block-number; }
-            CollatorBox { block: c1; current: block-number; }
-            CollatorBox { block: c2; current: block-number; }
+            CollatorBox { text: c0; active: c0-active; }
+            CollatorBox { text: c1; active: c1-active; }
+            CollatorBox { text: c2; active: c2-active; }
         }
         HorizontalLayout {
             alignment: center;
             spacing: 4px;
-            CollatorBox { block: c3; current: block-number; }
-            CollatorBox { block: c4; current: block-number; }
-            CollatorBox { block: c5; current: block-number; }
+            CollatorBox { text: c3; active: c3-active; }
+            CollatorBox { text: c4; active: c4-active; }
+            CollatorBox { text: c5; active: c5-active; }
         }
     }
 
