@@ -1,15 +1,31 @@
-//! Network connectivity: WiFi, TLS, WebSocket, chain subscription.
+//! Kreivo Clock — live blockchain data on your wrist
 //!
-//! All functions push [`UiEvent`]s to a lock-free queue consumed by the UI core.
+//! Showcases sube's ChainHead RPC subscription over TLS+WebSocket on an
+//! ESP32-S3 (T-Watch S3). Device setup lives in the library crate.
+//!
+//! Flash: espflash flash -p /dev/ttyACM0 -M target/xtensa-esp32s3-none-elf/release/kreivo-clock
+
+#![no_std]
+#![no_main]
+
+extern crate alloc;
+extern crate tinyrlibc;
 
 use alloc::vec;
 use alloc::vec::Vec;
+
+use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
-use embassy_time::{Duration, Timer};
+use embassy_time::Duration;
+use esp_backtrace as _;
 use heapless::spsc::Producer;
 use sube::rpc::chainhead::{ChainEvent, ChainHead};
 
-use crate::event::{Status, UiEvent};
+use kreivo_clock::device::event::{Status, UiEvent};
+
+esp_bootloader_esp_idf::esp_app_desc!();
+
+// ── Collator storage keys ──────────────────────────────────────────────
 
 // Twox128("CollatorSelection") ++ Twox128("LastAuthoredBlock")
 const KEY_PREFIX: [u8; 32] = [
@@ -65,48 +81,29 @@ fn collator_keys() -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Connect WiFi with retry loop.
-pub async fn wifi_connect(
-    controller: &mut esp_radio::wifi::WifiController<'static>,
-    tx: &mut Producer<'static, UiEvent, 16>,
-) {
-    tx.enqueue(UiEvent::Status(Status::Dim("connecting wifi...")))
-        .ok();
+// ── Entry point ────────────────────────────────────────────────────────
+
+#[esp_rtos::main]
+async fn main(spawner: Spawner) -> ! {
+    let mut rt = kreivo_clock::start(spawner).await;
+
     loop {
-        match controller.connect_async().await {
-            Ok(()) => break,
-            Err(e) => {
-                log::warn!("WiFi: {:?}, retry in 5s", e);
-                tx.enqueue(UiEvent::Status(Status::Error("wifi retry...")))
-                    .ok();
-                Timer::after(Duration::from_secs(5)).await;
-            }
+        rt.connect().await;
+
+        if let Err(e) = watch_chain(rt.stack, &mut rt.events).await {
+            log::error!("{e}");
+            rt.report_disconnected().await;
         }
+
+        rt.disconnect().await;
     }
-    log::info!("WiFi: connected");
-    tx.enqueue(UiEvent::Wifi(true)).ok();
 }
 
-/// Wait for DHCP to assign an IP address.
-pub async fn wait_for_ip(
-    stack: embassy_net::Stack<'static>,
-    tx: &mut Producer<'static, UiEvent, 16>,
-) {
-    tx.enqueue(UiEvent::Status(Status::Dim("getting IP...")))
-        .ok();
-    loop {
-        if stack.is_config_up() {
-            break;
-        }
-        Timer::after(Duration::from_millis(200)).await;
-    }
-    log::info!("IP: {:?}", stack.config_v4().map(|c| c.address));
-    tx.enqueue(UiEvent::Status(Status::Good("wifi ok"))).ok();
-}
+// ── sube: chain watcher ────────────────────────────────────────────────
 
 /// Connect to kreivo.io and stream block events to the UI.
 /// Returns on disconnect so the caller can retry.
-pub async fn watch_chain(
+async fn watch_chain(
     stack: embassy_net::Stack<'static>,
     tx: &mut Producer<'static, UiEvent, 16>,
 ) -> Result<(), &'static str> {

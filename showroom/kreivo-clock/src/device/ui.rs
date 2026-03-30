@@ -8,7 +8,7 @@ use slint::platform::software_renderer::{
     LineBufferProvider, MinimalSoftwareWindow, Rgb565Pixel, RepaintBufferType,
 };
 
-use crate::board::{Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use super::board::{Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 
 /// Line buffer provider that pushes rendered lines to the ST7789 display.
 pub struct DisplayBuffer<'a> {

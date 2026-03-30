@@ -16,7 +16,7 @@ use mipidsi::interface::SpiInterface;
 use mipidsi::options::{ColorInversion, Orientation};
 use static_cell::StaticCell;
 
-use crate::pmu::Pmu;
+use super::pmu::Pmu;
 
 pub const DISPLAY_WIDTH: usize = 240;
 pub const DISPLAY_HEIGHT: usize = 240;
