@@ -29,7 +29,7 @@ impl<K> Bitcoin<K> {
 
 impl<K: crate::substrate_ext::KeyStore> Vault for Bitcoin<K> {
     type Credentials = ();
-    type Error = K::Error;
+    type Error = crate::vault::VaultError<K::Error>;
     type Id = Option<&'static str>;
     type Signer = DerivedSigner;
 
@@ -38,16 +38,17 @@ impl<K: crate::substrate_ext::KeyStore> Vault for Bitcoin<K> {
         path: Self::Id,
         _creds: impl Into<Self::Credentials>,
     ) -> Result<Self::Signer, Self::Error> {
-        let entropy = self.keys.unlock()?;
+        use crate::vault::VaultError;
+        let entropy = self.keys.unlock().map_err(VaultError::KeyStore)?;
         let seed = crate::substrate_ext::substrate_seed(entropy, "");
 
         let path = path.unwrap_or(DEFAULT_PATH);
         let derived = ExtendedKey::from_seed(&*seed)
             .and_then(|master| master.derive_path(path))
-            .expect("valid BIP32 derivation");
+            .ok_or(VaultError::Derivation)?;
 
         let pair = <crate::key_pair::secp256k1::Pair as crate::Pair>::from_bytes(derived.secret_key())
-            .expect("valid secp256k1 key");
+            .ok_or(VaultError::Derivation)?;
 
         Ok(DerivedSigner::new(pair.into(), path))
     }

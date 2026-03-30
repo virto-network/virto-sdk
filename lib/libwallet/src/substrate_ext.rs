@@ -78,7 +78,7 @@ impl<S, const N: usize> KeyStore for crate::vault::Simple<S, N> {
 
 impl<K: KeyStore> Vault for Substrate<K> {
     type Credentials = ();
-    type Error = K::Error;
+    type Error = crate::vault::VaultError<K::Error>;
     type Id = Option<&'static str>;
     type Signer = DerivedSigner;
 
@@ -87,9 +87,10 @@ impl<K: KeyStore> Vault for Substrate<K> {
         path: Self::Id,
         _creds: impl Into<Self::Credentials>,
     ) -> Result<Self::Signer, Self::Error> {
-        let entropy = self.keys.unlock()?;
+        use crate::vault::VaultError;
+        let entropy = self.keys.unlock().map_err(VaultError::KeyStore)?;
         let seed = substrate_seed(entropy, "");
-        let root = RootAccount::from_bytes(&*seed).expect("valid seed");
+        let root = RootAccount::from_bytes(&*seed).ok_or(VaultError::Derivation)?;
         let path = path.unwrap_or("//default");
         let pair = root.derive(path);
         Ok(DerivedSigner::new(pair, path))

@@ -25,25 +25,25 @@ impl<S, const N: usize> Simple<S, N> {
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
-    pub fn generate_with_phrase<R>(rng: &mut R) -> (Self, mnemonic::Mnemonic)
+    pub fn generate_with_phrase<R>(rng: &mut R) -> Result<(Self, mnemonic::Mnemonic), Error>
     where
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
         let phrase = crate::util::gen_phrase(rng, Default::default());
-        (Self::from_phrase(&phrase), phrase)
+        Ok((Self::from_phrase(&phrase)?, phrase))
     }
 
     #[cfg(feature = "mnemonic")]
-    pub fn from_phrase(phrase: impl AsRef<str>) -> Self {
-        mnemonic::Mnemonic::validate(phrase.as_ref()).expect("its a valid mnemonic");
-        let mnemonic = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).expect("its a valid mnemonic");
+    pub fn from_phrase(phrase: impl AsRef<str>) -> Result<Self, Error> {
+        mnemonic::Mnemonic::validate(phrase.as_ref()).map_err(|_| Error)?;
+        let mnemonic = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).map_err(|_| Error)?;
         let raw_entropy = mnemonic.entropy();
 
-        Simple {
-            locked: Some(raw_entropy.try_into().expect("its a valid entropy")),
+        Ok(Simple {
+            locked: Some(raw_entropy.try_into().map_err(|_| Error)?),
             unlocked: None,
             _phantom: Default::default(),
-        }
+        })
     }
 
     /// Unlock the key store, making the raw entropy available.

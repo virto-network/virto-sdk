@@ -15,6 +15,24 @@ pub use os::OSKeyring;
 #[cfg(feature = "vault_pass")]
 pub use pass::Pass;
 
+/// Errors that can occur during vault operations.
+#[derive(Debug)]
+pub enum VaultError<E> {
+    /// The underlying key store returned an error.
+    KeyStore(E),
+    /// Key derivation failed (invalid path or invalid key material).
+    Derivation,
+}
+
+impl<E: core::fmt::Display> core::fmt::Display for VaultError<E> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            VaultError::KeyStore(e) => write!(f, "key store error: {}", e),
+            VaultError::Derivation => write!(f, "key derivation failed"),
+        }
+    }
+}
+
 /// A vault produces signers from stored key material.
 pub trait Vault {
     type Credentials;
@@ -40,6 +58,13 @@ pub mod utils {
     impl core::fmt::Debug for RootAccount {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             f.debug_struct("RootAccount").field("key", &"<redacted>").finish()
+        }
+    }
+
+    impl Drop for RootAccount {
+        fn drop(&mut self) {
+            use zeroize::Zeroize;
+            self.sub.zeroize();
         }
     }
 

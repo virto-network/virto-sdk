@@ -13,6 +13,8 @@ pub fn gen_phrase<R>(rng: &mut R, lang: mnemonic::Language) -> mnemonic::Mnemoni
 where
     R: rand_core::CryptoRng + rand_core::RngCore,
 {
-    let seed = random_bytes::<_, 32>(rng);
-    mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid")
+    let mut seed = random_bytes::<_, 32>(rng);
+    let phrase = mnemonic::Mnemonic::from_entropy_in(lang, seed.as_ref()).expect("seed valid");
+    zeroize::Zeroize::zeroize(&mut seed);
+    phrase
 }

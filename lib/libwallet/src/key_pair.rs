@@ -75,9 +75,9 @@ pub mod any {
                 #[cfg(feature = "sr25519")]
                 Pair::Sr25519(ref mut kp) => kp.zeroize(),
                 #[cfg(feature = "secp256k1")]
-                Pair::Secp256k1(_) => {},
+                Pair::Secp256k1(ref mut kp) => kp.zeroize(),
                 #[cfg(feature = "ed25519")]
-                Pair::Ed25519(_) => {},
+                Pair::Ed25519(ref mut kp) => kp.zeroize(),
             }
         }
     }
@@ -419,6 +419,7 @@ pub mod sr25519 {
 #[cfg(feature = "ed25519")]
 pub mod ed25519 {
     use super::{Bytes, Signer};
+    use zeroize::Zeroize;
 
     pub const SEED_LEN: usize = 32;
     pub const SIG_LEN: usize = 64;
@@ -474,9 +475,18 @@ pub mod ed25519 {
         }
     }
 
+    impl zeroize::Zeroize for Pair {
+        fn zeroize(&mut self) {
+            // Overwrite the signing key bytes. ed25519-dalek also zeroizes
+            // on its own Drop, but we do it explicitly for defense-in-depth.
+            let zero_key = ed25519_dalek::SigningKey::from_bytes(&[0u8; 32]);
+            self.secret = zero_key;
+        }
+    }
+
     impl Drop for Pair {
         fn drop(&mut self) {
-            // ed25519-dalek zeroizes on drop via the zeroize feature
+            self.zeroize();
         }
     }
 
@@ -491,6 +501,7 @@ pub mod ed25519 {
 pub mod secp256k1 {
     use super::{Bytes, Signer};
     use k256::ecdsa::{self, signature::Verifier};
+    use zeroize::Zeroize;
 
     pub const SEED_LEN: usize = 32;
     pub const SIG_LEN: usize = 65; // r(32) + s(32) + recovery_id(1)
@@ -559,9 +570,19 @@ pub mod secp256k1 {
         }
     }
 
+    impl zeroize::Zeroize for Pair {
+        fn zeroize(&mut self) {
+            // Overwrite with a known valid key. k256::SigningKey also zeroizes
+            // on its own Drop, but we do it explicitly for defense-in-depth.
+            if let Ok(zero) = ecdsa::SigningKey::from_slice(&[1u8; 32]) {
+                self.secret = zero;
+            }
+        }
+    }
+
     impl Drop for Pair {
         fn drop(&mut self) {
-            // k256::SigningKey zeroizes on drop internally
+            self.zeroize();
         }
     }
 

@@ -37,15 +37,19 @@ pub struct APDUCommand<'a> {
 
 impl APDUCommand<'_> {
     /// Serialize the command into wire format.
-    pub fn serialize(&self, buf: &mut [u8]) -> usize {
+    /// Returns `None` if `data` exceeds 255 bytes or `buf` is too small.
+    pub fn serialize(&self, buf: &mut [u8]) -> Option<usize> {
+        let len = self.data.len();
+        if len > 255 || buf.len() < 5 + len {
+            return None;
+        }
         buf[0] = self.cla;
         buf[1] = self.ins;
         buf[2] = self.p1;
         buf[3] = self.p2;
-        buf[4] = self.data.len() as u8;
-        let len = self.data.len();
+        buf[4] = len as u8;
         buf[5..5 + len].copy_from_slice(self.data);
-        5 + len
+        Some(5 + len)
     }
 }
 
@@ -176,12 +180,16 @@ impl<T: Transport> Signer for LedgerSigner<T> {
         let msg = data.as_ref();
 
         // Build payload: [num_components, path_bytes..., message...]
+        let path_end = 1 + self.path_len as usize;
+        let msg_end = path_end + msg.len();
+        // APDU data field is limited to 255 bytes
+        if msg_end > 255 {
+            return Err(SigningError::Locked);
+        }
         let mut payload = [0u8; MAX_APDU_LEN];
         payload[0] = self.path_len / 4;
-        let path_end = 1 + self.path_len as usize;
         payload[1..path_end].copy_from_slice(&self.path_bytes[..self.path_len as usize]);
-        let msg_end = (path_end + msg.len()).min(MAX_APDU_LEN);
-        payload[path_end..msg_end].copy_from_slice(&msg[..msg_end - path_end]);
+        payload[path_end..msg_end].copy_from_slice(msg);
 
         let (response, data_len) = self.apdu(0xE0, 0x04, 0x00, 0x00, &payload[..msg_end]).await
             .map_err(|_| SigningError::Locked)?;
@@ -252,7 +260,7 @@ mod tests {
         ) -> Result<usize, Self::Error> {
             // Capture the serialized command
             let mut cmd_buf = [0u8; MAX_APDU_LEN];
-            let cmd_len = command.serialize(&mut cmd_buf);
+            let cmd_len = command.serialize(&mut cmd_buf).unwrap_or(0);
             *self.last_command.borrow_mut() = Some((cmd_buf, cmd_len));
 
             let mut responses = self.responses.borrow_mut();

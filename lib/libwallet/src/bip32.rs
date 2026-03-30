@@ -4,6 +4,7 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
+use zeroize::Zeroize;
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -20,15 +21,20 @@ impl ExtendedKey {
     pub fn from_seed(seed: &[u8]) -> Option<Self> {
         let mut mac = HmacSha512::new_from_slice(b"Bitcoin seed").ok()?;
         mac.update(seed);
-        let result = mac.finalize().into_bytes();
+        let mut result = mac.finalize().into_bytes();
 
         let mut key = [0u8; 32];
         let mut chain_code = [0u8; 32];
         key.copy_from_slice(&result[..32]);
         chain_code.copy_from_slice(&result[32..64]);
+        result.zeroize();
 
         // Validate key is valid (non-zero, < curve order)
-        let _ = k256::ecdsa::SigningKey::from_slice(&key).ok()?;
+        if k256::ecdsa::SigningKey::from_slice(&key).is_err() {
+            key.zeroize();
+            chain_code.zeroize();
+            return None;
+        }
 
         Some(ExtendedKey { key, chain_code })
     }
@@ -41,31 +47,31 @@ impl ExtendedKey {
         let mut mac = HmacSha512::new_from_slice(&self.chain_code).ok()?;
 
         if is_hardened {
-            // Data = 0x00 || key || index_be
             mac.update(&[0x00]);
             mac.update(&self.key);
         } else {
-            // Data = compressed_pubkey || index_be
             let signing_key = k256::ecdsa::SigningKey::from_slice(&self.key).ok()?;
             let pubkey = signing_key.verifying_key().to_encoded_point(true);
             mac.update(pubkey.as_bytes());
         }
         mac.update(&index.to_be_bytes());
 
-        let result = mac.finalize().into_bytes();
+        let mut result = mac.finalize().into_bytes();
 
         let mut il = [0u8; 32];
         let mut chain_code = [0u8; 32];
         il.copy_from_slice(&result[..32]);
         chain_code.copy_from_slice(&result[32..64]);
+        result.zeroize();
 
-        // child_key = (parse256(IL) + parent_key) mod n
         use k256::elliptic_curve::ops::Reduce;
         let tweak = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&il.into());
         let parent = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&self.key.into());
+        il.zeroize();
         let child = tweak + parent;
 
         if child.is_zero().into() {
+            chain_code.zeroize();
             return None;
         }
 
@@ -113,12 +119,13 @@ impl Slip10Key {
     pub fn from_seed(seed: &[u8]) -> Option<Self> {
         let mut mac = HmacSha512::new_from_slice(b"ed25519 seed").ok()?;
         mac.update(seed);
-        let result = mac.finalize().into_bytes();
+        let mut result = mac.finalize().into_bytes();
 
         let mut key = [0u8; 32];
         let mut chain_code = [0u8; 32];
         key.copy_from_slice(&result[..32]);
         chain_code.copy_from_slice(&result[32..64]);
+        result.zeroize();
 
         Some(Slip10Key { key, chain_code })
     }
@@ -132,12 +139,13 @@ impl Slip10Key {
         mac.update(&self.key);
         mac.update(&index.to_be_bytes());
 
-        let result = mac.finalize().into_bytes();
+        let mut result = mac.finalize().into_bytes();
 
         let mut key = [0u8; 32];
         let mut chain_code = [0u8; 32];
         key.copy_from_slice(&result[..32]);
         chain_code.copy_from_slice(&result[32..64]);
+        result.zeroize();
 
         Some(Slip10Key { key, chain_code })
     }

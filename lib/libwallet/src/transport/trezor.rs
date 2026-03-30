@@ -172,12 +172,13 @@ impl<T: TrezorTransport> TrezorSigner<T> {
 
         let msg_type = u16::from_be_bytes([chunk[3], chunk[4]]);
         let msg_len = u32::from_be_bytes([chunk[5], chunk[6], chunk[7], chunk[8]]) as usize;
-        let total = msg_len.min(buf.len());
+        // Cap to buffer size AND a reasonable upper bound
+        let total = msg_len.min(buf.len()).min(MAX_MSG_LEN);
 
         let first_data = total.min(CHUNK_SIZE - 9);
         buf[..first_data].copy_from_slice(&chunk[9..9 + first_data]);
 
-        // Read continuation chunks
+        // Read continuation chunks (bounded by total which is capped)
         let mut offset = first_data;
         while offset < total {
             self.transport.read_chunk(&mut chunk).await.map_err(|_| TrezorError::Transport)?;
@@ -193,20 +194,21 @@ impl<T: TrezorTransport> TrezorSigner<T> {
     }
 
     /// Sign a message, handling ButtonRequest/Ack flow.
+    /// Allows at most `MAX_BUTTON_ROUNDS` button confirmations to prevent infinite loops.
     async fn sign_raw(&self, msg_type: u16, payload: &[u8]) -> Result<([u8; MAX_SIG_LEN], u8), TrezorError> {
+        const MAX_BUTTON_ROUNDS: usize = 8;
+
         self.send(msg_type, payload).await?;
 
         let mut buf = [0u8; MAX_MSG_LEN];
-        loop {
+        for _ in 0..MAX_BUTTON_ROUNDS {
             let (resp_type, resp_len) = self.recv(&mut buf).await?;
 
             match resp_type {
                 MSG_BUTTON_REQUEST => {
-                    // User needs to confirm on device — send ButtonAck
                     self.send(MSG_BUTTON_ACK, &[]).await?;
                 }
                 MSG_MESSAGE_SIGNATURE | MSG_ETH_MESSAGE_SIGNATURE => {
-                    // Parse signature from protobuf response
                     let sig = parse_signature(&buf[..resp_len])?;
                     return Ok(sig);
                 }
@@ -216,6 +218,7 @@ impl<T: TrezorTransport> TrezorSigner<T> {
                 _ => return Err(TrezorError::BadResponse),
             }
         }
+        Err(TrezorError::BadResponse)
     }
 }
 
@@ -234,17 +237,19 @@ fn encode_varint(mut value: u64, buf: &mut [u8]) -> usize {
     }
 }
 
-fn decode_varint(buf: &[u8]) -> (u64, usize) {
+fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
     let mut value: u64 = 0;
-    let mut shift = 0;
-    for (i, &byte) in buf.iter().enumerate() {
-        value |= ((byte & 0x7F) as u64) << shift;
+    let mut shift = 0u32;
+    // A u64 varint is at most 10 bytes (ceil(64/7))
+    let limit = buf.len().min(10);
+    for (i, &byte) in buf[..limit].iter().enumerate() {
+        value |= ((byte & 0x7F) as u64).checked_shl(shift)?;
         if byte & 0x80 == 0 {
-            return (value, i + 1);
+            return Some((value, i + 1));
         }
         shift += 7;
     }
-    (value, buf.len())
+    None // unterminated or overlong varint
 }
 
 /// Encode a SignMessage protobuf payload.
@@ -276,7 +281,7 @@ fn encode_sign_message(path: &[u32], message: &[u8], buf: &mut [u8]) -> usize {
 fn parse_signature(buf: &[u8]) -> Result<([u8; MAX_SIG_LEN], u8), TrezorError> {
     let mut pos = 0;
     while pos < buf.len() {
-        let (tag, tag_len) = decode_varint(&buf[pos..]);
+        let (tag, tag_len) = decode_varint(&buf[pos..]).ok_or(TrezorError::BadResponse)?;
         pos += tag_len;
         let field_number = tag >> 3;
         let wire_type = tag & 0x07;
@@ -284,12 +289,15 @@ fn parse_signature(buf: &[u8]) -> Result<([u8; MAX_SIG_LEN], u8), TrezorError> {
         match wire_type {
             2 => {
                 // Length-delimited
-                let (len, len_len) = decode_varint(&buf[pos..]);
+                let (len, len_len) = decode_varint(&buf[pos..]).ok_or(TrezorError::BadResponse)?;
                 pos += len_len;
                 let len = len as usize;
 
+                if pos + len > buf.len() {
+                    return Err(TrezorError::BadResponse);
+                }
+
                 if field_number == 2 && len <= MAX_SIG_LEN {
-                    // This is the signature field
                     let mut sig = [0u8; MAX_SIG_LEN];
                     sig[..len].copy_from_slice(&buf[pos..pos + len]);
                     return Ok((sig, len as u8));
@@ -298,7 +306,7 @@ fn parse_signature(buf: &[u8]) -> Result<([u8; MAX_SIG_LEN], u8), TrezorError> {
             }
             0 => {
                 // Varint — skip
-                let (_, vlen) = decode_varint(&buf[pos..]);
+                let (_, vlen) = decode_varint(&buf[pos..]).ok_or(TrezorError::BadResponse)?;
                 pos += vlen;
             }
             _ => return Err(TrezorError::BadResponse),
