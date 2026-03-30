@@ -5,3 +5,6 @@
 
 #[cfg(feature = "ledger")]
 pub mod ledger;
+
+#[cfg(feature = "trezor")]
+pub mod trezor;
