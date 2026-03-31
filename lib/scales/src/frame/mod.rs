@@ -9,6 +9,10 @@
 pub mod cursor;
 pub mod extrinsic;
 pub mod metadata;
+#[cfg(feature = "async")]
+pub mod stream_cursor;
+#[cfg(feature = "async")]
+pub mod streaming_metadata;
 
 #[cfg(feature = "compress")]
 pub mod compress;

@@ -11,7 +11,10 @@ fn main() -> sube::Result<()> {
         // One-liner: connect, query and get the result in a single expression
         let response = sube::sube(&format!("wss://kreivo.io/system/account/{addr}")).await?;
         if let Some(json) = response.to_json()? {
-            println!("Account (one-liner): {}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "Account (one-liner): {}",
+                serde_json::to_string_pretty(&json).unwrap()
+            );
         }
 
         // Reusable handle: connect once, query many times

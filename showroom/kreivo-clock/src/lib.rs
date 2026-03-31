@@ -40,11 +40,12 @@ impl Runtime {
         self.events
             .enqueue(UiEvent::Status(Status::Dim("connecting wifi...")))
             .ok();
+        log::info!("WiFi: starting connection...");
         loop {
             match self.wifi.connect_async().await {
                 Ok(()) => break,
                 Err(e) => {
-                    log::warn!("WiFi: {:?}, retry in 5s", e);
+                    log::warn!("WiFi connect failed: {:?}, retry in 5s", e);
                     self.events
                         .enqueue(UiEvent::Status(Status::Error("wifi retry...")))
                         .ok();
@@ -52,19 +53,25 @@ impl Runtime {
                 }
             }
         }
-        log::info!("WiFi: connected");
+        log::info!("WiFi: associated with AP");
         self.events.enqueue(UiEvent::Wifi(true)).ok();
 
         self.events
             .enqueue(UiEvent::Status(Status::Dim("getting IP...")))
             .ok();
+        let mut ip_wait = 0u32;
         loop {
             if self.stack.is_config_up() {
                 break;
             }
+            ip_wait += 1;
+            if ip_wait % 25 == 0 {
+                log::warn!("DHCP: still waiting after {}s", ip_wait / 5);
+            }
             Timer::after(Duration::from_millis(200)).await;
         }
-        log::info!("IP: {:?}", self.stack.config_v4().map(|c| c.address));
+        let ip = self.stack.config_v4().map(|c| c.address);
+        log::info!("IP acquired: {:?}", ip);
         self.events
             .enqueue(UiEvent::Status(Status::Good("wifi ok")))
             .ok();
@@ -72,12 +79,15 @@ impl Runtime {
 
     /// Tear down WiFi after a chain disconnect.
     pub async fn disconnect(&mut self) {
+        log::info!("WiFi: disconnecting...");
         let _ = self.wifi.disconnect_async().await;
+        log::info!("WiFi: disconnected, waiting 1s before reconnect");
         Timer::after(Duration::from_secs(1)).await;
     }
 
     /// Report a chain error to the UI and pause before reconnecting.
     pub async fn report_disconnected(&mut self) {
+        log::warn!("chain disconnected, will reconnect in 3s");
         self.events.enqueue(UiEvent::Live(false)).ok();
         self.events.enqueue(UiEvent::Wifi(false)).ok();
         self.events
@@ -194,17 +204,25 @@ fn ui_core(
                 UiEvent::Collators(blocks) => {
                     let current = app.get_block_number() as u32;
                     let fmt = |b: u32| -> slint::SharedString {
-                        if b > 0 { format_block(b).into() } else { "".into() }
+                        if b > 0 {
+                            format_block(b).into()
+                        } else {
+                            "".into()
+                        }
                     };
-                    let active = |b: u32| -> bool {
-                        b > 0 && current.saturating_sub(b) < 100
-                    };
-                    app.set_c0(fmt(blocks[0])); app.set_c0_active(active(blocks[0]));
-                    app.set_c1(fmt(blocks[1])); app.set_c1_active(active(blocks[1]));
-                    app.set_c2(fmt(blocks[2])); app.set_c2_active(active(blocks[2]));
-                    app.set_c3(fmt(blocks[3])); app.set_c3_active(active(blocks[3]));
-                    app.set_c4(fmt(blocks[4])); app.set_c4_active(active(blocks[4]));
-                    app.set_c5(fmt(blocks[5])); app.set_c5_active(active(blocks[5]));
+                    let active = |b: u32| -> bool { b > 0 && current.saturating_sub(b) < 100 };
+                    app.set_c0(fmt(blocks[0]));
+                    app.set_c0_active(active(blocks[0]));
+                    app.set_c1(fmt(blocks[1]));
+                    app.set_c1_active(active(blocks[1]));
+                    app.set_c2(fmt(blocks[2]));
+                    app.set_c2_active(active(blocks[2]));
+                    app.set_c3(fmt(blocks[3]));
+                    app.set_c3_active(active(blocks[3]));
+                    app.set_c4(fmt(blocks[4]));
+                    app.set_c4_active(active(blocks[4]));
+                    app.set_c5(fmt(blocks[5]));
+                    app.set_c5_active(active(blocks[5]));
                 }
                 UiEvent::Status(s) => {
                     let (msg, color) = match s {

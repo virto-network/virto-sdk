@@ -1,6 +1,6 @@
-use alloc::string::ToString;
 use crate::registry::*;
 use crate::Error;
+use alloc::string::ToString;
 use scale_info::{form::PortableForm, PortableRegistry};
 
 type SiType = scale_info::Type<PortableForm>;
@@ -8,7 +8,9 @@ type SiTypeDef = scale_info::TypeDef<PortableForm>;
 type SiComposite = scale_info::TypeDefComposite<PortableForm>;
 
 /// Compress a `PortableRegistry` into owned type definitions.
-pub fn compress_to_types(source: &PortableRegistry) -> Result<alloc::vec::Vec<TypeDefOwned>, Error> {
+pub fn compress_to_types(
+    source: &PortableRegistry,
+) -> Result<alloc::vec::Vec<TypeDefOwned>, Error> {
     source
         .types
         .iter()
@@ -34,11 +36,7 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> Result<TypeDefOwned, 
             .unwrap_or_else(|| "".into())
     };
 
-    let is_map = ty
-        .path
-        .segments
-        .last()
-        .is_some_and(|s| s == "BTreeMap");
+    let is_map = ty.path.segments.last().is_some_and(|s| s == "BTreeMap");
 
     Ok(match &ty.type_def {
         SiTypeDef::Primitive(p) => match p {
@@ -55,7 +53,9 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> Result<TypeDefOwned, 
             P::I128 => TypeDefOwned::I128,
             P::Char => TypeDefOwned::Char,
             P::Str => TypeDefOwned::Str,
-            P::U256 | P::I256 => return Err(Error::BadInput("256-bit integers not supported".into())),
+            P::U256 | P::I256 => {
+                return Err(Error::BadInput("256-bit integers not supported".into()))
+            }
         },
         SiTypeDef::Composite(c) => {
             if c.fields.is_empty() {
@@ -71,10 +71,16 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> Result<TypeDefOwned, 
                 TypeDefOwned::Struct(
                     c.fields
                         .iter()
-                        .map(|f| Ok(FieldOwned {
-                            name: f.name.as_ref().ok_or(Error::BadInput("expected named field".into()))?.to_string(),
-                            ty: f.ty.id,
-                        }))
+                        .map(|f| {
+                            Ok(FieldOwned {
+                                name: f
+                                    .name
+                                    .as_ref()
+                                    .ok_or(Error::BadInput("expected named field".into()))?
+                                    .to_string(),
+                                ty: f.ty.id,
+                            })
+                        })
                         .collect::<Result<_, Error>>()?,
                 )
             }
@@ -95,10 +101,16 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> Result<TypeDefOwned, 
                         FieldsOwned::Struct(
                             var.fields
                                 .iter()
-                                .map(|f| Ok(FieldOwned {
-                                    name: f.name.as_ref().ok_or(Error::BadInput("expected named field".into()))?.to_string(),
-                                    ty: f.ty.id,
-                                }))
+                                .map(|f| {
+                                    Ok(FieldOwned {
+                                        name: f
+                                            .name
+                                            .as_ref()
+                                            .ok_or(Error::BadInput("expected named field".into()))?
+                                            .to_string(),
+                                        ty: f.ty.id,
+                                    })
+                                })
                                 .collect::<Result<_, Error>>()?,
                         )
                     };
@@ -122,7 +134,9 @@ fn convert_type(ty: &SiType, source: &PortableRegistry) -> Result<TypeDefOwned, 
         SiTypeDef::Array(a) => TypeDefOwned::Array(a.type_param.id, a.len),
         SiTypeDef::Tuple(t) => TypeDefOwned::Tuple(t.fields.iter().map(|f| f.id).collect()),
         SiTypeDef::Compact(c) => TypeDefOwned::Compact(c.type_param.id),
-        SiTypeDef::BitSequence(b) => TypeDefOwned::BitSequence(b.bit_store_type.id, b.bit_order_type.id),
+        SiTypeDef::BitSequence(b) => {
+            TypeDefOwned::BitSequence(b.bit_store_type.id, b.bit_order_type.id)
+        }
     })
 }
 
@@ -212,7 +226,9 @@ fn remap_type_ids(td: &mut TypeDefOwned, id_map: &[Option<u32>]) {
     }
 
     match td {
-        TypeDefOwned::Sequence(id) | TypeDefOwned::StructNewType(id) | TypeDefOwned::Compact(id) => {
+        TypeDefOwned::Sequence(id)
+        | TypeDefOwned::StructNewType(id)
+        | TypeDefOwned::Compact(id) => {
             remap(id, id_map);
         }
         TypeDefOwned::Map(k, v) | TypeDefOwned::BitSequence(k, v) => {
@@ -221,17 +237,29 @@ fn remap_type_ids(td: &mut TypeDefOwned, id_map: &[Option<u32>]) {
         }
         TypeDefOwned::Array(id, _) => remap(id, id_map),
         TypeDefOwned::Tuple(ids) | TypeDefOwned::StructTuple(ids) => {
-            for id in ids { remap(id, id_map); }
+            for id in ids {
+                remap(id, id_map);
+            }
         }
         TypeDefOwned::Struct(fields) => {
-            for f in fields { remap(&mut f.ty, id_map); }
+            for f in fields {
+                remap(&mut f.ty, id_map);
+            }
         }
         TypeDefOwned::Variant(vdef) => {
             for v in &mut vdef.variants {
                 match &mut v.fields {
                     FieldsOwned::NewType(id) => remap(id, id_map),
-                    FieldsOwned::Tuple(ids) => { for id in ids { remap(id, id_map); } }
-                    FieldsOwned::Struct(fields) => { for f in fields { remap(&mut f.ty, id_map); } }
+                    FieldsOwned::Tuple(ids) => {
+                        for id in ids {
+                            remap(id, id_map);
+                        }
+                    }
+                    FieldsOwned::Struct(fields) => {
+                        for f in fields {
+                            remap(&mut f.ty, id_map);
+                        }
+                    }
                     FieldsOwned::Unit => {}
                 }
             }
@@ -244,11 +272,21 @@ fn is_tuple(c: &SiComposite) -> bool {
     c.fields.first().and_then(|f| f.name.as_ref()).is_none()
 }
 
-fn extract_map_types(c: &SiComposite, source: &PortableRegistry) -> Result<(TypeId, TypeId), Error> {
-    let field = c.fields.first().ok_or(Error::BadInput("map has no fields".into()))?;
-    let resolved = source.resolve(field.ty.id).ok_or(Error::BadInput("unresolved map type".into()))?;
+fn extract_map_types(
+    c: &SiComposite,
+    source: &PortableRegistry,
+) -> Result<(TypeId, TypeId), Error> {
+    let field = c
+        .fields
+        .first()
+        .ok_or(Error::BadInput("map has no fields".into()))?;
+    let resolved = source
+        .resolve(field.ty.id)
+        .ok_or(Error::BadInput("unresolved map type".into()))?;
     if let SiTypeDef::Sequence(s) = &resolved.type_def {
-        let inner = source.resolve(s.type_param.id).ok_or(Error::BadInput("unresolved map inner type".into()))?;
+        let inner = source
+            .resolve(s.type_param.id)
+            .ok_or(Error::BadInput("unresolved map inner type".into()))?;
         if let SiTypeDef::Tuple(t) = &inner.type_def {
             if t.fields.len() == 2 {
                 return Ok((t.fields[0].id, t.fields[1].id));

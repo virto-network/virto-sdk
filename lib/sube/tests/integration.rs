@@ -142,9 +142,7 @@ fn follow_chain_events() {
         for _ in 0..100 {
             let event = chain.next_event().await.expect("gets event");
             match event {
-                ChainEvent::NewBlock {
-                    hash, parent, ..
-                } => {
+                ChainEvent::NewBlock { hash, parent, .. } => {
                     assert!(hash.starts_with("0x"), "hash is hex");
                     assert!(parent.starts_with("0x"), "parent is hex");
                     saw_new_block = true;
@@ -222,14 +220,8 @@ fn decode_block_events() {
 
                             // Each event has phase and event fields
                             let first = &events[0];
-                            assert!(
-                                first.get("phase").is_some(),
-                                "event has phase"
-                            );
-                            assert!(
-                                first.get("event").is_some(),
-                                "event has event body"
-                            );
+                            assert!(first.get("phase").is_some(), "event has phase");
+                            assert!(first.get("event").is_some(), "event has event body");
                         }
                         other => panic!("expected Value, got {other:?}"),
                     }
@@ -253,10 +245,7 @@ fn fetch_block_header() {
                 ChainEvent::NewBlock { ref hash, .. } => {
                     let header = chain.header(hash).await.expect("gets header");
                     assert!(header.number > 0, "header has block number");
-                    assert!(
-                        header.state_root.starts_with("0x"),
-                        "state_root is hex"
-                    );
+                    assert!(header.state_root.starts_with("0x"), "state_root is hex");
                     assert!(
                         header.extrinsics_root.starts_with("0x"),
                         "extrinsics_root is hex"

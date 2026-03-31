@@ -2,13 +2,13 @@
 
 use alloc::rc::Rc;
 
-use embedded_graphics_core::pixelcolor::raw::RawU16;
 use embedded_graphics_core::pixelcolor::Rgb565;
+use embedded_graphics_core::pixelcolor::raw::RawU16;
 use slint::platform::software_renderer::{
-    LineBufferProvider, MinimalSoftwareWindow, Rgb565Pixel, RepaintBufferType,
+    LineBufferProvider, MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel,
 };
 
-use super::board::{Display, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use super::board::{DISPLAY_HEIGHT, DISPLAY_WIDTH, Display};
 
 /// Line buffer provider that pushes rendered lines to the ST7789 display.
 pub struct DisplayBuffer<'a> {

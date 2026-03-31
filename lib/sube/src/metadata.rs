@@ -143,6 +143,23 @@ pub struct Metadata {
     pub registry: scales::Registry,
 }
 
+impl Metadata {
+    /// Create an empty metadata (no pallets, empty registry).
+    /// Used when connecting without metadata on memory-constrained devices.
+    pub fn empty() -> Self {
+        Self {
+            pallets: Vec::new(),
+            extrinsic: ExtrinsicMeta {
+                version: 0,
+                address_ty: None,
+                signature_ty: None,
+                extensions: Vec::new(),
+            },
+            registry: scales::Registry::new(Vec::new()),
+        }
+    }
+}
+
 // Note: Registry does not implement Serialize (arena-backed, internal types are private)
 
 // --- Decode from raw SCALE bytes using the lean decoder ---
@@ -163,7 +180,11 @@ fn convert_raw_pallet(raw: lean::RawPallet) -> PalletMeta {
                     name: e.name,
                     ty: match e.ty {
                         lean::RawStorageType::Plain(t) => StorageEntryType::Plain(t),
-                        lean::RawStorageType::Map { hashers, key, value } => StorageEntryType::Map {
+                        lean::RawStorageType::Map {
+                            hashers,
+                            key,
+                            value,
+                        } => StorageEntryType::Map {
                             hashers: hashers.into_iter().map(Hasher::from_scale_index).collect(),
                             key,
                             value,
@@ -227,6 +248,22 @@ pub fn from_bytes_filtered(bytes: &[u8], pallet_filter: &[&str]) -> crate::Resul
     })
 }
 
+/// Build Metadata from pre-processed raw parts.
+///
+/// Used by the streaming metadata path where pallets and types are
+/// decoded in separate passes.
+pub fn from_raw(
+    pallets: Vec<lean::RawPallet>,
+    extrinsic: lean::RawExtrinsic,
+    registry: scales::Registry,
+) -> Metadata {
+    Metadata {
+        pallets: pallets.into_iter().map(convert_raw_pallet).collect(),
+        extrinsic: convert_raw_extrinsic(extrinsic),
+        registry,
+    }
+}
+
 /// Returns true if the type resolves to a zero-size type (StructUnit or empty Tuple).
 pub fn is_zero_size_type(ty: TypeId, registry: &scales::Registry) -> bool {
     match registry.resolve(ty) {
@@ -253,10 +290,7 @@ impl Metadata {
         from_bytes(bytes)
     }
 
-    pub fn from_bytes_filtered(
-        bytes: &[u8],
-        pallet_filter: &[&str],
-    ) -> crate::Result<Metadata> {
+    pub fn from_bytes_filtered(bytes: &[u8], pallet_filter: &[&str]) -> crate::Result<Metadata> {
         from_bytes_filtered(bytes, pallet_filter)
     }
 
@@ -291,7 +325,13 @@ impl StorageKey {
         args: Vec<KeyValue>,
         hashers: Vec<Hasher>,
     ) -> Self {
-        Self { ty, pallet, call, args, hashers }
+        Self {
+            ty,
+            pallet,
+            call,
+            args,
+            hashers,
+        }
     }
 
     pub fn key(&self) -> Vec<u8> {
@@ -322,7 +362,9 @@ impl StorageKey {
             .as_ref()
             .and_then(|s| s.entries.iter().find(|e| e.name == item))
             .ok_or(crate::Error::StorageKeyNotFound)?;
-        entry.ty.build_key(registry, &meta.name, &entry.name, map_keys)
+        entry
+            .ty
+            .build_key(registry, &meta.name, &entry.name, map_keys)
     }
 }
 
@@ -349,11 +391,25 @@ impl StorageEntryType {
     ) -> crate::Result<StorageKey> {
         match self {
             Self::Plain(ty) => build_storage_key(
-                registry, None, *ty, (pallet, item), &[] as &[&str], &[] as &[Hasher],
+                registry,
+                None,
+                *ty,
+                (pallet, item),
+                &[] as &[&str],
+                &[] as &[Hasher],
             ),
-            Self::Map { hashers, key, value } => {
-                build_storage_key(registry, Some(*key), *value, (pallet, item), map_keys, hashers)
-            }
+            Self::Map {
+                hashers,
+                key,
+                value,
+            } => build_storage_key(
+                registry,
+                Some(*key),
+                *value,
+                (pallet, item),
+                map_keys,
+                hashers,
+            ),
         }
     }
 }
@@ -405,10 +461,17 @@ fn build_storage_key<T: AsRef<str>>(
             value_ty_id,
             hash(&Hasher::Twox128, pallet_item.0),
             hash(&Hasher::Twox128, pallet_item.1),
-            vec![KeyValue::Value((key_ty, hashed_value, tuple_bytes, hasher.clone()))],
+            vec![KeyValue::Value((
+                key_ty,
+                hashed_value,
+                tuple_bytes,
+                hasher.clone(),
+            ))],
             hashers.to_vec(),
         ))
     } else {
-        Err(crate::Error::Encode("Wrong number of hashers vs map_keys".into()))
+        Err(crate::Error::Encode(
+            "Wrong number of hashers vs map_keys".into(),
+        ))
     }
 }

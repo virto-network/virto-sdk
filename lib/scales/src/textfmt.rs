@@ -49,9 +49,9 @@ impl fmt::Display for Value<'_> {
 // ── Formatter ──────────────────────────────────────────────────────────
 
 fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<(), Error> {
-    let depth = depth.checked_sub(1).ok_or_else(|| {
-        Error::BadInput("maximum nesting depth exceeded".into())
-    })?;
+    let depth = depth
+        .checked_sub(1)
+        .ok_or_else(|| Error::BadInput("maximum nesting depth exceeded".into()))?;
 
     let ty = value.ty().ok_or(Error::TypeNotFound(value.ty_id))?;
     let data = value.data;
@@ -277,7 +277,8 @@ impl<'a> Parser<'a> {
         } else {
             Err(Error::BadInput(alloc::format!(
                 "expected '{}' at position {}",
-                c, self.pos
+                c,
+                self.pos
             )))
         }
     }
@@ -356,9 +357,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_value(&mut self, ty_id: TypeId, out: &mut Vec<u8>) -> Result<(), Error> {
-        self.depth = self.depth.checked_sub(1).ok_or_else(|| {
-            Error::BadInput("maximum nesting depth exceeded".into())
-        })?;
+        self.depth = self
+            .depth
+            .checked_sub(1)
+            .ok_or_else(|| Error::BadInput("maximum nesting depth exceeded".into()))?;
 
         let result = self.parse_value_inner(ty_id, out);
 

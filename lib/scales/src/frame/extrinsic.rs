@@ -150,22 +150,28 @@ mod tests {
         // 5=Variant{None,Some(U32)} (for MultiAddress-like),
         // 6=Variant{Ed25519([u8;64]),Sr25519([u8;64])} (for MultiSignature-like)
         Registry::new(vec![
-            TypeDefOwned::U8,                    // 0
-            TypeDefOwned::U32,                   // 1
-            TypeDefOwned::Bool,                  // 2
-            TypeDefOwned::Bytes,                 // 3
-            TypeDefOwned::Compact(1),            // 4: Compact<u32>
-            TypeDefOwned::Variant(VariantDefOwned {   // 5: simple address enum
+            TypeDefOwned::U8,         // 0
+            TypeDefOwned::U32,        // 1
+            TypeDefOwned::Bool,       // 2
+            TypeDefOwned::Bytes,      // 3
+            TypeDefOwned::Compact(1), // 4: Compact<u32>
+            TypeDefOwned::Variant(VariantDefOwned {
+                // 5: simple address enum
                 name: "Address".into(),
-                variants: vec![
-                    VariantOwned { index: 0, name: "Id".into(), fields: FieldsOwned::NewType(3) },
-                ],
+                variants: vec![VariantOwned {
+                    index: 0,
+                    name: "Id".into(),
+                    fields: FieldsOwned::NewType(3),
+                }],
             }),
-            TypeDefOwned::Variant(VariantDefOwned {   // 6: signature enum
+            TypeDefOwned::Variant(VariantDefOwned {
+                // 6: signature enum
                 name: "Signature".into(),
-                variants: vec![
-                    VariantOwned { index: 1, name: "Sr25519".into(), fields: FieldsOwned::NewType(3) },
-                ],
+                variants: vec![VariantOwned {
+                    index: 1,
+                    name: "Sr25519".into(),
+                    fields: FieldsOwned::NewType(3),
+                }],
             }),
         ])
     }

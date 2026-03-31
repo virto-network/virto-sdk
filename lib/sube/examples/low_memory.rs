@@ -134,9 +134,6 @@ fn main() {
         println!("  total retained: {} KB", kb(total));
         println!("  total peak:     {} KB", kb(total_peak));
         println!("  ESP32 SRAM:     320 KB");
-        println!(
-            "  headroom:       {} KB",
-            320i64 - kb(total) as i64
-        );
+        println!("  headroom:       {} KB", 320i64 - kb(total) as i64);
     });
 }

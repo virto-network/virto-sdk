@@ -1,26 +1,25 @@
+use core::fmt::Write;
 use core::time::Duration;
 
 use alloc::sync::Arc;
+use heapless::index_map::FnvIndexMap as Map;
+use no_std_async::Mutex;
 
 use crate::prelude::*;
-use crate::url::Url;
+use crate::rpc::chainhead::ChainHead;
 use crate::{Backend, Error, Metadata, Result as SubeResult};
 
-#[cfg(any(feature = "ws", feature = "smoldot"))]
-use crate::rpc::chainhead::ChainHead;
+mod url;
+use url::Url;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]
 type SmoldotPlatform = alloc::sync::Arc<smoldot_light::platform::DefaultPlatform>;
-
-use core::fmt::Write;
-use heapless::index_map::FnvIndexMap as Map;
-use no_std_async::Mutex;
 
 type CacheKey = heapless::String<64>;
 
 // --- Internal backend enum + dispatch ---
 
-pub(crate) enum AnyBackend {
+pub enum AnyBackend {
     #[cfg(feature = "ws")]
     Ws(Box<ChainHead<crate::rpc::ws::Backend>>),
     #[cfg(all(feature = "smoldot", feature = "std"))]
@@ -72,52 +71,14 @@ impl Backend for AnyBackend {
     }
 }
 
-// --- Chain event forwarding ---
+// --- ChainSession implementation ---
 
-#[cfg(any(feature = "ws", feature = "smoldot"))]
-impl AnyBackend {
-    pub(crate) async fn next_chain_event(
-        &mut self,
-    ) -> SubeResult<crate::rpc::chainhead::ChainEvent> {
+impl crate::rpc::chainhead::ChainSession for AnyBackend {
+    async fn next_chain_event(&mut self) -> SubeResult<crate::rpc::chainhead::ChainEvent> {
         dispatch!(self, next_chain_event())
     }
 
-    pub(crate) async fn runtime_call_at(
-        &mut self,
-        block_hash: &str,
-        function: &str,
-        call_data: &str,
-    ) -> SubeResult<Vec<u8>> {
-        dispatch!(self, runtime_call_at(block_hash, function, call_data))
-    }
-
-    pub(crate) async fn header(
-        &mut self,
-        block_hash: &str,
-    ) -> SubeResult<crate::rpc::chainhead::BlockHeader> {
-        dispatch!(self, header(block_hash))
-    }
-
-    pub(crate) async fn scan_pallets(&mut self) -> SubeResult<Vec<String>> {
-        dispatch!(self, scan_pallets())
-    }
-
-    pub(crate) async fn metadata_filtered(
-        &mut self,
-        pallets: &[&str],
-    ) -> SubeResult<Metadata> {
-        dispatch!(self, metadata_filtered(pallets))
-    }
-
-    pub(crate) async fn get_storage_at_hash(
-        &mut self,
-        block_hash: &str,
-        keys: Vec<crate::RawKey>,
-    ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
-        dispatch!(self, get_storage_at_hash(block_hash, keys))
-    }
-
-    pub(crate) fn try_next_chain_event(&mut self) -> Option<crate::rpc::chainhead::ChainEvent> {
+    fn try_next_chain_event(&mut self) -> Option<crate::rpc::chainhead::ChainEvent> {
         match self {
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.try_next_chain_event(),
@@ -127,13 +88,41 @@ impl AnyBackend {
             _ => None,
         }
     }
+
+    async fn header(&mut self, block_hash: &str) -> SubeResult<crate::rpc::chainhead::BlockHeader> {
+        dispatch!(self, header(block_hash))
+    }
+
+    async fn runtime_call_at(
+        &mut self,
+        block_hash: &str,
+        function: &str,
+        call_data: &str,
+    ) -> SubeResult<Vec<u8>> {
+        dispatch!(self, runtime_call_at(block_hash, function, call_data))
+    }
+
+    async fn scan_pallets(&mut self) -> SubeResult<Vec<String>> {
+        dispatch!(self, scan_pallets())
+    }
+
+    async fn metadata_filtered(&mut self, pallets: &[&str]) -> SubeResult<Metadata> {
+        dispatch!(self, metadata_filtered(pallets))
+    }
+
+    async fn get_storage_at_hash(
+        &mut self,
+        block_hash: &str,
+        keys: Vec<crate::RawKey>,
+    ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        dispatch!(self, get_storage_at_hash(block_hash, keys))
+    }
 }
 
 // --- Global metadata cache ---
 
 static META_CACHE: Mutex<Option<Map<CacheKey, Arc<Metadata>, 16>>> = Mutex::new(None);
 
-/// Get or fetch metadata, keyed by scheme://host:port.
 pub(crate) async fn get_metadata(
     backend: &mut AnyBackend,
     url: &Url,
@@ -143,7 +132,6 @@ pub(crate) async fn get_metadata(
     get_or_fetch(key, backend, preloaded).await
 }
 
-/// Fetch+cache metadata using a string cache key (for backends without a URL).
 #[cfg(all(feature = "smoldot", feature = "std"))]
 pub(crate) async fn get_metadata_by_key(
     backend: &mut AnyBackend,
@@ -222,8 +210,6 @@ pub(crate) fn chain_string_to_url(chain: &str) -> SubeResult<Url> {
 
 // --- Timeout ---
 
-/// Race a future against a timer. When `ws` or `smoldot` features are enabled
-/// `smol::Timer` is available; otherwise the timeout is a no-op.
 #[cfg(any(feature = "ws", feature = "smoldot-std"))]
 async fn with_timeout<T>(
     duration: Duration,
@@ -266,7 +252,6 @@ pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBacke
     .await
 }
 
-/// Connect via smoldot light client using a chain spec (std only).
 #[cfg(all(feature = "smoldot", feature = "std"))]
 pub(crate) async fn connect_light(chain_spec: &str, timeout: Duration) -> SubeResult<AnyBackend> {
     with_timeout(timeout, async {
@@ -277,7 +262,6 @@ pub(crate) async fn connect_light(chain_spec: &str, timeout: Duration) -> SubeRe
     .await
 }
 
-/// Connect via smoldot light client for a parachain (std only).
 #[cfg(all(feature = "smoldot", feature = "std"))]
 pub(crate) async fn connect_light_para(
     chain_spec: &str,

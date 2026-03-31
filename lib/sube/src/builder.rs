@@ -3,10 +3,12 @@ use core::pin::Pin;
 
 use alloc::sync::Arc;
 
-use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
 use crate::extrinsic::{EncodeCall, ExtrinsicBody};
 use crate::prelude::*;
-use crate::{JsonValue, Metadata, Response, Result as SubeResult, Signer};
+use crate::{Backend, JsonValue, Metadata, Response, Result as SubeResult, Signer};
+
+#[cfg(any(feature = "ws", feature = "smoldot"))]
+use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -144,6 +146,7 @@ impl SubeBuilder {
 }
 
 /// One-liner query: `sube("wss://host/pallet/item/key").await?`
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 impl IntoFuture for SubeBuilder {
     type Output = SubeResult<Response>;
     type IntoFuture = BoxFuture<'static, SubeResult<Response>>;
@@ -173,163 +176,94 @@ impl IntoFuture for SubeBuilder {
 
 /// A connected handle to a Substrate chain.
 ///
-/// Owns the backend connection. Metadata is cached globally.
-/// If a connection drops, operations automatically reconnect once and retry.
-pub struct Sube {
-    backend: AnyBackend,
+/// Generic over the backend `B`. Use [`Sube::connect`] for URL-based connections
+/// (returns `Sube<AnyBackend>`) or [`Sube::from_parts`] for pre-built backends
+/// like `ChainHead<edge::Backend<T>>` on embedded targets.
+///
+/// ```rust,ignore
+/// // From URL (std, returns Sube<AnyBackend>)
+/// let mut chain = Sube::connect("wss://kreivo.io").await?;
+///
+/// // From pre-built backend (embedded, returns Sube<ChainHead<R>>)
+/// let chain_head = ChainHead::new(ws).await?;
+/// let meta = chain_head.metadata_filtered(&["CollatorSelection"]).await?;
+/// let mut chain = Sube::from_parts(chain_head, Arc::new(meta));
+///
+/// // Both support the same query API:
+/// let r = chain.query("system/account/0x1234").await?;
+/// ```
+/// When `ws` or `smoldot` is enabled, `B` defaults to
+/// [`AnyBackend`](crate::backend::AnyBackend) and includes URL/timeout
+/// for reconnect support.
+#[cfg(any(feature = "ws", feature = "smoldot"))]
+pub struct Sube<B = AnyBackend> {
+    backend: B,
     metadata: Arc<Metadata>,
     url: String,
     timeout: core::time::Duration,
 }
 
-impl Sube {
-    /// Connect to a chain and return a reusable handle.
-    pub async fn connect(url: &str) -> SubeResult<Self> {
-        Self::connect_with_options(url, None, crate::DEFAULT_TIMEOUT).await
-    }
+#[cfg(not(any(feature = "ws", feature = "smoldot")))]
+pub struct Sube<B> {
+    backend: B,
+    metadata: Arc<Metadata>,
+}
 
-    /// Connect with a custom timeout.
-    pub async fn connect_with_timeout(
-        url: &str,
-        timeout: core::time::Duration,
-    ) -> SubeResult<Self> {
-        Self::connect_with_options(url, None, timeout).await
-    }
+// --- Generic methods (any Backend) ---
 
-    /// Connect with pre-loaded metadata.
-    pub async fn connect_with_meta(url: &str, preloaded: Option<Metadata>) -> SubeResult<Self> {
-        Self::connect_with_options(url, preloaded, crate::DEFAULT_TIMEOUT).await
-    }
-
-    /// Connect with filtered metadata — only decode types for the specified pallets.
+impl<B: Backend> Sube<B> {
+    /// Wrap a pre-built backend with its metadata.
     ///
-    /// Uses two metadata requests: one to scan pallets, one to decode filtered types.
-    /// Reduces retained memory from ~400KB to ~170KB for a typical 2-pallet selection.
-    /// System pallet is always included.
+    /// This is the constructor for embedded targets where you bring your
+    /// own transport (e.g. `ChainHead<edge::Backend<TlsSession>>`).
     ///
     /// ```rust,ignore
-    /// let mut chain = Sube::connect_filtered("wss://kreivo.io", &["Balances"]).await?;
+    /// let ws = edge::Backend::connect(session, "kreivo.io", "/").await?;
+    /// let mut chain_head = ChainHead::new(ws).await?;
+    /// let meta = chain_head.metadata_filtered(&["CollatorSelection"]).await?;
+    /// let mut chain = Sube::from_parts(chain_head, Arc::new(meta));
     /// ```
-    /// Connect with filtered metadata — only fetch and decode types for
-    /// the specified pallets. Never fetches the full unfiltered metadata.
-    ///
-    /// This is the low-memory path: peak is ~200KB for 2 pallets vs ~1.5MB
-    /// for a full connect.
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
-    pub async fn connect_filtered(url: &str, pallets: &[&str]) -> SubeResult<Self> {
-        let parsed = chain_string_to_url(url)?;
-        let mut backend = connect(&parsed, crate::DEFAULT_TIMEOUT).await?;
-        let metadata = backend.metadata_filtered(pallets).await?;
-        Ok(Sube {
-            backend,
-            metadata: Arc::new(metadata),
-            url: url.into(),
-            timeout: crate::DEFAULT_TIMEOUT,
-        })
-    }
-
-    async fn connect_with_options(
-        url_str: &str,
-        preloaded: Option<Metadata>,
-        timeout: core::time::Duration,
-    ) -> SubeResult<Self> {
-        let url = chain_string_to_url(url_str)?;
-        let mut backend = connect(&url, timeout).await?;
-        let metadata = get_metadata(&mut backend, &url, preloaded).await?;
-        Ok(Sube {
+    pub fn from_parts(backend: B, metadata: Arc<Metadata>) -> Self {
+        Sube {
             backend,
             metadata,
-            url: url_str.into(),
-            timeout,
-        })
+            #[cfg(any(feature = "ws", feature = "smoldot"))]
+            url: String::new(),
+            #[cfg(any(feature = "ws", feature = "smoldot"))]
+            timeout: crate::DEFAULT_TIMEOUT,
+        }
     }
 
-    /// Connect via smoldot light client (no external node needed).
+    /// Mutable access to the metadata (for replacing it after construction).
+    pub fn metadata_mut(&mut self) -> &mut Arc<Metadata> {
+        &mut self.metadata
+    }
+
+    /// Query a storage path using human-readable names.
+    ///
+    /// Path format: `pallet/storage_item/key1/key2/...`
+    /// (kebab-case is converted to CamelCase automatically)
     ///
     /// ```rust,ignore
-    /// let chain = Sube::connect_light(include_str!("polkadot.json")).await?;
     /// let r = chain.query("system/account/0x1234").await?;
+    /// let r = chain.query("collator-selection/last-authored-block").await?;
     /// ```
-    #[cfg(all(feature = "smoldot", feature = "std"))]
-    pub async fn connect_light(chain_spec: &str) -> SubeResult<Self> {
-        Self::connect_light_with_meta(chain_spec, None).await
-    }
-
-    /// Connect light client with pre-loaded metadata.
-    #[cfg(all(feature = "smoldot", feature = "std"))]
-    pub async fn connect_light_with_meta(
-        chain_spec: &str,
-        preloaded: Option<Metadata>,
-    ) -> SubeResult<Self> {
-        let mut backend = crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
-        let metadata =
-            crate::backend::get_metadata_by_key(&mut backend, "light://chain", preloaded).await?;
-        Ok(Sube {
-            backend,
-            metadata,
-            url: String::new(),
-            timeout: crate::DEFAULT_TIMEOUT,
-        })
-    }
-
-    /// Connect a parachain via smoldot light client.
-    ///
-    /// Both the parachain and relay chain specs are required.
-    #[cfg(all(feature = "smoldot", feature = "std"))]
-    pub async fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<Self> {
-        let mut backend =
-            crate::backend::connect_light_para(chain_spec, relay_spec, crate::DEFAULT_TIMEOUT)
-                .await?;
-        let metadata =
-            crate::backend::get_metadata_by_key(&mut backend, "light://parachain", None).await?;
-        Ok(Sube {
-            backend,
-            metadata,
-            url: String::new(),
-            timeout: crate::DEFAULT_TIMEOUT,
-        })
-    }
-
-    /// Query a storage path. Reconnects once on connection failure.
     pub async fn query(&mut self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
             "_meta" | "_meta/registry" => Ok(Response::Meta(Arc::clone(&self.metadata))),
-            _ => {
-                let result = crate::query(&mut self.backend, &self.metadata, path, None).await;
-                match result {
-                    Err(ref e) if Self::is_connection_error(e) => {
-                        self.reconnect().await?;
-                        crate::query(&mut self.backend, &self.metadata, path, None).await
-                    }
-                    other => other,
-                }
-            }
+            _ => crate::query(&mut self.backend, &self.metadata, path, None).await,
         }
     }
 
-    /// Query a storage path at a specific block number. Reconnects once on connection failure.
+    /// Query a storage path at a specific block number.
     pub async fn query_at(&mut self, path: &str, block: u32) -> SubeResult<Response> {
         let path = path.trim_matches('/');
-        let result = crate::query(
-            &mut self.backend,
-            &self.metadata,
-            path,
-            Some(block),
-        )
-        .await;
-        match result {
-            Err(ref e) if Self::is_connection_error(e) => {
-                self.reconnect().await?;
-                crate::query(&mut self.backend, &self.metadata, path, Some(block)).await
-            }
-            other => other,
-        }
+        crate::query(&mut self.backend, &self.metadata, path, Some(block)).await
     }
 
     /// Build an extrinsic call for the given pallet/method path.
-    /// Reconnects once on connection failure before returning an error.
-    pub fn call(&mut self, path: &str) -> CallBuilder<'_, (), ()> {
+    pub fn call(&mut self, path: &str) -> CallBuilder<'_, B, (), ()> {
         CallBuilder {
             sube: self,
             tx: TxBuilder {
@@ -343,73 +277,9 @@ impl Sube {
         }
     }
 
-    /// Submit an extrinsic with reconnect-on-failure.
-    async fn submit_with_reconnect<B, S>(
-        &mut self,
-        path: &str,
-        body: ExtrinsicBody<B>,
-        signer: S,
-        wait_for_finalization: bool,
-    ) -> SubeResult<Response>
-    where
-        B: EncodeCall + core::fmt::Debug,
-        S: Signer,
-    {
-        let result = crate::extrinsic::submit(
-            &mut self.backend,
-            &self.metadata,
-            path,
-            &body,
-            &signer,
-            wait_for_finalization,
-        )
-        .await;
-        match result {
-            Err(ref e) if Self::is_connection_error(e) => {
-                self.reconnect().await?;
-                crate::extrinsic::submit(
-                    &mut self.backend,
-                    &self.metadata,
-                    path,
-                    &body,
-                    &signer,
-                    wait_for_finalization,
-                )
-                .await
-            }
-            other => other,
-        }
-    }
-
     /// Access the chain's metadata.
     pub fn metadata(&self) -> &Metadata {
         &self.metadata
-    }
-
-    /// Scan available pallet names from the chain (lightweight, no type decode).
-    ///
-    /// First step of the two-request low-memory pattern:
-    /// ```rust,ignore
-    /// let pallets = chain.scan_pallets().await?;
-    /// // user picks pallets...
-    /// chain.load_filtered_metadata(&["Balances"]).await?;
-    /// ```
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
-    pub async fn scan_pallets(&mut self) -> crate::Result<Vec<String>> {
-        self.backend.scan_pallets().await
-    }
-
-    /// Reload metadata keeping only the specified pallets.
-    ///
-    /// Makes a fresh metadata request and decodes only types referenced
-    /// by the selected pallets. Reduces memory from ~400KB to ~170KB
-    /// for a typical 2-pallet selection.
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
-    pub async fn load_filtered_metadata(&mut self, pallets: &[&str]) -> crate::Result<()> {
-        let refs: Vec<&str> = pallets.to_vec();
-        let meta = self.backend.metadata_filtered(&refs).await?;
-        self.metadata = Arc::new(meta);
-        Ok(())
     }
 
     /// Get a shared reference-counted handle to the metadata.
@@ -422,18 +292,58 @@ impl Sube {
         &self.metadata.registry
     }
 
+    /// Access the underlying backend.
+    pub fn backend(&mut self) -> &mut B {
+        &mut self.backend
+    }
+}
+
+// --- ChainSession methods (chain events, block-pinned queries) ---
+
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
+    /// Wait for the next chain event (new block, finalization, best block change).
+    ///
+    /// ```rust,ignore
+    /// loop {
+    ///     match chain.next_event().await? {
+    ///         ChainEvent::NewBlock { hash, parent, .. } => { /* new block */ }
+    ///         ChainEvent::Finalized { hashes, .. } => { /* finalized */ }
+    ///         ChainEvent::BestBlock { hash } => { /* head changed */ }
+    ///     }
+    /// }
+    /// ```
+    pub async fn next_event(&mut self) -> SubeResult<crate::rpc::chainhead::ChainEvent> {
+        self.backend.next_chain_event().await
+    }
+
+    /// Return a buffered chain event without blocking, if any.
+    pub fn try_next_event(&mut self) -> Option<crate::rpc::chainhead::ChainEvent> {
+        self.backend.try_next_chain_event()
+    }
+
+    /// Wait for the next finalization event.
+    ///
+    /// Convenience method that skips `NewBlock` and `BestBlock` events,
+    /// returning only when blocks are finalized.
+    pub async fn next_finalized(&mut self) -> SubeResult<crate::rpc::chainhead::ChainEvent> {
+        loop {
+            let event = self.next_event().await?;
+            if matches!(event, crate::rpc::chainhead::ChainEvent::Finalized { .. }) {
+                return Ok(event);
+            }
+        }
+    }
+
     /// Fetch the block header at a pinned block hash.
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
-    pub async fn header(&mut self, block_hash: &str) -> SubeResult<crate::BlockHeader> {
+    pub async fn header(
+        &mut self,
+        block_hash: &str,
+    ) -> SubeResult<crate::rpc::chainhead::BlockHeader> {
         self.backend.header(block_hash).await
     }
 
     /// Execute a runtime API call at a specific pinned block hash.
-    ///
-    /// `function` is the runtime API method (e.g. `"BlockBuilder_apply_extrinsic"`).
-    /// `call_data` is the hex-encoded SCALE input (e.g. `"0x"`).
-    /// Returns the raw SCALE-encoded output bytes.
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
     pub async fn runtime_call_at(
         &mut self,
         block_hash: &str,
@@ -460,7 +370,6 @@ impl Sube {
     ///     }
     /// }
     /// ```
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
     pub async fn query_at_hash(&mut self, path: &str, block_hash: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
@@ -513,53 +422,174 @@ impl Sube {
         }
     }
 
-    /// Wait for the next chain event (new block, finalization, best block change).
-    ///
-    /// ```rust,ignore
-    /// loop {
-    ///     match chain.next_event().await? {
-    ///         ChainEvent::NewBlock { hash, parent, .. } => { /* new block */ }
-    ///         ChainEvent::Finalized { hashes, .. } => { /* finalized */ }
-    ///         ChainEvent::BestBlock { hash } => { /* head changed */ }
-    ///     }
-    /// }
-    /// ```
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
-    pub async fn next_event(&mut self) -> SubeResult<crate::ChainEvent> {
-        self.backend.next_chain_event().await
+    /// Scan available pallet names from the chain (lightweight, no type decode).
+    pub async fn scan_pallets(&mut self) -> crate::Result<Vec<String>> {
+        self.backend.scan_pallets().await
     }
 
-    /// Return a buffered chain event without blocking, if any.
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
-    pub fn try_next_event(&mut self) -> Option<crate::ChainEvent> {
-        self.backend.try_next_chain_event()
+    /// Reload metadata keeping only the specified pallets.
+    ///
+    /// Makes a fresh metadata request and decodes only types referenced
+    /// by the selected pallets. Reduces memory from ~400KB to ~170KB
+    /// for a typical 2-pallet selection.
+    pub async fn load_filtered_metadata(&mut self, pallets: &[&str]) -> crate::Result<()> {
+        let refs: Vec<&str> = pallets.to_vec();
+        let meta = self.backend.metadata_filtered(&refs).await?;
+        self.metadata = Arc::new(meta);
+        Ok(())
+    }
+}
+
+// --- Edge backend constructor (embedded) ---
+
+/// The concrete `Sube` type returned by [`connect_edge`].
+#[cfg(feature = "ws-edge")]
+pub type EdgeSube =
+    Sube<crate::rpc::chainhead::ChainHead<crate::rpc::edge::Backend<crate::rpc::edge::EdgeSocket>>>;
+
+/// Connect to a Substrate chain from an embedded device.
+///
+/// Handles everything: DNS → TCP → TLS → WebSocket → ChainHead → filtered
+/// metadata. Returns a [`Sube`] handle ready for human-readable queries.
+///
+/// ```rust,ignore
+/// let mut rng = esp_hal::rng::Trng::try_new()?;
+/// let mut chain = sube::connect_edge(
+///     "wss://kreivo.io", stack, &mut rng, &["CollatorSelection"],
+/// ).await?;
+///
+/// loop {
+///     match chain.next_event().await? {
+///         ChainEvent::NewBlock { hash, .. } => {
+///             let r = chain.query_at_hash("system/account/0x1234", &hash).await?;
+///         }
+///         _ => {}
+///     }
+/// }
+/// ```
+#[cfg(feature = "ws-edge")]
+pub async fn connect_edge(
+    url: &str,
+    stack: embassy_net::Stack<'static>,
+    rng: impl rand_core::CryptoRng + Send + 'static,
+    pallets: &[&str],
+) -> SubeResult<EdgeSube> {
+    let ws = crate::rpc::edge::edge_connect(url, stack, rng).await?;
+    log::info!("sube: starting ChainHead session");
+    let mut chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
+    let meta = if pallets.is_empty() {
+        log::info!("sube: ready (no metadata)");
+        Arc::new(Metadata::empty())
+    } else {
+        log::info!("sube: loading filtered metadata (streaming)");
+        let m = chain_head.metadata_filtered_streaming(pallets).await?;
+        Arc::new(m)
+    };
+    Ok(Sube::from_parts(chain_head, meta))
+}
+
+// --- URL-based constructors and reconnect (AnyBackend only) ---
+
+#[cfg(any(feature = "ws", feature = "smoldot"))]
+use crate::rpc::chainhead::ChainSession as _;
+
+#[cfg(any(feature = "ws", feature = "smoldot"))]
+impl Sube {
+    /// Connect to a chain and return a reusable handle.
+    pub async fn connect(url: &str) -> SubeResult<Self> {
+        Self::connect_with_options(url, None, crate::DEFAULT_TIMEOUT).await
     }
 
-    /// Wait for the next finalization event.
+    /// Connect with a custom timeout.
+    pub async fn connect_with_timeout(
+        url: &str,
+        timeout: core::time::Duration,
+    ) -> SubeResult<Self> {
+        Self::connect_with_options(url, None, timeout).await
+    }
+
+    /// Connect with pre-loaded metadata.
+    pub async fn connect_with_meta(url: &str, preloaded: Option<Metadata>) -> SubeResult<Self> {
+        Self::connect_with_options(url, preloaded, crate::DEFAULT_TIMEOUT).await
+    }
+
+    /// Connect with filtered metadata — only decode types for the specified pallets.
     ///
-    /// Convenience method that skips `NewBlock` and `BestBlock` events,
-    /// returning only when blocks are finalized. Useful for polling storage
-    /// at each finalization point.
+    /// This is the low-memory path: peak is ~200KB for 2 pallets vs ~1.5MB
+    /// for a full connect. System pallet is always included.
     ///
     /// ```rust,ignore
-    /// loop {
-    ///     let finalized = chain.next_finalized().await?;
-    ///     let value = chain.query("system/account/0x1234").await?;
-    ///     // value is at the latest finalized block
-    /// }
+    /// let mut chain = Sube::connect_filtered("wss://kreivo.io", &["Balances"]).await?;
     /// ```
-    #[cfg(any(feature = "ws", feature = "smoldot"))]
-    pub async fn next_finalized(&mut self) -> SubeResult<crate::ChainEvent> {
-        loop {
-            let event = self.next_event().await?;
-            if matches!(event, crate::ChainEvent::Finalized { .. }) {
-                return Ok(event);
-            }
-        }
+    pub async fn connect_filtered(url: &str, pallets: &[&str]) -> SubeResult<Self> {
+        let parsed = chain_string_to_url(url)?;
+        let mut backend = connect(&parsed, crate::DEFAULT_TIMEOUT).await?;
+        let metadata = backend.metadata_filtered(pallets).await?;
+        Ok(Sube {
+            backend,
+            metadata: Arc::new(metadata),
+            url: url.into(),
+            timeout: crate::DEFAULT_TIMEOUT,
+        })
+    }
+
+    async fn connect_with_options(
+        url_str: &str,
+        preloaded: Option<Metadata>,
+        timeout: core::time::Duration,
+    ) -> SubeResult<Self> {
+        let url = chain_string_to_url(url_str)?;
+        let mut backend = connect(&url, timeout).await?;
+        let metadata = get_metadata(&mut backend, &url, preloaded).await?;
+        Ok(Sube {
+            backend,
+            metadata,
+            url: url_str.into(),
+            timeout,
+        })
+    }
+
+    /// Connect via smoldot light client (no external node needed).
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    pub async fn connect_light(chain_spec: &str) -> SubeResult<Self> {
+        Self::connect_light_with_meta(chain_spec, None).await
+    }
+
+    /// Connect light client with pre-loaded metadata.
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    pub async fn connect_light_with_meta(
+        chain_spec: &str,
+        preloaded: Option<Metadata>,
+    ) -> SubeResult<Self> {
+        let mut backend = crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
+        let metadata =
+            crate::backend::get_metadata_by_key(&mut backend, "light://chain", preloaded).await?;
+        Ok(Sube {
+            backend,
+            metadata,
+            url: String::new(),
+            timeout: crate::DEFAULT_TIMEOUT,
+        })
+    }
+
+    /// Connect a parachain via smoldot light client.
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    pub async fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<Self> {
+        let mut backend =
+            crate::backend::connect_light_para(chain_spec, relay_spec, crate::DEFAULT_TIMEOUT)
+                .await?;
+        let metadata =
+            crate::backend::get_metadata_by_key(&mut backend, "light://parachain", None).await?;
+        Ok(Sube {
+            backend,
+            metadata,
+            url: String::new(),
+            timeout: crate::DEFAULT_TIMEOUT,
+        })
     }
 
     /// Re-establish the backend connection using the stored URL.
-    async fn reconnect(&mut self) -> SubeResult<()> {
+    pub async fn reconnect(&mut self) -> SubeResult<()> {
         if self.url.is_empty() {
             return Err(crate::Error::ChainUnavailable);
         }
@@ -568,33 +598,18 @@ impl Sube {
         self.backend = connect(&url, self.timeout).await?;
         Ok(())
     }
-
-    fn is_connection_error(e: &crate::Error) -> bool {
-        match e {
-            crate::Error::ChainUnavailable
-            | crate::Error::SubscriptionClosed
-            | crate::Error::ConnectionTimeout => true,
-            crate::Error::Node(msg) => {
-                msg.contains("connection closed")
-                    || msg.contains("ws read")
-                    || msg.contains("ws send")
-                    || msg.contains("io error")
-            }
-            _ => false,
-        }
-    }
 }
 
 // --- CallBuilder (for reusable handle) ---
 
 /// Builder for an extrinsic submission via a reusable [`Sube`] handle.
-pub struct CallBuilder<'a, Body = (), Sign = ()> {
-    sube: &'a mut Sube,
+pub struct CallBuilder<'a, Bk: Backend, Body = (), Sign = ()> {
+    sube: &'a mut Sube<Bk>,
     tx: TxBuilder<Body, Sign>,
 }
 
-impl<'a, S> CallBuilder<'a, (), S> {
-    pub fn body<B>(self, body: B) -> CallBuilder<'a, B, S> {
+impl<'a, Bk: Backend, S> CallBuilder<'a, Bk, (), S> {
+    pub fn body<B>(self, body: B) -> CallBuilder<'a, Bk, B, S> {
         CallBuilder {
             sube: self.sube,
             tx: self.tx.body(body),
@@ -609,13 +624,13 @@ impl<'a, S> CallBuilder<'a, (), S> {
     ///     .signer(signer)
     ///     .await?;
     /// ```
-    pub fn body_text(self, text: &'a str) -> CallBuilder<'a, crate::Text<'a>, S> {
+    pub fn body_text(self, text: &'a str) -> CallBuilder<'a, Bk, crate::Text<'a>, S> {
         self.body(crate::Text(text))
     }
 }
 
-impl<'a, B> CallBuilder<'a, B, ()> {
-    pub fn signer<S>(self, signer: S) -> CallBuilder<'a, B, S> {
+impl<'a, Bk: Backend, B> CallBuilder<'a, Bk, B, ()> {
+    pub fn signer<S>(self, signer: S) -> CallBuilder<'a, Bk, B, S> {
         CallBuilder {
             sube: self.sube,
             tx: self.tx.signer(signer),
@@ -623,7 +638,7 @@ impl<'a, B> CallBuilder<'a, B, ()> {
     }
 }
 
-impl<'a, B, S> CallBuilder<'a, B, S> {
+impl<'a, Bk: Backend, B, S> CallBuilder<'a, Bk, B, S> {
     /// Wait for full finalization instead of just best-chain inclusion.
     pub fn finalize(mut self) -> Self {
         self.tx.wait_for_finalization = true;
@@ -641,14 +656,7 @@ impl<'a, B, S> CallBuilder<'a, B, S> {
     }
 }
 
-impl<'a, B, S> CallBuilder<'a, B, S>
-where
-    B: EncodeCall + core::fmt::Debug + 'a,
-    S: Signer + 'a,
-{
-}
-
-impl<'a, B, S> IntoFuture for CallBuilder<'a, B, S>
+impl<'a, Bk: Backend, B, S> IntoFuture for CallBuilder<'a, Bk, B, S>
 where
     B: EncodeCall + core::fmt::Debug + 'a,
     S: Signer + 'a,
@@ -659,9 +667,15 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let (path, body, signer, finalize) = self.tx.into_parts();
-            self.sube
-                .submit_with_reconnect(&path, body, signer, finalize)
-                .await
+            crate::extrinsic::submit(
+                &mut self.sube.backend,
+                &self.sube.metadata,
+                &path,
+                &body,
+                &signer,
+                finalize,
+            )
+            .await
         })
     }
 }
@@ -705,6 +719,7 @@ impl<B, S> OneShotCall<B, S> {
     }
 }
 
+#[cfg(any(feature = "ws", feature = "smoldot"))]
 impl<B, S> IntoFuture for OneShotCall<B, S>
 where
     B: EncodeCall + core::fmt::Debug + 'static,

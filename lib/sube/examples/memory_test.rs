@@ -47,8 +47,15 @@ fn main() {
     let meta = sube::Metadata::from_bytes(META_BYTES).unwrap();
     println!("--- Full parse ---");
     println!("  peak:     {} KB", PEAK.load(Ordering::Relaxed) / 1024);
-    println!("  retained: {} KB", ALLOCATED.load(Ordering::Relaxed) / 1024);
-    println!("  pallets: {}, types: {}", meta.pallets.len(), count_types(&meta));
+    println!(
+        "  retained: {} KB",
+        ALLOCATED.load(Ordering::Relaxed) / 1024
+    );
+    println!(
+        "  pallets: {}, types: {}",
+        meta.pallets.len(),
+        count_types(&meta)
+    );
     drop(meta);
 
     // Filtered parse
@@ -58,8 +65,15 @@ fn main() {
     let meta = sube::Metadata::from_bytes_filtered(META_BYTES, &["Balances"]).unwrap();
     println!("\n--- Filtered parse (System + Balances) ---");
     println!("  peak:     {} KB", PEAK.load(Ordering::Relaxed) / 1024);
-    println!("  retained: {} KB", ALLOCATED.load(Ordering::Relaxed) / 1024);
-    println!("  pallets: {}, types: {}", meta.pallets.len(), count_types(&meta));
+    println!(
+        "  retained: {} KB",
+        ALLOCATED.load(Ordering::Relaxed) / 1024
+    );
+    println!(
+        "  pallets: {}, types: {}",
+        meta.pallets.len(),
+        count_types(&meta)
+    );
     drop(meta);
 
     // Minimal: just one storage query pallet
@@ -69,8 +83,15 @@ fn main() {
     let meta = sube::Metadata::from_bytes_filtered(META_BYTES, &["Timestamp"]).unwrap();
     println!("\n--- Filtered parse (System + Timestamp) ---");
     println!("  peak:     {} KB", PEAK.load(Ordering::Relaxed) / 1024);
-    println!("  retained: {} KB", ALLOCATED.load(Ordering::Relaxed) / 1024);
-    println!("  pallets: {}, types: {}", meta.pallets.len(), count_types(&meta));
+    println!(
+        "  retained: {} KB",
+        ALLOCATED.load(Ordering::Relaxed) / 1024
+    );
+    println!(
+        "  pallets: {}, types: {}",
+        meta.pallets.len(),
+        count_types(&meta)
+    );
 
     // Lean decoder (no frame_metadata dependency)
     ALLOCATED.store(0, Ordering::Relaxed);
@@ -79,30 +100,53 @@ fn main() {
     let raw = sube::scales::frame::metadata::decode_metadata(META_BYTES).unwrap();
     println!("\n--- Lean decoder (all types, no frame_metadata) ---");
     println!("  peak:     {} KB", PEAK.load(Ordering::Relaxed) / 1024);
-    println!("  retained: {} KB", ALLOCATED.load(Ordering::Relaxed) / 1024);
-    println!("  pallets: {}, types: {}", raw.pallets.len(), raw.types.len());
+    println!(
+        "  retained: {} KB",
+        ALLOCATED.load(Ordering::Relaxed) / 1024
+    );
+    println!(
+        "  pallets: {}, types: {}",
+        raw.pallets.len(),
+        raw.types.len()
+    );
     drop(raw);
 
     // Lean decoder with two-pass filtering
     ALLOCATED.store(0, Ordering::Relaxed);
     PEAK.store(0, Ordering::Relaxed);
 
-    let raw = sube::scales::frame::metadata::decode_metadata_filtered(META_BYTES, &["Balances"]).unwrap();
+    let raw =
+        sube::scales::frame::metadata::decode_metadata_filtered(META_BYTES, &["Balances"]).unwrap();
     println!("\n--- Lean two-pass filtered (System + Balances) ---");
     println!("  peak:     {} KB", PEAK.load(Ordering::Relaxed) / 1024);
-    println!("  retained: {} KB", ALLOCATED.load(Ordering::Relaxed) / 1024);
-    println!("  pallets: {}, types: {}", raw.pallets.len(), raw.types.len());
+    println!(
+        "  retained: {} KB",
+        ALLOCATED.load(Ordering::Relaxed) / 1024
+    );
+    println!(
+        "  pallets: {}, types: {}",
+        raw.pallets.len(),
+        raw.types.len()
+    );
     drop(raw);
 
     // Minimal
     ALLOCATED.store(0, Ordering::Relaxed);
     PEAK.store(0, Ordering::Relaxed);
 
-    let raw = sube::scales::frame::metadata::decode_metadata_filtered(META_BYTES, &["Timestamp"]).unwrap();
+    let raw = sube::scales::frame::metadata::decode_metadata_filtered(META_BYTES, &["Timestamp"])
+        .unwrap();
     println!("\n--- Lean two-pass filtered (System + Timestamp) ---");
     println!("  peak:     {} KB", PEAK.load(Ordering::Relaxed) / 1024);
-    println!("  retained: {} KB", ALLOCATED.load(Ordering::Relaxed) / 1024);
-    println!("  pallets: {}, types: {}", raw.pallets.len(), raw.types.len());
+    println!(
+        "  retained: {} KB",
+        ALLOCATED.load(Ordering::Relaxed) / 1024
+    );
+    println!(
+        "  pallets: {}, types: {}",
+        raw.pallets.len(),
+        raw.types.len()
+    );
     drop(raw);
 
     println!("\nESP32 SRAM budget: 320 KB");

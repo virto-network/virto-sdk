@@ -134,6 +134,7 @@ pub type RpcResult<T> = Result<T, JsonRpcError>;
 /// This avoids parsing the full JSON with serde, which would allocate the
 /// entire hex string as a `Value::String`. Instead, we scan for the hex data
 /// and decode it directly.
+#[cfg(feature = "ws")]
 pub(crate) fn extract_hex_result(json: &str) -> Result<crate::prelude::Vec<u8>, JsonRpcError> {
     // Check for error first (small, safe to parse)
     if json.contains("\"error\"") {
@@ -186,8 +187,7 @@ pub trait Rpc {
             .as_str()
             .ok_or_else(|| JsonRpcError::new(-32603, "expected hex string result"))?;
         let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-        hex::decode(hex)
-            .map_err(|_| JsonRpcError::new(-32603, "invalid hex in result"))
+        hex::decode(hex).map_err(|_| JsonRpcError::new(-32603, "invalid hex in result"))
     }
 }
 

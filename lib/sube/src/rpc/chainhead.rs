@@ -442,8 +442,9 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 });
             }
             FollowEvent::BestBlockChanged { best_block_hash } => {
-                self.event_queue
-                    .push_back(ChainEvent::BestBlock { hash: best_block_hash });
+                self.event_queue.push_back(ChainEvent::BestBlock {
+                    hash: best_block_hash,
+                });
             }
             _ => {}
         }
@@ -815,7 +816,9 @@ fn decode_header(hex: &str) -> crate::Result<BlockHeader> {
 
     // parent_hash: 32 bytes
     if cursor.len() < 32 {
-        return Err(crate::Error::Decode("header too short for parent_hash".into()));
+        return Err(crate::Error::Decode(
+            "header too short for parent_hash".into(),
+        ));
     }
     let parent_hash = format!("0x{}", hex::encode(&cursor[..32]));
     cursor = &cursor[32..];
@@ -827,14 +830,18 @@ fn decode_header(hex: &str) -> crate::Result<BlockHeader> {
 
     // state_root: 32 bytes
     if cursor.len() < 32 {
-        return Err(crate::Error::Decode("header too short for state_root".into()));
+        return Err(crate::Error::Decode(
+            "header too short for state_root".into(),
+        ));
     }
     let state_root = format!("0x{}", hex::encode(&cursor[..32]));
     cursor = &cursor[32..];
 
     // extrinsics_root: 32 bytes
     if cursor.len() < 32 {
-        return Err(crate::Error::Decode("header too short for extrinsics_root".into()));
+        return Err(crate::Error::Decode(
+            "header too short for extrinsics_root".into(),
+        ));
     }
     let extrinsics_root = format!("0x{}", hex::encode(&cursor[..32]));
 
@@ -1038,8 +1045,8 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Scan pallet names from metadata without decoding types.
     pub async fn scan_pallets(&mut self) -> crate::Result<Vec<String>> {
         let raw = self.fetch_raw_metadata().await?;
-        let pallets = scales::frame::metadata::scan_pallets(&raw)
-            .map_err(|_| crate::Error::BadMetadata)?;
+        let pallets =
+            scales::frame::metadata::scan_pallets(&raw).map_err(|_| crate::Error::BadMetadata)?;
         Ok(pallets.into_iter().map(|p| p.name).collect())
     }
 
@@ -1047,5 +1054,191 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     pub async fn metadata_filtered(&mut self, pallets: &[&str]) -> crate::Result<Metadata> {
         let raw = self.fetch_raw_metadata().await?;
         meta::from_bytes_filtered(&raw, pallets)
+    }
+}
+
+// --- Streaming metadata (edge backend, memory-constrained) ---
+
+#[cfg(feature = "ws-edge")]
+impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edge::Backend<T>> {
+    /// Fetch filtered metadata via two streaming passes.
+    ///
+    /// Pass 1: scan type references + decode pallets (~35KB peak).
+    /// Pass 2: decode only needed types (~80KB peak).
+    /// Never holds the full metadata blob in memory.
+    pub async fn metadata_filtered_streaming(
+        &mut self,
+        pallet_filter: &[&str],
+    ) -> crate::Result<Metadata> {
+        use scales::frame::streaming_metadata;
+
+        // Pass 1: scan
+        log::info!("metadata: pass 1 — scanning type refs + pallets");
+        self.start_runtime_call("Metadata_metadata", "0x").await?;
+        let scan = {
+            let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
+            // Skip the OpaqueMetadata Compact<u32> length prefix
+            skip_opaque_prefix(&mut hex_reader).await?;
+            streaming_metadata::scan_metadata(&mut hex_reader, pallet_filter)
+                .await
+                .map_err(|e| crate::Error::Decode(alloc::format!("scan: {e}")))?
+        };
+        // Drain any remaining frames from this operation
+        self.drain_pending_frames().await;
+
+        log::info!(
+            "metadata: scanned {} types, {} pallets kept",
+            scan.type_count,
+            scan.pallets.len()
+        );
+
+        // Resolve needed types, then free the reference graph
+        let needed = streaming_metadata::resolve_needed_types(&scan);
+        let type_count = scan.type_count;
+        let pallets = scan.pallets;
+        let extrinsic = scan.extrinsic;
+        // scan.ref_data + ref_index dropped here — frees ~10KB before pass 2
+        log::info!("metadata: {} types needed", needed.len());
+
+        // Pass 2: decode needed types
+        log::info!("metadata: pass 2 — decoding {} types", needed.len());
+        self.start_runtime_call("Metadata_metadata", "0x").await?;
+        let (types, id_map) = {
+            let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
+            skip_opaque_prefix(&mut hex_reader).await?;
+            streaming_metadata::decode_needed_types(&mut hex_reader, &needed, type_count)
+                .await
+                .map_err(|e| crate::Error::Decode(alloc::format!("decode: {e}")))?
+        };
+        // Free needed set before building registry
+        drop(needed);
+        self.drain_pending_frames().await;
+
+        // Build registry + remap pallet/extrinsic IDs
+        let registry = scales::Registry::new(types);
+        let remap = |id: u32| id_map.get(id as usize).copied().flatten().unwrap_or(id);
+        let pallets = scales::frame::metadata::remap_pallet_ids(pallets, &remap);
+        let extrinsic = scales::frame::metadata::remap_extrinsic_ids(extrinsic, &remap);
+
+        log::info!("metadata: ready ({} pallets)", pallets.len());
+
+        Ok(meta::from_raw(pallets, extrinsic, registry))
+    }
+
+    /// Send a runtime call RPC and wait for the operation to start.
+    /// Does NOT wait for the result — the caller reads frames via HexFrameReader.
+    async fn start_runtime_call(&mut self, function: &str, call_data: &str) -> crate::Result<()> {
+        let hash = self.prepare_operation().await?;
+        let result = self
+            .rpc
+            .rpc(
+                "chainHead_v1_call",
+                serde_json::json!([&self.follow_sub_id, &hash, function, call_data]),
+            )
+            .await
+            .map_err(|e| crate::Error::Node(e.to_string()))?;
+
+        let started: OperationStarted = serde_json::from_value(result)
+            .map_err(|e| crate::Error::Node(alloc::format!("bad call response: {e}")))?;
+
+        match started {
+            OperationStarted::Started { .. } => Ok(()),
+            OperationStarted::LimitReached => Err(crate::Error::Node(
+                "chainHead operation limit reached".into(),
+            )),
+        }
+    }
+
+    /// Read and discard remaining frames from an in-progress operation.
+    async fn drain_pending_frames(&mut self) {
+        // Read one more event to consume the operationCallDone/Error
+        // This may have already been consumed by the HexFrameReader
+        if let Some((_, _)) = self.rpc.next_event().await {
+            // Consumed the follow event
+        }
+    }
+}
+
+#[cfg(feature = "ws-edge")]
+async fn skip_opaque_prefix<R: embedded_io_async::Read>(reader: &mut R) -> crate::Result<()> {
+    // Read compact u32 length prefix of OpaqueMetadata
+    let mut b = [0u8; 1];
+    reader
+        .read_exact(&mut b)
+        .await
+        .map_err(|_| crate::Error::Decode("opaque prefix read".into()))?;
+    let mode = b[0] & 0x03;
+    let skip = match mode {
+        0 => 0,
+        1 => 1,
+        2 => 3,
+        _ => ((b[0] >> 2) + 4) as usize,
+    };
+    for _ in 0..skip {
+        reader
+            .read_exact(&mut b)
+            .await
+            .map_err(|_| crate::Error::Decode("opaque prefix skip".into()))?;
+    }
+    Ok(())
+}
+
+// --- ChainSession trait ---
+
+/// Extended backend operations available when a ChainHead subscription is active.
+///
+/// Implemented by [`ChainHead<R>`] and [`AnyBackend`](crate::backend::AnyBackend).
+/// This trait is what allows [`Sube<B>`](crate::Sube) to provide chain-event
+/// streaming and block-pinned queries generically.
+#[allow(async_fn_in_trait)]
+pub trait ChainSession: crate::Backend {
+    async fn next_chain_event(&mut self) -> crate::Result<ChainEvent>;
+    fn try_next_chain_event(&mut self) -> Option<ChainEvent>;
+    async fn header(&mut self, block_hash: &str) -> crate::Result<BlockHeader>;
+    async fn runtime_call_at(
+        &mut self,
+        block_hash: &str,
+        function: &str,
+        call_data: &str,
+    ) -> crate::Result<Vec<u8>>;
+    async fn scan_pallets(&mut self) -> crate::Result<Vec<String>>;
+    async fn metadata_filtered(&mut self, pallets: &[&str]) -> crate::Result<Metadata>;
+    async fn get_storage_at_hash(
+        &mut self,
+        block_hash: &str,
+        keys: Vec<crate::RawKey>,
+    ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>>;
+}
+
+impl<R: Rpc + RpcSubscription> ChainSession for ChainHead<R> {
+    async fn next_chain_event(&mut self) -> crate::Result<ChainEvent> {
+        self.next_chain_event().await
+    }
+    fn try_next_chain_event(&mut self) -> Option<ChainEvent> {
+        self.try_next_chain_event()
+    }
+    async fn header(&mut self, block_hash: &str) -> crate::Result<BlockHeader> {
+        self.header(block_hash).await
+    }
+    async fn runtime_call_at(
+        &mut self,
+        block_hash: &str,
+        function: &str,
+        call_data: &str,
+    ) -> crate::Result<Vec<u8>> {
+        self.runtime_call_at(block_hash, function, call_data).await
+    }
+    async fn scan_pallets(&mut self) -> crate::Result<Vec<String>> {
+        self.scan_pallets().await
+    }
+    async fn metadata_filtered(&mut self, pallets: &[&str]) -> crate::Result<Metadata> {
+        self.metadata_filtered(pallets).await
+    }
+    async fn get_storage_at_hash(
+        &mut self,
+        block_hash: &str,
+        keys: Vec<crate::RawKey>,
+    ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        self.get_storage_at_hash(block_hash, keys).await
     }
 }

@@ -9,8 +9,8 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
-use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode as SpiMode;
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::timer::timg::TimerGroup;
 use mipidsi::interface::SpiInterface;
 use mipidsi::options::{ColorInversion, Orientation};
@@ -53,7 +53,7 @@ pub struct System<'a> {
 pub async fn init(spawner: Spawner) -> System<'static> {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
-    esp_alloc::heap_allocator!(size: 180224); // 176KB — leave room for app core stack
+    esp_alloc::heap_allocator!(size: 180224); // 176KB — WiFi needs the rest
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
@@ -115,7 +115,10 @@ pub async fn init(spawner: Spawner) -> System<'static> {
 
     // --- Network stack ---
     static TRNG_SRC: StaticCell<esp_hal::rng::TrngSource<'static>> = StaticCell::new();
-    TRNG_SRC.init(esp_hal::rng::TrngSource::new(peripherals.RNG, peripherals.ADC1));
+    TRNG_SRC.init(esp_hal::rng::TrngSource::new(
+        peripherals.RNG,
+        peripherals.ADC1,
+    ));
 
     static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
     let seed = esp_hal::rng::Rng::new().random() as u64;
@@ -138,8 +141,6 @@ pub async fn init(spawner: Spawner) -> System<'static> {
 }
 
 #[embassy_executor::task]
-async fn net_task(
-    mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>,
-) {
+async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::WifiDevice<'static>>) {
     runner.run().await;
 }

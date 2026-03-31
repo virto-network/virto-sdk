@@ -32,7 +32,9 @@ fn linker_be_nice() {
                     eprintln!("\n💡 Is the linker script `linkall.x` missing?\n");
                 }
                 what if what.starts_with("esp_rtos_") => {
-                    eprintln!("\n💡 `esp-radio` has no scheduler enabled. Initialize `esp-rtos`.\n");
+                    eprintln!(
+                        "\n💡 `esp-radio` has no scheduler enabled. Initialize `esp-rtos`.\n"
+                    );
                 }
                 "free" | "malloc" | "calloc" => {
                     eprintln!("\n💡 Did you forget the `esp-alloc` dependency?\n");

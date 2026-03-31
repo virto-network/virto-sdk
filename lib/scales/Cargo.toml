@@ -13,6 +13,7 @@ scale-info = { version = "2.11", default-features = false, features = ["serde", 
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1", default-features = false, optional = true }
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false, optional = true }
+embedded-io-async = { version = "0.7", optional = true }
 
 [features]
 default = ["std", "json", "text", "scale-info", "serializer", "frame"]
@@ -23,6 +24,7 @@ std = ["scale-info?/std", "bytes/std", "serde/std", "serde_json?/std", "serde_js
 scale-info = ["dep:scale-info"]
 json = ["dep:serde_json", "serde_json/alloc"]
 text = []
+async = ["dep:embedded-io-async"]
 
 [[bin]]
 name = "compress"

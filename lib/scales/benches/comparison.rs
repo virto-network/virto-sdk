@@ -79,9 +79,7 @@ fn bench_encode_primitives(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode/primitives");
 
     let val = 0xDEAD_BEEF_u32;
-    group.bench_function("parity-scale-codec", |b| {
-        b.iter(|| black_box(val).encode())
-    });
+    group.bench_function("parity-scale-codec", |b| b.iter(|| black_box(val).encode()));
     group.bench_function("scales (serde)", |b| {
         b.iter(|| scale_serialization::to_vec(black_box(&val)).unwrap())
     });
@@ -117,7 +115,8 @@ fn bench_encode_struct(c: &mut Criterion) {
     group.bench_function("scale-value (encode)", |b| {
         b.iter(|| {
             let mut out = Vec::new();
-            scale_value::scale::encode_as_type(black_box(&sv_value), id, &portable, &mut out).unwrap();
+            scale_value::scale::encode_as_type(black_box(&sv_value), id, &portable, &mut out)
+                .unwrap();
             black_box(out);
         })
     });
@@ -151,7 +150,8 @@ fn bench_encode_block(c: &mut Criterion) {
     group.bench_function("scale-value (encode)", |b| {
         b.iter(|| {
             let mut out = Vec::new();
-            scale_value::scale::encode_as_type(black_box(&sv_value), id, &portable, &mut out).unwrap();
+            scale_value::scale::encode_as_type(black_box(&sv_value), id, &portable, &mut out)
+                .unwrap();
             black_box(out);
         })
     });
@@ -215,10 +215,18 @@ fn bench_decode_struct(c: &mut Criterion) {
             let v = Value::new(black_box(&data), id, &registry);
             for (name, val) in v.fields_iter().unwrap() {
                 match name {
-                    "amount" => { black_box(val.as_u128()); }
-                    "nonce" => { black_box(val.as_u64()); }
-                    "memo" => { black_box(val.as_str()); }
-                    _ => { black_box(&val); }
+                    "amount" => {
+                        black_box(val.as_u128());
+                    }
+                    "nonce" => {
+                        black_box(val.as_u64());
+                    }
+                    "memo" => {
+                        black_box(val.as_str());
+                    }
+                    _ => {
+                        black_box(&val);
+                    }
                 }
             }
         })
@@ -240,9 +248,8 @@ fn bench_decode_struct(c: &mut Criterion) {
 
     group.bench_function("scale-value (decode + to json)", |b| {
         b.iter(|| {
-            let v =
-                scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
-                    .unwrap();
+            let v = scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
+                .unwrap();
             black_box(serde_json::to_value(&v).unwrap());
         })
     });
@@ -277,9 +284,8 @@ fn bench_decode_block(c: &mut Criterion) {
 
     group.bench_function("scale-value (decode + to json)", |b| {
         b.iter(|| {
-            let v =
-                scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
-                    .unwrap();
+            let v = scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
+                .unwrap();
             black_box(serde_json::to_value(&v).unwrap());
         })
     });
@@ -397,9 +403,8 @@ fn bench_value_size(c: &mut Criterion) {
 
     group.bench_function("scale-value decode+access", |b| {
         b.iter(|| {
-            let v =
-                scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
-                    .unwrap();
+            let v = scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
+                .unwrap();
             // Access the amount field
             match &v.value {
                 scale_value::ValueDef::Composite(scale_value::Composite::Named(fields)) => {
@@ -485,9 +490,8 @@ fn bench_map_decode(c: &mut Criterion) {
 
     group.bench_function("scale-value (decode + to json)", |b| {
         b.iter(|| {
-            let v =
-                scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
-                    .unwrap();
+            let v = scale_value::scale::decode_as_type(&mut black_box(&data[..]), id, &portable)
+                .unwrap();
             black_box(serde_json::to_value(&v).unwrap());
         })
     });

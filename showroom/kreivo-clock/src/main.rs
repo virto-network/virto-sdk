@@ -1,7 +1,11 @@
 //! Kreivo Clock — live blockchain data on your wrist
 //!
-//! Showcases sube's ChainHead RPC subscription over TLS+WebSocket on an
-//! ESP32-S3 (T-Watch S3). Device setup lives in the library crate.
+//! Showcases sube on an ESP32-S3 (T-Watch S3).
+//! `sube::connect_edge` handles the full connection and metadata stack in one
+//! call (DNS → TCP → TLS → WebSocket → ChainHead → streaming filtered metadata).
+//! Queries use human-readable pallet/storage paths.
+//!
+//! Device setup lives in the library crate.
 //!
 //! Flash: espflash flash -p /dev/ttyACM0 -M target/xtensa-esp32s3-none-elf/release/kreivo-clock
 
@@ -11,98 +15,57 @@
 extern crate alloc;
 extern crate tinyrlibc;
 
-use alloc::vec;
-use alloc::vec::Vec;
-
 use embassy_executor::Spawner;
-use embassy_net::tcp::TcpSocket;
-use embassy_time::Duration;
 use esp_backtrace as _;
 use heapless::spsc::Producer;
-use sube::rpc::chainhead::{ChainEvent, ChainHead};
+use sube::ChainEvent;
 
 use kreivo_clock::device::event::{Status, UiEvent};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// ── Collator storage keys ──────────────────────────────────────────────
-
-// Twox128("CollatorSelection") ++ Twox128("LastAuthoredBlock")
-const KEY_PREFIX: [u8; 32] = [
-    0x15, 0x46, 0x4c, 0xac, 0x33, 0x78, 0xd4, 0x6f, 0x11, 0x3c, 0xd5, 0xb7, 0xa4, 0xd7, 0x1c,
-    0x84, 0xfb, 0x8e, 0xc9, 0x65, 0x6b, 0xa1, 0x6a, 0xc6, 0x22, 0x3a, 0x82, 0x47, 0x0e, 0x54,
-    0x83, 0x7f,
+/// Hex-encoded public keys of the 6 active Kreivo collators.
+const COLLATORS: [&str; 6] = [
+    "0x64aee1f58697a75f9fc8eed9bfc4b04c49b06e2d0ee9ce55c6e1deb5a70a1546",
+    "0x20ee4662b8c904cf9475de4aedbfedde35001a48a6898648f8876ef1c66bed21",
+    "0x976be2fa3f476586d6863d1ef617a88e90449c2fe69d764397e2c063f5c7de76",
+    "0x465a4965d8f46869871688d81d94dcc26b7eec0c5810b72be84012a7c8c238e8",
+    "0x8a630873c5c08423b684a09540538874871151884f6df86d4a6cf947d998ec5c",
+    "0x51c08fd82068187f9f12b22ea50985dd0c0e9902da50c93beb5251b8cc6a7aeb",
 ];
-
-/// Twox64Concat(account_id) suffixes for 6 active Kreivo collators.
-const COLLATOR_SUFFIXES: [[u8; 40]; 6] = [
-    [
-        0x56, 0x58, 0xf6, 0xa0, 0x2a, 0x76, 0x00, 0xab, 0xc6, 0x70, 0xc3, 0x51, 0xe1, 0xd7,
-        0x9a, 0xb5, 0x64, 0xae, 0xe1, 0xf5, 0x86, 0x97, 0xa7, 0x5f, 0x9f, 0xc8, 0xee, 0xd9,
-        0xbf, 0xc4, 0xb0, 0x4c, 0x49, 0xb0, 0x6e, 0x2d, 0x0e, 0xe9, 0xce, 0x55,
-    ],
-    [
-        0x58, 0xfd, 0xca, 0xde, 0x70, 0x5c, 0x50, 0x78, 0xc6, 0x6b, 0xed, 0x21, 0xf8, 0x87,
-        0x6e, 0xf1, 0x20, 0xee, 0x46, 0x62, 0xb8, 0xc9, 0x04, 0xcf, 0x94, 0x75, 0xde, 0x4a,
-        0xed, 0xbf, 0xed, 0xde, 0x35, 0x00, 0x1a, 0x48, 0xa6, 0x89, 0x86, 0x48,
-    ],
-    [
-        0x76, 0xde, 0xc7, 0x34, 0xe8, 0xfa, 0x3e, 0x61, 0x6a, 0x5a, 0xed, 0xef, 0xf5, 0xc2,
-        0x63, 0x7f, 0x97, 0x6b, 0xe2, 0xfa, 0x3f, 0x47, 0x65, 0x86, 0xd6, 0x86, 0x3d, 0x1e,
-        0xf6, 0x17, 0xa8, 0x8e, 0x90, 0x44, 0x9c, 0x2f, 0xe6, 0x9d, 0x76, 0x43,
-    ],
-    [
-        0x89, 0xf3, 0xff, 0xdc, 0x95, 0xf8, 0x3e, 0x9b, 0x16, 0xc2, 0xc8, 0x38, 0xe8, 0x40,
-        0x12, 0xa7, 0x46, 0x5a, 0x49, 0x65, 0xd8, 0xf4, 0x68, 0x69, 0x87, 0x16, 0xdd, 0x88,
-        0x1d, 0x94, 0xdc, 0xc2, 0x6b, 0x7e, 0xec, 0x0c, 0x58, 0x10, 0xb7, 0x2b,
-    ],
-    [
-        0xb5, 0xab, 0x04, 0x6b, 0x56, 0x13, 0xd5, 0x29, 0x4a, 0x6c, 0xf9, 0x47, 0xd9, 0x98,
-        0xec, 0x5c, 0x8a, 0x63, 0x08, 0x73, 0xc5, 0xc0, 0x84, 0x23, 0xb6, 0x84, 0xa0, 0x95,
-        0x40, 0x53, 0xb8, 0x74, 0x87, 0x11, 0x51, 0x88, 0x4f, 0x6d, 0xf8, 0x6d,
-    ],
-    [
-        0xc2, 0xc8, 0x32, 0xf5, 0xf6, 0xf4, 0x65, 0x81, 0xcc, 0xc1, 0x6a, 0x7a, 0xeb, 0x52,
-        0x51, 0xb8, 0x51, 0xc0, 0x8f, 0xd8, 0x20, 0x68, 0x18, 0x79, 0x9f, 0x12, 0xb2, 0x2e,
-        0xa5, 0x09, 0x85, 0xdd, 0x0c, 0x0e, 0x99, 0x02, 0xda, 0x50, 0xc9, 0x3b,
-    ],
-];
-
-/// Build full storage keys (prefix + suffix) for all collators.
-fn collator_keys() -> Vec<Vec<u8>> {
-    COLLATOR_SUFFIXES
-        .iter()
-        .map(|suffix| {
-            let mut key = vec![0u8; 72];
-            key[..32].copy_from_slice(&KEY_PREFIX);
-            key[32..].copy_from_slice(suffix);
-            key
-        })
-        .collect()
-}
-
-// ── Entry point ────────────────────────────────────────────────────────
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     let mut rt = kreivo_clock::start(spawner).await;
+    rt.connect().await;
 
+    // watch_chain connects once and runs until disconnect.
+    // On failure, reconnect WiFi only if needed, then retry.
+    // edge_connect leaks memory for TLS buffers, so we can't
+    // retry indefinitely — reboot after a few failures.
+    let mut retries = 0u8;
     loop {
-        rt.connect().await;
-
-        if let Err(e) = watch_chain(rt.stack, &mut rt.events).await {
-            log::error!("{e}");
-            rt.report_disconnected().await;
+        match watch_chain(rt.stack, &mut rt.events).await {
+            Ok(()) => retries = 0,
+            Err(e) => {
+                log::error!("{e}");
+                retries += 1;
+                if retries > 3 {
+                    log::error!("too many failures, rebooting");
+                    esp_hal::system::software_reset();
+                }
+                rt.report_disconnected().await;
+                if !rt.stack.is_link_up() {
+                    rt.disconnect().await;
+                    rt.connect().await;
+                }
+            }
         }
-
-        rt.disconnect().await;
     }
 }
 
 // ── sube: chain watcher ────────────────────────────────────────────────
 
-/// Connect to kreivo.io and stream block events to the UI.
-/// Returns on disconnect so the caller can retry.
 async fn watch_chain(
     stack: embassy_net::Stack<'static>,
     tx: &mut Producer<'static, UiEvent, 16>,
@@ -110,53 +73,28 @@ async fn watch_chain(
     tx.enqueue(UiEvent::Status(Status::Dim("connecting...")))
         .ok();
 
-    let mut rx_buf = [0u8; 4096];
-    let mut tx_buf = [0u8; 4096];
-    let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
-    socket.set_timeout(Some(Duration::from_secs(15)));
-
-    let remote = stack
-        .dns_query("kreivo.io", embassy_net::dns::DnsQueryType::A)
+    log::info!("watch_chain: starting connection");
+    let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
+    let mut chain = sube::connect_edge("wss://kreivo.io", stack, rng, &[])
         .await
-        .map_err(|_| "DNS failed")?[0];
-    socket
-        .connect((remote, 443))
-        .await
-        .map_err(|_| "TCP failed")?;
-    log::info!("TCP connected");
+        .map_err(|e| {
+            log::error!("watch_chain: connect failed: {e}");
+            "sube connect failed"
+        })?;
+    log::info!("watch_chain: connected, loading metadata");
 
-    // TLS (mbedtls, software crypto)
-    tx.enqueue(UiEvent::Status(Status::Dim("TLS..."))).ok();
-    let mut rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG failed")?;
-    let tls_ctx = mbedtls_rs::Tls::new(&mut rng)
-        .map_err(|e| { log::error!("TLS init: {:?}", e); "TLS failed" })?;
-    let conf = mbedtls_rs::SessionConfig::Client(mbedtls_rs::ClientSessionConfig {
-        server_name: Some(c"kreivo.io"),
-        auth_mode: mbedtls_rs::AuthMode::None,
-        ..mbedtls_rs::ClientSessionConfig::new()
-    });
-    let mut session = mbedtls_rs::Session::new(tls_ctx.reference(), socket, &conf)
-        .map_err(|e| { log::error!("TLS session: {:?}", e); "TLS failed" })?;
-    session
-        .connect()
-        .await
-        .map_err(|e| { log::error!("TLS connect: {:?}", e); "TLS failed" })?;
-    log::info!("TLS connected");
-
-    // WebSocket
-    tx.enqueue(UiEvent::Status(Status::Dim("websocket...")))
+    tx.enqueue(UiEvent::Status(Status::Dim("loading metadata...")))
         .ok();
-    let ws = sube::rpc::edge::Backend::connect(session, "kreivo.io", "/")
+    chain
+        .backend()
+        .metadata_filtered_streaming(&["CollatorSelection"])
         .await
-        .map_err(|e| { log::error!("WS: {e}"); "WS failed" })?;
-    log::info!("WebSocket connected");
-
-    // ChainHead subscription
-    tx.enqueue(UiEvent::Status(Status::Dim("chain..."))).ok();
-    let mut chain = ChainHead::new(ws)
-        .await
-        .map_err(|e| { log::error!("ChainHead: {e}"); "ChainHead failed" })?;
-    log::info!("ChainHead started");
+        .map(|m| *chain.metadata_mut() = alloc::sync::Arc::new(m))
+        .map_err(|e| {
+            log::error!("watch_chain: metadata failed: {e}");
+            "metadata failed"
+        })?;
+    log::info!("watch_chain: metadata loaded, starting event loop");
 
     tx.enqueue(UiEvent::Live(true)).ok();
     tx.enqueue(UiEvent::Status(Status::Good(""))).ok();
@@ -164,7 +102,7 @@ async fn watch_chain(
     let mut block_count = 0u32;
 
     loop {
-        match chain.next_chain_event().await {
+        match chain.next_event().await {
             Ok(ChainEvent::NewBlock { hash, .. }) => {
                 if let Ok(header) = chain.header(&hash).await {
                     tx.enqueue(UiEvent::Block(header.number as u32)).ok();
@@ -172,28 +110,20 @@ async fn watch_chain(
                 // Query collator storage every 5th block to reduce heap pressure
                 block_count += 1;
                 if block_count % 5 == 1 {
-                    let keys = collator_keys();
-                    match chain.get_storage_at_hash(&hash, keys.clone()).await {
-                        Ok(items) => {
-                            let mut blocks = [0u32; 6];
-                            for (key, value) in &items {
-                                if let Some(i) = keys.iter().position(|k| k == key) {
-                                    if let Some(val) = value {
-                                        if val.len() >= 4 {
-                                            blocks[i] = u32::from_le_bytes([
-                                                val[0], val[1], val[2], val[3],
-                                            ]);
-                                        }
-                                    }
-                                }
-                            }
-                            tx.enqueue(UiEvent::Collators(blocks)).ok();
+                    let mut blocks = [0u32; 6];
+                    for (i, addr) in COLLATORS.iter().enumerate() {
+                        let path = alloc::format!("collator-selection/last-authored-block/{addr}");
+                        if let Ok((entry, _)) = chain
+                            .query_at_hash(&path, &hash)
+                            .await
+                            .and_then(|r| r.into_value())
+                        {
+                            blocks[i] = entry.as_u32().unwrap_or(0);
                         }
-                        Err(e) => log::warn!("storage query: {e}"),
                     }
+                    tx.enqueue(UiEvent::Collators(blocks)).ok();
                 }
             }
-            Ok(ChainEvent::Finalized { .. }) => {}
             Ok(_) => {}
             Err(e) => {
                 log::error!("Chain: {e}");

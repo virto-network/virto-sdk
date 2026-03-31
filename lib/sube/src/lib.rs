@@ -53,11 +53,13 @@ pub use alloc::sync::Arc;
 pub use scales::{self, Registry, Value};
 pub use serde_json::{json, Value as JsonValue};
 
+#[cfg(feature = "ws-edge")]
+pub use builder::connect_edge;
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 pub use extrinsic::{EncodeCall, Text};
 pub use meta::Metadata;
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
-pub use rpc::chainhead::{BlockHeader, ChainEvent};
+pub use rpc::chainhead::{BlockHeader, ChainEvent, ChainSession};
 pub use signer::{Bytes, Signer, SignerFn};
 
 use core::fmt;
@@ -71,14 +73,14 @@ mod prelude {
     pub use alloc::vec::Vec;
 }
 
-pub(crate) mod backend;
+#[cfg(any(feature = "ws", feature = "smoldot"))]
+pub mod backend;
 pub mod builder;
 pub(crate) mod extrinsic;
 mod hasher;
 pub mod metadata;
 pub mod rpc;
 mod signer;
-pub(crate) mod url;
 pub(crate) mod util;
 
 /// Connect to a Substrate chain.
@@ -208,6 +210,20 @@ impl StorageEntry {
     /// Format the entry as a compact text string (see [`scales::to_text`]).
     pub fn to_text(&self, registry: &scales::Registry) -> Result<String> {
         scales::to_text(&self.as_value(registry)).map_err(|e| Error::Mapping(e.to_string()))
+    }
+
+    /// Decode as a little-endian u32 (block numbers, counters, etc).
+    pub fn as_u32(&self) -> Option<u32> {
+        self.data
+            .get(..4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    /// Decode as a little-endian u64.
+    pub fn as_u64(&self) -> Option<u64> {
+        self.data
+            .get(..8)
+            .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
 }
 
@@ -471,8 +487,7 @@ mod tests {
 
     #[test]
     fn storage_entry_to_json() {
-        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale"))
-        .unwrap();
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
         let system = meta.pallet_by_name("System").unwrap();
         let version = system
             .constants
@@ -488,8 +503,7 @@ mod tests {
     fn encode_call_json_and_text_match() {
         use crate::extrinsic::{EncodeCall, Text};
 
-        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale"))
-        .unwrap();
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
         let system = meta.pallet_by_name("System").unwrap();
         let calls_ty = system.calls_ty.unwrap();
 
@@ -515,8 +529,7 @@ mod tests {
     fn encode_call_text_with_enum_arg() {
         use crate::extrinsic::{EncodeCall, Text};
 
-        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale"))
-        .unwrap();
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
         let balances = meta.pallet_by_name("Balances").unwrap();
         let calls_ty = balances.calls_ty.unwrap();
 

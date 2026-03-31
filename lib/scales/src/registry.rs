@@ -24,13 +24,25 @@ enum TDI {
 }
 
 #[derive(Debug, Clone)]
-struct FI { name: StrId, ty: TypeId }
+struct FI {
+    name: StrId,
+    ty: TypeId,
+}
 
 #[derive(Debug, Clone)]
-struct VI { index: u8, name: StrId, fields: VFI }
+struct VI {
+    index: u8,
+    name: StrId,
+    fields: VFI,
+}
 
 #[derive(Debug, Clone)]
-enum VFI { Unit, NewType(TypeId), Tuple(Span), Struct(Span) }
+enum VFI {
+    Unit,
+    NewType(TypeId),
+    Tuple(Span),
+    Struct(Span),
+}
 
 // --- Registry ---
 
@@ -50,10 +62,16 @@ impl Registry {
     pub fn new(types: Vec<TypeDefOwned>) -> Self {
         let mut r = Registry {
             types: Vec::with_capacity(types.len()),
-            fields: Vec::new(), variants: Vec::new(),
-            type_ids: Vec::new(), strings: String::new(), str_idx: Vec::new(),
+            fields: Vec::new(),
+            variants: Vec::new(),
+            type_ids: Vec::new(),
+            strings: String::new(),
+            str_idx: Vec::new(),
         };
-        for td in types { let c = r.compact(td); r.types.push(c); }
+        for td in types {
+            let c = r.compact(td);
+            r.types.push(c);
+        }
         r
     }
 
@@ -72,7 +90,9 @@ impl Registry {
 
     fn intern(&mut self, s: &str) -> StrId {
         for (i, &(o, l)) in self.str_idx.iter().enumerate() {
-            if &self.strings[o as usize..o as usize + l as usize] == s { return StrId(i as u32); }
+            if &self.strings[o as usize..o as usize + l as usize] == s {
+                return StrId(i as u32);
+            }
         }
         let id = StrId(self.str_idx.len() as u32);
         let o = self.strings.len() as u32;
@@ -82,7 +102,10 @@ impl Registry {
     }
     fn push_fs(&mut self, fs: Vec<FieldOwned>) -> Span {
         let start = self.fields.len() as u32;
-        for f in &fs { let n = self.intern(&f.name); self.fields.push(FI { name: n, ty: f.ty }); }
+        for f in &fs {
+            let n = self.intern(&f.name);
+            self.fields.push(FI { name: n, ty: f.ty });
+        }
         Span(start, fs.len() as u16)
     }
     fn push_ids(&mut self, ids: Vec<TypeId>) -> Span {
@@ -102,7 +125,11 @@ impl Registry {
                 FieldsOwned::Tuple(ids) => VFI::Tuple(self.push_ids(ids)),
                 FieldsOwned::Struct(fs) => VFI::Struct(self.push_fs(fs)),
             };
-            self.variants.push(VI { index: v.index, name: n, fields: f });
+            self.variants.push(VI {
+                index: v.index,
+                name: n,
+                fields: f,
+            });
         }
         Span(start, len)
     }
@@ -110,15 +137,26 @@ impl Registry {
     fn compact(&mut self, td: TypeDefOwned) -> TDI {
         use TypeDefOwned as O;
         match td {
-            O::Bool => TDI::Bool, O::U8 => TDI::U8, O::U16 => TDI::U16,
-            O::U32 => TDI::U32, O::U64 => TDI::U64, O::U128 => TDI::U128,
-            O::I8 => TDI::I8, O::I16 => TDI::I16, O::I32 => TDI::I32,
-            O::I64 => TDI::I64, O::I128 => TDI::I128, O::Char => TDI::Char,
-            O::Str => TDI::Str, O::Bytes => TDI::Bytes,
-            O::Sequence(id) => TDI::Sequence(id), O::Map(k, v) => TDI::Map(k, v),
+            O::Bool => TDI::Bool,
+            O::U8 => TDI::U8,
+            O::U16 => TDI::U16,
+            O::U32 => TDI::U32,
+            O::U64 => TDI::U64,
+            O::U128 => TDI::U128,
+            O::I8 => TDI::I8,
+            O::I16 => TDI::I16,
+            O::I32 => TDI::I32,
+            O::I64 => TDI::I64,
+            O::I128 => TDI::I128,
+            O::Char => TDI::Char,
+            O::Str => TDI::Str,
+            O::Bytes => TDI::Bytes,
+            O::Sequence(id) => TDI::Sequence(id),
+            O::Map(k, v) => TDI::Map(k, v),
             O::Array(id, n) => TDI::Array(id, n),
             O::Tuple(ids) => TDI::Tuple(self.push_ids(ids)),
-            O::StructUnit => TDI::StructUnit, O::StructNewType(id) => TDI::StructNewType(id),
+            O::StructUnit => TDI::StructUnit,
+            O::StructNewType(id) => TDI::StructNewType(id),
             O::StructTuple(ids) => TDI::StructTuple(self.push_ids(ids)),
             O::Struct(fs) => TDI::Struct(self.push_fs(fs)),
             O::Variant(v) => {
@@ -133,12 +171,22 @@ impl Registry {
 
     fn expand(&self, td: &TDI) -> TypeDef<'_> {
         match td {
-            TDI::Bool => TypeDef::Bool, TDI::U8 => TypeDef::U8, TDI::U16 => TypeDef::U16,
-            TDI::U32 => TypeDef::U32, TDI::U64 => TypeDef::U64, TDI::U128 => TypeDef::U128,
-            TDI::I8 => TypeDef::I8, TDI::I16 => TypeDef::I16, TDI::I32 => TypeDef::I32,
-            TDI::I64 => TypeDef::I64, TDI::I128 => TypeDef::I128, TDI::Char => TypeDef::Char,
-            TDI::Str => TypeDef::Str, TDI::Bytes => TypeDef::Bytes,
-            TDI::Sequence(id) => TypeDef::Sequence(*id), TDI::Map(k, v) => TypeDef::Map(*k, *v),
+            TDI::Bool => TypeDef::Bool,
+            TDI::U8 => TypeDef::U8,
+            TDI::U16 => TypeDef::U16,
+            TDI::U32 => TypeDef::U32,
+            TDI::U64 => TypeDef::U64,
+            TDI::U128 => TypeDef::U128,
+            TDI::I8 => TypeDef::I8,
+            TDI::I16 => TypeDef::I16,
+            TDI::I32 => TypeDef::I32,
+            TDI::I64 => TypeDef::I64,
+            TDI::I128 => TypeDef::I128,
+            TDI::Char => TypeDef::Char,
+            TDI::Str => TypeDef::Str,
+            TDI::Bytes => TypeDef::Bytes,
+            TDI::Sequence(id) => TypeDef::Sequence(*id),
+            TDI::Map(k, v) => TypeDef::Map(*k, *v),
             TDI::Array(id, n) => TypeDef::Array(*id, *n),
             TDI::Tuple(s) => TypeDef::Tuple(self.ids(*s)),
             TDI::StructUnit => TypeDef::StructUnit,
@@ -168,13 +216,20 @@ pub enum TypeDef<'a> {
 impl core::fmt::Debug for TypeDef<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
-            Self::Bool => write!(f, "Bool"), Self::U8 => write!(f, "U8"),
-            Self::U16 => write!(f, "U16"), Self::U32 => write!(f, "U32"),
-            Self::U64 => write!(f, "U64"), Self::U128 => write!(f, "U128"),
-            Self::I8 => write!(f, "I8"), Self::I16 => write!(f, "I16"),
-            Self::I32 => write!(f, "I32"), Self::I64 => write!(f, "I64"),
-            Self::I128 => write!(f, "I128"), Self::Char => write!(f, "Char"),
-            Self::Str => write!(f, "Str"), Self::Bytes => write!(f, "Bytes"),
+            Self::Bool => write!(f, "Bool"),
+            Self::U8 => write!(f, "U8"),
+            Self::U16 => write!(f, "U16"),
+            Self::U32 => write!(f, "U32"),
+            Self::U64 => write!(f, "U64"),
+            Self::U128 => write!(f, "U128"),
+            Self::I8 => write!(f, "I8"),
+            Self::I16 => write!(f, "I16"),
+            Self::I32 => write!(f, "I32"),
+            Self::I64 => write!(f, "I64"),
+            Self::I128 => write!(f, "I128"),
+            Self::Char => write!(f, "Char"),
+            Self::Str => write!(f, "Str"),
+            Self::Bytes => write!(f, "Bytes"),
             Self::Sequence(id) => write!(f, "Sequence({id})"),
             Self::Map(k, v) => write!(f, "Map({k},{v})"),
             Self::Array(id, n) => write!(f, "Array({id},{n})"),
@@ -200,16 +255,25 @@ impl<'a> StructFields<'a> {
         let s = self.1;
         reg.fields[s.0 as usize..s.0 as usize + s.1 as usize]
             .iter()
-            .map(move |f| Field { name: reg.s(f.name), ty: f.ty })
+            .map(move |f| Field {
+                name: reg.s(f.name),
+                ty: f.ty,
+            })
     }
-    pub fn len(&self) -> usize { self.1 .1 as usize }
-    pub fn is_empty(&self) -> bool { self.1 .1 == 0 }
+    pub fn len(&self) -> usize {
+        self.1 .1 as usize
+    }
+    pub fn is_empty(&self) -> bool {
+        self.1 .1 == 0
+    }
 }
 
 impl<'a> IntoIterator for StructFields<'a> {
     type Item = Field<'a>;
     type IntoIter = alloc::vec::IntoIter<Field<'a>>;
-    fn into_iter(self) -> Self::IntoIter { self.iter().collect::<Vec<_>>().into_iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter().collect::<Vec<_>>().into_iter()
+    }
 }
 
 /// A field with borrowed name.
@@ -224,7 +288,9 @@ pub struct Field<'a> {
 pub struct VariantDef<'a>(&'a Registry, StrId, Span);
 
 impl<'a> VariantDef<'a> {
-    pub fn name(&self) -> &'a str { self.0.s(self.1) }
+    pub fn name(&self) -> &'a str {
+        self.0.s(self.1)
+    }
 
     pub fn variants(&self) -> VariantIter<'a> {
         let s = self.2;
@@ -235,7 +301,9 @@ impl<'a> VariantDef<'a> {
     }
 
     pub fn variant(&self, index: u8) -> Result<Variant<'a>, crate::Error> {
-        self.variants().find(|v| v.index() == index).ok_or(crate::Error::InvalidVariant(index))
+        self.variants()
+            .find(|v| v.index() == index)
+            .ok_or(crate::Error::InvalidVariant(index))
     }
 }
 
@@ -248,20 +316,32 @@ pub struct VariantIter<'a> {
 impl<'a> Iterator for VariantIter<'a> {
     type Item = Variant<'a>;
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|v| Variant { reg: self.reg, i: v })
+        self.inner.next().map(|v| Variant {
+            reg: self.reg,
+            i: v,
+        })
     }
-    fn size_hint(&self) -> (usize, Option<usize>) { self.inner.size_hint() }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
 }
 
 impl<'a> ExactSizeIterator for VariantIter<'a> {}
 
 /// A single enum variant.
 #[derive(Clone, Copy)]
-pub struct Variant<'a> { reg: &'a Registry, i: &'a VI }
+pub struct Variant<'a> {
+    reg: &'a Registry,
+    i: &'a VI,
+}
 
 impl<'a> Variant<'a> {
-    pub fn index(&self) -> u8 { self.i.index }
-    pub fn name(&self) -> &'a str { self.reg.s(self.i.name) }
+    pub fn index(&self) -> u8 {
+        self.i.index
+    }
+    pub fn name(&self) -> &'a str {
+        self.reg.s(self.i.name)
+    }
     pub fn fields(&self) -> Fields<'a> {
         match &self.i.fields {
             VFI::Unit => Fields::Unit,
@@ -293,15 +373,28 @@ pub enum TypeDefOwned {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FieldOwned { pub name: String, pub ty: TypeId }
+pub struct FieldOwned {
+    pub name: String,
+    pub ty: TypeId,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VariantDefOwned { pub name: String, pub variants: Vec<VariantOwned> }
+pub struct VariantDefOwned {
+    pub name: String,
+    pub variants: Vec<VariantOwned>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VariantOwned { pub index: u8, pub name: String, pub fields: FieldsOwned }
+pub struct VariantOwned {
+    pub index: u8,
+    pub name: String,
+    pub fields: FieldsOwned,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FieldsOwned {
-    Unit, NewType(TypeId), Tuple(Vec<TypeId>), Struct(Vec<FieldOwned>),
+    Unit,
+    NewType(TypeId),
+    Tuple(Vec<TypeId>),
+    Struct(Vec<FieldOwned>),
 }

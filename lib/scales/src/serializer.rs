@@ -397,9 +397,7 @@ where
 
 impl<'reg, B: Debug> Serializer<'reg, B> {
     fn ty(&self) -> Option<TypeDef<'reg>> {
-        self.ty_id
-            .map(|id| self.resolve(id))
-            .or(self.ty_hint)
+        self.ty_id.map(|id| self.resolve(id)).or(self.ty_hint)
     }
 
     fn resolve(&self, ty_id: TypeId) -> TypeDef<'reg> {
@@ -568,7 +566,9 @@ where
         };
         let ty = ser.resolve(ty_id);
         match ty {
-            TypeDef::Struct(fields) => Self::Composite(ser, FieldTypes::Fields(fields.iter().collect())),
+            TypeDef::Struct(fields) => {
+                Self::Composite(ser, FieldTypes::Fields(fields.iter().collect()))
+            }
             TypeDef::StructTuple(ids) => Self::Composite(ser, FieldTypes::Ids(ids)),
             TypeDef::Array(ty, _) => Self::Sequence(ser, ty),
             TypeDef::Tuple(ids) => Self::Composite(ser, FieldTypes::Ids(ids)),
@@ -580,7 +580,9 @@ where
                     let var = vdef.variants().nth(idx);
                     match var.map(|v| v.fields()) {
                         Some(Fields::Tuple(types)) => Self::Composite(ser, FieldTypes::Ids(types)),
-                        Some(Fields::Struct(fields)) => Self::Composite(ser, FieldTypes::Fields(fields.iter().collect())),
+                        Some(Fields::Struct(fields)) => {
+                            Self::Composite(ser, FieldTypes::Fields(fields.iter().collect()))
+                        }
                         _ => Self::Empty(ser),
                     }
                 } else {
