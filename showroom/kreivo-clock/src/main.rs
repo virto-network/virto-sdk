@@ -1,11 +1,12 @@
 //! Kreivo Clock — live blockchain data on your wrist
 //!
 //! Showcases sube on an ESP32-S3 (T-Watch S3).
-//! `sube::connect_edge` handles the full connection and metadata stack in one
-//! call (DNS → TCP → TLS → WebSocket → ChainHead → streaming filtered metadata).
+//! `sube::connect_edge` handles the full connection and metadata stack
+//! (DNS → TCP → TLS → WebSocket → ChainHead → streaming filtered metadata).
 //! Queries use human-readable pallet/storage paths.
 //!
-//! Device setup lives in the library crate.
+//! WiFi is managed by the firmware in the background — the app only
+//! cares about the chain connection.
 //!
 //! Flash: espflash flash -p /dev/ttyACM0 -M target/xtensa-esp32s3-none-elf/release/kreivo-clock
 
@@ -16,6 +17,7 @@ extern crate alloc;
 extern crate tinyrlibc;
 
 use embassy_executor::Spawner;
+use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use heapless::spsc::Producer;
 use sube::ChainEvent;
@@ -39,29 +41,24 @@ const COLLATORS: [&str; 6] = [
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     let mut rt = kreivo_clock::start(spawner).await;
-    rt.connect().await;
     NET.init(rt.stack);
 
-    // watch_chain connects once and runs until disconnect.
-    // On failure, reconnect WiFi only if needed, then retry.
-    // edge_connect leaks memory for TLS buffers, so we can't
-    // retry indefinitely — reboot after a few failures.
     let mut retries = 0u8;
     loop {
         match watch_chain(&mut rt.events).await {
             Ok(()) => retries = 0,
             Err(e) => {
-                log::error!("{e}");
+                log::error!("chain: {e}");
                 retries += 1;
                 if retries > 3 {
                     log::error!("too many failures, rebooting");
                     esp_hal::system::software_reset();
                 }
-                rt.report_disconnected().await;
-                if !rt.stack.is_link_up() {
-                    rt.disconnect().await;
-                    rt.connect().await;
-                }
+                rt.events
+                    .enqueue(UiEvent::Status(Status::Error("reconnecting...")))
+                    .ok();
+                rt.events.enqueue(UiEvent::Live(false)).ok();
+                Timer::after(Duration::from_secs(3)).await;
             }
         }
     }
@@ -75,15 +72,13 @@ async fn watch_chain(
     tx.enqueue(UiEvent::Status(Status::Dim("connecting...")))
         .ok();
 
-    log::info!("watch_chain: starting connection");
     let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
     let mut chain = sube::connect_edge("wss://kreivo.io", &NET, rng, &[])
         .await
         .map_err(|e| {
-            log::error!("watch_chain: connect failed: {e}");
-            "sube connect failed"
+            log::error!("sube connect: {e}");
+            "connect failed"
         })?;
-    log::info!("watch_chain: connected, loading metadata");
 
     tx.enqueue(UiEvent::Status(Status::Dim("loading metadata...")))
         .ok();
@@ -93,10 +88,9 @@ async fn watch_chain(
         .await
         .map(|m| *chain.metadata_mut() = alloc::sync::Arc::new(m))
         .map_err(|e| {
-            log::error!("watch_chain: metadata failed: {e}");
+            log::error!("metadata: {e}");
             "metadata failed"
         })?;
-    log::info!("watch_chain: metadata loaded, starting event loop");
 
     tx.enqueue(UiEvent::Live(true)).ok();
     tx.enqueue(UiEvent::Status(Status::Good(""))).ok();
@@ -109,12 +103,12 @@ async fn watch_chain(
                 if let Ok(header) = chain.header(&hash).await {
                     tx.enqueue(UiEvent::Block(header.number as u32)).ok();
                 }
-                // Query collator storage every 5th block to reduce heap pressure
                 block_count += 1;
                 if block_count % 5 == 1 {
                     let mut blocks = [0u32; 6];
                     for (i, addr) in COLLATORS.iter().enumerate() {
-                        let path = alloc::format!("collator-selection/last-authored-block/{addr}");
+                        let path =
+                            alloc::format!("collator-selection/last-authored-block/{addr}");
                         if let Ok((entry, _)) = chain
                             .query_at_hash(&path, &hash)
                             .await
@@ -128,7 +122,7 @@ async fn watch_chain(
             }
             Ok(_) => {}
             Err(e) => {
-                log::error!("Chain: {e}");
+                log::error!("chain event: {e}");
                 return Err("chain disconnected");
             }
         }

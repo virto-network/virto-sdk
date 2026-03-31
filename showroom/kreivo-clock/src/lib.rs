@@ -26,79 +26,16 @@ static BATTERY_LEVEL: AtomicU8 = AtomicU8::new(255);
 /// Set by PMU task on button press, consumed by UI core.
 static SCREEN_TOGGLE: AtomicBool = AtomicBool::new(false);
 
-/// What the chain watcher loop needs after device init.
+/// What the app needs after device init.
 pub struct Runtime {
-    wifi: esp_radio::wifi::WifiController<'static>,
     pub stack: embassy_net::Stack<'static>,
     pub events: Producer<'static, UiEvent, 16>,
 }
 
-impl Runtime {
-    /// Ensure WiFi is connected and IP is assigned.
-    /// Call before each `watch_chain` attempt.
-    pub async fn connect(&mut self) {
-        self.events
-            .enqueue(UiEvent::Status(Status::Dim("connecting wifi...")))
-            .ok();
-        log::info!("WiFi: starting connection...");
-        loop {
-            match self.wifi.connect_async().await {
-                Ok(()) => break,
-                Err(e) => {
-                    log::warn!("WiFi connect failed: {:?}, retry in 5s", e);
-                    self.events
-                        .enqueue(UiEvent::Status(Status::Error("wifi retry...")))
-                        .ok();
-                    Timer::after(Duration::from_secs(5)).await;
-                }
-            }
-        }
-        log::info!("WiFi: associated with AP");
-        self.events.enqueue(UiEvent::Wifi(true)).ok();
-
-        self.events
-            .enqueue(UiEvent::Status(Status::Dim("getting IP...")))
-            .ok();
-        let mut ip_wait = 0u32;
-        loop {
-            if self.stack.is_config_up() {
-                break;
-            }
-            ip_wait += 1;
-            if ip_wait % 25 == 0 {
-                log::warn!("DHCP: still waiting after {}s", ip_wait / 5);
-            }
-            Timer::after(Duration::from_millis(200)).await;
-        }
-        let ip = self.stack.config_v4().map(|c| c.address);
-        log::info!("IP acquired: {:?}", ip);
-        self.events
-            .enqueue(UiEvent::Status(Status::Good("wifi ok")))
-            .ok();
-    }
-
-    /// Tear down WiFi after a chain disconnect.
-    pub async fn disconnect(&mut self) {
-        log::info!("WiFi: disconnecting...");
-        let _ = self.wifi.disconnect_async().await;
-        log::info!("WiFi: disconnected, waiting 1s before reconnect");
-        Timer::after(Duration::from_secs(1)).await;
-    }
-
-    /// Report a chain error to the UI and pause before reconnecting.
-    pub async fn report_disconnected(&mut self) {
-        log::warn!("chain disconnected, will reconnect in 3s");
-        self.events.enqueue(UiEvent::Live(false)).ok();
-        self.events.enqueue(UiEvent::Wifi(false)).ok();
-        self.events
-            .enqueue(UiEvent::Status(Status::Error("reconnecting...")))
-            .ok();
-        Timer::after(Duration::from_secs(3)).await;
-    }
-}
-
-/// Initialize hardware, start PMU polling and UI render core.
-/// Returns the bits the sube chain watcher needs.
+/// Initialize hardware, start background tasks (WiFi, PMU), and UI core.
+///
+/// WiFi connects automatically in the background and reconnects on failure.
+/// Returns once WiFi has an IP address so the app can start immediately.
 pub async fn start(spawner: Spawner) -> Runtime {
     let system = device::board::init(spawner).await;
 
@@ -111,6 +48,9 @@ pub async fn start(spawner: Spawner) -> Runtime {
     // Start PMU polling task (battery + button)
     spawner.spawn(pmu_task(system.pmu)).ok();
 
+    // Start WiFi management task (connect + auto-reconnect)
+    spawner.spawn(wifi_task(system.wifi)).ok();
+
     // Start core 1: UI render loop
     let mut cpu_control = CpuControl::new(system.cpu_ctrl);
     let stack = APP_CORE_STACK.init(Stack::new());
@@ -121,10 +61,41 @@ pub async fn start(spawner: Spawner) -> Runtime {
         .expect("start core 1");
     core::mem::forget(_guard);
 
+    // Wait for WiFi + IP before returning
+    log::info!("WiFi: waiting for connection...");
+    loop {
+        if system.stack.is_config_up() {
+            break;
+        }
+        Timer::after(Duration::from_millis(200)).await;
+    }
+    log::info!("IP: {:?}", system.stack.config_v4().map(|c| c.address));
+
     Runtime {
-        wifi: system.wifi,
         stack: system.stack,
         events: producer,
+    }
+}
+
+/// Background task: keep WiFi connected, reconnect on failure.
+#[embassy_executor::task]
+async fn wifi_task(mut wifi: esp_radio::wifi::WifiController<'static>) {
+    loop {
+        log::info!("WiFi: connecting...");
+        match wifi.connect_async().await {
+            Ok(()) => {
+                log::info!("WiFi: connected");
+                wifi.wait_for_event(esp_radio::wifi::WifiEvent::StaDisconnected)
+                    .await;
+                log::warn!("WiFi: disconnected, reconnecting in 1s");
+            }
+            Err(e) => {
+                log::warn!("WiFi: connect failed: {:?}, retry in 5s", e);
+                Timer::after(Duration::from_secs(5)).await;
+                continue;
+            }
+        }
+        Timer::after(Duration::from_secs(1)).await;
     }
 }
 
