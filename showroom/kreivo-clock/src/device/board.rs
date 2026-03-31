@@ -53,6 +53,7 @@ pub struct System<'a> {
 pub async fn init(spawner: Spawner) -> System<'static> {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+    esp_println::logger::init_logger(log::LevelFilter::Info);
     esp_alloc::heap_allocator!(size: 180224); // 176KB — WiFi needs the rest
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
