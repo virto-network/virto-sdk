@@ -447,33 +447,31 @@ impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
 pub type EdgeSube =
     Sube<crate::rpc::chainhead::ChainHead<crate::rpc::edge::Backend<crate::rpc::edge::EdgeSocket>>>;
 
-/// Re-export for callers to create static buffers.
+/// Re-export for callers.
 #[cfg(feature = "ws-edge")]
-pub use crate::rpc::edge::EdgeBuffers;
+pub use crate::rpc::edge::EdgeNet;
 
 /// Connect to a Substrate chain from an embedded device.
 ///
 /// Handles everything: DNS → TCP → TLS → WebSocket → ChainHead → filtered
 /// metadata. Returns a [`Sube`] handle ready for human-readable queries.
 ///
-/// `bufs` provides reusable socket buffers — store in a `static`:
-///
 /// ```rust,ignore
-/// static BUFS: EdgeBuffers = EdgeBuffers::new();
+/// static NET: sube::EdgeNet = sube::EdgeNet::new();
+/// // after WiFi:
+/// NET.init(stack);
 /// let rng = esp_hal::rng::Trng::try_new()?;
-/// let mut chain = sube::connect_edge(
-///     "wss://kreivo.io", stack, rng, &BUFS, &["CollatorSelection"],
-/// ).await?;
+/// let mut chain = sube::connect_edge("wss://kreivo.io", &NET, rng, &["CollatorSelection"])
+///     .await?;
 /// ```
 #[cfg(feature = "ws-edge")]
 pub async fn connect_edge(
     url: &str,
-    stack: embassy_net::Stack<'static>,
+    net: &'static crate::rpc::edge::EdgeNet,
     rng: impl rand_core::CryptoRng + Send + 'static,
-    bufs: &'static crate::rpc::edge::EdgeBuffers,
     pallets: &[&str],
 ) -> SubeResult<EdgeSube> {
-    let ws = crate::rpc::edge::edge_connect(url, stack, rng, bufs).await?;
+    let ws = crate::rpc::edge::edge_connect(url, net, rng).await?;
     log::info!("sube: starting ChainHead session");
     let mut chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
     let meta = if pallets.is_empty() {

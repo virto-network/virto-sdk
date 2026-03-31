@@ -24,7 +24,7 @@ use kreivo_clock::device::event::{Status, UiEvent};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static EDGE_BUFS: sube::EdgeBuffers = sube::EdgeBuffers::new();
+static NET: sube::EdgeNet = sube::EdgeNet::new();
 
 /// Hex-encoded public keys of the 6 active Kreivo collators.
 const COLLATORS: [&str; 6] = [
@@ -40,6 +40,7 @@ const COLLATORS: [&str; 6] = [
 async fn main(spawner: Spawner) -> ! {
     let mut rt = kreivo_clock::start(spawner).await;
     rt.connect().await;
+    NET.init(rt.stack);
 
     // watch_chain connects once and runs until disconnect.
     // On failure, reconnect WiFi only if needed, then retry.
@@ -47,7 +48,7 @@ async fn main(spawner: Spawner) -> ! {
     // retry indefinitely — reboot after a few failures.
     let mut retries = 0u8;
     loop {
-        match watch_chain(rt.stack, &mut rt.events).await {
+        match watch_chain(&mut rt.events).await {
             Ok(()) => retries = 0,
             Err(e) => {
                 log::error!("{e}");
@@ -69,7 +70,6 @@ async fn main(spawner: Spawner) -> ! {
 // ── sube: chain watcher ────────────────────────────────────────────────
 
 async fn watch_chain(
-    stack: embassy_net::Stack<'static>,
     tx: &mut Producer<'static, UiEvent, 16>,
 ) -> Result<(), &'static str> {
     tx.enqueue(UiEvent::Status(Status::Dim("connecting...")))
@@ -77,7 +77,7 @@ async fn watch_chain(
 
     log::info!("watch_chain: starting connection");
     let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
-    let mut chain = sube::connect_edge("wss://kreivo.io", stack, rng, &EDGE_BUFS, &[])
+    let mut chain = sube::connect_edge("wss://kreivo.io", &NET, rng, &[])
         .await
         .map_err(|e| {
             log::error!("watch_chain: connect failed: {e}");

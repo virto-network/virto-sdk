@@ -528,28 +528,45 @@ impl Write for EdgeSocket {
 ///
 /// Socket buffers and TLS state are heap-allocated with `'static` lifetime,
 /// suitable for single-connection embedded devices.
-/// Pre-allocated buffers for [`edge_connect`].
+/// Network context for embedded edge connections.
 ///
-/// Create once and reuse across reconnects. Safe to store in a `static`.
+/// Groups the embassy network stack, socket buffers, and provides
+/// everything [`connect_edge`](crate::connect_edge) needs besides the URL.
+/// Store in a `static` and initialize once at startup.
 ///
 /// ```rust,ignore
-/// static BUFS: sube::EdgeBuffers = sube::EdgeBuffers::new();
-/// let mut chain = sube::connect_edge("wss://kreivo.io", stack, rng, &BUFS, &[]).await?;
+/// static NET: sube::EdgeNet = sube::EdgeNet::new();
+/// // after WiFi is up:
+/// NET.init(stack, rng);
+/// let mut chain = sube::connect_edge("wss://kreivo.io", &NET, &["CollatorSelection"]).await?;
 /// ```
-pub struct EdgeBuffers {
+pub struct EdgeNet {
+    stack: core::cell::UnsafeCell<Option<embassy_net::Stack<'static>>>,
     rx: core::cell::UnsafeCell<[u8; 2048]>,
     tx: core::cell::UnsafeCell<[u8; 2048]>,
 }
 
 // SAFETY: single-threaded embassy executor, only one connection at a time.
-unsafe impl Sync for EdgeBuffers {}
+unsafe impl Sync for EdgeNet {}
 
-impl EdgeBuffers {
+impl EdgeNet {
     pub const fn new() -> Self {
         Self {
+            stack: core::cell::UnsafeCell::new(None),
             rx: core::cell::UnsafeCell::new([0u8; 2048]),
             tx: core::cell::UnsafeCell::new([0u8; 2048]),
         }
+    }
+
+    /// Set the network stack. Call once after WiFi is connected.
+    pub fn init(&self, stack: embassy_net::Stack<'static>) {
+        // SAFETY: single-threaded, called once at startup.
+        unsafe { *self.stack.get() = Some(stack) };
+    }
+
+    fn stack(&self) -> crate::Result<embassy_net::Stack<'static>> {
+        // SAFETY: single-threaded, init called before use.
+        unsafe { (*self.stack.get()).ok_or(crate::Error::ChainUnavailable) }
     }
 }
 
@@ -563,18 +580,18 @@ impl EdgeBuffers {
 /// reused if this function is called again (mbedtls drops the old one).
 pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
     url: &str,
-    stack: embassy_net::Stack<'static>,
+    net: &'static EdgeNet,
     rng: R,
-    bufs: &'static EdgeBuffers,
 ) -> crate::Result<Backend<EdgeSocket>> {
     use alloc::boxed::Box;
     use alloc::format;
 
     let parsed = parse_url(url)?;
+    let stack = net.stack()?;
     log::info!("edge: connecting to {} (tls={})", parsed.host, parsed.tls);
 
     // SAFETY: single-threaded executor, only one connection at a time.
-    let (rx, tx) = unsafe { (&mut *bufs.rx.get(), &mut *bufs.tx.get()) };
+    let (rx, tx) = unsafe { (&mut *net.rx.get(), &mut *net.tx.get()) };
     let mut socket = TcpSocket::new(stack, rx, tx);
     socket.set_timeout(Some(embassy_time::Duration::from_secs(15)));
 
