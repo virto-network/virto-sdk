@@ -236,10 +236,8 @@ fn ws_err<E>(ctx: &str, e: edge_ws::Error<E>) -> JsonRpcError {
 // --- Streaming hex reader ---
 
 /// Reads a large WebSocket message, hex-decoding the `"output":"0x..."` field
-/// on the fly without assembling the full message. Implements
-/// `embedded_io_async::Read` so it can feed a `StreamCursor`.
-///
-/// Used for streaming metadata decode on memory-constrained devices.
+/// on the fly in small chunks without allocating the full frame.
+/// Implements `embedded_io_async::Read` so it can feed a `StreamCursor`.
 pub struct HexFrameReader<'a, T> {
     backend: &'a mut Backend<T>,
     /// Decoded bytes ready to be read.
@@ -250,7 +248,11 @@ pub struct HexFrameReader<'a, T> {
     in_hex: bool,
     /// Carry byte from an odd-length hex chunk.
     carry: Option<u8>,
-    /// True once the closing `"` has been found.
+    /// Remaining payload bytes in the current frame.
+    remaining: usize,
+    /// True if current frame is the last (or only) one.
+    is_final: bool,
+    /// True once hex stream is complete.
     done: bool,
 }
 
@@ -262,83 +264,132 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
             read_pos: 0,
             in_hex: false,
             carry: None,
+            remaining: 0,
+            is_final: false,
             done: false,
         }
     }
 
-    /// Read and process the next WebSocket frame, populating `self.decoded`.
+    /// Read the next chunk from the current frame, or start a new frame.
     async fn fetch_next_chunk(&mut self) -> Result<bool, Error> {
         if self.done {
             return Ok(false);
         }
 
         loop {
-            let (frame_type, data) = self
-                .backend
-                .read_frame()
-                .await
-                .map_err(|e| Error::Node(alloc::format!("hex reader: {e}")))?;
+            // If we have remaining payload in the current frame, read a chunk
+            if self.remaining > 0 {
+                let mut chunk = [0u8; 1024];
+                let to_read = self.remaining.min(chunk.len());
+                read_exact(&mut self.backend.stream, &mut chunk[..to_read])
+                    .await
+                    .map_err(|_| Error::Node("frame payload read failed".into()))?;
+                self.remaining -= to_read;
 
-            let is_text_data = match frame_type {
-                FrameType::Text(false) => true, // complete single frame
-                FrameType::Text(true) => true,  // first fragment
-                FrameType::Continue(_) => true, // continuation
+                self.decoded.clear();
+                self.read_pos = 0;
+
+                if !self.in_hex {
+                    if let Some(pos) = find_hex_start(&chunk[..to_read]) {
+                        self.in_hex = true;
+                        log::debug!("hex reader: found hex start at offset {}", pos);
+                        self.decode_hex_chunk(&chunk[pos..to_read]);
+                    }
+                } else {
+                    self.decode_hex_chunk(&chunk[..to_read]);
+                }
+
+                // Frame fully consumed — check if message is complete
+                if self.remaining == 0 && self.is_final {
+                    self.done = true;
+                }
+
+                if !self.decoded.is_empty() {
+                    return Ok(true);
+                }
+
+                if self.done {
+                    return Ok(false);
+                }
+                continue;
+            }
+
+            // Start a new frame
+            let header = FrameHeader::recv(&mut self.backend.stream)
+                .await
+                .map_err(|_| Error::Node("hex reader: frame header read failed".into()))?;
+
+            match header.frame_type {
+                FrameType::Text(fragmented) => {
+                    self.remaining = header.payload_len as usize;
+                    self.is_final = !fragmented;
+                }
+                FrameType::Continue(fin) => {
+                    self.remaining = header.payload_len as usize;
+                    self.is_final = fin;
+                }
                 FrameType::Ping => {
-                    // Send pong
+                    // Read ping payload and pong
+                    let len = (header.payload_len as usize).min(125);
+                    let mut ping = [0u8; 125];
+                    if len > 0 {
+                        read_exact(&mut self.backend.stream, &mut ping[..len])
+                            .await
+                            .ok();
+                    }
                     let pong = FrameHeader {
                         frame_type: FrameType::Pong,
-                        payload_len: data.len() as u64,
+                        payload_len: len as u64,
                         mask_key: Some(0),
                     };
                     let _ = pong.send(&mut self.backend.stream).await;
-                    let _ = pong.send_payload(&mut self.backend.stream, &data).await;
+                    let _ = pong
+                        .send_payload(&mut self.backend.stream, &ping[..len])
+                        .await;
                     continue;
                 }
                 FrameType::Close => {
                     self.done = true;
                     return Err(Error::Node("connection closed during hex stream".into()));
                 }
-                _ => continue,
-            };
-
-            if !is_text_data {
-                continue;
+                _ => {
+                    // Skip unknown frame payload
+                    let mut skip = header.payload_len as usize;
+                    let mut discard = [0u8; 256];
+                    while skip > 0 {
+                        let n = skip.min(discard.len());
+                        let _ = read_exact(&mut self.backend.stream, &mut discard[..n]).await;
+                        skip -= n;
+                    }
+                    continue;
+                }
             }
 
-            self.decoded.clear();
-            self.read_pos = 0;
+            // For small complete frames without hex, skip (block events etc.)
+            if self.remaining < 4096 && self.is_final && !self.in_hex {
+                let len = self.remaining;
+                let mut small = Vec::new();
+                small.resize(len, 0);
+                read_exact(&mut self.backend.stream, &mut small)
+                    .await
+                    .map_err(|_| Error::Node("small frame read failed".into()))?;
+                self.remaining = 0;
 
-            if !self.in_hex {
-                // Scan for "0x" in the JSON
-                if let Some(pos) = find_hex_start(&data) {
+                if find_hex_start(&small).is_some() {
+                    // Oops, it does have hex — process it
+                    let pos = find_hex_start(&small).unwrap();
                     self.in_hex = true;
-                    self.decode_hex_chunk(&data[pos..]);
+                    self.decoded.clear();
+                    self.read_pos = 0;
+                    self.decode_hex_chunk(&small[pos..]);
+                    self.done = true; // single frame = done
+                    if !self.decoded.is_empty() {
+                        return Ok(true);
+                    }
+                    return Ok(false);
                 }
-                // If we're at a frame boundary and haven't found hex yet,
-                // check if the message is complete (unfragmented)
-                if matches!(frame_type, FrameType::Text(false)) && !self.in_hex {
-                    // Whole message had no hex data — shouldn't happen for metadata
-                    self.done = true;
-                    return Err(Error::Node("no hex data found in response".into()));
-                }
-            } else {
-                self.decode_hex_chunk(&data);
-            }
-
-            // Check for message completion
-            if matches!(
-                frame_type,
-                FrameType::Text(false) | FrameType::Continue(true)
-            ) {
-                self.done = true;
-            }
-
-            if !self.decoded.is_empty() {
-                return Ok(true);
-            }
-
-            if self.done {
-                return Ok(false);
+                log::debug!("hex reader: skipped small frame ({} bytes)", len);
+                continue;
             }
         }
     }
@@ -347,7 +398,6 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
     fn decode_hex_chunk(&mut self, data: &[u8]) {
         let mut i = 0;
 
-        // Handle carry from previous chunk
         if let Some(hi) = self.carry.take() {
             if i < data.len() {
                 if data[i] == b'"' {
@@ -367,7 +417,6 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
                 return;
             }
             if i + 1 >= data.len() {
-                // Odd byte — carry to next chunk
                 self.carry = Some(data[i]);
                 return;
             }
@@ -385,7 +434,6 @@ impl<T: Read + Write> embedded_io_async::ErrorType for HexFrameReader<'_, T> {
 
 impl<T: Read + Write> embedded_io_async::Read for HexFrameReader<'_, T> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        // Return buffered data first
         let available = self.decoded.len() - self.read_pos;
         if available > 0 {
             let n = available.min(buf.len());
@@ -394,7 +442,6 @@ impl<T: Read + Write> embedded_io_async::Read for HexFrameReader<'_, T> {
             return Ok(n);
         }
 
-        // Fetch more data
         match self.fetch_next_chunk().await {
             Ok(true) => {
                 let n = self.decoded.len().min(buf.len());
@@ -402,10 +449,26 @@ impl<T: Read + Write> embedded_io_async::Read for HexFrameReader<'_, T> {
                 self.read_pos = n;
                 Ok(n)
             }
-            Ok(false) => Ok(0), // EOF
-            Err(_) => Err(embedded_io_async::ErrorKind::Other),
+            Ok(false) => Ok(0),
+            Err(e) => {
+                log::error!("hex reader: {e}");
+                Err(embedded_io_async::ErrorKind::Other)
+            }
         }
     }
+}
+
+/// Read exactly `buf.len()` bytes from the stream.
+async fn read_exact(stream: &mut (impl Read + Write), buf: &mut [u8]) -> Result<(), ()> {
+    let mut pos = 0;
+    while pos < buf.len() {
+        match stream.read(&mut buf[pos..]).await {
+            Ok(0) => return Err(()),
+            Ok(n) => pos += n,
+            Err(_) => return Err(()),
+        }
+    }
+    Ok(())
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -620,13 +683,22 @@ pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
 
     let stream = if parsed.tls {
         log::debug!("edge: starting TLS handshake");
-        // RNG + host CStr are small, leak is acceptable
+
+        // Drop the previous Tls singleton (if any) so we can create a new one.
+        // SAFETY: single-threaded, the old Session referencing it has been dropped.
+        use core::sync::atomic::{AtomicPtr, Ordering};
+        static TLS_PTR: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+        let old = TLS_PTR.swap(core::ptr::null_mut(), Ordering::Relaxed);
+        if !old.is_null() {
+            unsafe { drop(Box::from_raw(old as *mut mbedtls_rs::Tls<'static>)) };
+        }
+
         let rng = Box::leak(Box::new(rng));
         let tls_ctx =
             mbedtls_rs::Tls::new(rng).map_err(|e| Error::Node(format!("TLS init: {e:?}")))?;
-        // Tls is a singleton — creating a new one drops the previous.
-        // Leak the context so the Session can borrow it with 'static.
         let tls_ctx = Box::leak(Box::new(tls_ctx));
+
+        TLS_PTR.store(tls_ctx as *mut _ as *mut u8, Ordering::Relaxed);
         let host_cstr = Box::leak(format!("{}\0", parsed.host).into_boxed_str());
         let conf = Box::leak(Box::new(mbedtls_rs::SessionConfig::Client(
             mbedtls_rs::ClientSessionConfig {
