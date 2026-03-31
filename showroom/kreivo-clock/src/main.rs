@@ -24,6 +24,8 @@ use kreivo_clock::device::event::{Status, UiEvent};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+static EDGE_BUFS: sube::EdgeBuffers = sube::EdgeBuffers::new();
+
 /// Hex-encoded public keys of the 6 active Kreivo collators.
 const COLLATORS: [&str; 6] = [
     "0x64aee1f58697a75f9fc8eed9bfc4b04c49b06e2d0ee9ce55c6e1deb5a70a1546",
@@ -75,7 +77,7 @@ async fn watch_chain(
 
     log::info!("watch_chain: starting connection");
     let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
-    let mut chain = sube::connect_edge("wss://kreivo.io", stack, rng, &[])
+    let mut chain = sube::connect_edge("wss://kreivo.io", stack, rng, &EDGE_BUFS, &[])
         .await
         .map_err(|e| {
             log::error!("watch_chain: connect failed: {e}");

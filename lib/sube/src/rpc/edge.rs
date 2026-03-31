@@ -528,10 +528,44 @@ impl Write for EdgeSocket {
 ///
 /// Socket buffers and TLS state are heap-allocated with `'static` lifetime,
 /// suitable for single-connection embedded devices.
+/// Pre-allocated buffers for [`edge_connect`].
+///
+/// Create once and reuse across reconnects. Safe to store in a `static`.
+///
+/// ```rust,ignore
+/// static BUFS: sube::EdgeBuffers = sube::EdgeBuffers::new();
+/// let mut chain = sube::connect_edge("wss://kreivo.io", stack, rng, &BUFS, &[]).await?;
+/// ```
+pub struct EdgeBuffers {
+    rx: core::cell::UnsafeCell<[u8; 2048]>,
+    tx: core::cell::UnsafeCell<[u8; 2048]>,
+}
+
+// SAFETY: single-threaded embassy executor, only one connection at a time.
+unsafe impl Sync for EdgeBuffers {}
+
+impl EdgeBuffers {
+    pub const fn new() -> Self {
+        Self {
+            rx: core::cell::UnsafeCell::new([0u8; 2048]),
+            tx: core::cell::UnsafeCell::new([0u8; 2048]),
+        }
+    }
+}
+
+/// Establish a WebSocket connection from a URL and network stack.
+///
+/// For `wss://` URLs: DNS → TCP → TLS → WebSocket.
+/// For `ws://` URLs: DNS → TCP → WebSocket (no TLS, for local testing).
+///
+/// `bufs` must have `'static` lifetime — use a `StaticCell` on embedded.
+/// TLS state is heap-allocated on first call. The `Tls` singleton is
+/// reused if this function is called again (mbedtls drops the old one).
 pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
     url: &str,
     stack: embassy_net::Stack<'static>,
     rng: R,
+    bufs: &'static EdgeBuffers,
 ) -> crate::Result<Backend<EdgeSocket>> {
     use alloc::boxed::Box;
     use alloc::format;
@@ -539,9 +573,8 @@ pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
     let parsed = parse_url(url)?;
     log::info!("edge: connecting to {} (tls={})", parsed.host, parsed.tls);
 
-    // Heap-allocate socket buffers with 'static lifetime (2KB each)
-    let rx = &mut *Box::leak(Box::new([0u8; 2048]));
-    let tx = &mut *Box::leak(Box::new([0u8; 2048]));
+    // SAFETY: single-threaded executor, only one connection at a time.
+    let (rx, tx) = unsafe { (&mut *bufs.rx.get(), &mut *bufs.tx.get()) };
     let mut socket = TcpSocket::new(stack, rx, tx);
     socket.set_timeout(Some(embassy_time::Duration::from_secs(15)));
 
@@ -570,10 +603,13 @@ pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
 
     let stream = if parsed.tls {
         log::debug!("edge: starting TLS handshake");
+        // RNG + host CStr are small, leak is acceptable
         let rng = Box::leak(Box::new(rng));
-        let tls_ctx = Box::leak(Box::new(
-            mbedtls_rs::Tls::new(rng).map_err(|e| Error::Node(format!("TLS init: {e:?}")))?,
-        ));
+        let tls_ctx =
+            mbedtls_rs::Tls::new(rng).map_err(|e| Error::Node(format!("TLS init: {e:?}")))?;
+        // Tls is a singleton — creating a new one drops the previous.
+        // Leak the context so the Session can borrow it with 'static.
+        let tls_ctx = Box::leak(Box::new(tls_ctx));
         let host_cstr = Box::leak(format!("{}\0", parsed.host).into_boxed_str());
         let conf = Box::leak(Box::new(mbedtls_rs::SessionConfig::Client(
             mbedtls_rs::ClientSessionConfig {

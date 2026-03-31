@@ -54,7 +54,7 @@ pub use scales::{self, Registry, Value};
 pub use serde_json::{json, Value as JsonValue};
 
 #[cfg(feature = "ws-edge")]
-pub use builder::connect_edge;
+pub use builder::{connect_edge, EdgeBuffers};
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 pub use extrinsic::{EncodeCall, Text};
 pub use meta::Metadata;
