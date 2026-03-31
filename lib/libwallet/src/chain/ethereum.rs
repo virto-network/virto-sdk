@@ -1,33 +1,43 @@
 use crate::bip32::ExtendedKey;
+use crate::chain::KeyStore;
 use crate::vault::{utils::DerivedSigner, Vault};
 
-/// BIP44 path for Bitcoin
-const DEFAULT_PATH: &str = "m/44'/0'/0'/0/0";
-/// BIP84 path for native SegWit (bech32)
-pub const SEGWIT_PATH: &str = "m/84'/0'/0'/0/0";
+const DEFAULT_PATH: &str = "m/44'/60'/0'/0/0";
 
-/// A vault wrapper that produces Bitcoin-compatible secp256k1 signers
+/// A vault wrapper that produces Ethereum-compatible secp256k1 signers
 /// using BIP32 hierarchical deterministic derivation.
 ///
 /// ```ignore
-/// let keys = Simple::from_phrase("...");
-/// let mut vault = Bitcoin::new(keys);
-/// // Default BIP44 path: m/44'/0'/0'/0/0
+/// let keys = Simple::from_phrase("...")?;
+/// let mut vault = Ethereum::new(keys);
+/// // Default path: m/44'/60'/0'/0/0
 /// let signer = vault.unlock(None, ()).await?;
-/// // SegWit path:
-/// let signer = vault.unlock(Some("m/84'/0'/0'/0/0"), ()).await?;
+/// // Custom path:
+/// let signer = vault.unlock(Some("m/44'/60'/0'/0/1"), ()).await?;
 /// ```
-pub struct Bitcoin<K> {
+pub struct Ethereum<K> {
     keys: K,
 }
 
-impl<K> Bitcoin<K> {
+impl<K> Ethereum<K> {
     pub fn new(keys: K) -> Self {
-        Bitcoin { keys }
+        Ethereum { keys }
     }
 }
 
-impl<K: crate::substrate_ext::KeyStore> Vault for Bitcoin<K> {
+/// Derive an Ethereum address (last 20 bytes of keccak256(uncompressed_pubkey))
+pub fn eth_address(pubkey: &k256::ecdsa::VerifyingKey) -> [u8; 20] {
+    use sha3::{Keccak256, Digest};
+    let uncompressed = pubkey.to_encoded_point(false);
+    let mut hasher = Keccak256::new();
+    hasher.update(&uncompressed.as_bytes()[1..]); // skip 0x04 prefix
+    let hash = hasher.finalize();
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&hash[12..32]);
+    addr
+}
+
+impl<K: KeyStore> Vault for Ethereum<K> {
     type Credentials = ();
     type Error = crate::vault::VaultError<K::Error>;
     type Id = Option<&'static str>;
@@ -40,7 +50,7 @@ impl<K: crate::substrate_ext::KeyStore> Vault for Bitcoin<K> {
     ) -> Result<Self::Signer, Self::Error> {
         use crate::vault::VaultError;
         let entropy = self.keys.unlock().map_err(VaultError::KeyStore)?;
-        let seed = crate::substrate_ext::substrate_seed(entropy, "");
+        let seed = crate::chain::seed_from_entropy(entropy, "");
 
         let path = path.unwrap_or(DEFAULT_PATH);
         let derived = ExtendedKey::from_seed(&*seed)

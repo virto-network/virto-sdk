@@ -81,8 +81,7 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-#[cfg(feature = "substrate")]
-impl<S> crate::substrate_ext::KeyStore for OSKeyring<S> {
+impl<S> crate::chain::KeyStore for OSKeyring<S> {
     type Error = Error;
     fn unlock(&mut self) -> Result<&[u8], Self::Error> {
         if self.entropy.is_none() {

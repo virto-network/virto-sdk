@@ -413,7 +413,7 @@ pub mod sr25519 {
                 ),
             ] {
                 let phrase = Mnemonic::from_phrase(phrase).unwrap();
-                let seed = crate::substrate_seed(phrase.entropy(), "");
+                let seed = crate::seed_from_entropy(phrase.entropy(), "");
 
                 let root: super::Pair = Pair::from_bytes(&*seed).expect("valid seed");
                 let derived = root.derive(path);

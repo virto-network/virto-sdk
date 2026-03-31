@@ -1,4 +1,5 @@
 use crate::bip32::ExtendedKey;
+use crate::chain::KeyStore;
 use crate::vault::{utils::DerivedSigner, Vault};
 
 /// Cosmos/Tendermint default BIP44 path (coin type 118)
@@ -8,7 +9,7 @@ const DEFAULT_PATH: &str = "m/44'/118'/0'/0/0";
 /// using BIP32 hierarchical deterministic derivation.
 ///
 /// ```ignore
-/// let keys = Simple::from_phrase("...");
+/// let keys = Simple::from_phrase("...")?;
 /// let mut vault = Cosmos::new(keys);
 /// let signer = vault.unlock(None, ()).await?;
 /// ```
@@ -22,7 +23,7 @@ impl<K> Cosmos<K> {
     }
 }
 
-impl<K: crate::substrate_ext::KeyStore> Vault for Cosmos<K> {
+impl<K: KeyStore> Vault for Cosmos<K> {
     type Credentials = ();
     type Error = crate::vault::VaultError<K::Error>;
     type Id = Option<&'static str>;
@@ -35,7 +36,7 @@ impl<K: crate::substrate_ext::KeyStore> Vault for Cosmos<K> {
     ) -> Result<Self::Signer, Self::Error> {
         use crate::vault::VaultError;
         let entropy = self.keys.unlock().map_err(VaultError::KeyStore)?;
-        let seed = crate::substrate_ext::substrate_seed(entropy, "");
+        let seed = crate::chain::seed_from_entropy(entropy, "");
 
         let path = path.unwrap_or(DEFAULT_PATH);
         let derived = ExtendedKey::from_seed(&*seed)

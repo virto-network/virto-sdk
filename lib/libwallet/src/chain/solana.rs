@@ -1,4 +1,5 @@
 use crate::bip32::Slip10Key;
+use crate::chain::KeyStore;
 use crate::vault::{utils::DerivedSigner, Vault};
 
 /// Solana default BIP44 path (all hardened per SLIP-0010)
@@ -8,7 +9,7 @@ const DEFAULT_PATH: &str = "m/44'/501'/0'/0'";
 /// using SLIP-0010 hierarchical deterministic derivation.
 ///
 /// ```ignore
-/// let keys = Simple::from_phrase("...");
+/// let keys = Simple::from_phrase("...")?;
 /// let mut vault = Solana::new(keys);
 /// let signer = vault.unlock(None, ()).await?;
 /// // Custom account index:
@@ -24,7 +25,7 @@ impl<K> Solana<K> {
     }
 }
 
-impl<K: crate::substrate_ext::KeyStore> Vault for Solana<K> {
+impl<K: KeyStore> Vault for Solana<K> {
     type Credentials = ();
     type Error = crate::vault::VaultError<K::Error>;
     type Id = Option<&'static str>;
@@ -37,7 +38,7 @@ impl<K: crate::substrate_ext::KeyStore> Vault for Solana<K> {
     ) -> Result<Self::Signer, Self::Error> {
         use crate::vault::VaultError;
         let entropy = self.keys.unlock().map_err(VaultError::KeyStore)?;
-        let seed = crate::substrate_ext::substrate_seed(entropy, "");
+        let seed = crate::chain::seed_from_entropy(entropy, "");
 
         let path = path.unwrap_or(DEFAULT_PATH);
         let derived = Slip10Key::from_seed(&*seed)

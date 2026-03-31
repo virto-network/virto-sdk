@@ -133,8 +133,7 @@ impl core::fmt::Display for Error {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-#[cfg(feature = "substrate")]
-impl<Id> crate::substrate_ext::KeyStore for Pass<Id> {
+impl<Id> crate::chain::KeyStore for Pass<Id> {
     type Error = Error;
     fn unlock(&mut self) -> Result<&[u8], Self::Error> {
         if self.entropy.is_none() {

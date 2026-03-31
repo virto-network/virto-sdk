@@ -12,33 +12,23 @@ mod account;
 mod key_pair;
 pub mod util;
 
-#[cfg(feature = "substrate")]
-pub mod substrate_ext;
-#[cfg(feature = "substrate")]
-pub use substrate_ext::{substrate_seed, KeyStore, Substrate};
-
 #[cfg(any(feature = "secp256k1", feature = "ed25519"))]
 pub mod bip32;
 
+pub mod chain;
+pub use chain::KeyStore;
+#[cfg(all(feature = "pbkdf2", feature = "hmac", feature = "sha2"))]
+pub use chain::seed_from_entropy;
+#[cfg(feature = "substrate")]
+pub use chain::Substrate;
 #[cfg(feature = "ethereum")]
-pub mod ethereum_ext;
-#[cfg(feature = "ethereum")]
-pub use ethereum_ext::Ethereum;
-
+pub use chain::Ethereum;
 #[cfg(feature = "bitcoin")]
-pub mod bitcoin_ext;
-#[cfg(feature = "bitcoin")]
-pub use bitcoin_ext::Bitcoin;
-
+pub use chain::Bitcoin;
 #[cfg(feature = "solana")]
-pub mod solana_ext;
-#[cfg(feature = "solana")]
-pub use solana_ext::Solana;
-
+pub use chain::Solana;
 #[cfg(feature = "cosmos")]
-pub mod cosmos_ext;
-#[cfg(feature = "cosmos")]
-pub use cosmos_ext::Cosmos;
+pub use chain::Cosmos;
 
 pub use account::Account;
 use arrayvec::ArrayVec;
