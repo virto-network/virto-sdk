@@ -169,6 +169,13 @@ impl<T: Transport> LedgerSigner<T> {
     }
 }
 
+fn ledger_signing_error(msg: &str) -> SigningError {
+    let mut s = arrayvec::ArrayString::<64>::new();
+    let _ = s.try_push_str("ledger: ");
+    let _ = s.try_push_str(&msg[..msg.len().min(56)]);
+    SigningError::Hardware(s)
+}
+
 impl<T: Transport> Signer for LedgerSigner<T> {
     type Signature = LedgerSignature;
 
@@ -184,7 +191,7 @@ impl<T: Transport> Signer for LedgerSigner<T> {
         let msg_end = path_end + msg.len();
         // APDU data field is limited to 255 bytes
         if msg_end > 255 {
-            return Err(SigningError::Locked);
+            return Err(ledger_signing_error("message too large for APDU"));
         }
         let mut payload = [0u8; MAX_APDU_LEN];
         payload[0] = self.path_len / 4;
@@ -192,7 +199,11 @@ impl<T: Transport> Signer for LedgerSigner<T> {
         payload[path_end..msg_end].copy_from_slice(msg);
 
         let (response, data_len) = self.apdu(0xE0, 0x04, 0x00, 0x00, &payload[..msg_end]).await
-            .map_err(|_| SigningError::Locked)?;
+            .map_err(|e| ledger_signing_error(match e {
+                LedgerError::Transport => "transport error",
+                LedgerError::InvalidPath => "invalid path",
+                LedgerError::DeviceError(_) => "device rejected",
+            }))?;
 
         let mut bytes = [0u8; MAX_SIG_LEN];
         let len = data_len.min(MAX_SIG_LEN);

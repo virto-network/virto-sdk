@@ -1,18 +1,17 @@
 //! Trezor hardware wallet transport.
 //!
-//! Implements the Trezor wire protocol (protobuf over USB HID framing)
+//! Implements the Trezor wire protocol (protobuf over 64-byte USB frames)
 //! with hand-encoded messages for the sign-only flow. No protobuf
 //! library dependency.
 //!
-//! ```ignore
-//! struct UsbHid { /* hidapi handle */ }
-//! impl TrezorTransport for UsbHid {
-//!     type Error = std::io::Error;
-//!     async fn write_chunk(&self, chunk: &[u8; 64]) -> Result<(), Self::Error> { ... }
-//!     async fn read_chunk(&self, chunk: &mut [u8; 64]) -> Result<(), Self::Error> { ... }
-//! }
+//! Includes [`UsbTransport`] for direct USB access via `rusb`, supporting
+//! Trezor One, Model T, and Safe. For custom backends (Bluetooth,
+//! embedded-io, etc.) implement [`TrezorTransport`] directly.
 //!
-//! let signer = TrezorSigner::new(UsbHid::new()?, "m/44'/60'/0'/0/0")?;
+//! ```ignore
+//! let usb = UsbTransport::open()?;
+//! let signer = TrezorSigner::new(usb, "m/44'/60'/0'/0/0")?;
+//! signer.init().await?;
 //! wallet.add(signer);
 //! wallet.sign(tx).await?;
 //! ```
@@ -26,14 +25,19 @@ const CHUNK_SIZE: usize = 64;
 const MAX_MSG_LEN: usize = 256;
 
 // Wire message types
+const MSG_INITIALIZE: u16 = 0;
+const MSG_FEATURES: u16 = 17;
 const MSG_SIGN_MESSAGE: u16 = 38;
 const MSG_MESSAGE_SIGNATURE: u16 = 40;
-#[allow(dead_code)] // used when signing Ethereum messages
-const MSG_ETH_SIGN_MESSAGE: u16 = 64;
 const MSG_ETH_MESSAGE_SIGNATURE: u16 = 67;
-const MSG_BUTTON_REQUEST: u16 = 19;
-const MSG_BUTTON_ACK: u16 = 20;
+const MSG_BUTTON_REQUEST: u16 = 26;
+const MSG_BUTTON_ACK: u16 = 27;
+const MSG_PASSPHRASE_REQUEST: u16 = 41;
+const MSG_PASSPHRASE_ACK: u16 = 42;
 const MSG_FAILURE: u16 = 3;
+
+/// Maximum passphrase length supported by Trezor (50 bytes).
+const MAX_PASSPHRASE_LEN: usize = 50;
 
 /// Transport trait for Trezor USB HID communication.
 /// Implement this for your USB backend (hidapi, embedded-io, etc).
@@ -51,6 +55,18 @@ pub trait TrezorTransport {
         &self,
         chunk: &mut [u8; CHUNK_SIZE],
     ) -> impl core::future::Future<Output = Result<(), Self::Error>>;
+
+    /// Called when the device requests a passphrase from the host.
+    /// Return the passphrase bytes (up to 50 bytes), or `None` to
+    /// enter the passphrase on the device screen instead.
+    ///
+    /// The default delegates to the device screen (`None`).
+    /// Override this to supply a passphrase from the host.
+    fn request_passphrase(
+        &self,
+    ) -> impl core::future::Future<Output = Option<arrayvec::ArrayVec<u8, MAX_PASSPHRASE_LEN>>> {
+        core::future::ready(None)
+    }
 }
 
 /// A signer backed by a Trezor hardware wallet.
@@ -79,21 +95,32 @@ impl Signature for TrezorSignature {}
 pub enum TrezorError {
     Transport,
     InvalidPath,
-    DeviceError,
     BadResponse,
     UserRejected,
 }
 
-impl core::fmt::Display for TrezorError {
-    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+impl TrezorError {
+    fn as_str(&self) -> &str {
         match self {
-            TrezorError::Transport => write!(f, "Trezor transport error"),
-            TrezorError::InvalidPath => write!(f, "Invalid derivation path"),
-            TrezorError::DeviceError => write!(f, "Trezor device error"),
-            TrezorError::BadResponse => write!(f, "Invalid response from device"),
-            TrezorError::UserRejected => write!(f, "User rejected on device"),
+            TrezorError::Transport => "transport error",
+            TrezorError::InvalidPath => "invalid derivation path",
+            TrezorError::BadResponse => "invalid response from device",
+            TrezorError::UserRejected => "user rejected on device",
         }
     }
+}
+
+impl core::fmt::Display for TrezorError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+fn trezor_signing_error(msg: &str) -> SigningError {
+    let mut s = arrayvec::ArrayString::<64>::new();
+    let _ = s.try_push_str("trezor: ");
+    let _ = s.try_push_str(&msg[..msg.len().min(56)]);
+    SigningError::Hardware(s)
 }
 
 impl<T: TrezorTransport> TrezorSigner<T> {
@@ -128,6 +155,37 @@ impl<T: TrezorTransport> TrezorSigner<T> {
         Ok(TrezorSigner { transport, id, path, path_len })
     }
 
+    /// Initialize a session with the Trezor device.
+    /// Must be called before signing. Sends `Initialize` and handles
+    /// the `Features` response plus any passphrase/button prompts.
+    pub async fn init(&self) -> Result<(), TrezorError> {
+        self.send(MSG_INITIALIZE, &[]).await?;
+
+        let mut buf = [0u8; MAX_MSG_LEN];
+        for _ in 0..8 {
+            let (resp_type, resp_len) = self.recv(&mut buf).await?;
+            match resp_type {
+                MSG_FEATURES => return Ok(()),
+                MSG_BUTTON_REQUEST => {
+                    self.send(MSG_BUTTON_ACK, &[]).await?;
+                }
+                MSG_PASSPHRASE_REQUEST => {
+                    let device_wants_onscreen = resp_len > 0
+                        && buf[0] == 0x08 && buf.get(1) == Some(&0x01);
+                    let pp = if device_wants_onscreen {
+                        None
+                    } else {
+                        self.transport.request_passphrase().await
+                    };
+                    self.send(MSG_PASSPHRASE_ACK, &encode_passphrase_ack(&pp)).await?;
+                }
+                MSG_FAILURE => return Err(TrezorError::UserRejected),
+                _ => return Err(TrezorError::BadResponse),
+            }
+        }
+        Err(TrezorError::BadResponse)
+    }
+
     /// Send a framed message to the Trezor device.
     async fn send(&self, msg_type: u16, payload: &[u8]) -> Result<(), TrezorError> {
         let mut chunk = [0u8; CHUNK_SIZE];
@@ -160,10 +218,11 @@ impl<T: TrezorTransport> TrezorSigner<T> {
 
     /// Read a framed message from the Trezor device.
     /// Returns (message_type, data_length) with data written into `buf`.
+    /// If the message is larger than `buf`, excess data is drained from the
+    /// USB endpoint to keep the stream synchronized.
     async fn recv(&self, buf: &mut [u8]) -> Result<(u16, usize), TrezorError> {
         let mut chunk = [0u8; CHUNK_SIZE];
 
-        // Read first chunk
         self.transport.read_chunk(&mut chunk).await.map_err(|_| TrezorError::Transport)?;
 
         if chunk[0] != b'?' || chunk[1] != b'#' || chunk[2] != b'#' {
@@ -172,41 +231,60 @@ impl<T: TrezorTransport> TrezorSigner<T> {
 
         let msg_type = u16::from_be_bytes([chunk[3], chunk[4]]);
         let msg_len = u32::from_be_bytes([chunk[5], chunk[6], chunk[7], chunk[8]]) as usize;
-        // Cap to buffer size AND a reasonable upper bound
-        let total = msg_len.min(buf.len()).min(MAX_MSG_LEN);
+        let kept = msg_len.min(buf.len());
 
-        let first_data = total.min(CHUNK_SIZE - 9);
+        let first_data = kept.min(CHUNK_SIZE - 9);
         buf[..first_data].copy_from_slice(&chunk[9..9 + first_data]);
 
-        // Read continuation chunks (bounded by total which is capped)
-        let mut offset = first_data;
-        while offset < total {
+        // Track how many total bytes we've consumed from the USB stream
+        let mut consumed = CHUNK_SIZE - 9; // first chunk data portion
+        let mut written = first_data;
+
+        // Read continuation chunks until entire msg_len is consumed
+        while consumed < msg_len {
             self.transport.read_chunk(&mut chunk).await.map_err(|_| TrezorError::Transport)?;
             if chunk[0] != b'?' {
                 return Err(TrezorError::BadResponse);
             }
-            let cont_data = (total - offset).min(CHUNK_SIZE - 1);
-            buf[offset..offset + cont_data].copy_from_slice(&chunk[1..1 + cont_data]);
-            offset += cont_data;
+            let avail = (CHUNK_SIZE - 1).min(msg_len - consumed);
+            // Only copy into buf if we still have space
+            if written < kept {
+                let n = avail.min(kept - written);
+                buf[written..written + n].copy_from_slice(&chunk[1..1 + n]);
+                written += n;
+            }
+            consumed += avail;
         }
 
-        Ok((msg_type, total))
+        Ok((msg_type, kept))
     }
 
-    /// Sign a message, handling ButtonRequest/Ack flow.
-    /// Allows at most `MAX_BUTTON_ROUNDS` button confirmations to prevent infinite loops.
+    /// Sign a message, handling device interaction flow (button confirm, passphrase).
+    /// Allows at most `MAX_ROUNDS` interaction rounds to prevent infinite loops.
     async fn sign_raw(&self, msg_type: u16, payload: &[u8]) -> Result<([u8; MAX_SIG_LEN], u8), TrezorError> {
-        const MAX_BUTTON_ROUNDS: usize = 8;
+        const MAX_ROUNDS: usize = 8;
 
         self.send(msg_type, payload).await?;
 
         let mut buf = [0u8; MAX_MSG_LEN];
-        for _ in 0..MAX_BUTTON_ROUNDS {
+        for _ in 0..MAX_ROUNDS {
             let (resp_type, resp_len) = self.recv(&mut buf).await?;
 
             match resp_type {
                 MSG_BUTTON_REQUEST => {
                     self.send(MSG_BUTTON_ACK, &[]).await?;
+                }
+                MSG_PASSPHRASE_REQUEST => {
+                    // If the device says on_device=true (field 1 in the
+                    // response), we must respect it regardless of the callback.
+                    let device_wants_onscreen = resp_len > 0
+                        && buf[0] == 0x08 && buf.get(1) == Some(&0x01);
+                    let pp = if device_wants_onscreen {
+                        None
+                    } else {
+                        self.transport.request_passphrase().await
+                    };
+                    self.send(MSG_PASSPHRASE_ACK, &encode_passphrase_ack(&pp)).await?;
                 }
                 MSG_MESSAGE_SIGNATURE | MSG_ETH_MESSAGE_SIGNATURE => {
                     let sig = parse_signature(&buf[..resp_len])?;
@@ -253,27 +331,49 @@ fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
 }
 
 /// Encode a SignMessage protobuf payload.
-fn encode_sign_message(path: &[u32], message: &[u8], buf: &mut [u8]) -> usize {
+/// Returns `None` if the encoded message doesn't fit in `buf`.
+fn encode_sign_message(path: &[u32], message: &[u8], buf: &mut [u8]) -> Option<usize> {
     let mut pos = 0;
 
-    // Field 1: repeated uint32 address_n
-    // Trezor expects non-packed repeated fields (one tag per element)
+    // Field 1: repeated uint32 address_n (one tag per element)
     for &index in path {
-        // Tag: field 1, wire type 0 (VARINT) = 0x08
+        if pos + 6 > buf.len() { return None; } // tag(1) + varint(up to 5)
         buf[pos] = 0x08;
         pos += 1;
         pos += encode_varint(index as u64, &mut buf[pos..]);
     }
 
-    // Field 2: bytes message
-    // Tag: field 2, wire type 2 (LEN) = 0x12
+    // Field 2: bytes message (tag + length varint + data)
+    let overhead = 1 + 5; // tag + max varint len
+    if pos + overhead + message.len() > buf.len() { return None; }
     buf[pos] = 0x12;
     pos += 1;
     pos += encode_varint(message.len() as u64, &mut buf[pos..]);
     buf[pos..pos + message.len()].copy_from_slice(message);
     pos += message.len();
 
-    pos
+    Some(pos)
+}
+
+/// Encode a PassphraseAck protobuf payload.
+/// `Some(bytes)` → field 1 (passphrase string) on host.
+/// `None` → field 3 (on_device = true), passphrase entered on Trezor screen.
+fn encode_passphrase_ack(passphrase: &Option<arrayvec::ArrayVec<u8, MAX_PASSPHRASE_LEN>>) -> arrayvec::ArrayVec<u8, 64> {
+    let mut out = arrayvec::ArrayVec::new();
+    match passphrase {
+        Some(pp) => {
+            // Field 1: string passphrase (tag 0x0A = field 1, wire type LEN)
+            out.push(0x0a);
+            out.push(pp.len() as u8);
+            out.try_extend_from_slice(pp).ok();
+        }
+        None => {
+            // Field 3: bool on_device = true (tag 0x18 = field 3, wire type VARINT)
+            out.push(0x18);
+            out.push(0x01);
+        }
+    }
+    out
 }
 
 /// Parse a signature from a MessageSignature protobuf response.
@@ -297,7 +397,7 @@ fn parse_signature(buf: &[u8]) -> Result<([u8; MAX_SIG_LEN], u8), TrezorError> {
                     return Err(TrezorError::BadResponse);
                 }
 
-                if field_number == 2 && len <= MAX_SIG_LEN {
+                if field_number == 2 && (len == 64 || len == 65) {
                     let mut sig = [0u8; MAX_SIG_LEN];
                     sig[..len].copy_from_slice(&buf[pos..pos + len]);
                     return Ok((sig, len as u8));
@@ -327,10 +427,11 @@ impl<T: TrezorTransport> Signer for TrezorSigner<T> {
         let path = &self.path[..self.path_len as usize];
 
         let mut payload = [0u8; MAX_MSG_LEN];
-        let payload_len = encode_sign_message(path, msg, &mut payload);
+        let payload_len = encode_sign_message(path, msg, &mut payload)
+            .ok_or_else(|| trezor_signing_error("message too large for payload buffer"))?;
 
         let (bytes, len) = self.sign_raw(MSG_SIGN_MESSAGE, &payload[..payload_len]).await
-            .map_err(|_| SigningError::Locked)?;
+            .map_err(|e| trezor_signing_error(e.as_str()))?;
 
         Ok(TrezorSignature { bytes, len })
     }
@@ -345,6 +446,83 @@ impl<T: TrezorTransport> core::fmt::Debug for TrezorSigner<T> {
         f.debug_struct("TrezorSigner")
             .field("id", &self.id.as_str())
             .finish()
+    }
+}
+
+// -- Built-in USB transport via rusb --
+
+/// Ready-to-use USB transport for Trezor devices.
+///
+/// Supports Trezor One (HID), Model T, and Safe (WebUSB interface 0).
+/// Uses the default `request_passphrase` (empty passphrase). To prompt
+/// the user, wrap this in a newtype and override `request_passphrase`.
+///
+/// ```ignore
+/// let usb = UsbTransport::open()?;
+/// let signer = TrezorSigner::new(usb, "m/44'/0'/0'/0/0")?;
+/// signer.init().await?;
+/// ```
+pub struct UsbTransport {
+    handle: rusb::DeviceHandle<rusb::GlobalContext>,
+    kernel_detached: bool,
+}
+
+// Trezor One
+const VID_ONE: u16 = 0x534c;
+const PID_ONE: u16 = 0x0001;
+// Trezor Model T / Safe 3 / Safe 5
+const VID_T: u16 = 0x1209;
+const PID_T: u16 = 0x53c1;
+const WEBUSB_IFACE: u8 = 0;
+const EP_OUT: u8 = 0x01;
+const EP_IN: u8 = 0x81;
+
+impl UsbTransport {
+    /// Open the first connected Trezor device.
+    pub fn open() -> Result<Self, TrezorError> {
+        let device = rusb::devices()
+            .map_err(|_| TrezorError::Transport)?
+            .iter()
+            .find(|d| {
+                d.device_descriptor().map_or(false, |desc| {
+                    (desc.vendor_id() == VID_ONE && desc.product_id() == PID_ONE)
+                        || (desc.vendor_id() == VID_T && desc.product_id() == PID_T)
+                })
+            })
+            .ok_or(TrezorError::Transport)?;
+
+        let handle = device.open().map_err(|_| TrezorError::Transport)?;
+
+        let kernel_detached = handle.kernel_driver_active(WEBUSB_IFACE).unwrap_or(false);
+        if kernel_detached {
+            handle.detach_kernel_driver(WEBUSB_IFACE).map_err(|_| TrezorError::Transport)?;
+        }
+        handle.claim_interface(WEBUSB_IFACE).map_err(|_| TrezorError::Transport)?;
+
+        Ok(UsbTransport { handle, kernel_detached })
+    }
+}
+
+impl Drop for UsbTransport {
+    fn drop(&mut self) {
+        let _ = self.handle.release_interface(WEBUSB_IFACE);
+        if self.kernel_detached {
+            let _ = self.handle.attach_kernel_driver(WEBUSB_IFACE);
+        }
+    }
+}
+
+impl TrezorTransport for UsbTransport {
+    type Error = rusb::Error;
+
+    async fn write_chunk(&self, chunk: &[u8; CHUNK_SIZE]) -> Result<(), Self::Error> {
+        self.handle.write_interrupt(EP_OUT, chunk, std::time::Duration::from_secs(5))?;
+        Ok(())
+    }
+
+    async fn read_chunk(&self, chunk: &mut [u8; CHUNK_SIZE]) -> Result<(), Self::Error> {
+        self.handle.read_interrupt(EP_IN, chunk, std::time::Duration::from_secs(60))?;
+        Ok(())
     }
 }
 
@@ -477,11 +655,18 @@ mod tests {
         let path = [0x8000002Cu32, 0x8000003C, 0x80000000, 0, 0];
         let msg = b"test message";
         let mut buf = [0u8; 128];
-        let len = encode_sign_message(&path, msg, &mut buf);
+        let len = encode_sign_message(&path, msg, &mut buf).unwrap();
 
-        // Should encode field 1 (path) and field 2 (message)
         assert!(len > 0);
         assert_eq!(buf[0], 0x08); // field 1, wire type varint (non-packed repeated)
+    }
+
+    #[test]
+    fn encode_rejects_oversized_message() {
+        let path = [0x8000002Cu32];
+        let msg = [0u8; 256];
+        let mut buf = [0u8; 32]; // too small
+        assert!(encode_sign_message(&path, &msg, &mut buf).is_none());
     }
 
     #[test]

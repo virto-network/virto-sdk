@@ -37,6 +37,8 @@ keyring = {version = "1.1.2", optional = true}
 prs-lib = {version = "0.2.1", optional = true}
 log = { version = "0.4" }
 zeroize = { version = "1", default-features = false }
+# trezor USB transport
+rusb = { version = "0.9", optional = true }
 
 [dev-dependencies]
 async-std = {version = "1.10.0", features = ["attributes"]}
@@ -61,7 +63,7 @@ bitcoin = ["secp256k1", "pbkdf2", "hmac", "sha2"]
 solana = ["ed25519", "hmac", "sha2", "pbkdf2"]
 cosmos = ["secp256k1", "hmac", "sha2", "pbkdf2"]
 ledger = ["std"]
-trezor = ["std"]
+trezor = ["std", "dep:rusb"]
 vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = ["mnemonic", "rand"]

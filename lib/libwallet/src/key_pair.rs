@@ -43,6 +43,8 @@ pub trait Signer {
 pub enum SigningError {
     Locked,
     NoAccount,
+    /// A hardware signer (Ledger, Trezor) returned an error.
+    Hardware(arrayvec::ArrayString<64>),
 }
 
 impl core::fmt::Display for SigningError {
@@ -50,9 +52,14 @@ impl core::fmt::Display for SigningError {
         match self {
             SigningError::Locked => write!(f, "Wallet is locked"),
             SigningError::NoAccount => write!(f, "No account available"),
+            SigningError::Hardware(msg) => write!(f, "{}", msg),
         }
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for SigningError {}
+
 /// Wrappers to represent any supported key pair.
 pub mod any {
     use super::{Public, Signature, SigningError};
