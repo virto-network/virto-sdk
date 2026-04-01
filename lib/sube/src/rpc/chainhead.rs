@@ -1074,7 +1074,7 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
 
         // Pass 1: scan
         log::info!("metadata: pass 1 — scanning type refs + pallets");
-        self.start_runtime_call("Metadata_metadata", "0x").await?;
+        self.send_runtime_call("Metadata_metadata", "0x").await?;
         let scan = {
             let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
             // Skip the OpaqueMetadata Compact<u32> length prefix
@@ -1102,7 +1102,7 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
 
         // Pass 2: decode needed types
         log::info!("metadata: pass 2 — decoding {} types", needed.len());
-        self.start_runtime_call("Metadata_metadata", "0x").await?;
+        self.send_runtime_call("Metadata_metadata", "0x").await?;
         let (types, id_map) = {
             let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
             skip_opaque_prefix(&mut hex_reader).await?;
@@ -1125,28 +1125,35 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
         Ok(meta::from_raw(pallets, extrinsic, registry))
     }
 
-    /// Send a runtime call RPC and wait for the operation to start.
-    /// Does NOT wait for the result — the caller reads frames via HexFrameReader.
-    async fn start_runtime_call(&mut self, function: &str, call_data: &str) -> crate::Result<()> {
+    /// Send a runtime call RPC request without reading the response.
+    ///
+    /// The response and the operationCallDone notification will both
+    /// arrive as WebSocket frames — HexFrameReader handles them,
+    /// skipping the non-hex response and processing the hex notification.
+    async fn send_runtime_call(&mut self, function: &str, call_data: &str) -> crate::Result<()> {
         let hash = self.prepare_operation().await?;
-        let result = self
-            .rpc
-            .rpc(
-                "chainHead_v1_call",
-                serde_json::json!([&self.follow_sub_id, &hash, function, call_data]),
-            )
+        let id = self.rpc.next_id;
+        self.rpc.next_id += 1;
+        log::info!("RPC `chainHead_v1_call` (ID={})", id);
+
+        let msg = serde_json::to_vec(&super::JsonRpcRequest {
+            id,
+            jsonrpc: "2.0",
+            method: "chainHead_v1_call",
+            params: Some(serde_json::json!([
+                &self.follow_sub_id,
+                &hash,
+                function,
+                call_data
+            ])),
+        })
+        .map_err(|_| crate::Error::Encode("rpc serialize".into()))?;
+
+        self.rpc
+            .send_text(&msg)
             .await
-            .map_err(|e| crate::Error::Node(e.to_string()))?;
-
-        let started: OperationStarted = serde_json::from_value(result)
-            .map_err(|e| crate::Error::Node(alloc::format!("bad call response: {e}")))?;
-
-        match started {
-            OperationStarted::Started { .. } => Ok(()),
-            OperationStarted::LimitReached => Err(crate::Error::Node(
-                "chainHead operation limit reached".into(),
-            )),
-        }
+            .map_err(|e| crate::Error::Node(alloc::format!("rpc send: {e}")))?;
+        Ok(())
     }
 
     /// Read and discard remaining frames from an in-progress operation.

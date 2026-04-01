@@ -25,6 +25,8 @@ static APP_CORE_STACK: StaticCell<Stack<32768>> = StaticCell::new();
 static BATTERY_LEVEL: AtomicU8 = AtomicU8::new(255);
 /// Set by PMU task on button press, consumed by UI core.
 static SCREEN_TOGGLE: AtomicBool = AtomicBool::new(false);
+/// WiFi connection status, set by wifi_task, read by UI core.
+static WIFI_CONNECTED: AtomicBool = AtomicBool::new(false);
 
 /// What the app needs after device init.
 pub struct Runtime {
@@ -85,8 +87,10 @@ async fn wifi_task(mut wifi: esp_radio::wifi::WifiController<'static>) {
         match wifi.connect_async().await {
             Ok(()) => {
                 log::info!("WiFi: connected");
+                WIFI_CONNECTED.store(true, Ordering::Relaxed);
                 wifi.wait_for_event(esp_radio::wifi::WifiEvent::StaDisconnected)
                     .await;
+                WIFI_CONNECTED.store(false, Ordering::Relaxed);
                 log::warn!("WiFi: disconnected, reconnecting in 1s");
             }
             Err(e) => {
@@ -166,7 +170,6 @@ fn ui_core(
 
         while let Some(event) = rx.dequeue() {
             match event {
-                UiEvent::Wifi(on) => app.set_wifi(on),
                 UiEvent::Live(on) => app.set_live(on),
                 UiEvent::Block(n) => {
                     app.set_block_number(n as i32);
@@ -207,6 +210,7 @@ fn ui_core(
             }
         }
 
+        app.set_wifi(WIFI_CONNECTED.load(Ordering::Relaxed));
         let batt = BATTERY_LEVEL.load(Ordering::Relaxed);
         app.set_battery_level(if batt <= 100 { batt as i32 } else { -1 });
 

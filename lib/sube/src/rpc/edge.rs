@@ -33,7 +33,7 @@ use crate::Error;
 pub struct Backend<T> {
     stream: T,
     event_buffer: VecDeque<(String, serde_json::Value)>,
-    next_id: u32,
+    pub(crate) next_id: u32,
     frag_buf: Vec<u8>,
 }
 
@@ -58,7 +58,7 @@ impl<T: Read + Write> Backend<T> {
     }
 
     /// Send a complete text frame (client-masked per RFC 6455).
-    async fn send_text(&mut self, payload: &[u8]) -> Result<(), JsonRpcError> {
+    pub(crate) async fn send_text(&mut self, payload: &[u8]) -> Result<(), JsonRpcError> {
         let header = FrameHeader {
             frame_type: FrameType::Text(false),
             payload_len: payload.len() as u64,

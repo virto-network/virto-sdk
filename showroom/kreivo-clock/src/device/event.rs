@@ -2,7 +2,6 @@
 
 /// Events pushed from the chain task (core 0) to the UI (core 1).
 pub enum UiEvent {
-    Wifi(bool),
     Live(bool),
     Block(u32),
     Collators([u32; 6]),
