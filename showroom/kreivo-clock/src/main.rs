@@ -69,28 +69,83 @@ async fn main(spawner: Spawner) -> ! {
 async fn watch_chain(
     tx: &mut Producer<'static, UiEvent, 16>,
 ) -> Result<(), &'static str> {
+    use alloc::boxed::Box;
+
+    // Step 1: scan pallets (Box::pin to keep future size small)
+    tx.enqueue(UiEvent::Status(Status::Dim("scanning pallets...")))
+        .ok();
+    let (needed_ids, type_count): (alloc::collections::BTreeSet<u32>, u32) = Box::pin(async {
+        let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
+        let mut tmp = sube::connect_edge("wss://kreivo.io", &NET, rng, &[])
+            .await
+            .map_err(|e| { log::error!("connect (scan): {e}"); "connect failed" })?;
+        tmp.backend()
+            .metadata_scan_pallets(&["CollatorSelection"])
+            .await
+            .map_err(|e| { log::error!("scan: {e}"); "scan failed" })
+    })
+    .await?;
+
+    // Step 2: decode types on fresh connection.
+    // NOT Box::pin'd — saves ~25KB heap vs Box::pin'd version.
+    // Stack is sufficient at 168KB heap (8KB more than 176KB which overflowed).
+    tx.enqueue(UiEvent::Status(Status::Dim("loading types...")))
+        .ok();
+    // Pause UI rendering to free Slint's scene allocations (~20KB)
+    kreivo_clock::PAUSE_UI.store(true, core::sync::atomic::Ordering::Relaxed);
+    // Give core 1 a moment to finish its current render cycle
+    embassy_time::Timer::after(embassy_time::Duration::from_millis(100)).await;
+    log::info!("heap before step 2: {} free", esp_alloc::HEAP.free());
+    let metadata = {
+        let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
+        let mut tmp = sube::connect_edge("wss://kreivo.io", &NET, rng, &[])
+            .await
+            .map_err(|e| {
+                log::error!("connect (decode): {e}");
+                "connect failed"
+            })?;
+        log::info!("heap after connect: {} free", esp_alloc::HEAP.free());
+        // Preallocate only strings + str_idx (the two that cause the worst
+        // doubling: strings 16→32KB = 48KB transient, str_idx 1024→2048 = 18KB transient).
+        // Budget: ~68KB free. Target: ~32KB prealloc, ~36KB remaining.
+        // Preallocate tight: strings(16KB) + str_idx(11KB) + variants(10KB) = ~37KB
+        // Leaves ~31KB for: fields growth(max 12KB) + BTreeMap(3KB) + types(3KB) + temps
+        let mut registry = sube::Registry::with_capacity_detailed(0, 0, 0, 0, 16000);
+        registry.reserve_str_idx(1800);
+        registry.reserve_variants(850);
+        registry.reserve_fields(1100);
+        log::info!("heap after prealloc: {} free", esp_alloc::HEAP.free());
+        let meta = tmp
+            .backend()
+            .metadata_decode_filtered(
+                &["CollatorSelection"],
+                &needed_ids,
+                type_count,
+                &mut registry,
+            )
+            .await
+            .map_err(|e| {
+                log::error!("decode: {e}");
+                "decode failed"
+            })?;
+        alloc::sync::Arc::new(meta)
+    };
+    drop(needed_ids);
+    // Resume UI rendering
+    kreivo_clock::PAUSE_UI.store(false, core::sync::atomic::Ordering::Relaxed);
+    log::info!("metadata loaded, reconnecting for events");
+
+    // Step 3: final connection with loaded metadata
     tx.enqueue(UiEvent::Status(Status::Dim("connecting...")))
         .ok();
-
     let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
     let mut chain = sube::connect_edge("wss://kreivo.io", &NET, rng, &[])
         .await
         .map_err(|e| {
-            log::error!("sube connect: {e}");
+            log::error!("connect (final): {e}");
             "connect failed"
         })?;
-
-    tx.enqueue(UiEvent::Status(Status::Dim("loading metadata...")))
-        .ok();
-    chain
-        .backend()
-        .metadata_filtered_streaming(&["CollatorSelection"])
-        .await
-        .map(|m| *chain.metadata_mut() = alloc::sync::Arc::new(m))
-        .map_err(|e| {
-            log::error!("metadata: {e}");
-            "metadata failed"
-        })?;
+    *chain.metadata_mut() = metadata;
 
     tx.enqueue(UiEvent::Live(true)).ok();
     tx.enqueue(UiEvent::Status(Status::Good(""))).ok();

@@ -248,6 +248,9 @@ pub struct HexFrameReader<'a, T> {
     in_hex: bool,
     /// Carry byte from an odd-length hex chunk.
     carry: Option<u8>,
+    /// Tail of previous chunk for cross-boundary marker search.
+    tail: [u8; 16],
+    tail_len: usize,
     /// Remaining payload bytes in the current frame.
     remaining: usize,
     /// True if current frame is the last (or only) one.
@@ -264,6 +267,8 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
             read_pos: 0,
             in_hex: false,
             carry: None,
+            tail: [0u8; 16],
+            tail_len: 0,
             remaining: 0,
             is_final: false,
             done: false,
@@ -279,21 +284,48 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
         loop {
             // If we have remaining payload in the current frame, read a chunk
             if self.remaining > 0 {
-                let mut chunk = [0u8; 512];
+                let mut chunk = [0u8; 128];
                 let to_read = self.remaining.min(chunk.len());
                 read_exact(&mut self.backend.stream, &mut chunk[..to_read])
                     .await
-                    .map_err(|_| Error::Node("frame payload read failed".into()))?;
+                    .map_err(|_| {
+                        Error::Node(alloc::format!(
+                            "frame payload read failed (remaining={}, to_read={})",
+                            self.remaining,
+                            to_read
+                        ))
+                    })?;
                 self.remaining -= to_read;
 
                 self.decoded.clear();
                 self.read_pos = 0;
 
                 if !self.in_hex {
-                    if let Some(pos) = find_hex_start(&chunk[..to_read]) {
+                    // Check cross-boundary: tail of previous chunk + start of this one
+                    let found = if self.tail_len > 0 {
+                        let mut combined = [0u8; 16 + 128];
+                        combined[..self.tail_len].copy_from_slice(&self.tail[..self.tail_len]);
+                        combined[self.tail_len..self.tail_len + to_read]
+                            .copy_from_slice(&chunk[..to_read]);
+                        let total = self.tail_len + to_read;
+                        find_hex_start(&combined[..total]).map(|pos| {
+                            // Offset relative to current chunk
+                            pos.saturating_sub(self.tail_len)
+                        })
+                    } else {
+                        find_hex_start(&chunk[..to_read])
+                    };
+                    // Save tail for next iteration
+                    let tail_start = to_read.saturating_sub(16);
+                    self.tail_len = to_read - tail_start;
+                    self.tail[..self.tail_len].copy_from_slice(&chunk[tail_start..to_read]);
+
+                    if let Some(pos) = found {
                         self.in_hex = true;
-                        log::debug!("hex reader: found hex start at offset {}", pos);
-                        self.decode_hex_chunk(&chunk[pos..to_read]);
+                        log::debug!("hex reader: found hex start at chunk offset {}", pos);
+                        if pos < to_read {
+                            self.decode_hex_chunk(&chunk[pos..to_read]);
+                        }
                     }
                 } else {
                     self.decode_hex_chunk(&chunk[..to_read]);
@@ -314,7 +346,8 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
                 continue;
             }
 
-            // Start a new frame
+            // Start a new frame — reset tail buffer
+            self.tail_len = 0;
             let header = FrameHeader::recv(&mut self.backend.stream)
                 .await
                 .map_err(|_| Error::Node("hex reader: frame header read failed".into()))?;
@@ -330,8 +363,8 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
                 }
                 FrameType::Ping => {
                     // Read ping payload and pong
-                    let len = (header.payload_len as usize).min(125);
-                    let mut ping = [0u8; 125];
+                    let len = (header.payload_len as usize).min(8);
+                    let mut ping = [0u8; 8];
                     if len > 0 {
                         read_exact(&mut self.backend.stream, &mut ping[..len])
                             .await
@@ -424,6 +457,47 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
                 self.decoded.push((h << 4) | l);
             }
             i += 2;
+        }
+    }
+
+    /// Consume remaining frame payload and continuation frames.
+    /// Must be called after the hex data has been fully read, before
+    /// the backend can be used for another operation.
+    pub async fn finish(&mut self) {
+        // Drain remaining payload of current frame
+        let mut discard = [0u8; 128];
+        while self.remaining > 0 {
+            let n = self.remaining.min(discard.len());
+            if read_exact(&mut self.backend.stream, &mut discard[..n])
+                .await
+                .is_err()
+            {
+                return;
+            }
+            self.remaining -= n;
+        }
+        // If this was a fragmented message and not the final frame,
+        // read and discard continuation frames
+        while !self.is_final {
+            let header = match FrameHeader::recv(&mut self.backend.stream).await {
+                Ok(h) => h,
+                Err(_) => return,
+            };
+            let mut left = header.payload_len as usize;
+            while left > 0 {
+                let n = left.min(discard.len());
+                if read_exact(&mut self.backend.stream, &mut discard[..n])
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                left -= n;
+            }
+            match header.frame_type {
+                FrameType::Continue(true) | FrameType::Text(false) => break,
+                _ => continue,
+            }
         }
     }
 }
@@ -656,7 +730,7 @@ pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
     // SAFETY: single-threaded executor, only one connection at a time.
     let (rx, tx) = unsafe { (&mut *net.rx.get(), &mut *net.tx.get()) };
     let mut socket = TcpSocket::new(stack, rx, tx);
-    socket.set_timeout(Some(embassy_time::Duration::from_secs(15)));
+    socket.set_timeout(Some(embassy_time::Duration::from_secs(60)));
 
     // DNS
     log::debug!("edge: DNS lookup for {}", parsed.host);

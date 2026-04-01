@@ -29,6 +29,8 @@ static SCREEN_TOGGLE: AtomicBool = AtomicBool::new(false);
 static WIFI_CONNECTED: AtomicBool = AtomicBool::new(false);
 /// Battery charging status, set by pmu_task, read by UI core.
 static CHARGING: AtomicBool = AtomicBool::new(false);
+/// When true, UI rendering is paused to free heap for metadata loading.
+pub static PAUSE_UI: AtomicBool = AtomicBool::new(false);
 
 /// What the app needs after device init.
 pub struct Runtime {
@@ -218,7 +220,7 @@ fn ui_core(
         let batt = BATTERY_LEVEL.load(Ordering::Relaxed);
         app.set_battery_level(if batt <= 100 { batt as i32 } else { -1 });
 
-        if screen_on {
+        if screen_on && !PAUSE_UI.load(Ordering::Relaxed) {
             slint::platform::update_timers_and_animations();
             window.draw_if_needed(|renderer| {
                 renderer.render_by_line(&mut DisplayBuffer {

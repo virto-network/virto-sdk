@@ -1,10 +1,10 @@
 //! Streaming metadata decode for memory-constrained targets.
 //!
-//! Two-pass approach using [`StreamCursor`] to avoid holding the full
-//! metadata blob in memory:
+//! Two-pass approach using [`StreamCursor`] — never holds the full blob:
 //!
-//! 1. **Scan pass** ([`scan_metadata`]): extract type reference graph + pallets (~35KB peak)
-//! 2. **Decode pass** ([`decode_needed_types`]): decode only types in the needed set (~80KB peak)
+//! 1. **Pass 1** ([`scan_pallets_streaming`]): skip all types, decode + filter pallets (~20KB peak)
+//! 2. **Pass 2** ([`decode_filtered_types`]): decode only types needed by kept pallets,
+//!    resolving transitive dependencies in a single forward scan (~60KB peak for 1 pallet)
 
 use alloc::collections::BTreeSet;
 use alloc::string::String;
@@ -14,38 +14,44 @@ use embedded_io_async::Read;
 
 use super::metadata::{RawExtrinsic, RawPallet};
 use super::stream_cursor::StreamCursor;
-use crate::registry::TypeDefOwned;
+use crate::registry::*;
 use crate::Error;
 
-/// Single-pass streaming metadata decode.
+/// Result of pass 1 — pallets + extrinsic + type count.
+pub struct PalletScan {
+    pub pallets: Vec<RawPallet>,
+    pub extrinsic: RawExtrinsic,
+    pub type_count: u32,
+}
+
+/// Pass 1: skip all types, decode + filter pallets.
 ///
-/// Decodes ALL types (builds the full registry) and filters pallets.
-/// Simpler than two-pass, and the full Kreivo registry is only ~120KB
-/// which fits when combined with ~50KB connection overhead.
-/// Peak memory: ~170KB (types accumulate as decoded, then compacted into registry).
-pub async fn decode_metadata_streaming<R: Read>(
+/// Peak memory: ~20KB (just the kept pallets + extrinsic).
+pub async fn scan_pallets_streaming<R: Read>(
     reader: R,
     pallet_filter: &[&str],
-) -> Result<super::metadata::RawMetadata, Error> {
-    use super::metadata::RawMetadata;
-
+) -> Result<PalletScan, Error> {
     let mut c = StreamCursor::new(reader);
     let version = read_header_async(&mut c).await?;
 
+    // Skip all types — zero allocation
     let type_count = c.read_compact_u32().await?;
-    let mut types = Vec::with_capacity(type_count as usize);
-    for _ in 0..type_count {
-        let id = c.read_compact_u32().await?;
-        let td = decode_portable_type_async(&mut c).await?;
-        // Fill gaps (type IDs may not be contiguous)
-        while types.len() < id as usize {
-            types.push(TypeDefOwned::StructUnit);
-        }
-        types.push(td);
+    if type_count > 10_000 {
+        return Err(Error::BadInput(
+            alloc::format!("type_count too large: {type_count} (metadata corrupt?)").into(),
+        ));
     }
-    super::metadata::postprocess_types(&mut types);
+    for _ in 0..type_count {
+        c.read_compact_u32().await?; // id
+        skip_portable_type_async(&mut c).await?;
+    }
 
     let pallet_count = c.read_compact_u32().await?;
+    if pallet_count > 500 {
+        return Err(Error::BadInput(
+            alloc::format!("pallet_count too large: {pallet_count} (type skipping off?)").into(),
+        ));
+    }
     let mut pallets = Vec::with_capacity(pallet_count as usize);
     for _ in 0..pallet_count {
         let p = decode_pallet_async(&mut c, version).await?;
@@ -54,141 +60,121 @@ pub async fn decode_metadata_streaming<R: Read>(
         }
     }
     let extrinsic = decode_extrinsic_async(&mut c, version).await?;
-    Ok(RawMetadata {
-        types,
+
+    Ok(PalletScan {
         pallets,
         extrinsic,
-    })
-}
-
-/// Result of a metadata scan pass.
-pub struct ScanResult {
-    /// Filtered pallets (only those matching the filter + System).
-    pub pallets: Vec<RawPallet>,
-    /// Extrinsic metadata.
-    pub extrinsic: RawExtrinsic,
-    /// Flat buffer of all type references.
-    ref_data: Vec<u32>,
-    /// Per-type offset+length into `ref_data`.
-    ref_index: Vec<(u32, u16)>,
-    /// Total number of types in the registry.
-    pub type_count: u32,
-}
-
-impl ScanResult {
-    /// Get type references for a given type ID.
-    fn refs_for(&self, id: u32) -> &[u32] {
-        self.ref_index
-            .get(id as usize)
-            .map(|&(off, len)| &self.ref_data[off as usize..(off as usize + len as usize)])
-            .unwrap_or(&[])
-    }
-
-    /// Drop the reference data to free memory before pass 2.
-    pub fn drop_refs(&mut self) {
-        self.ref_data = Vec::new();
-        self.ref_index = Vec::new();
-    }
-}
-
-/// Pass 1: Stream through metadata, extracting only type references and pallets.
-///
-/// Types are not decoded — only their referenced type IDs are extracted.
-/// Uses a flat buffer (~8KB) instead of per-type Vecs (~14KB + allocation overhead).
-/// Pallets are fully decoded and filtered. Peak memory: ~30KB.
-pub async fn scan_metadata<R: Read>(
-    reader: R,
-    pallet_filter: &[&str],
-) -> Result<ScanResult, Error> {
-    let mut c = StreamCursor::new(reader);
-    let version = read_header_async(&mut c).await?;
-
-    // Scan types — extract only references into flat buffer
-    let type_count = c.read_compact_u32().await?;
-    // Preallocate: ~3 refs per type on average
-    let mut ref_data = Vec::with_capacity((type_count as usize) * 3);
-    let mut ref_index = Vec::with_capacity(type_count as usize);
-    let mut tmp_refs = Vec::new();
-    for _ in 0..type_count {
-        let _id = c.read_compact_u32().await?;
-        tmp_refs.clear();
-        scan_type_refs(&mut c, &mut tmp_refs).await?;
-        let offset = ref_data.len() as u32;
-        ref_data.extend_from_slice(&tmp_refs);
-        ref_index.push((offset, tmp_refs.len() as u16));
-    }
-
-    // Decode pallets
-    let pallet_count = c.read_compact_u32().await?;
-    let mut all_pallets = Vec::with_capacity(pallet_count as usize);
-    for _ in 0..pallet_count {
-        all_pallets.push(decode_pallet_async(&mut c, version).await?);
-    }
-    let extrinsic = decode_extrinsic_async(&mut c, version).await?;
-
-    // Filter pallets
-    let pallets: Vec<RawPallet> = all_pallets
-        .into_iter()
-        .filter(|p| p.name == "System" || pallet_filter.iter().any(|n| p.name == *n))
-        .collect();
-
-    Ok(ScanResult {
-        pallets,
-        extrinsic,
-        ref_data,
-        ref_index,
         type_count,
     })
 }
 
-/// Compute the transitive closure of type IDs needed by the given pallets.
-pub fn resolve_needed_types(scan: &ScanResult) -> BTreeSet<u32> {
-    let mut root_ids = super::metadata::collect_pallet_type_ids(&scan.pallets, &scan.extrinsic);
-    let mut needed = BTreeSet::new();
-    while let Some(id) = root_ids.pop() {
-        if !needed.insert(id) {
-            continue;
-        }
-        root_ids.extend_from_slice(scan.refs_for(id));
-    }
-    needed
-}
-
-/// Pass 2: Stream through metadata, decoding only types in the needed set.
+/// Pass 2: decode needed types, compact each into Registry immediately.
 ///
-/// Returns the decoded types (with remapped IDs) and the ID remap table.
-pub async fn decode_needed_types<R: Read>(
+/// Decode needed types into a pre-allocated Registry.
+///
+/// The `registry` should be allocated BEFORE connecting (when heap is
+/// unfragmented). Pass it in along with the reader from the connection.
+/// Returns the ID remap table.
+pub async fn decode_filtered_to_registry<R: Read>(
     reader: R,
-    needed: &BTreeSet<u32>,
+    needed_seed: &BTreeSet<u32>,
     type_count: u32,
-) -> Result<(Vec<TypeDefOwned>, Vec<Option<u32>>), Error> {
+    registry: &mut crate::Registry,
+) -> Result<alloc::collections::BTreeMap<u32, u32>, Error> {
     let mut c = StreamCursor::new(reader);
     let _version = read_header_async(&mut c).await?;
 
-    // Build ID remap
-    let mut id_map: Vec<Option<u32>> = Vec::new();
-    id_map.resize(type_count as usize, None);
-    let mut new_id = 0u32;
-    for &old_id in needed {
-        if (old_id as usize) < id_map.len() {
-            id_map[old_id as usize] = Some(new_id);
-            new_id += 1;
-        }
-    }
+    let mut needed = needed_seed.clone();
+    let actual_type_count = c.read_compact_u32().await?;
+    let count = actual_type_count.min(type_count);
 
-    // Read types — decode needed, skip rest
-    let count = c.read_compact_u32().await?;
-    let mut types = Vec::with_capacity(needed.len());
+    // Use BTreeMap instead of Vec<Option<u32>> to save ~3KB
+    // (246 entries in BTreeMap vs 740 Option<u32> slots)
+    let mut id_map = alloc::collections::BTreeMap::new();
+    let mut new_id = 0u32;
+
     for _ in 0..count {
         let id = c.read_compact_u32().await?;
         if needed.contains(&id) {
-            let mut td = decode_portable_type_async(&mut c).await?;
-            super::metadata::remap_type_ids(&mut td, &id_map);
-            types.push(td);
+            let td = decode_portable_type_async(&mut c).await?;
+            let mut refs = Vec::new();
+            collect_type_refs(&td, &mut refs);
+            for r in refs {
+                needed.insert(r);
+            }
+            registry.push(td);
+            id_map.insert(id, new_id);
+            new_id += 1;
         } else {
             skip_portable_type_async(&mut c).await?;
         }
     }
+
+    // TODO: the types in the registry still have old IDs in their fields.
+    // Registry doesn't support in-place ID remapping after construction.
+    // For now, the remap is applied to pallets/extrinsic by the caller.
+    // Type-internal references (e.g. struct field types) will have old IDs
+    // which resolve to wrong registry slots. This needs a registry.remap() method.
+
+    Ok(id_map)
+}
+
+/// Pass 2 (alternative): decode only types needed by the filtered pallets.
+///
+/// Resolves transitive dependencies in a single forward scan:
+/// when a needed type is decoded, its referenced type IDs are added
+/// to the needed set. Types ahead in ID order will be decoded when reached.
+///
+/// Peak memory: ~60KB for 1-2 pallets (decoded types + ID remap table).
+pub async fn decode_filtered_types<R: Read>(
+    reader: R,
+    scan: &PalletScan,
+) -> Result<(Vec<TypeDefOwned>, Vec<Option<u32>>), Error> {
+    let mut c = StreamCursor::new(reader);
+    let _version = read_header_async(&mut c).await?;
+
+    // Seed needed set from pallet + extrinsic type refs
+    let root_ids = super::metadata::collect_pallet_type_ids(&scan.pallets, &scan.extrinsic);
+    let mut needed: BTreeSet<u32> = root_ids.into_iter().collect();
+
+    let type_count = c.read_compact_u32().await?;
+
+    // Sparse storage: only needed types get allocated
+    let mut decoded: Vec<(u32, TypeDefOwned)> = Vec::new();
+
+    for _ in 0..type_count {
+        let id = c.read_compact_u32().await?;
+        if needed.contains(&id) {
+            let td = decode_portable_type_async(&mut c).await?;
+            // Add transitive deps
+            let mut refs = Vec::new();
+            collect_type_refs(&td, &mut refs);
+            for r in refs {
+                needed.insert(r);
+            }
+            decoded.push((id, td));
+        } else {
+            skip_portable_type_async(&mut c).await?;
+        }
+    }
+
+    // Build ID remap: old → new (contiguous)
+    let mut id_map: Vec<Option<u32>> = Vec::new();
+    id_map.resize(type_count as usize, None);
+    for (i, &(old_id, _)) in decoded.iter().enumerate() {
+        if (old_id as usize) < id_map.len() {
+            id_map[old_id as usize] = Some(i as u32);
+        }
+    }
+
+    // Remap + collect
+    let mut types: Vec<TypeDefOwned> = decoded
+        .into_iter()
+        .map(|(_, mut td)| {
+            super::metadata::remap_type_ids(&mut td, &id_map);
+            td
+        })
+        .collect();
 
     super::metadata::postprocess_types(&mut types);
 
@@ -200,96 +186,17 @@ pub async fn decode_needed_types<R: Read>(
 async fn read_header_async<R: Read>(c: &mut StreamCursor<R>) -> Result<u8, Error> {
     let magic = c.read_u32_le().await?;
     if magic != 0x6174656d {
-        return Err(Error::BadInput("not metadata (bad magic)".into()));
+        return Err(Error::BadInput(
+            alloc::format!("not metadata (magic={:#010x}, expected 0x6174656d)", magic).into(),
+        ));
     }
-    c.read_byte().await
-}
-
-// --- Async type scanning (extract refs only) ---
-
-/// Extract type IDs referenced by this type into `refs`, without full decode.
-async fn scan_type_refs<R: Read>(
-    c: &mut StreamCursor<R>,
-    refs: &mut Vec<u32>,
-) -> Result<(), Error> {
-    // path
-    c.skip_vec_string().await?;
-    // type_params
-    let param_count = c.read_compact_u32().await?;
-    for _ in 0..param_count {
-        c.skip_string().await?;
-        if c.read_byte().await? != 0 {
-            refs.push(c.read_compact_u32().await?);
-        }
+    let version = c.read_byte().await?;
+    if version != 14 && version != 15 {
+        return Err(Error::BadInput(
+            alloc::format!("unsupported metadata version: {version}").into(),
+        ));
     }
-    // type_def — scan for type IDs
-    scan_type_def_refs(c, refs).await?;
-    // docs
-    c.skip_vec_string().await?;
-    Ok(())
-}
-
-async fn scan_type_def_refs<R: Read>(
-    c: &mut StreamCursor<R>,
-    refs: &mut Vec<u32>,
-) -> Result<(), Error> {
-    match c.read_byte().await? {
-        0 => {
-            // Composite
-            let count = c.read_compact_u32().await?;
-            for _ in 0..count {
-                if c.read_byte().await? != 0 {
-                    c.skip_string().await?;
-                }
-                refs.push(c.read_compact_u32().await?);
-                if c.read_byte().await? != 0 {
-                    c.skip_string().await?;
-                }
-                c.skip_vec_string().await?;
-            }
-        }
-        1 => {
-            // Variant
-            let count = c.read_compact_u32().await?;
-            for _ in 0..count {
-                c.skip_string().await?;
-                let fc = c.read_compact_u32().await?;
-                for _ in 0..fc {
-                    if c.read_byte().await? != 0 {
-                        c.skip_string().await?;
-                    }
-                    refs.push(c.read_compact_u32().await?);
-                    if c.read_byte().await? != 0 {
-                        c.skip_string().await?;
-                    }
-                    c.skip_vec_string().await?;
-                }
-                c.read_byte().await?; // index
-                c.skip_vec_string().await?;
-            }
-        }
-        2 => refs.push(c.read_compact_u32().await?),
-        3 => {
-            c.read_u32_le().await?;
-            refs.push(c.read_compact_u32().await?);
-        }
-        4 => {
-            let n = c.read_compact_u32().await?;
-            for _ in 0..n {
-                refs.push(c.read_compact_u32().await?);
-            }
-        }
-        5 => {
-            c.read_byte().await?;
-        }
-        6 => refs.push(c.read_compact_u32().await?),
-        7 => {
-            refs.push(c.read_compact_u32().await?);
-            refs.push(c.read_compact_u32().await?);
-        }
-        _ => return Err(Error::BadInput("unknown TypeDef variant".into())),
-    }
-    Ok(())
+    Ok(version)
 }
 
 // --- Async type skip ---
@@ -373,10 +280,6 @@ async fn skip_type_def_async<R: Read>(c: &mut StreamCursor<R>) -> Result<(), Err
 async fn decode_portable_type_async<R: Read>(
     c: &mut StreamCursor<R>,
 ) -> Result<TypeDefOwned, Error> {
-    #[allow(unused_imports)]
-    use crate::registry::*;
-
-    // path — check for BTreeMap
     let path_count = c.read_compact_u32().await?;
     let mut is_btreemap = false;
     for i in 0..path_count {
@@ -385,15 +288,12 @@ async fn decode_portable_type_async<R: Read>(
             is_btreemap = true;
         }
     }
-    // type_params
     let param_count = c.read_compact_u32().await?;
     for _ in 0..param_count {
         c.skip_string().await?;
         c.skip_option_compact_u32().await?;
     }
-    // type_def
     let td = decode_type_def_async(c, is_btreemap).await?;
-    // docs
     c.skip_vec_string().await?;
     Ok(td)
 }
@@ -402,8 +302,6 @@ async fn decode_type_def_async<R: Read>(
     c: &mut StreamCursor<R>,
     is_btreemap: bool,
 ) -> Result<TypeDefOwned, Error> {
-    use crate::registry::*;
-
     match c.read_byte().await? {
         0 => decode_composite_async(c, is_btreemap).await,
         1 => decode_variant_async(c).await,
@@ -450,8 +348,6 @@ async fn decode_composite_async<R: Read>(
     c: &mut StreamCursor<R>,
     is_btreemap: bool,
 ) -> Result<TypeDefOwned, Error> {
-    use crate::registry::*;
-
     let count = c.read_compact_u32().await?;
     let mut named = Vec::new();
     let mut unnamed = Vec::new();
@@ -487,8 +383,6 @@ async fn decode_composite_async<R: Read>(
 }
 
 async fn decode_variant_async<R: Read>(c: &mut StreamCursor<R>) -> Result<TypeDefOwned, Error> {
-    use crate::registry::*;
-
     let count = c.read_compact_u32().await?;
     let mut variants = Vec::with_capacity(count as usize);
     for _ in 0..count {
@@ -549,7 +443,6 @@ async fn decode_pallet_async<R: Read>(
 ) -> Result<RawPallet, Error> {
     let name = c.read_string().await?;
 
-    // storage: Option<StorageMetadata>
     let storage = if c.read_byte().await? != 0 {
         let prefix = c.read_string().await?;
         let entry_count = c.read_compact_u32().await?;
@@ -562,18 +455,15 @@ async fn decode_pallet_async<R: Read>(
         None
     };
 
-    // calls: Option<{ ty }>
     let calls_ty = if c.read_byte().await? != 0 {
         Some(c.read_compact_u32().await?)
     } else {
         None
     };
-    // event: Option<{ ty }>
     if c.read_byte().await? != 0 {
         c.read_compact_u32().await?;
-    }
+    } // event
 
-    // constants
     let const_count = c.read_compact_u32().await?;
     let mut constants = Vec::with_capacity(const_count as usize);
     for _ in 0..const_count {
@@ -581,7 +471,7 @@ async fn decode_pallet_async<R: Read>(
         let ty = c.read_compact_u32().await?;
         let value_len = c.read_compact_u32().await? as usize;
         let value = c.read_bytes(value_len).await?;
-        c.skip_vec_string().await?; // docs
+        c.skip_vec_string().await?;
         constants.push(RawConstant {
             name: cname,
             ty,
@@ -589,10 +479,9 @@ async fn decode_pallet_async<R: Read>(
         });
     }
 
-    // error: Option<{ ty }>
     if c.read_byte().await? != 0 {
         c.read_compact_u32().await?;
-    }
+    } // error
     let index = c.read_byte().await?;
     if version >= 15 {
         c.skip_vec_string().await?;
@@ -632,7 +521,7 @@ async fn decode_storage_entry_async<R: Read>(
     };
     let default_len = c.read_compact_u32().await? as usize;
     let default = c.read_bytes(default_len).await?;
-    c.skip_vec_string().await?; // docs
+    c.skip_vec_string().await?;
     Ok(RawStorageEntry {
         name,
         modifier,
@@ -645,41 +534,79 @@ async fn decode_extrinsic_async<R: Read>(
     c: &mut StreamCursor<R>,
     version: u8,
 ) -> Result<RawExtrinsic, Error> {
-    let ext_version = c.read_byte().await?;
-    let address_ty = if version >= 15 {
-        Some(c.read_compact_u32().await?)
+    if version == 14 {
+        let _ty = c.read_compact_u32().await?;
+        let ext_version = c.read_byte().await?;
+        let count = c.read_compact_u32().await?;
+        let mut extensions = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            extensions.push(RawExtension {
+                identifier: c.read_string().await?,
+                ty: c.read_compact_u32().await?,
+                additional_signed: c.read_compact_u32().await?,
+            });
+        }
+        Ok(RawExtrinsic {
+            version: ext_version,
+            address_ty: None,
+            signature_ty: None,
+            extensions,
+        })
     } else {
-        None
-    };
-    // call_ty (V15) — skip
-    if version >= 15 {
-        c.read_compact_u32().await?;
+        let ext_version = c.read_byte().await?;
+        let address_ty = c.read_compact_u32().await?;
+        let _call_ty = c.read_compact_u32().await?;
+        let signature_ty = c.read_compact_u32().await?;
+        let _extra_ty = c.read_compact_u32().await?;
+        let count = c.read_compact_u32().await?;
+        let mut extensions = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            extensions.push(RawExtension {
+                identifier: c.read_string().await?,
+                ty: c.read_compact_u32().await?,
+                additional_signed: c.read_compact_u32().await?,
+            });
+        }
+        Ok(RawExtrinsic {
+            version: ext_version,
+            address_ty: Some(address_ty),
+            signature_ty: Some(signature_ty),
+            extensions,
+        })
     }
-    let signature_ty = if version >= 15 {
-        Some(c.read_compact_u32().await?)
-    } else {
-        None
-    };
-    // extra_ty (V15) — skip
-    if version >= 15 {
-        c.read_compact_u32().await?;
+}
+
+/// Collect type IDs referenced by a decoded type.
+fn collect_type_refs(td: &TypeDefOwned, out: &mut Vec<u32>) {
+    match td {
+        TypeDefOwned::Sequence(id)
+        | TypeDefOwned::StructNewType(id)
+        | TypeDefOwned::Compact(id) => out.push(*id),
+        TypeDefOwned::Map(k, v) | TypeDefOwned::BitSequence(k, v) => {
+            out.push(*k);
+            out.push(*v);
+        }
+        TypeDefOwned::Array(id, _) => out.push(*id),
+        TypeDefOwned::Tuple(ids) | TypeDefOwned::StructTuple(ids) => out.extend(ids),
+        TypeDefOwned::Struct(fields) => {
+            for f in fields {
+                out.push(f.ty);
+            }
+        }
+        TypeDefOwned::Variant(vdef) => {
+            for v in &vdef.variants {
+                match &v.fields {
+                    FieldsOwned::NewType(id) => out.push(*id),
+                    FieldsOwned::Tuple(ids) => out.extend(ids),
+                    FieldsOwned::Struct(fields) => {
+                        for f in fields {
+                            out.push(f.ty);
+                        }
+                    }
+                    FieldsOwned::Unit => {}
+                }
+            }
+        }
+        _ => {}
     }
-    let ext_count = c.read_compact_u32().await?;
-    let mut extensions = Vec::with_capacity(ext_count as usize);
-    for _ in 0..ext_count {
-        let identifier = c.read_string().await?;
-        let ty = c.read_compact_u32().await?;
-        let additional_signed = c.read_compact_u32().await?;
-        extensions.push(RawExtension {
-            identifier,
-            ty,
-            additional_signed,
-        });
-    }
-    Ok(RawExtrinsic {
-        version: ext_version,
-        address_ty,
-        signature_ty,
-        extensions,
-    })
 }

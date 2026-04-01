@@ -60,19 +60,154 @@ pub struct Registry {
 
 impl Registry {
     pub fn new(types: Vec<TypeDefOwned>) -> Self {
-        let mut r = Registry {
-            types: Vec::with_capacity(types.len()),
-            fields: Vec::new(),
-            variants: Vec::new(),
-            type_ids: Vec::new(),
-            strings: String::new(),
-            str_idx: Vec::new(),
-        };
+        let mut r = Self::with_capacity(types.len());
         for td in types {
-            let c = r.compact(td);
-            r.types.push(c);
+            r.push(td);
         }
         r
+    }
+
+    /// Create an empty registry with pre-allocated capacity.
+    pub fn with_capacity(cap: usize) -> Self {
+        Self::with_capacity_detailed(cap, 0, 0, 0, 0)
+    }
+
+    /// Create an empty registry with detailed arena pre-allocation.
+    pub fn with_capacity_detailed(
+        types: usize,
+        fields: usize,
+        variants: usize,
+        type_ids: usize,
+        string_bytes: usize,
+    ) -> Self {
+        let mut strings = String::new();
+        if string_bytes > 0 {
+            strings.reserve(string_bytes);
+        }
+        Registry {
+            types: Vec::with_capacity(types),
+            fields: Vec::with_capacity(fields),
+            variants: Vec::with_capacity(variants),
+            type_ids: Vec::with_capacity(type_ids),
+            strings,
+            str_idx: Vec::with_capacity(types + fields + variants),
+        }
+    }
+
+    /// Remap all type IDs in the registry using a mapping function.
+    pub fn remap_ids(&mut self, remap: &dyn Fn(TypeId) -> TypeId) {
+        fn r(id: &mut TypeId, remap: &dyn Fn(TypeId) -> TypeId) {
+            *id = remap(*id);
+        }
+        let map = remap;
+        for td in &mut self.types {
+            match td {
+                TDI::Sequence(id) | TDI::StructNewType(id) | TDI::Compact(id) => r(id, map),
+                TDI::Map(k, v) | TDI::BitSequence(k, v) => {
+                    r(k, map);
+                    r(v, map);
+                }
+                TDI::Array(id, _) => r(id, map),
+                TDI::Tuple(span) | TDI::StructTuple(span) => {
+                    let start = span.0 as usize;
+                    let len = span.1 as usize;
+                    for i in start..start + len {
+                        if let Some(id) = self.type_ids.get_mut(i) {
+                            r(id, map);
+                        }
+                    }
+                }
+                TDI::Struct(span) => {
+                    let start = span.0 as usize;
+                    let len = span.1 as usize;
+                    for i in start..start + len {
+                        if let Some(f) = self.fields.get_mut(i) {
+                            r(&mut f.ty, map);
+                        }
+                    }
+                }
+                TDI::Variant(_, span) => {
+                    let start = span.0 as usize;
+                    let len = span.1 as usize;
+                    for i in start..start + len {
+                        if let Some(v) = self.variants.get_mut(i) {
+                            match &mut v.fields {
+                                VFI::NewType(id) => r(id, map),
+                                VFI::Tuple(sp) => {
+                                    let s = sp.0 as usize;
+                                    let l = sp.1 as usize;
+                                    for j in s..s + l {
+                                        if let Some(id) = self.type_ids.get_mut(j) {
+                                            r(id, map);
+                                        }
+                                    }
+                                }
+                                VFI::Struct(sp) => {
+                                    let s = sp.0 as usize;
+                                    let l = sp.1 as usize;
+                                    for j in s..s + l {
+                                        if let Some(f) = self.fields.get_mut(j) {
+                                            r(&mut f.ty, map);
+                                        }
+                                    }
+                                }
+                                VFI::Unit => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Run post-processing: resolve Vec<u8> → Bytes and BTreeMap inner types.
+    pub fn postprocess(&mut self) {
+        for i in 0..self.types.len() {
+            if let TDI::Sequence(inner) = self.types[i] {
+                if matches!(self.types.get(inner as usize), Some(TDI::U8)) {
+                    self.types[i] = TDI::Bytes;
+                }
+            }
+        }
+        for i in 0..self.types.len() {
+            if let TDI::Map(inner, _) = self.types[i] {
+                if let Some(&TDI::Sequence(tuple_id)) = self.types.get(inner as usize) {
+                    if let Some(&TDI::Tuple(span)) = self.types.get(tuple_id as usize) {
+                        let s = span.0 as usize;
+                        if span.1 == 2 {
+                            if let (Some(&k), Some(&v)) =
+                                (self.type_ids.get(s), self.type_ids.get(s + 1))
+                            {
+                                self.types[i] = TDI::Map(k, v);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pre-allocate capacity for the string index.
+    pub fn reserve_str_idx(&mut self, cap: usize) {
+        self.str_idx.reserve(cap);
+    }
+
+    /// Pre-allocate capacity for the variants arena.
+    pub fn reserve_variants(&mut self, cap: usize) {
+        self.variants.reserve(cap);
+    }
+
+    /// Pre-allocate capacity for the fields arena.
+    pub fn reserve_fields(&mut self, cap: usize) {
+        self.fields.reserve(cap);
+    }
+
+    /// Add a type to the registry, compacting it immediately into the arena.
+    /// The `TypeDefOwned` is consumed and its heap allocations freed.
+    pub fn push(&mut self, td: TypeDefOwned) {
+        let c = self.compact(td);
+        self.types.push(c);
     }
 
     #[inline]

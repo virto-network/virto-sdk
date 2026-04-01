@@ -1066,26 +1066,97 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
     /// Pass 1: scan type references + decode pallets (~35KB peak).
     /// Pass 2: decode only needed types (~80KB peak).
     /// Never holds the full metadata blob in memory.
-    pub async fn metadata_filtered_streaming(
+    /// Pass 1: scan pallets from metadata, return needed type IDs + type count.
+    /// Drop the connection after this to free heap for pass 2.
+    pub async fn metadata_scan_pallets(
         &mut self,
         pallet_filter: &[&str],
+    ) -> crate::Result<(alloc::collections::BTreeSet<u32>, u32)> {
+        use scales::frame::streaming_metadata;
+
+        log::info!("metadata: pass 1 — scanning pallets");
+        self.send_runtime_call("Metadata_metadata", "0x").await?;
+        let scan = {
+            let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
+            skip_opaque_prefix(&mut hex_reader).await?;
+            let result = Box::pin(
+                streaming_metadata::scan_pallets_streaming(&mut hex_reader, pallet_filter),
+            )
+            .await
+            .map_err(|e| crate::Error::Decode(alloc::format!("scan: {e}")))?;
+            hex_reader.finish().await;
+            result
+        };
+        log::info!(
+            "metadata: {} pallets, {} types",
+            scan.pallets.len(),
+            scan.type_count
+        );
+
+        let root = scales::frame::metadata::collect_storage_type_ids(&scan.pallets);
+        let mut needed = alloc::collections::BTreeSet::new();
+        for id in root {
+            needed.insert(id);
+        }
+        log::info!("metadata: {} root type IDs", needed.len());
+        Ok((needed, scan.type_count))
+    }
+
+    /// Pass 2+3: decode filtered types and re-decode pallets.
+    /// Call on a FRESH connection (after dropping pass 1's connection to free heap).
+    pub async fn metadata_decode_filtered(
+        &mut self,
+        pallet_filter: &[&str],
+        needed_ids: &alloc::collections::BTreeSet<u32>,
+        type_count: u32,
+        registry: &mut scales::Registry,
     ) -> crate::Result<Metadata> {
         use scales::frame::streaming_metadata;
 
-        log::info!("metadata: streaming decode");
+        // Pass 2: decode types into pre-allocated registry
+        log::info!("metadata: pass 2 — decoding filtered types");
         self.send_runtime_call("Metadata_metadata", "0x").await?;
-        let raw = {
+        let id_map = {
             let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
             skip_opaque_prefix(&mut hex_reader).await?;
-            streaming_metadata::decode_metadata_streaming(&mut hex_reader, pallet_filter)
-                .await
-                .map_err(|e| crate::Error::Decode(alloc::format!("{e}")))?
+            let result = Box::pin(streaming_metadata::decode_filtered_to_registry(
+                &mut hex_reader,
+                needed_ids,
+                type_count,
+                registry,
+            ))
+            .await
+            .map_err(|e| crate::Error::Decode(alloc::format!("decode: {e}")))?;
+            hex_reader.finish().await;
+            result
         };
-        self.drain_pending_frames().await;
+        registry.remap_ids(&|id| id_map.get(&id).copied().unwrap_or(id));
+        registry.postprocess();
+        log::info!("metadata: registry built");
 
-        let registry = scales::Registry::new(raw.types);
-        log::info!("metadata: ready ({} pallets)", raw.pallets.len());
-        Ok(meta::from_raw(raw.pallets, raw.extrinsic, registry))
+        // Pass 3: re-decode pallets
+        log::info!("metadata: pass 3 — re-decoding pallets");
+        self.send_runtime_call("Metadata_metadata", "0x").await?;
+        let scan = {
+            let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
+            skip_opaque_prefix(&mut hex_reader).await?;
+            let result = Box::pin(
+                streaming_metadata::scan_pallets_streaming(&mut hex_reader, pallet_filter),
+            )
+            .await
+            .map_err(|e| crate::Error::Decode(alloc::format!("rescan: {e}")))?;
+            hex_reader.finish().await;
+            result
+        };
+
+        let remap = |id: u32| id_map.get(&id).copied().unwrap_or(id);
+        let pallets = scales::frame::metadata::remap_pallet_ids(scan.pallets, &remap);
+        let extrinsic = scales::frame::metadata::remap_extrinsic_ids(scan.extrinsic, &remap);
+        log::info!("metadata: ready ({} pallets)", pallets.len());
+        // Take the filled registry out, replacing with empty
+        let built_registry =
+            core::mem::replace(registry, scales::Registry::with_capacity(0));
+        Ok(meta::from_raw(pallets, extrinsic, built_registry))
     }
 
     /// Send a runtime call RPC request without reading the response.
@@ -1094,7 +1165,9 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
     /// arrive as WebSocket frames — HexFrameReader handles them,
     /// skipping the non-hex response and processing the hex notification.
     async fn send_runtime_call(&mut self, function: &str, call_data: &str) -> crate::Result<()> {
-        let hash = self.prepare_operation().await?;
+        // Use finalized hash directly — don't flush unpins (which calls rpc()
+        // and could try to parse a large buffered notification, blowing the stack).
+        let hash = self.finalized_hash.clone();
         let id = self.rpc.next_id;
         self.rpc.next_id += 1;
         log::info!("RPC `chainHead_v1_call` (ID={})", id);
@@ -1131,7 +1204,7 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
 
 #[cfg(feature = "ws-edge")]
 async fn skip_opaque_prefix<R: embedded_io_async::Read>(reader: &mut R) -> crate::Result<()> {
-    // Read compact u32 length prefix of OpaqueMetadata
+    // Read and skip the compact u32 length prefix of OpaqueMetadata.
     let mut b = [0u8; 1];
     reader
         .read_exact(&mut b)
@@ -1144,6 +1217,12 @@ async fn skip_opaque_prefix<R: embedded_io_async::Read>(reader: &mut R) -> crate
         2 => 3,
         _ => ((b[0] >> 2) + 4) as usize,
     };
+    log::debug!(
+        "opaque prefix: byte=0x{:02x} mode={} skip={}",
+        b[0],
+        mode,
+        skip
+    );
     for _ in 0..skip {
         reader
             .read_exact(&mut b)

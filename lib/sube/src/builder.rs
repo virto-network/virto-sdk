@@ -473,16 +473,9 @@ pub async fn connect_edge(
 ) -> SubeResult<EdgeSube> {
     let ws = crate::rpc::edge::edge_connect(url, net, rng).await?;
     log::info!("sube: starting ChainHead session");
-    let mut chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
-    let meta = if pallets.is_empty() {
-        log::info!("sube: ready (no metadata)");
-        Arc::new(Metadata::empty())
-    } else {
-        log::info!("sube: loading filtered metadata (streaming)");
-        let m = chain_head.metadata_filtered_streaming(pallets).await?;
-        Arc::new(m)
-    };
-    Ok(Sube::from_parts(chain_head, meta))
+    let chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
+    log::info!("sube: ready");
+    Ok(Sube::from_parts(chain_head, Arc::new(Metadata::empty())))
 }
 
 // --- URL-based constructors and reconnect (AnyBackend only) ---

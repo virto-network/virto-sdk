@@ -87,8 +87,8 @@ harness = false
 features = ["wss"]
 
 [workspace]
-members = [".", ".wt_alt/lib/pass"]
-exclude = ["tests/qemu"]
+members = ["."]
+exclude = ["tests/qemu", ".wt_alt"]
 
 [workspace.dependencies]
 serde = { version = "1", default-features = false }

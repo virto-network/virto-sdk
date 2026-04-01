@@ -12,7 +12,7 @@ use embedded_io_async::Read;
 
 use crate::Error;
 
-const BUF_SIZE: usize = 1024;
+const BUF_SIZE: usize = 256;
 
 /// Async streaming cursor over SCALE-encoded data.
 ///

@@ -335,6 +335,30 @@ pub fn postprocess_types(types: &mut [TypeDefOwned]) {
     }
 }
 
+/// Collect only storage + constant type IDs (no calls/events/extrinsic).
+/// This avoids pulling in RuntimeCall/RuntimeEvent which transitively
+/// reference every pallet's types — too much for memory-constrained targets.
+pub fn collect_storage_type_ids(pallets: &[RawPallet]) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for p in pallets {
+        if let Some(ref s) = p.storage {
+            for e in &s.entries {
+                match &e.ty {
+                    RawStorageType::Plain(t) => ids.push(*t),
+                    RawStorageType::Map { key, value, .. } => {
+                        ids.push(*key);
+                        ids.push(*value);
+                    }
+                }
+            }
+        }
+        for c in &p.constants {
+            ids.push(c.ty);
+        }
+    }
+    ids
+}
+
 pub fn collect_pallet_type_ids(pallets: &[RawPallet], extrinsic: &RawExtrinsic) -> Vec<u32> {
     let mut ids = Vec::new();
     for p in pallets {
@@ -937,5 +961,100 @@ mod tests {
         let storage = system.storage.as_ref().unwrap();
         assert!(storage.entries.iter().any(|e| e.name == "Account"));
         assert!(storage.entries.iter().any(|e| e.name == "Number"));
+    }
+}
+
+// Test: verify filtered registry size for streaming metadata budget planning
+#[cfg(test)]
+mod streaming_size_tests {
+    use super::*;
+    use alloc::collections::BTreeSet;
+    
+    const KREIVO_META: &[u8] = include_bytes!("../../tests/fixtures/kreivo.scale");
+    
+    #[test]
+    fn measure_filtered_registry_storage_only() {
+        let raw = decode_metadata(KREIVO_META).unwrap();
+        let pallets: Vec<_> = raw.pallets.into_iter()
+            .filter(|p| p.name == "System" || p.name == "CollatorSelection")
+            .collect();
+        
+        let root = collect_storage_type_ids(&pallets);
+        println!("Root storage type IDs: {} entries", root.len());
+        
+        // Transitive closure
+        let mut needed = BTreeSet::new();
+        let mut queue = root;
+        while let Some(id) = queue.pop() {
+            if !needed.insert(id) { continue; }
+            if let Some(td) = raw.types.get(id as usize) {
+                collect_type_refs(td, &mut queue);
+            }
+        }
+        println!("Transitive types needed: {}", needed.len());
+        
+        // Build filtered types
+        let mut id_map: Vec<Option<u32>> = vec![None; raw.types.len()];
+        let mut filtered = Vec::new();
+        for &old_id in &needed {
+            if (old_id as usize) < id_map.len() {
+                id_map[old_id as usize] = Some(filtered.len() as u32);
+            }
+            if let Some(td) = raw.types.get(old_id as usize) {
+                let mut td = td.clone();
+                remap_type_ids(&mut td, &id_map);
+                filtered.push(td);
+            }
+        }
+        postprocess_types(&mut filtered);
+        
+        // Measure type sizes
+        let mut total_strings = 0usize;
+        let mut total_fields = 0usize;
+        let mut total_variants = 0usize;
+        let mut total_type_ids = 0usize;
+        for td in &filtered {
+            match td {
+                TypeDefOwned::Struct(fields) => {
+                    total_fields += fields.len();
+                    for f in fields { total_strings += f.name.len(); }
+                }
+                TypeDefOwned::Variant(vdef) => {
+                    total_variants += vdef.variants.len();
+                    total_strings += vdef.name.len();
+                    for v in &vdef.variants {
+                        total_strings += v.name.len();
+                        match &v.fields {
+                            FieldsOwned::Struct(fields) => {
+                                total_fields += fields.len();
+                                for f in fields { total_strings += f.name.len(); }
+                            }
+                            FieldsOwned::Tuple(ids) => total_type_ids += ids.len(),
+                            _ => {}
+                        }
+                    }
+                }
+                TypeDefOwned::Tuple(ids) | TypeDefOwned::StructTuple(ids) => {
+                    total_type_ids += ids.len();
+                }
+                _ => {}
+            }
+        }
+        
+        let tdi_size = filtered.len() * 12; // approx TDI enum size
+        let fields_size = total_fields * 8; // FI = StrId + TypeId
+        let variants_size = total_variants * 12; // VI = u8 + StrId + VFI
+        let type_ids_size = total_type_ids * 4;
+        let str_idx_size = (total_fields + total_variants + filtered.len()) * 6; // (u32, u16) per string
+        let total = tdi_size + fields_size + variants_size + type_ids_size + total_strings + str_idx_size;
+        
+        println!("Filtered registry estimate:");
+        println!("  types:    {} entries, ~{} bytes", filtered.len(), tdi_size);
+        println!("  fields:   {}, ~{} bytes", total_fields, fields_size);
+        println!("  variants: {}, ~{} bytes", total_variants, variants_size);
+        println!("  type_ids: {}, ~{} bytes", total_type_ids, type_ids_size);
+        println!("  strings:  {} bytes", total_strings);
+        println!("  str_idx:  ~{} bytes", str_idx_size);
+        println!("  TOTAL:    ~{} bytes (~{}KB)", total, total / 1024);
     }
 }
