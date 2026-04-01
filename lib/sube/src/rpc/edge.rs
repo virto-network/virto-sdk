@@ -279,7 +279,7 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
         loop {
             // If we have remaining payload in the current frame, read a chunk
             if self.remaining > 0 {
-                let mut chunk = [0u8; 1024];
+                let mut chunk = [0u8; 512];
                 let to_read = self.remaining.min(chunk.len());
                 read_exact(&mut self.backend.stream, &mut chunk[..to_read])
                     .await
@@ -480,15 +480,15 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
-/// Find the start of hex data after `"0x` in a JSON text chunk.
+/// Find the start of the `"output":"0x...` hex payload in a JSON chunk.
+///
+/// Looks specifically for `"output":"0x` to avoid matching block hashes
+/// or other hex fields in subscription notifications.
 fn find_hex_start(data: &[u8]) -> Option<usize> {
-    // Look for "0x pattern (quote, 0, x)
-    for i in 0..data.len().saturating_sub(2) {
-        if data[i] == b'"' && data[i + 1] == b'0' && data[i + 2] == b'x' {
-            return Some(i + 3); // start after "0x
-        }
-    }
-    None
+    const MARKER: &[u8] = b"\"output\":\"0x";
+    data.windows(MARKER.len())
+        .position(|w| w == MARKER)
+        .map(|i| i + MARKER.len())
 }
 
 /// Parsed components of a `ws://` or `wss://` URL.
