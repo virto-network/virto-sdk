@@ -19,6 +19,20 @@ impl Pmu {
         for reg in 0x92..=0x9Au8 {
             let _ = self.0.write(AXP, &[reg, 0x1C]);
         }
+        self.enable_charging();
+    }
+
+    /// Enable battery charger at 300mA, 4.2V target.
+    fn enable_charging(&mut self) {
+        // Register 0x62: Linear charger control
+        // Bit 0 = charger enable, bits 4-0 = charge current
+        // 0x04 = enable + 300mA (safe default for small LiPo)
+        let _ = self.0.write(AXP, &[0x62, 0x04]);
+        // Register 0x63: Charge target voltage = 4.2V (bits 2-0 = 0b010)
+        let _ = self.0.write(AXP, &[0x63, 0x02]);
+        // Register 0x14: minimum system voltage = 4.5V (ensures USB powers device while charging)
+        let _ = self.0.write(AXP, &[0x14, 0x05]);
+        log::info!("PMU: charger enabled (300mA, 4.2V)");
     }
 
     /// Enable battery voltage ADC and clear stale IRQs from boot.
