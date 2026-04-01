@@ -58,6 +58,16 @@ impl Pmu {
         })
     }
 
+    /// True if battery is currently charging (register 0x01, bit 2).
+    pub fn is_charging(&mut self) -> bool {
+        let mut buf = [0u8; 1];
+        if self.0.write_read(AXP, &[0x01], &mut buf).is_ok() {
+            buf[0] & 0x04 != 0
+        } else {
+            false
+        }
+    }
+
     /// Check and clear power key short press (INTSTS2 register 0x49, bit 1).
     pub fn button_pressed(&mut self) -> bool {
         let mut buf = [0u8; 1];

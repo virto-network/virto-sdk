@@ -27,6 +27,8 @@ static BATTERY_LEVEL: AtomicU8 = AtomicU8::new(255);
 static SCREEN_TOGGLE: AtomicBool = AtomicBool::new(false);
 /// WiFi connection status, set by wifi_task, read by UI core.
 static WIFI_CONNECTED: AtomicBool = AtomicBool::new(false);
+/// Battery charging status, set by pmu_task, read by UI core.
+static CHARGING: AtomicBool = AtomicBool::new(false);
 
 /// What the app needs after device init.
 pub struct Runtime {
@@ -126,11 +128,12 @@ async fn pmu_task(mut pmu: device::pmu::Pmu) {
             SCREEN_TOGGLE.store(true, Ordering::Relaxed);
         }
 
-        // Read battery every ~30s (150 × 200ms)
+        // Read battery + charge status every ~30s (150 × 200ms)
         if tick % 150 == 0 {
             if let Some(pct) = pmu.battery_percent() {
                 BATTERY_LEVEL.store(pct, Ordering::Relaxed);
             }
+            CHARGING.store(pmu.is_charging(), Ordering::Relaxed);
         }
 
         tick = tick.wrapping_add(1);
@@ -211,6 +214,7 @@ fn ui_core(
         }
 
         app.set_wifi(WIFI_CONNECTED.load(Ordering::Relaxed));
+        app.set_charging(CHARGING.load(Ordering::Relaxed));
         let batt = BATTERY_LEVEL.load(Ordering::Relaxed);
         app.set_battery_level(if batt <= 100 { batt as i32 } else { -1 });
 
