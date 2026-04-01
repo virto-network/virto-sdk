@@ -1072,57 +1072,20 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
     ) -> crate::Result<Metadata> {
         use scales::frame::streaming_metadata;
 
-        // Pass 1: scan
-        log::info!("metadata: pass 1 — scanning type refs + pallets");
+        log::info!("metadata: streaming decode");
         self.send_runtime_call("Metadata_metadata", "0x").await?;
-        let scan = {
-            let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
-            // Skip the OpaqueMetadata Compact<u32> length prefix
-            skip_opaque_prefix(&mut hex_reader).await?;
-            streaming_metadata::scan_metadata(&mut hex_reader, pallet_filter)
-                .await
-                .map_err(|e| crate::Error::Decode(alloc::format!("scan: {e}")))?
-        };
-        // Drain any remaining frames from this operation
-        self.drain_pending_frames().await;
-
-        log::info!(
-            "metadata: scanned {} types, {} pallets kept",
-            scan.type_count,
-            scan.pallets.len()
-        );
-
-        // Resolve needed types, then free the reference graph
-        let needed = streaming_metadata::resolve_needed_types(&scan);
-        let type_count = scan.type_count;
-        let pallets = scan.pallets;
-        let extrinsic = scan.extrinsic;
-        // scan.ref_data + ref_index dropped here — frees ~10KB before pass 2
-        log::info!("metadata: {} types needed", needed.len());
-
-        // Pass 2: decode needed types
-        log::info!("metadata: pass 2 — decoding {} types", needed.len());
-        self.send_runtime_call("Metadata_metadata", "0x").await?;
-        let (types, id_map) = {
+        let raw = {
             let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
             skip_opaque_prefix(&mut hex_reader).await?;
-            streaming_metadata::decode_needed_types(&mut hex_reader, &needed, type_count)
+            streaming_metadata::decode_metadata_streaming(&mut hex_reader, pallet_filter)
                 .await
-                .map_err(|e| crate::Error::Decode(alloc::format!("decode: {e}")))?
+                .map_err(|e| crate::Error::Decode(alloc::format!("{e}")))?
         };
-        // Free needed set before building registry
-        drop(needed);
         self.drain_pending_frames().await;
 
-        // Build registry + remap pallet/extrinsic IDs
-        let registry = scales::Registry::new(types);
-        let remap = |id: u32| id_map.get(id as usize).copied().flatten().unwrap_or(id);
-        let pallets = scales::frame::metadata::remap_pallet_ids(pallets, &remap);
-        let extrinsic = scales::frame::metadata::remap_extrinsic_ids(extrinsic, &remap);
-
-        log::info!("metadata: ready ({} pallets)", pallets.len());
-
-        Ok(meta::from_raw(pallets, extrinsic, registry))
+        let registry = scales::Registry::new(raw.types);
+        log::info!("metadata: ready ({} pallets)", raw.pallets.len());
+        Ok(meta::from_raw(raw.pallets, raw.extrinsic, registry))
     }
 
     /// Send a runtime call RPC request without reading the response.

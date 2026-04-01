@@ -87,7 +87,7 @@ harness = false
 features = ["wss"]
 
 [workspace]
-members = ["."]
+members = [".", ".wt_alt/lib/pass"]
 exclude = ["tests/qemu"]
 
 [workspace.dependencies]

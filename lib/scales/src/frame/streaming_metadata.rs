@@ -17,6 +17,50 @@ use super::stream_cursor::StreamCursor;
 use crate::registry::TypeDefOwned;
 use crate::Error;
 
+/// Single-pass streaming metadata decode.
+///
+/// Decodes ALL types (builds the full registry) and filters pallets.
+/// Simpler than two-pass, and the full Kreivo registry is only ~120KB
+/// which fits when combined with ~50KB connection overhead.
+/// Peak memory: ~170KB (types accumulate as decoded, then compacted into registry).
+pub async fn decode_metadata_streaming<R: Read>(
+    reader: R,
+    pallet_filter: &[&str],
+) -> Result<super::metadata::RawMetadata, Error> {
+    use super::metadata::RawMetadata;
+
+    let mut c = StreamCursor::new(reader);
+    let version = read_header_async(&mut c).await?;
+
+    let type_count = c.read_compact_u32().await?;
+    let mut types = Vec::with_capacity(type_count as usize);
+    for _ in 0..type_count {
+        let id = c.read_compact_u32().await?;
+        let td = decode_portable_type_async(&mut c).await?;
+        // Fill gaps (type IDs may not be contiguous)
+        while types.len() < id as usize {
+            types.push(TypeDefOwned::StructUnit);
+        }
+        types.push(td);
+    }
+    super::metadata::postprocess_types(&mut types);
+
+    let pallet_count = c.read_compact_u32().await?;
+    let mut pallets = Vec::with_capacity(pallet_count as usize);
+    for _ in 0..pallet_count {
+        let p = decode_pallet_async(&mut c, version).await?;
+        if p.name == "System" || pallet_filter.iter().any(|n| p.name == *n) {
+            pallets.push(p);
+        }
+    }
+    let extrinsic = decode_extrinsic_async(&mut c, version).await?;
+    Ok(RawMetadata {
+        types,
+        pallets,
+        extrinsic,
+    })
+}
+
 /// Result of a metadata scan pass.
 pub struct ScanResult {
     /// Filtered pallets (only those matching the filter + System).
@@ -61,7 +105,8 @@ pub async fn scan_metadata<R: Read>(
 
     // Scan types — extract only references into flat buffer
     let type_count = c.read_compact_u32().await?;
-    let mut ref_data = Vec::new();
+    // Preallocate: ~3 refs per type on average
+    let mut ref_data = Vec::with_capacity((type_count as usize) * 3);
     let mut ref_index = Vec::with_capacity(type_count as usize);
     let mut tmp_refs = Vec::new();
     for _ in 0..type_count {
