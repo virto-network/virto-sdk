@@ -165,13 +165,17 @@ pub fn encode_extensions(
     Ok((extra, additional))
 }
 
-/// Build and submit a signed extrinsic using metadata-driven extensions.
+/// Build and submit an extrinsic using metadata-driven extensions.
+///
+/// Delegates extrinsic assembly to the [`ExtrinsicAssembler`](crate::ExtrinsicAssembler):
+/// - [`Signer`](crate::Signer) impls get V4 signed assembly via blanket impl
+/// - Custom assemblers (e.g. pallet-pass `PassAuthenticator`) produce V5 General extrinsics
 pub async fn submit<V>(
     chain: &mut (impl Backend + ?Sized),
     meta: &Rc<Metadata>,
     path: &str,
     tx_data: &ExtrinsicBody<V>,
-    signer: &(impl crate::Signer + ?Sized),
+    assembler: &(impl crate::ExtrinsicAssembler + ?Sized),
     wait_for_finalization: bool,
 ) -> Result<Response>
 where
@@ -191,7 +195,7 @@ where
             .encode_call(&item_or_call.to_lowercase(), &meta.registry, calls_ty)?;
     encoded_call.extend(&call_data);
 
-    let from_account = signer.account();
+    let from_account = assembler.account();
 
     // Build chain context
     let ctx = build_context(
@@ -203,51 +207,16 @@ where
     )
     .await?;
 
-    // Encode extensions
-    let (extra_bytes, additional_signed) = encode_extensions(
-        &meta.extrinsic.extensions,
-        &meta.registry,
-        &ctx,
-        &tx_data.extensions,
-    )?;
-
-    // Sign
-    let signature_payload = [encoded_call.clone(), extra_bytes.clone(), additional_signed].concat();
-
-    let payload = if signature_payload.len() > 256 {
-        hash(&Hasher::Blake2_256, &signature_payload)
-    } else {
-        signature_payload
-    };
-    let signature = signer.sign(payload).await?;
-
-    // Assemble extrinsic
-    let version = meta.extrinsic.version;
-
-    // MultiAddress::Id → variant 0 + 32-byte account
-    let address_bytes = [vec![0x00], from_account.as_ref().to_vec()].concat();
-
-    // Find Sr25519 variant index from signature type
-    let sig_prefix = meta
-        .extrinsic
-        .signature_ty
-        .and_then(|ty| match meta.registry.resolve(ty) {
-            Some(scales::TypeDef::Variant(vdef)) => vdef
-                .variants()
-                .find(|v| v.name().contains("Sr25519"))
-                .map(|v| v.index()),
-            _ => None,
-        })
-        .unwrap_or(0x01);
-
-    let encoded_inner = [
-        vec![0b10000000 | version],
-        address_bytes,
-        [vec![sig_prefix], signature.as_ref().to_vec()].concat(),
-        extra_bytes,
-        encoded_call,
-    ]
-    .concat();
+    // Delegate assembly to the assembler
+    let encoded_inner = assembler
+        .assemble(
+            &encoded_call,
+            &meta.extrinsic,
+            &meta.registry,
+            &ctx,
+            &tx_data.extensions,
+        )
+        .await?;
 
     let len = Compact(
         u32::try_from(encoded_inner.len())
@@ -260,6 +229,61 @@ where
         .await?;
 
     Ok(Response::Void)
+}
+
+/// Assemble a V4 signed extrinsic from a [`Signer`](crate::Signer).
+///
+/// Called by the blanket `ExtrinsicAssembler` impl for `Signer` types.
+/// Also available for custom assemblers that need to fall back to V4.
+pub async fn assemble_signed_v4(
+    signer: &(impl crate::Signer + ?Sized),
+    encoded_call: &[u8],
+    meta: &meta::ExtrinsicMeta,
+    registry: &scales::Registry,
+    ctx: &ChainContext,
+    overrides: &[(String, DynValue)],
+) -> Result<Vec<u8>> {
+    // Encode extensions
+    let (extra_bytes, additional_signed) =
+        encode_extensions(&meta.extensions, registry, ctx, overrides)?;
+
+    // Sign
+    let signature_payload = [encoded_call, &extra_bytes, &additional_signed].concat();
+
+    let payload = if signature_payload.len() > 256 {
+        hash(&Hasher::Blake2_256, &signature_payload)
+    } else {
+        signature_payload
+    };
+    let signature = signer.sign(payload).await?;
+
+    // Assemble extrinsic
+    let version = meta.version;
+    let from_account = signer.account();
+
+    // MultiAddress::Id → variant 0 + 32-byte account
+    let address_bytes = [vec![0x00], from_account.as_ref().to_vec()].concat();
+
+    // Find Sr25519 variant index from signature type
+    let sig_prefix = meta
+        .signature_ty
+        .and_then(|ty| match registry.resolve(ty) {
+            Some(scales::TypeDef::Variant(vdef)) => vdef
+                .variants()
+                .find(|v| v.name().contains("Sr25519"))
+                .map(|v| v.index()),
+            _ => None,
+        })
+        .unwrap_or(0x01);
+
+    Ok([
+        vec![0b10000000 | version],
+        address_bytes,
+        [vec![sig_prefix], signature.as_ref().to_vec()].concat(),
+        extra_bytes,
+        encoded_call.to_vec(),
+    ]
+    .concat())
 }
 
 #[cfg(test)]
@@ -359,7 +383,7 @@ mod tests {
 }
 
 /// Fetch spec/tx version, genesis hash, and account nonce.
-async fn build_context(
+pub async fn build_context(
     chain: &mut (impl Backend + ?Sized),
     meta: &Rc<Metadata>,
     nonce: Option<u64>,

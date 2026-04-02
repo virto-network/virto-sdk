@@ -67,7 +67,7 @@ pub use extrinsic::{EncodeCall, Text};
 pub use meta::Metadata;
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 pub use rpc::chainhead::{BlockHeader, ChainEvent, ChainSession};
-pub use signer::{Bytes, Signer, SignerFn};
+pub use signer::{Bytes, ExtrinsicAssembler, Signer, SignerFn};
 
 use core::fmt;
 use metadata::{self as meta, KeyValue, StorageKey};
@@ -83,11 +83,11 @@ mod prelude {
 #[cfg(any(feature = "ws", feature = "smoldot"))]
 pub mod backend;
 pub mod builder;
-pub(crate) mod extrinsic;
+pub mod extrinsic;
 mod hasher;
 pub mod metadata;
 pub mod rpc;
-mod signer;
+pub mod signer;
 pub(crate) mod util;
 pub mod value;
 

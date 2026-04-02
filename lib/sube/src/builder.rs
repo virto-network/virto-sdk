@@ -5,7 +5,7 @@ use alloc::rc::Rc;
 
 use crate::extrinsic::{EncodeCall, ExtrinsicBody};
 use crate::prelude::*;
-use crate::{Backend, DynValue, Metadata, Response, Result as SubeResult, Signer};
+use crate::{Backend, DynValue, ExtrinsicAssembler, Metadata, Response, Result as SubeResult};
 
 #[cfg(any(feature = "ws", feature = "smoldot"))]
 use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
@@ -649,20 +649,20 @@ impl<'a, Bk: Backend, B, S> CallBuilder<'a, Bk, B, S> {
 impl<'a, Bk: Backend, B, S> IntoFuture for CallBuilder<'a, Bk, B, S>
 where
     B: EncodeCall + core::fmt::Debug + 'a,
-    S: Signer + 'a,
+    S: ExtrinsicAssembler + 'a,
 {
     type Output = SubeResult<Response>;
     type IntoFuture = BoxFuture<'a, SubeResult<Response>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let (path, body, signer, finalize) = self.tx.into_parts();
+            let (path, body, assembler, finalize) = self.tx.into_parts();
             crate::extrinsic::submit(
                 &mut self.sube.backend,
                 &self.sube.metadata,
                 &path,
                 &body,
-                &signer,
+                &assembler,
                 finalize,
             )
             .await
@@ -713,7 +713,7 @@ impl<B, S> OneShotCall<B, S> {
 impl<B, S> IntoFuture for OneShotCall<B, S>
 where
     B: EncodeCall + core::fmt::Debug + 'static,
-    S: Signer + 'static,
+    S: ExtrinsicAssembler + 'static,
 {
     type Output = SubeResult<Response>;
     type IntoFuture = BoxFuture<'static, SubeResult<Response>>;
@@ -725,8 +725,8 @@ where
             let mut backend = connect(&url, self.timeout).await?;
             let meta = get_metadata(&mut backend, &url, self.preloaded_meta).await?;
 
-            let (_, body, signer, finalize) = self.tx.into_parts();
-            crate::extrinsic::submit(&mut backend, &meta, path, &body, &signer, finalize).await
+            let (_, body, assembler, finalize) = self.tx.into_parts();
+            crate::extrinsic::submit(&mut backend, &meta, path, &body, &assembler, finalize).await
         })
     }
 }
