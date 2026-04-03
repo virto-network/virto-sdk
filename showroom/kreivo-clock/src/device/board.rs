@@ -50,11 +50,18 @@ pub struct System<'a> {
     pub cpu_ctrl: esp_hal::peripherals::CPU_CTRL<'a>,
 }
 
-pub async fn init(spawner: Spawner) -> System<'static> {
+pub async fn init(spawner: Spawner) -> (System<'static>, sube::Registry) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
     esp_println::logger::init_logger(log::LevelFilter::Info);
     esp_alloc::heap_allocator!(size: 172032); // 168KB
+
+    // Pre-allocate registry FIRST from clean, unfragmented heap.
+    // 6 Vecs are the first allocations — contiguous at heap bottom.
+    // TLS will get the large contiguous region above them (~104KB).
+    let registry = sube::Registry::with_capacity_detailed(250, 1050, 850, 64, 18000);
+    log::info!("registry allocated, heap: {} free", esp_alloc::HEAP.free());
+
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 
@@ -131,14 +138,14 @@ pub async fn init(spawner: Spawner) -> System<'static> {
     );
     spawner.spawn(net_task(runner)).ok();
 
-    System {
+    (System {
         display,
         backlight,
         pmu,
         wifi: controller,
         stack,
         cpu_ctrl: peripherals.CPU_CTRL,
-    }
+    }, registry)
 }
 
 #[embassy_executor::task]

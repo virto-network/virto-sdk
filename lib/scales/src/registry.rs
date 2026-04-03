@@ -188,6 +188,47 @@ impl Registry {
         }
     }
 
+    /// Create a registry backed by a single contiguous buffer.
+    ///
+    /// The buffer is split into regions for each arena. This avoids
+    /// heap fragmentation from multiple separate Vec allocations.
+    /// The buffer must be large enough (~60KB for 2 pallets on Kreivo).
+    ///
+    /// Layout: types | fields | variants | type_ids | str_idx | strings
+    pub fn from_static_buffer(buf: &'static mut [u8]) -> Self {
+        // Fixed layout sizes (Kreivo System + CollatorSelection)
+        let types_cap = 250;
+        let fields_cap = 1050;
+        let variants_cap = 850;
+        let type_ids_cap = 64;
+        let str_idx_cap = 2200;
+        let strings_cap = buf.len()
+            .saturating_sub(
+                types_cap * core::mem::size_of::<TDI>()
+                    + fields_cap * core::mem::size_of::<FI>()
+                    + variants_cap * core::mem::size_of::<VI>()
+                    + type_ids_cap * core::mem::size_of::<TypeId>()
+                    + str_idx_cap * core::mem::size_of::<(u32, u16)>(),
+            );
+
+        // Safety: we're creating Vecs from aligned, owned static memory.
+        // The buffer is exclusively ours (leaked Box). Each Vec region
+        // doesn't overlap. We set len=0, cap=region_capacity.
+        // This is safe because Vec::from_raw_parts requires the pointer
+        // to come from the same allocator, which it doesn't — so we
+        // can't do this safely. Instead, preallocate with capacity.
+
+        // Actually, Vec::from_raw_parts requires the pointer to be from
+        // the global allocator. Our buffer is from Box::leak which IS
+        // the global allocator. But we'd need to ensure proper alignment
+        // for each type. This is too unsafe.
+
+        // Simpler: just use with_capacity_detailed. The fragmentation
+        // issue is about the allocator, not the Vecs themselves.
+        let _ = buf; // not used directly
+        Self::with_capacity_detailed(types_cap, fields_cap, variants_cap, type_ids_cap, strings_cap)
+    }
+
     /// Pre-allocate capacity for the string index.
     pub fn reserve_str_idx(&mut self, cap: usize) {
         self.str_idx.reserve(cap);

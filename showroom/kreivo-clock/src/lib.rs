@@ -36,6 +36,9 @@ pub static PAUSE_UI: AtomicBool = AtomicBool::new(false);
 pub struct Runtime {
     pub stack: embassy_net::Stack<'static>,
     pub events: Producer<'static, UiEvent, 16>,
+    /// Pre-allocated registry for metadata loading.
+    /// Allocated early (before WiFi) from clean, unfragmented heap.
+    pub registry: sube::Registry,
 }
 
 /// Initialize hardware, start background tasks (WiFi, PMU), and UI core.
@@ -43,7 +46,7 @@ pub struct Runtime {
 /// WiFi connects automatically in the background and reconnects on failure.
 /// Returns once WiFi has an IP address so the app can start immediately.
 pub async fn start(spawner: Spawner) -> Runtime {
-    let system = device::board::init(spawner).await;
+    let (system, registry) = device::board::init(spawner).await;
 
     // Let WiFi ppTask finish its late init before starting core 1
     Timer::after(Duration::from_millis(500)).await;
@@ -80,6 +83,7 @@ pub async fn start(spawner: Spawner) -> Runtime {
     Runtime {
         stack: system.stack,
         events: producer,
+        registry,
     }
 }
 
