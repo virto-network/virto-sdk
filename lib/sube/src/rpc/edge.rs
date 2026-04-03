@@ -32,7 +32,7 @@ use crate::Error;
 /// handshake has already been done externally.
 pub struct Backend<T> {
     stream: T,
-    event_buffer: VecDeque<(String, serde_json::Value)>,
+    event_buffer: VecDeque<(String, String)>,
     pub(crate) next_id: u32,
     frag_buf: Vec<u8>,
 }
@@ -191,7 +191,7 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
         Ok(sub_id)
     }
 
-    async fn next_event(&mut self) -> Option<(String, serde_json::Value)> {
+    async fn next_event(&mut self) -> Option<(String, String)> {
         if let Some(event) = self.event_buffer.pop_front() {
             return Some(event);
         }
@@ -211,7 +211,7 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
         }
     }
 
-    fn try_next_event(&mut self) -> Option<(String, serde_json::Value)> {
+    fn try_next_event(&mut self) -> Option<(String, String)> {
         self.event_buffer.pop_front()
     }
 

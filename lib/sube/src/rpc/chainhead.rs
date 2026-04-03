@@ -261,7 +261,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     async fn wait_initialized(&mut self) -> crate::Result<()> {
         loop {
             let (_, event_json) = self.next_follow_event().await?;
-            let event: FollowEvent = serde_json::from_value(event_json)
+            let event: FollowEvent = serde_json::from_str(&event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
             if let FollowEvent::Initialized {
@@ -283,7 +283,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
     /// Wait for the next event on the follow subscription, buffering events
     /// from other subscriptions for later retrieval.
-    async fn next_follow_event(&mut self) -> crate::Result<(String, serde_json::Value)> {
+    async fn next_follow_event(&mut self) -> crate::Result<(String, String)> {
         loop {
             let (sub_id, value) = self.rpc.next_event().await.ok_or(crate::Error::Node(
                 "subscription closed before receiving event".into(),
@@ -297,8 +297,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     }
 
     /// Put an event back into the transport's buffer for later retrieval.
-    /// This is used when we receive an event from a non-follow subscription.
-    fn rpc_rebuffer(&mut self, _sub_id: String, _value: serde_json::Value) {
+    fn rpc_rebuffer(&mut self, _sub_id: String, _value: String) {
         // Events from non-follow subscriptions are currently discarded.
         // Archive operations use wait_for_archive_event which handles routing.
         log::trace!("discarding event from non-follow subscription");
@@ -343,7 +342,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 continue;
             }
 
-            let event: FollowEvent = serde_json::from_value(event_json)
+            let event: FollowEvent = serde_json::from_str(&event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
             match event {
@@ -459,7 +458,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             if sub_id != self.follow_sub_id {
                 continue;
             }
-            let event: FollowEvent = match serde_json::from_value(event_json) {
+            let event: FollowEvent = match serde_json::from_str(&event_json) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
@@ -508,7 +507,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 continue;
             }
 
-            let event: FollowEvent = serde_json::from_value(event_json)
+            let event: FollowEvent = serde_json::from_str(&event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
             match event {
@@ -764,7 +763,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 .ok_or(crate::Error::SubscriptionClosed)?;
 
             if sub_id == archive_sub_id {
-                let event: ArchiveStorageEvent = serde_json::from_value(event_json)
+                let event: ArchiveStorageEvent = serde_json::from_str(&event_json)
                     .map_err(|e| crate::Error::Decode(format!("archive event: {e}")))?;
 
                 match event {
@@ -792,7 +791,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 }
             } else if sub_id == self.follow_sub_id {
                 // Process follow events that arrive while waiting for archive results
-                if let Ok(event) = serde_json::from_value::<FollowEvent>(event_json) {
+                if let Ok(event) = serde_json::from_str::<FollowEvent>(&event_json) {
                     match event {
                         FollowEvent::Stop => {
                             self.needs_refollow = true;
@@ -950,7 +949,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 .ok_or(crate::Error::SubscriptionClosed)?;
 
             if event_sub_id == sub_id {
-                let event: TxEvent = serde_json::from_value(event_json)
+                let event: TxEvent = serde_json::from_str(&event_json)
                     .map_err(|e| crate::Error::Decode(format!("tx event: {e}")))?;
 
                 match event {
@@ -983,7 +982,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                     _ => {}
                 }
             } else if event_sub_id == self.follow_sub_id {
-                if let Ok(event) = serde_json::from_value::<FollowEvent>(event_json) {
+                if let Ok(event) = serde_json::from_str::<FollowEvent>(&event_json) {
                     match event {
                         FollowEvent::Stop => self.needs_refollow = true,
                         other => self.record_lifecycle_event(other),

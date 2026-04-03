@@ -57,16 +57,18 @@ impl JsonRpcResponse {
 }
 
 /// A JSON-RPC notification (subscription event) — has `method` and `params` but no `id`.
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub struct Notification {
     pub method: String,
     pub params: NotificationParams,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Debug)]
 pub struct NotificationParams {
     pub subscription: String,
-    pub result: serde_json::Value,
+    /// Raw JSON of the notification result — not parsed into `Value` to save heap.
+    /// ChainHead parses this on demand with `serde_json::from_str()`.
+    pub result: String,
 }
 
 /// Represents either a response (has `id`) or a notification (has `method` + `params.subscription`).
@@ -78,30 +80,97 @@ pub enum IncomingMessage {
 
 impl IncomingMessage {
     /// Parse a JSON string into either a Response or Notification.
+    ///
+    /// For responses: full serde_json parse (responses are small).
+    /// For notifications: extract subscription ID and keep the `result`
+    /// as a raw JSON string to avoid allocating a `Value` tree.
     pub fn parse(json: &str) -> Option<Self> {
-        #[derive(Deserialize)]
-        struct Raw {
-            id: Option<serde_json::Value>,
-            result: Option<serde_json::Value>,
-            error: Option<JsonRpcError>,
-            method: Option<String>,
-            params: Option<serde_json::Value>,
+        // Quick check: responses have "id", notifications have "method"
+        if json.contains("\"id\"") && !json.contains("\"method\"") {
+            // Response — parse fully (small payloads: operationStarted, genesis hash, etc.)
+            let resp: JsonRpcResponse = serde_json::from_str(json).ok()?;
+            return Some(IncomingMessage::Response(resp));
         }
 
-        let raw: Raw = serde_json::from_str(json).ok()?;
+        if !json.contains("\"method\"") {
+            // Ambiguous: has both id and method, or neither. Try response first.
+            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(json) {
+                return Some(IncomingMessage::Response(resp));
+            }
+            return None;
+        }
 
-        if raw.id.as_ref().is_some_and(|v| !v.is_null()) || raw.method.is_none() {
-            Some(IncomingMessage::Response(JsonRpcResponse {
-                id: raw.id,
-                result: raw.result,
-                error: raw.error,
-            }))
-        } else {
-            let params: NotificationParams = serde_json::from_value(raw.params?).ok()?;
-            Some(IncomingMessage::Notification(Notification {
-                method: raw.method?,
-                params,
-            }))
+        // Notification — extract subscription and raw result without full parse.
+        let subscription = extract_json_string(json, "\"subscription\":\"")?;
+        let result = extract_json_object(json, "\"result\":")?;
+
+        Some(IncomingMessage::Notification(Notification {
+            method: extract_json_string(json, "\"method\":\"")?,
+            params: NotificationParams {
+                subscription,
+                result,
+            },
+        }))
+    }
+}
+
+/// Extract a JSON string value by scanning for `"key":"value"`.
+fn extract_json_string(json: &str, marker: &str) -> Option<String> {
+    let start = json.find(marker)? + marker.len();
+    let end = json[start..].find('"')?;
+    Some(json[start..start + end].into())
+}
+
+/// Extract a raw JSON object/value after a key marker.
+/// Handles nested braces to find the correct end.
+fn extract_json_object(json: &str, marker: &str) -> Option<String> {
+    let start = json.find(marker)? + marker.len();
+    let rest = &json[start..];
+
+    // Could be an object {...}, array [...], string "...", number, bool, null
+    let first = rest.chars().next()?;
+    match first {
+        '{' => {
+            let mut depth = 0i32;
+            let mut in_string = false;
+            let mut escape = false;
+            for (i, ch) in rest.char_indices() {
+                if escape {
+                    escape = false;
+                    continue;
+                }
+                if ch == '\\' && in_string {
+                    escape = true;
+                    continue;
+                }
+                if ch == '"' {
+                    in_string = !in_string;
+                }
+                if !in_string {
+                    if ch == '{' {
+                        depth += 1;
+                    }
+                    if ch == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(rest[..=i].into());
+                        }
+                    }
+                }
+            }
+            None
+        }
+        '"' => {
+            // String value — find closing quote
+            let end = rest[1..].find('"').map(|i| i + 2)?;
+            Some(rest[..end].into())
+        }
+        _ => {
+            // Number, bool, null — find next comma, brace, or bracket
+            let end = rest
+                .find(|c: char| c == ',' || c == '}' || c == ']')
+                .unwrap_or(rest.len());
+            Some(rest[..end].trim().into())
         }
     }
 }
@@ -203,11 +272,11 @@ pub trait RpcSubscription: Rpc {
     async fn subscribe(&mut self, method: &str, params: serde_json::Value) -> RpcResult<String>;
 
     /// Read the next subscription event, blocking until one arrives.
-    /// Returns `(subscription_id, event_value)`.
-    async fn next_event(&mut self) -> Option<(String, serde_json::Value)>;
+    /// Returns `(subscription_id, raw_json_result)`.
+    async fn next_event(&mut self) -> Option<(String, String)>;
 
     /// Non-blocking: return a buffered event if available.
-    fn try_next_event(&mut self) -> Option<(String, serde_json::Value)>;
+    fn try_next_event(&mut self) -> Option<(String, String)>;
 
     /// Unsubscribe from a subscription.
     async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> RpcResult<()>;
