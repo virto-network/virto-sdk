@@ -23,6 +23,7 @@ extern crate alloc;
 
 #[cfg(feature = "wallet")]
 pub mod wallet;
+pub mod webauthn;
 
 use alloc::string::String;
 use alloc::vec::Vec;
