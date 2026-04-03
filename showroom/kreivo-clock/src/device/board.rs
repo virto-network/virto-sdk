@@ -52,9 +52,11 @@ pub struct System<'a> {
 
 pub async fn init(spawner: Spawner) -> System<'static> {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    // TODO: enable PSRAM once WiFi+PSRAM coexistence is confirmed for T-Watch S3
+    // .with_psram(esp_hal::psram::PsramConfig::default());
     let peripherals = esp_hal::init(config);
     esp_println::logger::init_logger(log::LevelFilter::Info);
-    esp_alloc::heap_allocator!(size: 172032); // 168KB — balances heap vs stack for TLS
+    esp_alloc::heap_allocator!(size: 172032); // 168KB internal SRAM
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timg0.timer0);
 

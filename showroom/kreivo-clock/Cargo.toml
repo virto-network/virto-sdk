@@ -14,7 +14,7 @@ name = "kreivo-clock"
 sube = { path = "../../lib/sube", default-features = false, features = ["ws-edge", "json", "text"] }
 
 # ESP32-S3 HAL + runtime
-esp-hal              = { version = "~1.0", features = ["esp32s3", "log-04", "unstable"] }
+esp-hal              = { version = "~1.0", features = ["esp32s3", "log-04", "unstable", "psram"] }
 esp-rtos             = { version = "0.2.0", features = ["embassy", "esp-alloc", "esp-radio", "esp32s3", "log-04"] }
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3", "log-04"] }
 esp-alloc            = "0.9.0"

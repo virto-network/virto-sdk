@@ -97,11 +97,8 @@ async fn watch_chain(
             })?;
         log::info!("heap after scan: {} free", esp_alloc::HEAP.free());
 
-        // Preallocate registry — connection is settled, heap less fragmented
-        let mut registry = sube::Registry::with_capacity_detailed(
-            250, 1100, 850, 64, 18000,
-        );
-        log::info!("heap after prealloc: {} free", esp_alloc::HEAP.free());
+        // Registry Vecs allocate from PSRAM (added to global heap)
+        let mut registry = sube::Registry::with_capacity(0);
 
         // Pass 2+3: decode types into pre-allocated registry
         let meta = tmp
