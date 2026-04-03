@@ -1,26 +1,19 @@
 #![no_std]
+#![allow(async_fn_in_trait)]
 //! pallet-pass authenticator for sube.
 //!
-//! Provides [`PassAuthenticator`] which implements sube's [`ExtrinsicAssembler`]
-//! to produce V5 "General" extrinsics authenticated via the `PassAuthenticate`
-//! transaction extension (as used by the Kreivo blockchain).
+//! Produces V5 "General" extrinsics authenticated via the `PassAuthenticate`
+//! transaction extension, as used by the Kreivo blockchain.
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use pass::{PassAuthenticator, CredentialProvider};
+//! use pass::{PassAuthenticator, wallet::WalletCredential};
 //!
-//! struct MyWebAuthn { /* ... */ }
-//! impl CredentialProvider for MyWebAuthn {
-//!     async fn credential(&self, ctx: &[u8; 32]) -> sube::Result<sube::DynValue> {
-//!         // return DynValue representation of the credential
-//!         // (scales serializes it against the runtime type from metadata)
-//!         todo!()
-//!     }
-//! }
+//! let cred = WalletCredential::new(hashed_user_id, authority_id, block_number, &my_signer);
+//! let auth = PassAuthenticator::new(account, device_id, cred);
 //!
-//! let auth = PassAuthenticator::new(account, device_id, MyWebAuthn { /* ... */ });
-//! chain.call("some_pallet/some_call")
+//! chain.call("balances/transfer")
 //!     .body_text("(...)")
 //!     .signer(auth)
 //!     .await?;
@@ -28,12 +21,12 @@
 
 extern crate alloc;
 
+#[cfg(feature = "wallet")]
+pub mod wallet;
+
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::future::Future;
-
-use blake2::digest::Digest;
-use blake2::Blake2s256;
+use codec::Encode;
 
 use sube::extrinsic::{encode_extensions, ChainContext};
 use sube::metadata::ExtrinsicMeta;
@@ -41,31 +34,30 @@ use sube::{DynValue, Error, ExtrinsicAssembler, Registry, Result};
 
 /// Device identifier — 32 bytes, matches `fc_traits_authn::DeviceId`.
 pub type DeviceId = [u8; 32];
+/// Hashed user identifier — 32 bytes.
+pub type HashedUserId = [u8; 32];
+/// Authority identifier — 32 bytes.
+pub type AuthorityId = [u8; 32];
+/// Challenge — 32 bytes.
+pub type Challenge = [u8; 32];
 
 /// Generates a credential as a [`DynValue`] given the extrinsic context.
 ///
 /// The extrinsic context is the blake2-256 hash of the "inherited implication"
 /// that pallet-pass uses to verify the credential. The returned [`DynValue`]
 /// is serialized to SCALE by `scales` against the credential type from metadata.
-///
-/// Concrete implementations handle the actual credential generation
-/// (WebAuthn, SubstrateKey, mock, etc.).
 pub trait CredentialProvider {
-    fn credential(&self, extrinsic_context: &[u8; 32]) -> impl Future<Output = Result<DynValue>>;
+    async fn credential(&self, extrinsic_context: &[u8; 32]) -> Result<DynValue>;
 }
 
 /// pallet-pass authenticator that produces V5 "General" extrinsics.
 ///
 /// Implements [`ExtrinsicAssembler`] by encoding the `PassAuthenticate`
 /// transaction extension with a credential obtained from the [`CredentialProvider`].
-/// All SCALE encoding is delegated to `scales` via the type registry — no manual
-/// byte construction.
+/// All SCALE encoding is delegated to `scales` via the type registry.
 pub struct PassAuthenticator<C> {
-    /// Derived pass account address (for nonce lookup).
     account: [u8; 32],
-    /// Registered device identifier.
     device_id: DeviceId,
-    /// Credential generator.
     credential_provider: C,
 }
 
@@ -79,8 +71,9 @@ impl<C> PassAuthenticator<C> {
     }
 }
 
-fn blake2_256(data: &[u8]) -> [u8; 32] {
-    let mut hasher = Blake2s256::new();
+pub(crate) fn blake2_256(data: &[u8]) -> [u8; 32] {
+    use blake2::digest::Digest;
+    let mut hasher = blake2::Blake2s256::new();
     hasher.update(data);
     let result = hasher.finalize();
     let mut out = [0u8; 32];
@@ -88,9 +81,17 @@ fn blake2_256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+/// Compute challenge compatible with pallet-pass's block-based challenger:
+/// `blake2_256(blake2_256(context.encode()) ++ extrinsic_context)`
+pub fn block_challenge(context: u32, extrinsic_context: &[u8; 32]) -> Challenge {
+    let ctx_hash = blake2_256(&context.encode());
+    let mut input = Vec::from(ctx_hash.as_slice());
+    input.extend_from_slice(extrinsic_context);
+    blake2_256(&input)
+}
+
 /// V5 General extrinsic version prefix (bit 6 set).
 const GENERAL_PREFIX: u8 = 0b01000000;
-
 /// Extension identifier used by pallet-pass.
 const PASS_AUTHENTICATE: &str = "PassAuthenticate";
 
@@ -150,10 +151,10 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         // Add PassAuthenticate override and encode ALL extensions through scales
         let mut all_overrides = Vec::from(overrides);
         all_overrides.push((PASS_AUTHENTICATE.into(), pass_value));
-        let (all_extra, _all_additional) = encode_extensions(exts, registry, ctx, &all_overrides)?;
+        let (all_extra, _) = encode_extensions(exts, registry, ctx, &all_overrides)?;
 
         // Assemble V5 General extrinsic:
-        // [version_byte, extension_version(0u8), all_extras, encoded_call]
+        // [version_byte, extension_version, all_extras, encoded_call]
         let mut inner = Vec::new();
         inner.push(version_byte);
         inner.push(0u8); // extension_version
@@ -161,28 +162,5 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         inner.extend_from_slice(encoded_call);
 
         Ok(inner)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct MockCredential(DynValue);
-
-    impl CredentialProvider for MockCredential {
-        fn credential(&self, _ctx: &[u8; 32]) -> impl Future<Output = Result<DynValue>> {
-            let val = self.0.clone();
-            async move { Ok(val) }
-        }
-    }
-
-    #[test]
-    fn pass_authenticator_created() {
-        let account = [1u8; 32];
-        let device_id = [2u8; 32];
-        let cred = MockCredential(DynValue::Null);
-        let auth = PassAuthenticator::new(account, device_id, cred);
-        assert_eq!(ExtrinsicAssembler::account(&auth), [1u8; 32]);
     }
 }

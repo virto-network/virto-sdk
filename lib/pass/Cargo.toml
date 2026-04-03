@@ -7,6 +7,12 @@ description = "pallet-pass authenticator for sube — no_std, embedded-friendly"
 [dependencies]
 sube = { path = "../sube", default-features = false }
 blake2 = { version = "0.10", default-features = false }
+codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
+libwallet = { path = "../libwallet", default-features = false, optional = true }
+
+[features]
+default = ["wallet"]
+wallet = ["dep:libwallet", "libwallet/sr25519"]
 
 [workspace]
