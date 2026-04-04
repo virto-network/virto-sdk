@@ -47,6 +47,10 @@ slint = { version = "1.15", default-features = false, features = [
   "compat-1-2", "unsafe-single-threaded", "libm", "renderer-software",
 ] }
 
+# Flash persistence
+esp-storage      = { version = "0.8.1", features = ["esp32s3"] }
+embedded-storage = "0.3"
+
 # Shared
 log              = "0.4"
 critical-section = "1.2"

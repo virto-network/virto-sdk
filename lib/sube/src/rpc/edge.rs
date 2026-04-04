@@ -83,10 +83,10 @@ impl<T: Read + Write> Backend<T> {
         if len == 0 {
             return Ok((header.frame_type, Vec::new()));
         }
-        if len > 512 * 1024 {
+        if len > 1024 * 1024 {
             return Err(JsonRpcError::new(
                 -32603,
-                "frame too large for embedded target",
+                "frame too large (>1MB)",
             ));
         }
         let mut buf = vec![0u8; len];
@@ -257,6 +257,8 @@ pub struct HexFrameReader<'a, T> {
     is_final: bool,
     /// True once hex stream is complete.
     done: bool,
+    /// Chunk counter for periodic yielding to let WiFi process TX queue.
+    chunk_count: u32,
 }
 
 impl<'a, T: Read + Write> HexFrameReader<'a, T> {
@@ -272,6 +274,7 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
             remaining: 0,
             is_final: false,
             done: false,
+            chunk_count: 0,
         }
     }
 
@@ -284,13 +287,21 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
         loop {
             // If we have remaining payload in the current frame, read a chunk
             if self.remaining > 0 {
-                let mut chunk = [0u8; 128];
+                // Yield periodically so the WiFi task can send TCP ACKs.
+                // Without this, sustained TLS decryption starves the WiFi TX
+                // queue, causing esp_wifi_internal_tx errors.
+                self.chunk_count += 1;
+                if self.chunk_count % 8 == 0 {
+                    yield_now().await;
+                }
+
+                let mut chunk = [0u8; 512];
                 let to_read = self.remaining.min(chunk.len());
                 read_exact(&mut self.backend.stream, &mut chunk[..to_read])
                     .await
-                    .map_err(|_| {
+                    .map_err(|e| {
                         Error::Node(alloc::format!(
-                            "frame payload read failed (remaining={}, to_read={})",
+                            "frame payload read failed: {e} (remaining={}, to_read={})",
                             self.remaining,
                             to_read
                         ))
@@ -356,10 +367,20 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
                 FrameType::Text(fragmented) => {
                     self.remaining = header.payload_len as usize;
                     self.is_final = !fragmented;
+                    log::info!(
+                        "hex reader: text frame {} bytes (final={})",
+                        self.remaining,
+                        self.is_final
+                    );
                 }
                 FrameType::Continue(fin) => {
                     self.remaining = header.payload_len as usize;
                     self.is_final = fin;
+                    log::debug!(
+                        "hex reader: continuation frame {} bytes (final={})",
+                        self.remaining,
+                        self.is_final
+                    );
                 }
                 FrameType::Ping => {
                     // Read ping payload and pong
@@ -408,9 +429,7 @@ impl<'a, T: Read + Write> HexFrameReader<'a, T> {
                     .map_err(|_| Error::Node("small frame read failed".into()))?;
                 self.remaining = 0;
 
-                if find_hex_start(&small).is_some() {
-                    // Oops, it does have hex — process it
-                    let pos = find_hex_start(&small).unwrap();
+                if let Some(pos) = find_hex_start(&small) {
                     self.in_hex = true;
                     self.decoded.clear();
                     self.read_pos = 0;
@@ -533,16 +552,37 @@ impl<T: Read + Write> embedded_io_async::Read for HexFrameReader<'_, T> {
 }
 
 /// Read exactly `buf.len()` bytes from the stream.
-async fn read_exact(stream: &mut (impl Read + Write), buf: &mut [u8]) -> Result<(), ()> {
+async fn read_exact(stream: &mut (impl Read + Write), buf: &mut [u8]) -> Result<(), &'static str> {
     let mut pos = 0;
     while pos < buf.len() {
         match stream.read(&mut buf[pos..]).await {
-            Ok(0) => return Err(()),
+            Ok(0) => {
+                log::warn!("read_exact: EOF after {}/{} bytes", pos, buf.len());
+                return Err("unexpected EOF");
+            }
             Ok(n) => pos += n,
-            Err(_) => return Err(()),
+            Err(_) => {
+                log::warn!("read_exact: IO error after {}/{} bytes", pos, buf.len());
+                return Err("IO error");
+            }
         }
     }
     Ok(())
+}
+
+/// Yield control to the executor once, allowing other tasks to run.
+async fn yield_now() {
+    let mut yielded = false;
+    core::future::poll_fn(|cx| {
+        if yielded {
+            core::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            core::task::Poll::Pending
+        }
+    })
+    .await;
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -627,9 +667,10 @@ impl Read for EdgeSocket {
             Self::Tcp(s) => Read::read(s, buf)
                 .await
                 .map_err(|_| embedded_io_async::ErrorKind::Other),
-            Self::Tls(s) => Read::read(s, buf)
-                .await
-                .map_err(|_| embedded_io_async::ErrorKind::Other),
+            Self::Tls(s) => Read::read(s, buf).await.map_err(|e| {
+                log::error!("TLS read error: {:?}", e);
+                embedded_io_async::ErrorKind::Other
+            }),
         }
     }
 }
@@ -731,6 +772,8 @@ pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
     let (rx, tx) = unsafe { (&mut *net.rx.get(), &mut *net.tx.get()) };
     let mut socket = TcpSocket::new(stack, rx, tx);
     socket.set_timeout(Some(embassy_time::Duration::from_secs(60)));
+    socket.set_keep_alive(Some(embassy_time::Duration::from_secs(10)));
+    socket.set_nagle_enabled(false);
 
     // DNS
     log::debug!("edge: DNS lookup for {}", parsed.host);

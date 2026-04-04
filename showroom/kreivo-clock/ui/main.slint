@@ -71,6 +71,12 @@ export component MainWindow inherits Window {
     in property <string> c3; in property <bool> c3-active;
     in property <string> c4; in property <bool> c4-active;
     in property <string> c5; in property <bool> c5-active;
+    in property <string> config-url: "";
+    in property <bool> show-info: false;
+    in property <int> meta-pallets: 0;
+    in property <int> meta-types: 0;
+    in property <bool> meta-saved: false;
+    in property <int> heap-free: 0;
 
     property <color> grey: #3a3a3a;
 
@@ -110,49 +116,135 @@ export component MainWindow inherits Window {
         }
     }
 
-    // --- Logo ---
-    HorizontalLayout {
-        alignment: center;
-        padding-top: 30px;
-        KreivoLogo {
-            live: root.live;
-            loading-step: root.loading-step;
-        }
-    }
-
-    // --- Block number ---
-    if block-number > 0: HorizontalLayout {
-        padding-top: 112px;
-        alignment: center;
-        Text {
-            text: block-text;
-            color: #fff;
-            font-size: 36px;
-            font-weight: 700;
-        }
-    }
-
-    // --- Collator grid (3×2) ---
-    if block-number > 0: VerticalLayout {
-        padding-top: 178px;
-        spacing: 4px;
+    // ═══════════════════ MAIN PAGE ═══════════════════
+    if !show-info: VerticalLayout {
+        // --- Logo ---
         HorizontalLayout {
             alignment: center;
-            spacing: 4px;
-            CollatorBox { text: c0; active: c0-active; }
-            CollatorBox { text: c1; active: c1-active; }
-            CollatorBox { text: c2; active: c2-active; }
+            padding-top: 30px;
+            KreivoLogo {
+                live: root.live;
+                loading-step: root.loading-step;
+            }
         }
-        HorizontalLayout {
+
+        // --- Config URL (shown before metadata is loaded) ---
+        if config-url != "" && block-number == 0: VerticalLayout {
+            padding-top: 8px;
+            HorizontalLayout {
+                alignment: center;
+                Text {
+                    text: "open in browser:";
+                    color: #666;
+                    font-size: 10px;
+                }
+            }
+            HorizontalLayout {
+                alignment: center;
+                padding-top: 4px;
+                Text {
+                    text: config-url;
+                    color: #7df;
+                    font-size: 13px;
+                }
+            }
+        }
+
+        // --- Block number ---
+        if block-number > 0: HorizontalLayout {
+            padding-top: 8px;
             alignment: center;
+            Text {
+                text: block-text;
+                color: #fff;
+                font-size: 36px;
+                font-weight: 700;
+            }
+        }
+
+        // --- Collator grid (3×2) ---
+        if block-number > 0: VerticalLayout {
+            padding-top: 12px;
             spacing: 4px;
-            CollatorBox { text: c3; active: c3-active; }
-            CollatorBox { text: c4; active: c4-active; }
-            CollatorBox { text: c5; active: c5-active; }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 4px;
+                CollatorBox { text: c0; active: c0-active; }
+                CollatorBox { text: c1; active: c1-active; }
+                CollatorBox { text: c2; active: c2-active; }
+            }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 4px;
+                CollatorBox { text: c3; active: c3-active; }
+                CollatorBox { text: c4; active: c4-active; }
+                CollatorBox { text: c5; active: c5-active; }
+            }
         }
     }
 
-    // --- Status ---
+    // ═══════════════════ INFO PAGE ═══════════════════
+    if show-info: VerticalLayout {
+        padding-top: 32px;
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 10px;
+
+        Text { text: "Device Info"; color: #7df; font-size: 16px; font-weight: 600; }
+
+        // Config URL
+        if config-url != "": VerticalLayout {
+            spacing: 2px;
+            Text { text: "config page"; color: #666; font-size: 10px; }
+            Text { text: config-url; color: #7df; font-size: 12px; }
+        }
+
+        // Metadata
+        VerticalLayout {
+            spacing: 2px;
+            Text { text: "metadata"; color: #666; font-size: 10px; }
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: meta-pallets > 0 ? "\{meta-pallets} pallets" : "not loaded";
+                    color: meta-pallets > 0 ? #3d5 : #f54;
+                    font-size: 12px;
+                }
+                if meta-types > 0: Text {
+                    text: "\{meta-types} types";
+                    color: #aaa;
+                    font-size: 12px;
+                }
+            }
+            Text {
+                text: meta-saved ? "saved to flash" : "not persisted";
+                color: meta-saved ? #3d5 : #888;
+                font-size: 10px;
+            }
+        }
+
+        // Heap
+        if heap-free > 0: VerticalLayout {
+            spacing: 2px;
+            Text { text: "memory"; color: #666; font-size: 10px; }
+            Text {
+                text: "\{heap-free} KB free";
+                color: #aaa;
+                font-size: 12px;
+            }
+        }
+
+        // Hint
+        Rectangle {
+            height: 20px;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Text { text: "press button to go back"; color: #444; font-size: 9px; }
+        }
+    }
+
+    // --- Status (always visible) ---
     if status != "": Rectangle {
         y: 214px; height: 24px; width: 240px;
         HorizontalLayout {

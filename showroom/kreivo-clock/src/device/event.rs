@@ -6,6 +6,8 @@ pub enum UiEvent {
     Block(u32),
     Collators([u32; 6]),
     Status(Status),
+    /// Show config URL on the display (e.g., "http://10.49.209.176/").
+    ConfigUrl(heapless::String<32>),
 }
 
 #[derive(Clone, Copy)]

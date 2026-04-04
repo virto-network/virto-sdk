@@ -2,6 +2,8 @@
 extern crate alloc;
 
 pub mod device;
+pub mod flash;
+pub mod http;
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -29,8 +31,8 @@ static SCREEN_TOGGLE: AtomicBool = AtomicBool::new(false);
 static WIFI_CONNECTED: AtomicBool = AtomicBool::new(false);
 /// Battery charging status, set by pmu_task, read by UI core.
 static CHARGING: AtomicBool = AtomicBool::new(false);
-/// When true, UI rendering is paused to free heap for metadata loading.
-pub static PAUSE_UI: AtomicBool = AtomicBool::new(false);
+/// Screen state — written by UI core, read by chain loop to skip queries when off.
+pub static SCREEN_ON: AtomicBool = AtomicBool::new(true);
 
 /// What the app needs after device init.
 pub struct Runtime {
@@ -134,6 +136,11 @@ async fn pmu_task(mut pmu: device::pmu::Pmu) {
             SCREEN_TOGGLE.store(true, Ordering::Relaxed);
         }
 
+        // Log charger state ~1s after boot
+        if tick == 5 {
+            pmu.log_charger_state();
+        }
+
         // Read battery + charge status every ~30s (150 × 200ms)
         if tick % 150 == 0 {
             if let Some(pct) = pmu.battery_percent() {
@@ -158,15 +165,32 @@ fn ui_core(
     let mut line_buf = [Rgb565Pixel(0); DISPLAY_WIDTH];
     let mut screen_on = true;
     let mut loading_frame = 0u32;
+    let mut last_activity = esp_hal::time::Instant::now();
+    let screen_timeout = esp_hal::time::Duration::from_secs(15);
 
     loop {
         if SCREEN_TOGGLE.swap(false, Ordering::Relaxed) {
-            screen_on = !screen_on;
-            if screen_on {
+            if !screen_on {
+                // Wake up — turn screen back on
+                screen_on = true;
                 backlight.set_high();
+                SCREEN_ON.store(true, Ordering::Relaxed);
             } else {
-                backlight.set_low();
+                // Toggle between main view and info page
+                let showing = app.get_show_info();
+                app.set_show_info(!showing);
+                if !showing {
+                    app.set_heap_free((esp_alloc::HEAP.free() / 1024) as i32);
+                }
             }
+            last_activity = esp_hal::time::Instant::now();
+        }
+
+        // Auto screen off after 15s idle
+        if screen_on && last_activity.elapsed() > screen_timeout {
+            screen_on = false;
+            backlight.set_low();
+            SCREEN_ON.store(false, Ordering::Relaxed);
         }
 
         // Loading animation: cycle segments 0-7 while not live (~200ms per step)
@@ -178,6 +202,9 @@ fn ui_core(
         }
 
         while let Some(event) = rx.dequeue() {
+            if screen_on {
+                last_activity = esp_hal::time::Instant::now();
+            }
             match event {
                 UiEvent::Live(on) => app.set_live(on),
                 UiEvent::Block(n) => {
@@ -207,6 +234,10 @@ fn ui_core(
                     app.set_c5(fmt(blocks[5]));
                     app.set_c5_active(active(blocks[5]));
                 }
+                UiEvent::ConfigUrl(url) => {
+                    let s: slint::SharedString = url.as_str().into();
+                    app.set_config_url(s);
+                }
                 UiEvent::Status(s) => {
                     let (msg, color) = match s {
                         Status::Dim(m) => (m, slint::Color::from_rgb_u8(100, 100, 100)),
@@ -219,12 +250,13 @@ fn ui_core(
             }
         }
 
-        app.set_wifi(WIFI_CONNECTED.load(Ordering::Relaxed));
-        app.set_charging(CHARGING.load(Ordering::Relaxed));
-        let batt = BATTERY_LEVEL.load(Ordering::Relaxed);
-        app.set_battery_level(if batt <= 100 { batt as i32 } else { -1 });
-
-        if screen_on && !PAUSE_UI.load(Ordering::Relaxed) {
+        if screen_on {
+            app.set_wifi(WIFI_CONNECTED.load(Ordering::Relaxed));
+            app.set_charging(CHARGING.load(Ordering::Relaxed));
+            let batt = BATTERY_LEVEL.load(Ordering::Relaxed);
+            app.set_battery_level(if batt <= 100 { batt as i32 } else { -1 });
+            app.set_meta_pallets(http::PALLET_COUNT.load(Ordering::Relaxed) as i32);
+            app.set_meta_saved(http::META_SAVED.load(Ordering::Relaxed));
             slint::platform::update_timers_and_animations();
             window.draw_if_needed(|renderer| {
                 renderer.render_by_line(&mut DisplayBuffer {
@@ -232,6 +264,16 @@ fn ui_core(
                     line_buf: &mut line_buf,
                 });
             });
+        }
+
+        // Low power: when screen is off, sleep core 1.
+        // Only wake to check button press (SCREEN_TOGGLE) every ~200ms.
+        if !screen_on {
+            // Use waiti to put core 1 in idle — wakes on any interrupt.
+            // Fall back to a delay loop (~200ms at 240MHz).
+            for _ in 0..10_000_000u32 {
+                core::hint::spin_loop();
+            }
         }
     }
 }

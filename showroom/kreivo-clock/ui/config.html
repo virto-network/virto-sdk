@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kreivo Clock</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:16px;max-width:480px;margin:0 auto}
+h1{font-size:1.3em;margin-bottom:12px;color:#7df}
+.card{background:#1a1a2e;border-radius:8px;padding:12px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;margin:4px 0}
+.dim{color:#888}
+.ok{color:#3d5}
+.err{color:#f54}
+button{width:100%;padding:14px;font-size:1.1em;border:none;border-radius:8px;cursor:pointer;
+  background:#2563eb;color:#fff;margin-top:8px}
+button:disabled{background:#333;color:#666}
+#progress{margin-top:8px;display:none}
+#bar{height:6px;background:#333;border-radius:3px;overflow:hidden}
+#fill{height:100%;width:0;background:#3d5;transition:width .2s}
+#log{margin-top:8px;font-size:.85em;color:#aaa;white-space:pre-wrap;max-height:200px;overflow-y:auto}
+</style>
+</head><body>
+<h1>Kreivo Clock</h1>
+
+<div class="card" id="status">
+  <div class="row"><span class="dim">WiFi</span><span id="wifi">--</span></div>
+  <div class="row"><span class="dim">Battery</span><span id="batt">--</span></div>
+  <div class="row"><span class="dim">Block</span><span id="block">--</span></div>
+  <div class="row"><span class="dim">Metadata</span><span id="meta">not loaded</span></div>
+</div>
+
+<button id="btn" onclick="go()">Load Metadata from Chain</button>
+
+<div id="progress">
+  <div id="bar"><div id="fill"></div></div>
+</div>
+<div id="log"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = m => { $('log').textContent += m + '\n'; };
+
+// Poll device status
+async function poll() {
+  try {
+    const r = await fetch('/status');
+    if (!r.ok) return;
+    const s = await r.json();
+    $('wifi').textContent = s.wifi ? 'connected' : 'disconnected';
+    $('wifi').className = s.wifi ? 'ok' : 'err';
+    $('batt').textContent = s.battery >= 0 ? s.battery + '%' : '--';
+    $('block').textContent = s.block > 0 ? s.block.toLocaleString() : '--';
+    $('meta').textContent = s.pallets > 0 ? s.pallets + ' pallets' : 'not loaded';
+    $('meta').className = s.pallets > 0 ? 'ok' : 'err';
+  } catch(e) {}
+}
+setInterval(poll, 3000);
+poll();
+
+async function go() {
+  const btn = $('btn');
+  btn.disabled = true;
+  $('progress').style.display = 'block';
+  $('fill').style.width = '0%';
+  $('log').textContent = '';
+
+  try {
+    // 1. Fetch metadata from chain via WebSocket (avoids CORS issues)
+    log('connecting to kreivo.io...');
+    $('fill').style.width = '5%';
+    const hex = await new Promise((resolve, reject) => {
+      const ws = new WebSocket('wss://kreivo.io');
+      ws.onopen = () => {
+        log('sending state_getMetadata...');
+        $('fill').style.width = '10%';
+        ws.send(JSON.stringify({jsonrpc:'2.0', id:1, method:'state_getMetadata', params:[]}));
+      };
+      ws.onmessage = e => {
+        ws.close();
+        const json = JSON.parse(e.data);
+        if (json.error) return reject(new Error(json.error.message));
+        resolve(json.result.slice(2)); // strip 0x
+      };
+      ws.onerror = () => reject(new Error('WebSocket connection failed'));
+      setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 30000);
+    });
+    log('received ' + (hex.length/2/1024).toFixed(0) + ' KB');
+    $('fill').style.width = '40%';
+
+    // 2. Hex decode
+    const raw = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < raw.length; i++)
+      raw[i] = parseInt(hex.substr(i * 2, 2), 16);
+
+    // Send raw bytes including OpaqueMetadata compact prefix — device handles stripping
+    const meta = raw;
+    log('metadata: ' + (meta.length/1024).toFixed(0) + ' KB');
+    $('fill').style.width = '50%';
+
+    // 4. Push to device
+    log('pushing to device...');
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/metadata');
+      xhr.responseType = 'text';
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) {
+          const pct = 50 + (e.loaded / e.total) * 45;
+          $('fill').style.width = pct + '%';
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status === 200) resolve();
+        else reject(new Error('device: ' + xhr.responseText));
+      };
+      xhr.onerror = () => reject(new Error('connection failed'));
+      xhr.send(meta);
+    });
+
+    $('fill').style.width = '100%';
+    log('done!');
+    poll();
+  } catch(e) {
+    log('error: ' + e.message);
+    $('fill').style.width = '0%';
+  }
+  btn.disabled = false;
+}
+</script>
+</body></html>

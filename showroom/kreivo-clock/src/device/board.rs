@@ -9,6 +9,7 @@ use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Level, Output};
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
+use esp_hal::psram;
 use esp_hal::spi::Mode as SpiMode;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::timer::timg::TimerGroup;
@@ -54,11 +55,15 @@ pub async fn init(spawner: Spawner) -> (System<'static>, sube::Registry) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
     esp_println::logger::init_logger(log::LevelFilter::Info);
-    esp_alloc::heap_allocator!(size: 172032); // 168KB
 
-    // Pre-allocate registry FIRST from clean, unfragmented heap.
-    // 6 Vecs are the first allocations — contiguous at heap bottom.
-    // TLS will get the large contiguous region above them (~104KB).
+    // Internal SRAM heap — WiFi DMA needs internal RAM for TX buffers.
+    esp_alloc::heap_allocator!(size: 167936); // 164KB — balance StackResources<4> + TLS stack + WiFi TX
+
+    // PSRAM (8MB octal) — overflow for registry, metadata strings, large allocs.
+    // Registered as second region: allocator tries internal first, then PSRAM.
+    esp_alloc::psram_allocator!(peripherals.PSRAM, psram);
+    log::info!("heap: {} free (internal + PSRAM)", esp_alloc::HEAP.free());
+
     let registry = sube::Registry::with_capacity_detailed(250, 1050, 850, 64, 18000);
     log::info!("registry allocated, heap: {} free", esp_alloc::HEAP.free());
 
@@ -128,7 +133,7 @@ pub async fn init(spawner: Spawner) -> (System<'static>, sube::Registry) {
         peripherals.ADC1,
     ));
 
-    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
     let seed = esp_hal::rng::Rng::new().random() as u64;
     let (stack, runner) = embassy_net::new(
         interfaces.sta,

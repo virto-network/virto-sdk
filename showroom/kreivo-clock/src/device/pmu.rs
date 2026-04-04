@@ -1,4 +1,4 @@
-//! AXP2101 PMU driver: power rails, battery monitoring, and power key.
+//! AXP2101 PMU driver: power rails, battery monitoring, charging, and power key.
 
 use esp_hal::i2c::master::I2c;
 
@@ -12,6 +12,12 @@ impl Pmu {
         Self(i2c)
     }
 
+    fn read_reg(&mut self, reg: u8) -> u8 {
+        let mut b = [0u8; 1];
+        let _ = self.0.write_read(AXP, &[reg], &mut b);
+        b[0]
+    }
+
     /// Enable all LDOs at 3.3V for T-Watch S3 peripherals.
     pub fn enable_power(&mut self) {
         let _ = self.0.write(AXP, &[0x90, 0xFF]);
@@ -22,17 +28,55 @@ impl Pmu {
         self.enable_charging();
     }
 
-    /// Enable battery charger at 300mA, 4.2V target.
+    /// Enable battery charger: 300mA, 4.2V target.
     fn enable_charging(&mut self) {
-        // Register 0x62: Linear charger control
-        // Bit 0 = charger enable, bits 4-0 = charge current
-        // 0x04 = enable + 300mA (safe default for small LiPo)
-        let _ = self.0.write(AXP, &[0x62, 0x04]);
-        // Register 0x63: Charge target voltage = 4.2V (bits 2-0 = 0b010)
-        let _ = self.0.write(AXP, &[0x63, 0x02]);
-        // Register 0x14: minimum system voltage = 4.5V (ensures USB powers device while charging)
+        // Reg 0x50: TS pin control — set to external input so it doesn't
+        // block charging. Without this, the AXP2101 sees "temperature fault"
+        // and refuses to charge. (From LILYGO XPowersLib: disableTSPinMeasure)
+        let mut buf = [0u8; 1];
+        if self.0.write_read(AXP, &[0x50], &mut buf).is_ok() {
+            let _ = self.0.write(AXP, &[0x50, (buf[0] & 0xF0) | 0x10]);
+        }
+
+        // Reg 0x18: enable cell battery charging (bit 1), disable TS ADC (clear bit 1 of ADC)
+        if self.0.write_read(AXP, &[0x18], &mut buf).is_ok() {
+            let _ = self.0.write(AXP, &[0x18, buf[0] | 0x02]);
+        }
+
+        // Reg 0x62: charge current (ICC)
+        // Bits 4:0 select current step. Values 8-16 map to 200-1000mA.
+        // Step 10 = 300mA
+        let _ = self.0.write(AXP, &[0x62, 10]);
+
+        // Reg 0x64: charge target voltage (CV)
+        // Bits 2:0: 000=4.0V, 001=4.1V, 010=4.2V, 011=4.35V, 100=4.4V
+        let _ = self.0.write(AXP, &[0x64, 0x02]); // 4.2V
+
+        // Reg 0x63: charge termination current + enable termination
+        // Bit 4 = termination enable, bits 3:0 = current (25mA steps)
+        // 0x10 = termination enabled, 25mA threshold
+        let _ = self.0.write(AXP, &[0x63, 0x10]);
+
+        // Reg 0x14: minimum system voltage = 4.5V
         let _ = self.0.write(AXP, &[0x14, 0x05]);
-        log::info!("PMU: charger enabled (300mA, 4.2V)");
+
+        log::info!(
+            "PMU: charger cfg — 0x18={:#04x} 0x62={:#04x} 0x63={:#04x} 0x64={:#04x} 0x01={:#04x}",
+            self.read_reg(0x18), self.read_reg(0x62), self.read_reg(0x63),
+            self.read_reg(0x64), self.read_reg(0x01)
+        );
+    }
+
+    /// Log charger register state (call after serial is ready).
+    pub fn log_charger_state(&mut self) {
+        let r00 = self.read_reg(0x00);
+        let r01 = self.read_reg(0x01);
+        let charge_state = r01 & 0x07;
+        log::info!(
+            "PMU: vbus={} charge_state={} (0=idle 1=pre 2=CC 3=CV 4=done 5=off)",
+            r00 & 0x20 != 0,
+            charge_state,
+        );
     }
 
     /// Enable battery voltage ADC and clear stale IRQs from boot.
@@ -58,11 +102,14 @@ impl Pmu {
         })
     }
 
-    /// True if battery is currently charging (register 0x01, bit 2).
+    /// True if battery is currently charging.
+    /// Register 0x01 bits 2:0 encode charge status.
+    /// 001 = pre-charge, 010 = CC charge, 011 = CV charge
     pub fn is_charging(&mut self) -> bool {
         let mut buf = [0u8; 1];
         if self.0.write_read(AXP, &[0x01], &mut buf).is_ok() {
-            buf[0] & 0x04 != 0
+            let state = buf[0] & 0x07;
+            state >= 1 && state <= 3
         } else {
             false
         }
