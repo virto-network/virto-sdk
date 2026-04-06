@@ -51,7 +51,7 @@ extern crate alloc;
 
 pub use alloc::sync::Arc;
 pub use scales::{self, Registry, Value};
-pub use serde_json::{json, Value as JsonValue};
+pub use value::DynValue;
 
 #[cfg(feature = "ws-edge")]
 pub use builder::{connect_edge, EdgeNet};
@@ -82,6 +82,7 @@ pub mod metadata;
 pub mod rpc;
 mod signer;
 pub(crate) mod util;
+pub mod value;
 
 /// Connect to a Substrate chain.
 ///
@@ -203,10 +204,6 @@ impl StorageEntry {
         scales::Value::new(&self.data, self.ty, registry)
     }
 
-    pub fn to_json(&self, registry: &scales::Registry) -> Result<JsonValue> {
-        serde_json::to_value(self.as_value(registry)).map_err(|e| Error::Mapping(e.to_string()))
-    }
-
     /// Format the entry as a compact text string (see [`scales::to_text`]).
     pub fn to_text(&self, registry: &scales::Registry) -> Result<String> {
         scales::to_text(&self.as_value(registry)).map_err(|e| Error::Mapping(e.to_string()))
@@ -247,25 +244,6 @@ impl Response {
                 Some(&m.registry)
             }
             _ => None,
-        }
-    }
-
-    /// Decode the response value as JSON.
-    ///
-    /// Returns `Ok(None)` for `None`/`Void`/`Meta` responses.
-    /// For `ValueSet`, returns the first value entry.
-    pub fn to_json(&self) -> Result<Option<JsonValue>> {
-        match self {
-            Response::Value(entry, meta) => entry.to_json(&meta.registry).map(Some),
-            Response::ValueSet(items, meta) => {
-                let values: Vec<JsonValue> = items
-                    .iter()
-                    .filter_map(|(_, v)| v.as_ref())
-                    .map(|e| e.to_json(&meta.registry))
-                    .collect::<Result<_>>()?;
-                Ok(Some(JsonValue::Array(values)))
-            }
-            _ => Ok(None),
         }
     }
 
@@ -483,46 +461,6 @@ mod tests {
         assert_eq!(pallet, "System");
         assert_eq!(item, "_constants");
         assert_eq!(keys, vec!["Version"]);
-    }
-
-    #[test]
-    fn storage_entry_to_json() {
-        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
-        let system = meta.pallet_by_name("System").unwrap();
-        let version = system
-            .constants
-            .iter()
-            .find(|c| c.name == "Version")
-            .unwrap();
-        let entry = StorageEntry::new(version.value.clone(), version.ty);
-        let json = entry.to_json(&meta.registry).expect("decodes to JSON");
-        assert!(json.get("spec_name").is_some());
-    }
-
-    #[test]
-    fn encode_call_json_and_text_match() {
-        use crate::extrinsic::{EncodeCall, Text};
-
-        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
-        let system = meta.pallet_by_name("System").unwrap();
-        let calls_ty = system.calls_ty.unwrap();
-
-        // JSON body for system::remark
-        let json_body = serde_json::json!({ "remark": "0x68656c6c6f" });
-        let json_encoded = json_body
-            .encode_call("remark", &meta.registry, calls_ty)
-            .expect("json encodes");
-
-        // Text body for the same call
-        let text_body = Text("(remark:0x68656c6c6f)");
-        let text_encoded = text_body
-            .encode_call("remark", &meta.registry, calls_ty)
-            .expect("text encodes");
-
-        assert_eq!(
-            json_encoded, text_encoded,
-            "JSON and text format should produce identical SCALE bytes"
-        );
     }
 
     #[test]

@@ -7,12 +7,14 @@
 //! Between operations we drain queued events and unpin everything
 //! except the current finalized block.
 
-use alloc::{collections::BTreeMap, collections::VecDeque, string::String, vec::Vec};
+use alloc::{collections::BTreeMap, collections::VecDeque, format, string::String, vec::Vec};
 
 use codec::Decode;
-use serde::Deserialize;
 
-use super::{to_hex, Rpc, RpcSubscription};
+use super::{
+    extract_json_object, extract_json_str, extract_json_string, result_as_str, to_hex, Rpc,
+    RpcSubscription,
+};
 use crate::meta::{self, Metadata};
 use crate::prelude::*;
 
@@ -80,164 +82,309 @@ pub struct StorageItem {
 
 // --- Follow event types ---
 
-#[derive(Deserialize, Debug)]
-#[serde(tag = "event")]
-enum FollowEvent {
-    #[serde(rename = "initialized")]
+/// Parsed follow event — borrows string values from the JSON input.
+/// Consumed immediately; values that must outlive the JSON are cloned at the call site.
+#[derive(Debug)]
+enum FollowEvent<'a> {
     Initialized {
-        #[serde(rename = "finalizedBlockHashes")]
-        finalized_block_hashes: Vec<String>,
-        #[serde(rename = "finalizedBlockRuntime")]
-        _finalized_block_runtime: Option<serde_json::Value>,
+        finalized_block_hashes: Vec<&'a str>,
     },
-    #[serde(rename = "newBlock")]
     NewBlock {
-        #[serde(rename = "blockHash")]
-        block_hash: String,
-        #[serde(rename = "parentBlockHash")]
-        parent_block_hash: String,
-        #[serde(rename = "newRuntime")]
-        new_runtime: Option<serde_json::Value>,
+        block_hash: &'a str,
+        parent_block_hash: &'a str,
+        has_new_runtime: bool,
     },
-    #[serde(rename = "bestBlockChanged")]
     BestBlockChanged {
-        #[serde(rename = "bestBlockHash")]
-        best_block_hash: String,
+        best_block_hash: &'a str,
     },
-    #[serde(rename = "finalized")]
     Finalized {
-        #[serde(rename = "finalizedBlockHashes")]
-        finalized_block_hashes: Vec<String>,
-        #[serde(rename = "prunedBlockHashes")]
-        pruned_block_hashes: Vec<String>,
+        finalized_block_hashes: Vec<&'a str>,
+        pruned_block_hashes: Vec<&'a str>,
     },
-    #[serde(rename = "stop")]
     Stop,
-    #[serde(rename = "operationCallDone")]
     OperationCallDone {
-        #[serde(rename = "operationId")]
-        operation_id: String,
-        output: String,
+        operation_id: &'a str,
+        output: &'a str,
     },
-    #[serde(rename = "operationStorageItems")]
     OperationStorageItems {
-        #[serde(rename = "operationId")]
-        operation_id: String,
-        items: Vec<OperationStorageItemJson>,
+        operation_id: &'a str,
+        items: Vec<StorageItem>,
     },
-    #[serde(rename = "operationStorageDone")]
     OperationStorageDone {
-        #[serde(rename = "operationId")]
-        operation_id: String,
+        operation_id: &'a str,
     },
-    #[serde(rename = "operationError")]
     OperationError {
-        #[serde(rename = "operationId")]
-        operation_id: String,
-        error: String,
+        operation_id: &'a str,
+        error: &'a str,
     },
-    #[serde(rename = "operationInaccessible")]
     OperationInaccessible {
-        #[serde(rename = "operationId")]
-        operation_id: String,
+        operation_id: &'a str,
     },
-    #[serde(rename = "operationWaitingForContinue")]
     OperationWaitingForContinue {
-        #[serde(rename = "operationId")]
-        operation_id: String,
+        operation_id: &'a str,
     },
 }
 
-#[derive(Deserialize, Debug, Clone)]
-struct OperationStorageItemJson {
-    key: String,
-    value: Option<String>,
+/// Extract a JSON array of quoted strings as borrowed slices.
+///
+/// Finds `marker` in `json`, parses the `[...]` that follows, and returns
+/// each quoted element as a `&str` borrowing from `json`. Zero allocation
+/// for the strings themselves. Safe for hex hashes and identifiers.
+fn extract_str_array<'a>(json: &'a str, marker: &str) -> Vec<&'a str> {
+    let marker_pos = match json.find(marker) {
+        Some(p) => p + marker.len(),
+        None => return Vec::new(),
+    };
+    let rest = json[marker_pos..].trim_start();
+    if !rest.starts_with('[') {
+        return Vec::new();
+    }
+    // Find the offset of the array content within the original json
+    let arr_start = json.len() - rest.len();
+    // Find matching `]`
+    let mut depth = 0;
+    let mut arr_end = arr_start;
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    arr_end = arr_start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let inner = &json[arr_start + 1..arr_end];
+    let mut result = Vec::new();
+    let bytes = inner.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' | b',' | b'\n' | b'\r' | b'\t' => i += 1,
+            b'"' => {
+                i += 1;
+                let start = i;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += 1;
+                }
+                result.push(&inner[start..i]);
+                if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            _ => break,
+        }
+    }
+    result
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(tag = "result")]
-enum OperationStarted {
-    #[serde(rename = "started")]
-    Started {
-        #[serde(rename = "operationId")]
-        operation_id: String,
-    },
-    #[serde(rename = "limitReached")]
+/// Deserialize storage items from a JSON `"items":[...]` array.
+///
+/// Each item is `{"key":"0x...","value":"0x..."}` with optional value.
+fn parse_storage_items(json: &str) -> Vec<StorageItem> {
+    let arr = match extract_json_object(json, "\"items\":") {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let arr = arr.trim();
+    if !arr.starts_with('[') || !arr.ends_with(']') {
+        return Vec::new();
+    }
+    // Each item is a simple flat object with "key" and optional "value".
+    // We find each {...} and extract fields with the standard helper.
+    let mut items = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, ch) in arr.char_indices() {
+        match ch {
+            '{' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let obj = &arr[start..=i];
+                    let key = extract_json_string(obj, "\"key\":\"").unwrap_or_default();
+                    let value = extract_json_string(obj, "\"value\":\"");
+                    items.push(StorageItem { key, value });
+                }
+            }
+            _ => {}
+        }
+    }
+    items
+}
+
+fn parse_follow_event(json: &str) -> Result<FollowEvent<'_>, crate::Error> {
+    let event = extract_json_str(json, "\"event\":\"")
+        .ok_or_else(|| crate::Error::Decode("missing event field".into()))?;
+    match event {
+        "initialized" => Ok(FollowEvent::Initialized {
+            finalized_block_hashes: extract_str_array(json, "\"finalizedBlockHashes\":"),
+        }),
+        "newBlock" => Ok(FollowEvent::NewBlock {
+            block_hash: extract_json_str(json, "\"blockHash\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing blockHash".into()))?,
+            parent_block_hash: extract_json_str(json, "\"parentBlockHash\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing parentBlockHash".into()))?,
+            has_new_runtime: json.contains("\"newRuntime\":")
+                && !json.contains("\"newRuntime\":null"),
+        }),
+        "bestBlockChanged" => Ok(FollowEvent::BestBlockChanged {
+            best_block_hash: extract_json_str(json, "\"bestBlockHash\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing bestBlockHash".into()))?,
+        }),
+        "finalized" => Ok(FollowEvent::Finalized {
+            finalized_block_hashes: extract_str_array(json, "\"finalizedBlockHashes\":"),
+            pruned_block_hashes: extract_str_array(json, "\"prunedBlockHashes\":"),
+        }),
+        "stop" => Ok(FollowEvent::Stop),
+        "operationCallDone" => Ok(FollowEvent::OperationCallDone {
+            operation_id: extract_json_str(json, "\"operationId\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+            output: extract_json_str(json, "\"output\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing output".into()))?,
+        }),
+        "operationStorageItems" => Ok(FollowEvent::OperationStorageItems {
+            operation_id: extract_json_str(json, "\"operationId\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+            items: parse_storage_items(json),
+        }),
+        "operationStorageDone" => Ok(FollowEvent::OperationStorageDone {
+            operation_id: extract_json_str(json, "\"operationId\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+        }),
+        "operationError" => Ok(FollowEvent::OperationError {
+            operation_id: extract_json_str(json, "\"operationId\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+            error: extract_json_str(json, "\"error\":\"").unwrap_or("unknown error"),
+        }),
+        "operationInaccessible" => Ok(FollowEvent::OperationInaccessible {
+            operation_id: extract_json_str(json, "\"operationId\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+        }),
+        "operationWaitingForContinue" => Ok(FollowEvent::OperationWaitingForContinue {
+            operation_id: extract_json_str(json, "\"operationId\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+        }),
+        other => Err(crate::Error::Decode(format!(
+            "unknown follow event: {other}"
+        ))),
+    }
+}
+
+#[derive(Debug)]
+enum OperationStarted<'a> {
+    Started { operation_id: &'a str },
     LimitReached,
+}
+
+fn parse_operation_started(json: &str) -> Result<OperationStarted<'_>, crate::Error> {
+    let result = extract_json_str(json, "\"result\":\"")
+        .ok_or_else(|| crate::Error::Decode("missing result in operation response".into()))?;
+    match result {
+        "started" => Ok(OperationStarted::Started {
+            operation_id: extract_json_str(json, "\"operationId\":\"")
+                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+        }),
+        "limitReached" => Ok(OperationStarted::LimitReached),
+        other => Err(crate::Error::Decode(format!(
+            "unknown operation result: {other}"
+        ))),
+    }
 }
 
 // --- Archive storage event types ---
 
-#[derive(Deserialize, Debug)]
-#[serde(tag = "event")]
-enum ArchiveStorageEvent {
-    #[serde(rename = "items")]
-    Items { items: Vec<ArchiveStorageItemJson> },
-    #[serde(rename = "done")]
+#[derive(Debug)]
+enum ArchiveStorageEvent<'a> {
+    Items { items: Vec<StorageItem> },
     Done,
-    #[serde(rename = "error")]
-    Error { error: String },
-    #[serde(rename = "waitingForContinue")]
+    Error { error: &'a str },
     WaitingForContinue,
 }
 
-#[derive(Deserialize, Debug)]
-struct ArchiveStorageItemJson {
-    key: String,
-    value: Option<String>,
+fn parse_archive_storage_event(json: &str) -> Result<ArchiveStorageEvent<'_>, crate::Error> {
+    let event = extract_json_str(json, "\"event\":\"")
+        .ok_or_else(|| crate::Error::Decode("missing event field".into()))?;
+    match event {
+        "items" => Ok(ArchiveStorageEvent::Items {
+            items: parse_storage_items(json),
+        }),
+        "done" => Ok(ArchiveStorageEvent::Done),
+        "error" => Ok(ArchiveStorageEvent::Error {
+            error: extract_json_str(json, "\"error\":\"").unwrap_or("unknown error"),
+        }),
+        "waitingForContinue" => Ok(ArchiveStorageEvent::WaitingForContinue),
+        other => Err(crate::Error::Decode(format!(
+            "unknown archive event: {other}"
+        ))),
+    }
 }
 
 // --- Transaction watch event types ---
 
-#[derive(Deserialize, Debug)]
-#[serde(tag = "event")]
+#[derive(Debug)]
 #[allow(dead_code)]
-enum TxEvent {
-    #[serde(rename = "validated")]
+enum TxEvent<'a> {
     Validated,
-    #[serde(rename = "broadcasted")]
-    Broadcasted {
-        #[serde(rename = "numPeers")]
-        _num_peers: u32,
-    },
-    #[serde(rename = "bestChainBlockIncluded")]
-    BestChainBlockIncluded { block: Option<TxEventBlock> },
-    #[serde(rename = "finalized")]
-    Finalized { block: TxEventBlock },
-    #[serde(rename = "invalid")]
-    Invalid { error: String },
-    #[serde(rename = "dropped")]
-    Dropped {
-        #[serde(default)]
-        error: String,
-    },
-    #[serde(rename = "error")]
-    Error { error: String },
+    Broadcasted,
+    BestChainBlockIncluded { has_block: bool },
+    Finalized,
+    Invalid { error: &'a str },
+    Dropped { error: &'a str },
+    Error { error: &'a str },
 }
 
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct TxEventBlock {
-    hash: String,
-    index: u32,
+fn parse_tx_event(json: &str) -> Result<TxEvent<'_>, crate::Error> {
+    let event = extract_json_str(json, "\"event\":\"")
+        .ok_or_else(|| crate::Error::Decode("missing event field".into()))?;
+    match event {
+        "validated" => Ok(TxEvent::Validated),
+        "broadcasted" => Ok(TxEvent::Broadcasted),
+        "bestChainBlockIncluded" => Ok(TxEvent::BestChainBlockIncluded {
+            has_block: json.contains("\"block\":{"),
+        }),
+        "finalized" => Ok(TxEvent::Finalized),
+        "invalid" => Ok(TxEvent::Invalid {
+            error: extract_json_str(json, "\"error\":\"").unwrap_or("unknown"),
+        }),
+        "dropped" => Ok(TxEvent::Dropped {
+            error: extract_json_str(json, "\"error\":\"").unwrap_or(""),
+        }),
+        "error" => Ok(TxEvent::Error {
+            error: extract_json_str(json, "\"error\":\"").unwrap_or("unknown"),
+        }),
+        other => Err(crate::Error::Decode(format!("unknown tx event: {other}"))),
+    }
 }
 
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Create a new ChainHead session. Fetches genesis hash and starts follow subscription.
     pub async fn new(mut rpc: R) -> crate::Result<Self> {
-        let genesis_hex: String = serde_json::from_value(
-            rpc.rpc("chainSpec_v1_genesisHash", serde_json::json!([]))
-                .await
-                .map_err(|e| crate::Error::Node(e.to_string()))?,
-        )
-        .map_err(|e| crate::Error::Decode(e.to_string()))?;
+        let result = rpc
+            .rpc("chainSpec_v1_genesisHash", "[]")
+            .await
+            .map_err(|e| crate::Error::Node(e.to_string()))?;
+        let genesis_hex = result_as_str(&result)
+            .map(Into::into)
+            .ok_or_else(|| crate::Error::Decode("genesis hash not a string".into()))?;
 
         let mut genesis_hash = [0u8; 32];
-        hex::decode_to_slice(genesis_hex.trim_start_matches("0x"), &mut genesis_hash)
-            .map_err(|_| crate::Error::Decode("genesis hash hex decode failed".into()))?;
+        hex::decode_to_slice(
+            <String as AsRef<str>>::as_ref(&genesis_hex).trim_start_matches("0x"),
+            &mut genesis_hash,
+        )
+        .map_err(|_| crate::Error::Decode("genesis hash hex decode failed".into()))?;
 
         let follow_sub_id = rpc
-            .subscribe("chainHead_v1_follow", serde_json::json!([true]))
+            .subscribe("chainHead_v1_follow", "[true]")
             .await
             .map_err(|e| crate::Error::Node(format!("follow subscribe failed: {e}")))?;
 
@@ -261,7 +408,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     async fn wait_initialized(&mut self) -> crate::Result<()> {
         loop {
             let (_, event_json) = self.next_follow_event().await?;
-            let event: FollowEvent = serde_json::from_str(&event_json)
+            let event = parse_follow_event(&event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
             if let FollowEvent::Initialized {
@@ -270,11 +417,11 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             } = event
             {
                 if let Some(h) = finalized_block_hashes.last() {
-                    self.finalized_hash = h.clone();
+                    self.finalized_hash = h.to_string();
                 }
                 // Queue unpin for all initialized blocks except the latest finalized
                 for h in finalized_block_hashes.iter().rev().skip(1) {
-                    self.pending_unpin.push(h.clone());
+                    self.pending_unpin.push(h.to_string());
                 }
                 return Ok(());
             }
@@ -309,13 +456,14 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .rpc
             .rpc(
                 "chainHead_v1_header",
-                serde_json::json!([&self.follow_sub_id, block_hash]),
+                &format!(r#"["{}","{}"]"#, self.follow_sub_id, block_hash),
             )
             .await
             .map_err(|e| crate::Error::Node(format!("header: {e}")))?;
 
-        let hex: String = serde_json::from_value(result)
-            .map_err(|e| crate::Error::Decode(format!("header response: {e}")))?;
+        let hex: String = result_as_str(&result)
+            .map(Into::into)
+            .ok_or_else(|| crate::Error::Decode("header response not a string".into()))?;
 
         decode_header(&hex)
     }
@@ -342,7 +490,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 continue;
             }
 
-            let event: FollowEvent = serde_json::from_str(&event_json)
+            let event = parse_follow_event(&event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
             match event {
@@ -379,37 +527,48 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             return;
         }
         log::debug!("unpinning {} blocks", hashes.len());
+        // Build the hash array as a JSON string
+        let mut hash_arr = String::from("[");
+        for (i, h) in hashes.iter().enumerate() {
+            if i > 0 {
+                hash_arr.push(',');
+            }
+            hash_arr.push('"');
+            hash_arr.push_str(h);
+            hash_arr.push('"');
+        }
+        hash_arr.push(']');
         let _ = self
             .rpc
             .rpc(
                 "chainHead_v1_unpin",
-                serde_json::json!([&self.follow_sub_id, hashes]),
+                &format!(r#"["{}",{}]"#, self.follow_sub_id, hash_arr),
             )
             .await;
     }
 
     /// Record a lifecycle event. Updates internal state, queues unpins,
     /// and buffers user-visible chain events.
-    fn record_lifecycle_event(&mut self, event: FollowEvent) {
+    fn record_lifecycle_event(&mut self, event: FollowEvent<'_>) {
         match event {
             FollowEvent::Initialized {
                 finalized_block_hashes,
                 ..
             } => {
                 if let Some(h) = finalized_block_hashes.last() {
-                    self.finalized_hash = h.clone();
+                    self.finalized_hash = h.to_string();
                 }
             }
             FollowEvent::NewBlock {
                 block_hash,
                 parent_block_hash,
-                new_runtime,
+                has_new_runtime,
             } => {
                 self.event_queue.push_back(ChainEvent::NewBlock {
-                    hash: block_hash,
-                    parent: parent_block_hash,
+                    hash: block_hash.into(),
+                    parent: parent_block_hash.into(),
                     number: 0, // resolved in next_chain_event via header RPC
-                    is_new_runtime: new_runtime.is_some(),
+                    is_new_runtime: has_new_runtime,
                 });
                 // Don't unpin new blocks — keep them queryable until finalized/pruned
             }
@@ -423,26 +582,29 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     self.pending_unpin.push(old);
                 }
                 for h in &pruned_block_hashes {
-                    self.pending_unpin.push(h.clone());
+                    self.pending_unpin.push(h.to_string());
                 }
                 for h in finalized_block_hashes.iter().rev().skip(1) {
-                    self.pending_unpin.push(h.clone());
+                    self.pending_unpin.push(h.to_string());
                 }
 
                 if let Some(new) = finalized_block_hashes.last() {
-                    self.finalized_hash = new.clone();
+                    self.finalized_hash = new.to_string();
                     // Remove the new finalized hash from unpin queue — we need it pinned
-                    self.pending_unpin.retain(|h| h != new);
+                    self.pending_unpin.retain(|h| h != *new);
                 }
 
                 self.event_queue.push_back(ChainEvent::Finalized {
-                    hashes: finalized_block_hashes,
-                    pruned: pruned_block_hashes,
+                    hashes: finalized_block_hashes
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    pruned: pruned_block_hashes.iter().map(|s| s.to_string()).collect(),
                 });
             }
             FollowEvent::BestBlockChanged { best_block_hash } => {
                 self.event_queue.push_back(ChainEvent::BestBlock {
-                    hash: best_block_hash,
+                    hash: best_block_hash.into(),
                 });
             }
             _ => {}
@@ -458,7 +620,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             if sub_id != self.follow_sub_id {
                 continue;
             }
-            let event: FollowEvent = match serde_json::from_str(&event_json) {
+            let event = match parse_follow_event(&event_json) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
@@ -480,7 +642,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 .await;
             self.follow_sub_id = self
                 .rpc
-                .subscribe("chainHead_v1_follow", serde_json::json!([true]))
+                .subscribe("chainHead_v1_follow", "[true]")
                 .await
                 .map_err(|e| crate::Error::Node(format!("refollow failed: {e}")))?;
             self.finalized_hash.clear();
@@ -507,7 +669,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 continue;
             }
 
-            let event: FollowEvent = serde_json::from_str(&event_json)
+            let event = parse_follow_event(&event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
             match event {
@@ -518,16 +680,16 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     operation_id,
                     items,
                 } => {
-                    let entry = self.storage_accum.entry(operation_id).or_default();
+                    let entry = self
+                        .storage_accum
+                        .entry(operation_id.to_string())
+                        .or_default();
                     for item in items {
-                        entry.push(StorageItem {
-                            key: item.key,
-                            value: item.value,
-                        });
+                        entry.push(item);
                     }
                 }
                 FollowEvent::OperationStorageDone { operation_id } => {
-                    let items = self.storage_accum.remove(&operation_id).unwrap_or_default();
+                    let items = self.storage_accum.remove(operation_id).unwrap_or_default();
                     if operation_id == target {
                         return Ok(OperationResult::StorageItems(items));
                     }
@@ -537,7 +699,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     output,
                 } => {
                     if operation_id == target {
-                        return Ok(OperationResult::CallDone(output));
+                        return Ok(OperationResult::CallDone(output.into()));
                     }
                 }
                 FollowEvent::OperationError {
@@ -545,7 +707,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     error,
                 } => {
                     if operation_id == target {
-                        return Ok(OperationResult::Error(error));
+                        return Ok(OperationResult::Error(error.into()));
                     }
                 }
                 FollowEvent::OperationInaccessible { operation_id } => {
@@ -559,7 +721,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                             .rpc
                             .rpc(
                                 "chainHead_v1_continue",
-                                serde_json::json!([&self.follow_sub_id, &operation_id]),
+                                &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
                             )
                             .await;
                     }
@@ -592,21 +754,28 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         hash: &str,
         keys: &[String],
     ) -> crate::Result<Vec<StorageItem>> {
-        let items: Vec<serde_json::Value> = keys
-            .iter()
-            .map(|k| serde_json::json!({"key": k, "type": "value"}))
-            .collect();
+        let mut items_json = String::from("[");
+        for (i, k) in keys.iter().enumerate() {
+            if i > 0 {
+                items_json.push(',');
+            }
+            items_json.push_str(&format!(r#"{{"key":"{}","type":"value"}}"#, k));
+        }
+        items_json.push(']');
 
         let result = self
             .rpc
             .rpc(
                 "chainHead_v1_storage",
-                serde_json::json!([&self.follow_sub_id, hash, items, null]),
+                &format!(
+                    r#"["{}","{}",{},null]"#,
+                    self.follow_sub_id, hash, items_json
+                ),
             )
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
 
-        let started: OperationStarted = serde_json::from_value(result)
+        let started = parse_operation_started(&result)
             .map_err(|e| crate::Error::Node(format!("bad storage response: {e}")))?;
 
         match started {
@@ -626,18 +795,21 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Query storage using descendantsValues type.
     async fn storage_descendants(&mut self, prefix: &str) -> crate::Result<Vec<StorageItem>> {
         let hash = self.prepare_operation().await?;
-        let items = serde_json::json!([{"key": prefix, "type": "descendantsValues"}]);
+        let items_json = format!(r#"[{{"key":"{}","type":"descendantsValues"}}]"#, prefix);
 
         let result = self
             .rpc
             .rpc(
                 "chainHead_v1_storage",
-                serde_json::json!([&self.follow_sub_id, &hash, items, null]),
+                &format!(
+                    r#"["{}","{}",{},null]"#,
+                    self.follow_sub_id, hash, items_json
+                ),
             )
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
 
-        let started: OperationStarted = serde_json::from_value(result)
+        let started = parse_operation_started(&result)
             .map_err(|e| crate::Error::Node(format!("bad storage response: {e}")))?;
 
         match started {
@@ -683,12 +855,15 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .rpc
             .rpc(
                 "chainHead_v1_call",
-                serde_json::json!([&self.follow_sub_id, &hash, function, call_data]),
+                &format!(
+                    r#"["{}","{}","{}","{}"]"#,
+                    self.follow_sub_id, hash, function, call_data
+                ),
             )
             .await
             .map_err(|e| crate::Error::Node(e.to_string()))?;
 
-        let started: OperationStarted = serde_json::from_value(result)
+        let started = parse_operation_started(&result)
             .map_err(|e| crate::Error::Node(format!("bad call response: {e}")))?;
 
         match started {
@@ -714,17 +889,20 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     async fn archive_hash_by_height(&mut self, height: u64) -> crate::Result<String> {
         let result = self
             .rpc
-            .rpc("archive_v1_hashByHeight", serde_json::json!([height]))
+            .rpc("archive_v1_hashByHeight", &format!("[{}]", height))
             .await
             .map_err(|e| crate::Error::Node(format!("archive_v1_hashByHeight: {e}")))?;
 
-        // Returns an array of hashes (usually one for canonical chain)
-        let hashes: Vec<String> = serde_json::from_value(result)
-            .map_err(|e| crate::Error::Decode(format!("hashByHeight response: {e}")))?;
+        // Returns an array of hashes (usually one for canonical chain).
+        // The result is the raw JSON array, e.g. `["0xabc..."]`.
+        // Wrap it so extract_str_array can find the array via a marker.
+        let wrapped = format!(r#"{{"v":{}}}"#, result.trim());
+        let hashes = extract_str_array(&wrapped, "\"v\":");
 
         hashes
             .into_iter()
             .next()
+            .map(|s| s.to_string())
             .ok_or(crate::Error::BadBlockNumber)
     }
 
@@ -734,14 +912,21 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         block_hash: &str,
         keys: &[String],
     ) -> crate::Result<Vec<StorageItem>> {
-        let items: Vec<serde_json::Value> = keys
-            .iter()
-            .map(|k| serde_json::json!({"key": k, "type": "value"}))
-            .collect();
+        let mut items_json = String::from("[");
+        for (i, k) in keys.iter().enumerate() {
+            if i > 0 {
+                items_json.push(',');
+            }
+            items_json.push_str(&format!(r#"{{"key":"{}","type":"value"}}"#, k));
+        }
+        items_json.push(']');
 
         let archive_sub_id = self
             .rpc
-            .subscribe("archive_v1_storage", serde_json::json!([block_hash, items]))
+            .subscribe(
+                "archive_v1_storage",
+                &format!(r#"["{}",{}]"#, block_hash, items_json),
+            )
             .await
             .map_err(|e| crate::Error::Node(format!("archive_v1_storage: {e}")))?;
 
@@ -763,16 +948,13 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 .ok_or(crate::Error::SubscriptionClosed)?;
 
             if sub_id == archive_sub_id {
-                let event: ArchiveStorageEvent = serde_json::from_str(&event_json)
+                let event = parse_archive_storage_event(&event_json)
                     .map_err(|e| crate::Error::Decode(format!("archive event: {e}")))?;
 
                 match event {
                     ArchiveStorageEvent::Items { items } => {
                         for item in items {
-                            result_items.push(StorageItem {
-                                key: item.key,
-                                value: item.value,
-                            });
+                            result_items.push(item);
                         }
                     }
                     ArchiveStorageEvent::Done => return Ok(result_items),
@@ -784,14 +966,14 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                             .rpc
                             .rpc(
                                 "archive_v1_storageContinue",
-                                serde_json::json!([archive_sub_id]),
+                                &format!(r#"["{}"]"#, archive_sub_id),
                             )
                             .await;
                     }
                 }
             } else if sub_id == self.follow_sub_id {
                 // Process follow events that arrive while waiting for archive results
-                if let Ok(event) = serde_json::from_str::<FollowEvent>(&event_json) {
+                if let Ok(event) = parse_follow_event(&event_json) {
                     match event {
                         FollowEvent::Stop => {
                             self.needs_refollow = true;
@@ -933,7 +1115,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .rpc
             .subscribe(
                 "transactionWatch_v1_submitAndWatch",
-                serde_json::json!([hex]),
+                &format!(r#"["{}"]"#, hex),
             )
             .await
             .map_err(|e| crate::Error::Node(format!("tx watch: {e}")))?;
@@ -949,17 +1131,17 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 .ok_or(crate::Error::SubscriptionClosed)?;
 
             if event_sub_id == sub_id {
-                let event: TxEvent = serde_json::from_str(&event_json)
+                let event = parse_tx_event(&event_json)
                     .map_err(|e| crate::Error::Decode(format!("tx event: {e}")))?;
 
                 match event {
-                    TxEvent::BestChainBlockIncluded { block: Some(_) } => {
+                    TxEvent::BestChainBlockIncluded { has_block: true } => {
                         if !wait_for_finalization {
                             return Ok(());
                         }
                         included = true;
                     }
-                    TxEvent::Finalized { .. } => return Ok(()),
+                    TxEvent::Finalized => return Ok(()),
                     TxEvent::Invalid { error } => {
                         return Err(crate::Error::OperationFailed(format!(
                             "tx invalid: {error}"
@@ -978,11 +1160,11 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                     TxEvent::Error { error } => {
                         return Err(crate::Error::OperationFailed(format!("tx error: {error}")));
                     }
-                    // Validated, Broadcasted, BestChainBlockIncluded(None) — keep waiting
+                    // Validated, Broadcasted, BestChainBlockIncluded(false) — keep waiting
                     _ => {}
                 }
             } else if event_sub_id == self.follow_sub_id {
-                if let Ok(event) = serde_json::from_str::<FollowEvent>(&event_json) {
+                if let Ok(event) = parse_follow_event(&event_json) {
                     match event {
                         FollowEvent::Stop => self.needs_refollow = true,
                         other => self.record_lifecycle_event(other),
@@ -1078,9 +1260,10 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
         let scan = {
             let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
             skip_opaque_prefix(&mut hex_reader).await?;
-            let result = Box::pin(
-                streaming_metadata::scan_pallets_streaming(&mut hex_reader, pallet_filter),
-            )
+            let result = Box::pin(streaming_metadata::scan_pallets_streaming(
+                &mut hex_reader,
+                pallet_filter,
+            ))
             .await
             .map_err(|e| crate::Error::Decode(alloc::format!("scan: {e}")))?;
             hex_reader.finish().await;
@@ -1139,9 +1322,10 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
         let scan = {
             let mut hex_reader = super::edge::HexFrameReader::new(&mut self.rpc);
             skip_opaque_prefix(&mut hex_reader).await?;
-            let result = Box::pin(
-                streaming_metadata::scan_pallets_streaming(&mut hex_reader, pallet_filter),
-            )
+            let result = Box::pin(streaming_metadata::scan_pallets_streaming(
+                &mut hex_reader,
+                pallet_filter,
+            ))
             .await
             .map_err(|e| crate::Error::Decode(alloc::format!("rescan: {e}")))?;
             hex_reader.finish().await;
@@ -1153,8 +1337,7 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
         let extrinsic = scales::frame::metadata::remap_extrinsic_ids(scan.extrinsic, &remap);
         log::info!("metadata: ready ({} pallets)", pallets.len());
         // Take the filled registry out, replacing with empty
-        let built_registry =
-            core::mem::replace(registry, scales::Registry::with_capacity(0));
+        let built_registry = core::mem::replace(registry, scales::Registry::with_capacity(0));
         Ok(meta::from_raw(pallets, extrinsic, built_registry))
     }
 
@@ -1171,33 +1354,24 @@ impl<T: embedded_io_async::Read + embedded_io_async::Write> ChainHead<super::edg
         self.rpc.next_id += 1;
         log::info!("RPC `chainHead_v1_call` (ID={})", id);
 
-        let msg = serde_json::to_vec(&super::JsonRpcRequest {
+        let mut msg = String::new();
+        super::format_request(
+            &mut msg,
             id,
-            jsonrpc: "2.0",
-            method: "chainHead_v1_call",
-            params: Some(serde_json::json!([
-                &self.follow_sub_id,
-                &hash,
+            "chainHead_v1_call",
+            &alloc::format!(
+                r#"["{}","{}","{}","{}"]"#,
+                self.follow_sub_id,
+                hash,
                 function,
                 call_data
-            ])),
-        })
-        .map_err(|_| crate::Error::Encode("rpc serialize".into()))?;
-
+            ),
+        );
         self.rpc
-            .send_text(&msg)
+            .send_text(msg.as_bytes())
             .await
             .map_err(|e| crate::Error::Node(alloc::format!("rpc send: {e}")))?;
         Ok(())
-    }
-
-    /// Read and discard remaining frames from an in-progress operation.
-    async fn drain_pending_frames(&mut self) {
-        // Read one more event to consume the operationCallDone/Error
-        // This may have already been consumed by the HexFrameReader
-        if let Some((_, _)) = self.rpc.next_event().await {
-            // Consumed the follow event
-        }
     }
 }
 

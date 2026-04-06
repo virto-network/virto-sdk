@@ -22,7 +22,7 @@ use core::fmt::Write as FmtWrite;
 use edge_ws::{FrameHeader, FrameType};
 use embedded_io_async::{Read, Write};
 
-use super::{IncomingMessage, JsonRpcError, JsonRpcRequest, Rpc, RpcResult};
+use super::{IncomingMessage, JsonRpcError, Rpc, RpcResult};
 use crate::Error;
 
 /// WebSocket backend over any `embedded_io_async` byte stream.
@@ -84,10 +84,7 @@ impl<T: Read + Write> Backend<T> {
             return Ok((header.frame_type, Vec::new()));
         }
         if len > 1024 * 1024 {
-            return Err(JsonRpcError::new(
-                -32603,
-                "frame too large (>1MB)",
-            ));
+            return Err(JsonRpcError::new(-32603, "frame too large (>1MB)"));
         }
         let mut buf = vec![0u8; len];
         header
@@ -146,34 +143,23 @@ impl<T: Read + Write> Backend<T> {
 }
 
 impl<T: Read + Write> Rpc for Backend<T> {
-    async fn rpc(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> RpcResult<serde_json::Value> {
+    async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String> {
         let id = self.next_id;
         self.next_id += 1;
         log::info!("RPC `{}` (ID={})", method, id);
 
-        let msg = serde_json::to_vec(&JsonRpcRequest {
-            id,
-            jsonrpc: "2.0",
-            method,
-            params: Some(params),
-        })
-        .map_err(|e| JsonRpcError::new(-32603, &alloc::format!("serialize: {e}")))?;
-
-        self.send_text(&msg).await?;
+        let mut req = String::new();
+        super::format_request(&mut req, id, method, params);
+        self.send_text(req.as_bytes()).await?;
 
         loop {
             match self.read_message().await? {
-                IncomingMessage::Response(r)
-                    if r.id.as_ref().and_then(|v| v.as_u64()) == Some(id as u64) =>
-                {
-                    return r.into_result();
+                IncomingMessage::Response(r) if r.id == id => {
+                    return r.result.ok_or_else(|| JsonRpcError::new(-1, "no result"));
                 }
+                IncomingMessage::Error(e) => return Err(e),
                 IncomingMessage::Response(r) => {
-                    log::warn!("unexpected response id: {:?}", r.id);
+                    log::warn!("unexpected response id: {}", r.id);
                 }
                 IncomingMessage::Notification(n) => {
                     self.event_buffer
@@ -185,10 +171,12 @@ impl<T: Read + Write> Rpc for Backend<T> {
 }
 
 impl<T: Read + Write> super::RpcSubscription for Backend<T> {
-    async fn subscribe(&mut self, method: &str, params: serde_json::Value) -> RpcResult<String> {
-        let sub_id: String = serde_json::from_value(self.rpc(method, params).await?)
-            .map_err(|e| JsonRpcError::new(-32603, &alloc::format!("bad sub id: {e}")))?;
-        Ok(sub_id)
+    async fn subscribe(&mut self, method: &str, params: &str) -> RpcResult<String> {
+        let result = self.rpc(method, params).await?;
+        // Result is a JSON string like `"sub_id_here"` — strip quotes
+        super::result_as_str(&result)
+            .map(|s| s.into())
+            .ok_or_else(|| JsonRpcError::new(-32603, "expected string subscription id"))
     }
 
     async fn next_event(&mut self) -> Option<(String, String)> {
@@ -200,8 +188,9 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
                 Ok(IncomingMessage::Notification(n)) => {
                     return Some((n.params.subscription, n.params.result))
                 }
-                Ok(IncomingMessage::Response(r)) => {
-                    log::warn!("unexpected response while waiting for event: {:?}", r.id);
+                Ok(IncomingMessage::Response(_)) => {}
+                Ok(IncomingMessage::Error(e)) => {
+                    log::warn!("rpc error while waiting for event: {e}");
                 }
                 Err(e) => {
                     log::warn!("ws error while waiting for event: {e}");
@@ -216,7 +205,8 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
     }
 
     async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> RpcResult<()> {
-        let _ = self.rpc(method, serde_json::json!([sub_id])).await?;
+        let params = alloc::format!(r#"["{}"]"#, sub_id);
+        let _ = self.rpc(method, &params).await?;
         Ok(())
     }
 }
@@ -828,8 +818,9 @@ pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
         )));
         let mut session = mbedtls_rs::Session::new(tls_ctx.reference(), socket, conf)
             .map_err(|e| Error::Node(format!("TLS session: {e:?}")))?;
-        session
-            .connect()
+        // Box::pin moves the TLS handshake future off the stack — its
+        // HMAC-SHA384 contexts in TLS 1.3 key derivation use ~4-6KB.
+        Box::pin(session.connect())
             .await
             .map_err(|e| Error::Node(format!("TLS handshake: {e:?}")))?;
         log::info!("TLS connected");

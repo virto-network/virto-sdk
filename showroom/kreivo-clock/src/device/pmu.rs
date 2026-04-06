@@ -62,8 +62,11 @@ impl Pmu {
 
         log::info!(
             "PMU: charger cfg — 0x18={:#04x} 0x62={:#04x} 0x63={:#04x} 0x64={:#04x} 0x01={:#04x}",
-            self.read_reg(0x18), self.read_reg(0x62), self.read_reg(0x63),
-            self.read_reg(0x64), self.read_reg(0x01)
+            self.read_reg(0x18),
+            self.read_reg(0x62),
+            self.read_reg(0x63),
+            self.read_reg(0x64),
+            self.read_reg(0x01)
         );
     }
 
@@ -109,7 +112,7 @@ impl Pmu {
         let mut buf = [0u8; 1];
         if self.0.write_read(AXP, &[0x01], &mut buf).is_ok() {
             let state = buf[0] & 0x07;
-            state >= 1 && state <= 3
+            (1..=3).contains(&state)
         } else {
             false
         }

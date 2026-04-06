@@ -4,10 +4,11 @@
 //! subscription-capable transports, and concrete backend implementations.
 //!
 //! All trait methods take `&mut self` — single-threaded, no spawning.
+//! Params and results are raw JSON strings — no `serde_json::Value`.
 
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 use core::fmt::Write;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::prelude::*;
 
@@ -28,32 +29,18 @@ pub(crate) fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
-// --- Inline JSON-RPC protocol types ---
+// --- JSON-RPC message types ---
 
-#[derive(Serialize)]
-pub struct JsonRpcRequest<'a> {
-    pub jsonrpc: &'a str,
-    pub id: u32,
-    pub method: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
-}
-
-#[derive(Deserialize, Debug)]
-pub struct JsonRpcResponse {
-    pub id: Option<serde_json::Value>,
-    pub result: Option<serde_json::Value>,
-    pub error: Option<JsonRpcError>,
-}
-
-impl JsonRpcResponse {
-    pub fn into_result(self) -> Result<serde_json::Value, JsonRpcError> {
-        if let Some(err) = self.error {
-            return Err(err);
-        }
-        self.result
-            .ok_or_else(|| JsonRpcError::new(-1, "no result"))
-    }
+/// Format a JSON-RPC request into `buf`. Returns the written length.
+/// `params` is a pre-serialized JSON string (e.g. `"[]"` or `"[true]"`).
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+pub(crate) fn format_request(buf: &mut String, id: u32, method: &str, params: &str) {
+    buf.clear();
+    let _ = write!(
+        buf,
+        r#"{{"jsonrpc":"2.0","id":{},"method":"{}","params":{}}}"#,
+        id, method, params
+    );
 }
 
 /// A JSON-RPC notification (subscription event) — has `method` and `params` but no `id`.
@@ -66,69 +53,112 @@ pub struct Notification {
 #[derive(Debug)]
 pub struct NotificationParams {
     pub subscription: String,
-    /// Raw JSON of the notification result — not parsed into `Value` to save heap.
-    /// ChainHead parses this on demand with `serde_json::from_str()`.
+    /// Raw JSON of the notification result (not parsed).
     pub result: String,
+}
+
+/// Parsed JSON-RPC response fields extracted from raw JSON.
+#[derive(Debug)]
+pub struct RpcResponse {
+    pub id: u32,
+    /// Raw JSON of the result field (e.g. `"\"0x1234\""` or `"{\"result\":\"started\",...}"`).
+    pub result: Option<String>,
 }
 
 /// Represents either a response (has `id`) or a notification (has `method` + `params.subscription`).
 #[derive(Debug)]
 pub enum IncomingMessage {
-    Response(JsonRpcResponse),
+    Response(RpcResponse),
+    Error(JsonRpcError),
     Notification(Notification),
 }
 
 impl IncomingMessage {
-    /// Parse a JSON string into either a Response or Notification.
-    ///
-    /// For responses: full serde_json parse (responses are small).
-    /// For notifications: extract subscription ID and keep the `result`
-    /// as a raw JSON string to avoid allocating a `Value` tree.
+    /// Parse a JSON string into either a Response, Error, or Notification.
+    /// All parsing uses lightweight string scanning — no serde_json.
     pub fn parse(json: &str) -> Option<Self> {
-        // Quick check: responses have "id", notifications have "method"
-        if json.contains("\"id\"") && !json.contains("\"method\"") {
-            // Response — parse fully (small payloads: operationStarted, genesis hash, etc.)
-            let resp: JsonRpcResponse = serde_json::from_str(json).ok()?;
-            return Some(IncomingMessage::Response(resp));
-        }
-
-        if !json.contains("\"method\"") {
-            // Ambiguous: has both id and method, or neither. Try response first.
-            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(json) {
-                return Some(IncomingMessage::Response(resp));
+        // Check for error first
+        if json.contains("\"error\"") && json.contains("\"id\"") {
+            if let (Some(code), Some(message)) = (
+                extract_json_number(json, "\"code\":"),
+                extract_json_string(json, "\"message\":\""),
+            ) {
+                return Some(IncomingMessage::Error(JsonRpcError { code, message }));
             }
-            return None;
         }
 
-        // Notification — extract subscription and raw result without full parse.
-        let subscription = extract_json_string(json, "\"subscription\":\"")?;
-        let result = extract_json_object(json, "\"result\":")?;
-
-        Some(IncomingMessage::Notification(Notification {
-            method: extract_json_string(json, "\"method\":\"")?,
-            params: NotificationParams {
-                subscription,
+        // Response: has "id" and "result"
+        if json.contains("\"id\"") && !json.contains("\"method\"") {
+            let id = extract_json_number(json, "\"id\":")?;
+            let result = extract_json_object(json, "\"result\":");
+            return Some(IncomingMessage::Response(RpcResponse {
+                id: id as u32,
                 result,
-            },
-        }))
+            }));
+        }
+
+        // Notification: has "method" and "params.subscription"
+        if json.contains("\"method\"") {
+            let subscription = extract_json_string(json, "\"subscription\":\"")?;
+            let result = extract_json_object(json, "\"result\":")?;
+            return Some(IncomingMessage::Notification(Notification {
+                method: extract_json_string(json, "\"method\":\"")?,
+                params: NotificationParams {
+                    subscription,
+                    result,
+                },
+            }));
+        }
+
+        // Ambiguous — try as response
+        if json.contains("\"id\"") {
+            let id = extract_json_number(json, "\"id\":")?;
+            let result = extract_json_object(json, "\"result\":");
+            return Some(IncomingMessage::Response(RpcResponse {
+                id: id as u32,
+                result,
+            }));
+        }
+
+        None
     }
 }
 
-/// Extract a JSON string value by scanning for `"key":"value"`.
-fn extract_json_string(json: &str, marker: &str) -> Option<String> {
+/// Extract a JSON string value by scanning for a `"key":"value"` pattern.
+///
+/// Safe for values that don't contain escape sequences (hex hashes,
+/// identifiers, operation IDs). The marker must end with `"` to anchor
+/// at the start of the value string.
+pub(crate) fn extract_json_str<'a>(json: &'a str, marker: &str) -> Option<&'a str> {
     let start = json.find(marker)? + marker.len();
     let end = json[start..].find('"')?;
-    Some(json[start..start + end].into())
+    Some(&json[start..start + end])
+}
+
+/// Like [`extract_json_str`] but returns an owned String.
+/// Use when the result must outlive the input (e.g. buffered notifications).
+fn extract_json_string(json: &str, marker: &str) -> Option<String> {
+    extract_json_str(json, marker).map(Into::into)
+}
+
+/// Extract a JSON number after a marker.
+fn extract_json_number(json: &str, marker: &str) -> Option<i64> {
+    let start = json.find(marker)? + marker.len();
+    let rest = json[start..].trim_start();
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '-')
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
 }
 
 /// Extract a raw JSON object/value after a key marker.
 /// Handles nested braces to find the correct end.
-fn extract_json_object(json: &str, marker: &str) -> Option<String> {
+pub(crate) fn extract_json_object(json: &str, marker: &str) -> Option<String> {
     let start = json.find(marker)? + marker.len();
     let rest = &json[start..];
 
-    // Could be an object {...}, array [...], string "...", number, bool, null
-    let first = rest.chars().next()?;
+    let first = rest.trim_start().chars().next()?;
+    let rest = &json[start + (rest.len() - rest.trim_start().len())..];
     match first {
         '{' => {
             let mut depth = 0i32;
@@ -160,13 +190,41 @@ fn extract_json_object(json: &str, marker: &str) -> Option<String> {
             }
             None
         }
+        '[' => {
+            let mut depth = 0i32;
+            let mut in_string = false;
+            let mut escape = false;
+            for (i, ch) in rest.char_indices() {
+                if escape {
+                    escape = false;
+                    continue;
+                }
+                if ch == '\\' && in_string {
+                    escape = true;
+                    continue;
+                }
+                if ch == '"' {
+                    in_string = !in_string;
+                }
+                if !in_string {
+                    if ch == '[' {
+                        depth += 1;
+                    }
+                    if ch == ']' {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(rest[..=i].into());
+                        }
+                    }
+                }
+            }
+            None
+        }
         '"' => {
-            // String value — find closing quote
             let end = rest[1..].find('"').map(|i| i + 2)?;
             Some(rest[..end].into())
         }
         _ => {
-            // Number, bool, null — find next comma, brace, or bracket
             let end = rest
                 .find(|c: char| c == ',' || c == '}' || c == ']')
                 .unwrap_or(rest.len());
@@ -199,22 +257,18 @@ impl core::fmt::Display for JsonRpcError {
 pub type RpcResult<T> = Result<T, JsonRpcError>;
 
 /// Extract and hex-decode the `"result":"0x..."` value from raw JSON-RPC text.
-///
-/// This avoids parsing the full JSON with serde, which would allocate the
-/// entire hex string as a `Value::String`. Instead, we scan for the hex data
-/// and decode it directly.
 #[cfg(feature = "ws")]
 pub(crate) fn extract_hex_result(json: &str) -> Result<crate::prelude::Vec<u8>, JsonRpcError> {
-    // Check for error first (small, safe to parse)
+    // Check for error first
     if json.contains("\"error\"") {
-        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(json) {
-            if let Some(err) = resp.error {
-                return Err(err);
-            }
+        if let (Some(code), Some(message)) = (
+            extract_json_number(json, "\"code\":"),
+            extract_json_string(json, "\"message\":\""),
+        ) {
+            return Err(JsonRpcError { code, message });
         }
     }
 
-    // Find "result":"0x and extract hex chars until closing quote
     let marker = "\"result\":\"0x";
     let start = json
         .find(marker)
@@ -229,47 +283,32 @@ pub(crate) fn extract_hex_result(json: &str) -> Result<crate::prelude::Vec<u8>, 
     hex::decode(hex_str).map_err(|_| JsonRpcError::new(-32603, "invalid hex"))
 }
 
-// --- Rpc trait ---
-
-/// Async JSON-RPC request/response interface.
-#[allow(async_fn_in_trait)]
-pub trait Rpc {
-    async fn rpc(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> RpcResult<serde_json::Value>;
-
-    /// Make an RPC call and hex-decode the result directly, bypassing serde_json.
-    ///
-    /// For large hex responses (like metadata), this avoids allocating the
-    /// intermediate `serde_json::Value` string (~770KB for Kreivo metadata).
-    /// Returns the decoded bytes.
-    async fn rpc_raw_hex(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> RpcResult<crate::prelude::Vec<u8>> {
-        // Default impl: falls back to normal rpc + hex decode
-        let val = self.rpc(method, params).await?;
-        let hex_str = val
-            .as_str()
-            .ok_or_else(|| JsonRpcError::new(-32603, "expected hex string result"))?;
-        let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
-        hex::decode(hex).map_err(|_| JsonRpcError::new(-32603, "invalid hex in result"))
+/// Helper: extract result as a JSON string value (strips quotes).
+pub(crate) fn result_as_str(result: &str) -> Option<&str> {
+    let trimmed = result.trim();
+    if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        Some(&trimmed[1..trimmed.len() - 1])
+    } else {
+        None
     }
 }
 
+// --- Rpc trait ---
+
+/// Async JSON-RPC request/response interface.
+/// `params` is a pre-serialized JSON string (e.g. `"[]"` or `"[\"sub\",\"hash\"]"`).
+/// Returns the raw JSON `result` field as a String.
+#[allow(async_fn_in_trait)]
+pub trait Rpc {
+    async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String>;
+}
+
 /// Backends that support JSON-RPC subscriptions (WebSocket, smoldot).
-///
-/// Events are buffered inside the transport. `rpc()` calls that encounter
-/// subscription notifications while waiting for a response automatically
-/// buffer them for later retrieval via `next_event`/`try_next_event`.
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 #[allow(async_fn_in_trait)]
 pub trait RpcSubscription: Rpc {
     /// Subscribe to a method. Returns the subscription ID.
-    async fn subscribe(&mut self, method: &str, params: serde_json::Value) -> RpcResult<String>;
+    async fn subscribe(&mut self, method: &str, params: &str) -> RpcResult<String>;
 
     /// Read the next subscription event, blocking until one arrives.
     /// Returns `(subscription_id, raw_json_result)`.
@@ -291,8 +330,7 @@ pub mod smoldot;
 #[cfg(feature = "ws")]
 pub mod ws;
 
-/// ChainHead v1 session manager — public for embedded users who construct
-/// `ChainHead<edge::Backend<T>>` directly.
+/// ChainHead v1 session manager.
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 pub mod chainhead;
 
@@ -318,8 +356,8 @@ mod tests {
         let msg = IncomingMessage::parse(json).unwrap();
         match msg {
             IncomingMessage::Response(resp) => {
-                assert_eq!(resp.id, Some(serde_json::json!(1)));
-                assert_eq!(resp.result, Some(serde_json::json!("0x1234")));
+                assert_eq!(resp.id, 1);
+                assert_eq!(resp.result.unwrap(), "\"0x1234\"");
             }
             _ => panic!("expected Response"),
         }
@@ -339,30 +377,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_error() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"bad"}}"#;
+        let msg = IncomingMessage::parse(json).unwrap();
+        match msg {
+            IncomingMessage::Error(e) => {
+                assert_eq!(e.code, -32603);
+                assert_eq!(e.message, "bad");
+            }
+            _ => panic!("expected Error"),
+        }
+    }
+
+    #[test]
     fn parse_invalid_json_returns_none() {
         assert!(IncomingMessage::parse("not json at all").is_none());
     }
 
     #[test]
-    fn response_into_result_ok() {
-        let resp = JsonRpcResponse {
-            id: Some(serde_json::json!(1)),
-            result: Some(serde_json::json!("ok")),
-            error: None,
-        };
-        let val = resp.into_result().unwrap();
-        assert_eq!(val, serde_json::json!("ok"));
-    }
-
-    #[test]
-    fn response_into_result_error() {
-        let resp = JsonRpcResponse {
-            id: Some(serde_json::json!(1)),
-            result: None,
-            error: Some(JsonRpcError::new(-1, "fail")),
-        };
-        let err = resp.into_result().unwrap_err();
-        assert_eq!(err.code, -1);
-        assert_eq!(err.message, "fail");
+    fn result_as_str_strips_quotes() {
+        assert_eq!(result_as_str("\"hello\""), Some("hello"));
+        assert_eq!(result_as_str("123"), None);
+        assert_eq!(result_as_str("null"), None);
     }
 }

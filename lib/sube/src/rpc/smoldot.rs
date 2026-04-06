@@ -1,12 +1,12 @@
 //! Smoldot light client transport — no_std compatible, no spawning.
 
 use alloc::collections::VecDeque;
-use alloc::{format, sync::Arc, vec::Vec};
+use alloc::{format, string::String, sync::Arc, vec::Vec};
 
 use smoldot_light::platform::PlatformRef;
 use smoldot_light::{AddChainConfig, AddChainConfigJsonRpc, Client};
 
-use super::{IncomingMessage, JsonRpcError, JsonRpcRequest, Rpc, RpcResult};
+use super::{IncomingMessage, JsonRpcError, Rpc, RpcResult};
 use crate::Error;
 
 /// Light client backend powered by smoldot.
@@ -14,7 +14,7 @@ pub struct Backend<P: PlatformRef> {
     client: Client<P, ()>,
     chain_id: smoldot_light::ChainId,
     responses: smoldot_light::JsonRpcResponses<P>,
-    event_buffer: VecDeque<(String, serde_json::Value)>,
+    event_buffer: VecDeque<(String, String)>,
     next_id: u32,
 }
 
@@ -67,27 +67,17 @@ impl<P: PlatformRef> Backend<P> {
 }
 
 impl<P: PlatformRef> super::Rpc for Backend<P> {
-    async fn rpc(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> RpcResult<serde_json::Value> {
+    async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String> {
         let id = self.next_id;
         self.next_id += 1;
         log::info!("RPC `{}` (ID={})", method, id);
 
-        let msg = serde_json::to_string(&JsonRpcRequest {
-            id,
-            jsonrpc: "2.0",
-            method,
-            params: Some(params),
-        })
-        .expect("request is serializable");
-
-        log::debug!("RPC request: {}", &msg);
+        let mut req = String::new();
+        super::format_request(&mut req, id, method, params);
+        log::debug!("RPC request: {}", &req);
 
         self.client
-            .json_rpc_request(msg, self.chain_id)
+            .json_rpc_request(req, self.chain_id)
             .map_err(|e| {
                 log::error!("smoldot send error: {e}");
                 JsonRpcError::new(-32603, "send failed")
@@ -103,13 +93,12 @@ impl<P: PlatformRef> super::Rpc for Backend<P> {
             log::trace!("smoldot response: {}", &json);
 
             match IncomingMessage::parse(&json) {
-                Some(IncomingMessage::Response(r))
-                    if r.id.as_ref().and_then(|v| v.as_u64()) == Some(id as u64) =>
-                {
-                    return r.into_result();
+                Some(IncomingMessage::Response(r)) if r.id == id => {
+                    return r.result.ok_or_else(|| JsonRpcError::new(-1, "no result"));
                 }
+                Some(IncomingMessage::Error(e)) => return Err(e),
                 Some(IncomingMessage::Response(r)) => {
-                    log::warn!("unexpected response id: {:?}", r.id);
+                    log::warn!("unexpected response id: {}", r.id);
                 }
                 Some(IncomingMessage::Notification(n)) => {
                     self.event_buffer
@@ -124,13 +113,14 @@ impl<P: PlatformRef> super::Rpc for Backend<P> {
 }
 
 impl<P: PlatformRef> super::RpcSubscription for Backend<P> {
-    async fn subscribe(&mut self, method: &str, params: serde_json::Value) -> RpcResult<String> {
-        let sub_id: String = serde_json::from_value(self.rpc(method, params).await?)
-            .map_err(|e| JsonRpcError::new(-32603, &format!("bad sub id: {e}")))?;
-        Ok(sub_id)
+    async fn subscribe(&mut self, method: &str, params: &str) -> RpcResult<String> {
+        let result = self.rpc(method, params).await?;
+        super::result_as_str(&result)
+            .map(|s| s.into())
+            .ok_or_else(|| JsonRpcError::new(-32603, "expected string subscription id"))
     }
 
-    async fn next_event(&mut self) -> Option<(String, serde_json::Value)> {
+    async fn next_event(&mut self) -> Option<(String, String)> {
         if let Some(event) = self.event_buffer.pop_front() {
             return Some(event);
         }
@@ -141,9 +131,7 @@ impl<P: PlatformRef> super::RpcSubscription for Backend<P> {
                 Some(IncomingMessage::Notification(n)) => {
                     return Some((n.params.subscription, n.params.result))
                 }
-                Some(IncomingMessage::Response(r)) => {
-                    log::warn!("unexpected response while waiting for event: {:?}", r.id);
-                }
+                Some(IncomingMessage::Response(_)) | Some(IncomingMessage::Error(_)) => {}
                 None => {
                     log::warn!("failed to parse smoldot message: {}", &json);
                 }
@@ -151,12 +139,13 @@ impl<P: PlatformRef> super::RpcSubscription for Backend<P> {
         }
     }
 
-    fn try_next_event(&mut self) -> Option<(String, serde_json::Value)> {
+    fn try_next_event(&mut self) -> Option<(String, String)> {
         self.event_buffer.pop_front()
     }
 
     async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> RpcResult<()> {
-        let _ = self.rpc(method, serde_json::json!([sub_id])).await?;
+        let params = format!(r#"["{}"]"#, sub_id);
+        let _ = self.rpc(method, &params).await?;
         Ok(())
     }
 }

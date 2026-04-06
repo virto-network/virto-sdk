@@ -56,8 +56,9 @@ pub async fn init(spawner: Spawner) -> (System<'static>, sube::Registry) {
     let peripherals = esp_hal::init(config);
     esp_println::logger::init_logger(log::LevelFilter::Info);
 
-    // Internal SRAM heap — WiFi DMA needs internal RAM for TX buffers.
-    esp_alloc::heap_allocator!(size: 167936); // 164KB — balance StackResources<4> + TLS stack + WiFi TX
+    // Internal SRAM heap — balance: enough for WiFi/DNS, leaving room for
+    // mbedtls TLS 1.3 stack (~8KB peak in key derivation). PSRAM holds the rest.
+    esp_alloc::heap_allocator!(size: 147456); // 144KB
 
     // PSRAM (8MB octal) — overflow for registry, metadata strings, large allocs.
     // Registered as second region: allocator tries internal first, then PSRAM.
@@ -120,8 +121,8 @@ pub async fn init(spawner: Spawner) -> (System<'static>, sube::Registry) {
     controller
         .set_config(&esp_radio::wifi::ModeConfig::Client(
             esp_radio::wifi::ClientConfig::default()
-                .with_ssid(SSID.try_into().unwrap())
-                .with_password(PASS.try_into().unwrap()),
+                .with_ssid(SSID.into())
+                .with_password(PASS.into()),
         ))
         .unwrap();
     controller.start_async().await.unwrap();
@@ -143,14 +144,17 @@ pub async fn init(spawner: Spawner) -> (System<'static>, sube::Registry) {
     );
     spawner.spawn(net_task(runner)).ok();
 
-    (System {
-        display,
-        backlight,
-        pmu,
-        wifi: controller,
-        stack,
-        cpu_ctrl: peripherals.CPU_CTRL,
-    }, registry)
+    (
+        System {
+            display,
+            backlight,
+            pmu,
+            wifi: controller,
+            stack,
+            cpu_ctrl: peripherals.CPU_CTRL,
+        },
+        registry,
+    )
 }
 
 #[embassy_executor::task]

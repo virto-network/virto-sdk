@@ -127,39 +127,28 @@ impl Backend {
 }
 
 impl super::Rpc for Backend {
-    async fn rpc(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> RpcResult<serde_json::Value> {
+    async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String> {
         let id = self.next_id;
         self.next_id += 1;
         log::info!("RPC `{}` (ID={})", method, id);
 
-        let msg = serde_json::to_string(&JsonRpcRequest {
-            id,
-            jsonrpc: "2.0",
-            method,
-            params: Some(params),
-        })
-        .expect("request is serializable");
-
-        log::debug!("RPC request: {}", &msg);
+        let mut req = String::new();
+        super::format_request(&mut req, id, method, params);
+        log::debug!("RPC request: {}", &req);
 
         self.ws
-            .send(Message::Text(msg.into()))
+            .send(Message::Text(req.into()))
             .await
             .map_err(|e| JsonRpcError::new(-32603, &format!("ws send: {e}")))?;
 
         loop {
             match self.read_message().await? {
-                IncomingMessage::Response(r)
-                    if r.id.as_ref().and_then(|v| v.as_u64()) == Some(id as u64) =>
-                {
-                    return r.into_result();
+                IncomingMessage::Response(r) if r.id == id => {
+                    return r.result.ok_or_else(|| JsonRpcError::new(-1, "no result"));
                 }
+                IncomingMessage::Error(e) => return Err(e),
                 IncomingMessage::Response(r) => {
-                    log::warn!("unexpected response id: {:?}", r.id);
+                    log::warn!("unexpected response id: {}", r.id);
                 }
                 IncomingMessage::Notification(n) => {
                     self.event_buffer
@@ -169,40 +158,30 @@ impl super::Rpc for Backend {
         }
     }
 
-    /// Bypass serde_json for large hex responses (metadata, runtime calls).
-    /// Hex-decodes the result directly from the raw JSON text.
-    async fn rpc_raw_hex(
-        &mut self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> RpcResult<alloc::vec::Vec<u8>> {
+    /// Hex-decode the result directly from the raw JSON text.
+    async fn rpc_raw_hex(&mut self, method: &str, params: &str) -> RpcResult<alloc::vec::Vec<u8>> {
         let id = self.next_id;
         self.next_id += 1;
 
-        let msg = serde_json::to_string(&JsonRpcRequest {
-            id,
-            jsonrpc: "2.0",
-            method,
-            params: Some(params),
-        })
-        .expect("request is serializable");
+        let mut req = String::new();
+        super::format_request(&mut req, id, method, params);
 
         self.ws
-            .send(Message::Text(msg.into()))
+            .send(Message::Text(req.into()))
             .await
             .map_err(|e| JsonRpcError::new(-32603, &format!("ws send: {e}")))?;
 
-        // Read raw text, extract hex without serde_json Value allocation
         let text = self.read_raw_text().await?;
         super::extract_hex_result(&text)
     }
 }
 
 impl super::RpcSubscription for Backend {
-    async fn subscribe(&mut self, method: &str, params: serde_json::Value) -> RpcResult<String> {
-        let sub_id: String = serde_json::from_value(self.rpc(method, params).await?)
-            .map_err(|e| JsonRpcError::new(-32603, &format!("bad sub id: {e}")))?;
-        Ok(sub_id)
+    async fn subscribe(&mut self, method: &str, params: &str) -> RpcResult<String> {
+        let result = self.rpc(method, params).await?;
+        super::result_as_str(&result)
+            .map(|s| s.into())
+            .ok_or_else(|| JsonRpcError::new(-32603, "expected string subscription id"))
     }
 
     async fn next_event(&mut self) -> Option<(String, String)> {
@@ -214,8 +193,9 @@ impl super::RpcSubscription for Backend {
                 Ok(IncomingMessage::Notification(n)) => {
                     return Some((n.params.subscription, n.params.result))
                 }
-                Ok(IncomingMessage::Response(r)) => {
-                    log::warn!("unexpected response while waiting for event: {:?}", r.id);
+                Ok(IncomingMessage::Response(_)) => {}
+                Ok(IncomingMessage::Error(e)) => {
+                    log::warn!("rpc error while waiting for event: {e}");
                 }
                 Err(e) => {
                     log::warn!("ws error while waiting for event: {e}");
@@ -230,7 +210,8 @@ impl super::RpcSubscription for Backend {
     }
 
     async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> RpcResult<()> {
-        let _ = self.rpc(method, serde_json::json!([sub_id])).await?;
+        let params = format!(r#"["{}"]"#, sub_id);
+        let _ = self.rpc(method, &params).await?;
         Ok(())
     }
 }

@@ -142,7 +142,7 @@ async fn pmu_task(mut pmu: device::pmu::Pmu) {
         }
 
         // Read battery + charge status every ~30s (150 × 200ms)
-        if tick % 150 == 0 {
+        if tick.is_multiple_of(150) {
             if let Some(pct) = pmu.battery_percent() {
                 BATTERY_LEVEL.store(pct, Ordering::Relaxed);
             }

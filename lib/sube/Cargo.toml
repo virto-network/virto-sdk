@@ -15,11 +15,9 @@ log = { workspace = true }
 scales = { path = "../scales", package = "scale-serialization", default-features = false, features = [
 	"serializer",
 	"frame",
-	"json",
-	"text",
 ] }
 serde = { workspace = true }
-serde_json = { workspace = true, features = ["arbitrary_precision"] }
+serde-json-core = { version = "0.6", default-features = false }
 twox-hash = { version = "2.1", default-features = false, features = ["xxhash64"] }
 
 # ws backend (std, smol runtime)
@@ -54,7 +52,6 @@ libwallet = { path = "../libwallet", default-features = false, features = [
 	"substrate",
 	"mnemonic",
 	"sr25519",
-	"util_pin",
 	"rand",
 	"std",
 ] }
@@ -62,10 +59,10 @@ rand_core = "0.6"
 
 [features]
 default = []
-test = ["std", "wss", "json", "dep:smol", "dep:rand_core"]
-json = ["scales/json"]
+test = ["std", "wss", "dep:smol", "dep:rand_core"]
 text = ["scales/text"]
-std = ["scales/std", "log/std", "serde/std", "serde_json/std", "hex/std"]
+async = ["scales/async"]
+std = ["scales/std", "log/std", "serde/std", "hex/std"]
 
 ws = [
 	"dep:smol",
@@ -74,7 +71,7 @@ ws = [
 	"async-tungstenite/smol-runtime",
 ]
 wss = ["ws", "async-tungstenite/async-tls", "dep:async-tls"]
-ws-edge = ["dep:edge-ws", "dep:embedded-io-async", "dep:embassy-net", "dep:embassy-time", "dep:mbedtls-rs", "dep:rand_core", "scales/async"]
+ws-edge = ["dep:edge-ws", "dep:embedded-io-async", "dep:embassy-net", "dep:embassy-time", "dep:mbedtls-rs", "dep:rand_core", "async"]
 smoldot = ["dep:smoldot-light"]
 smoldot-std = ["smoldot", "std", "dep:smol", "dep:futures-util"]
 examples = ["dep:rand_core"]
@@ -92,7 +89,6 @@ exclude = ["tests/qemu", ".wt_alt"]
 
 [workspace.dependencies]
 serde = { version = "1", default-features = false }
-serde_json = { version = "1", default-features = false, features = ["alloc"] }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 log = { version = "0.4", default-features = false }
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false }

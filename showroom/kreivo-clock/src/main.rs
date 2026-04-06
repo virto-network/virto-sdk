@@ -54,8 +54,10 @@ async fn main(spawner: Spawner) -> ! {
         match sube::metadata::from_bytes_filtered(&raw, &["CollatorSelection"]) {
             Ok(meta) => {
                 log::info!("flash metadata: {} pallets", meta.pallets.len());
-                http::PALLET_COUNT
-                    .store(meta.pallets.len() as u8, core::sync::atomic::Ordering::Relaxed);
+                http::PALLET_COUNT.store(
+                    meta.pallets.len() as u8,
+                    core::sync::atomic::Ordering::Relaxed,
+                );
                 http::META_SAVED.store(true, core::sync::atomic::Ordering::Relaxed);
                 Some(meta)
             }
@@ -86,12 +88,13 @@ async fn main(spawner: Spawner) -> ! {
                         }
 
                         log::info!("metadata decoded ({} pallets)", meta.pallets.len());
-                        http::PALLET_COUNT
-                            .store(meta.pallets.len() as u8, core::sync::atomic::Ordering::Relaxed);
+                        http::PALLET_COUNT.store(
+                            meta.pallets.len() as u8,
+                            core::sync::atomic::Ordering::Relaxed,
+                        );
                         break meta;
                     }
                     Err(e) => {
-
                         log::error!("metadata decode failed: {:?}", e);
                         rt.events
                             .enqueue(UiEvent::Status(Status::Error("bad metadata")))
@@ -183,8 +186,7 @@ async fn watch_chain(
                 if has_meta && block_count % 5 == 1 {
                     let mut blocks = [0u32; 6];
                     for (i, addr) in COLLATORS.iter().enumerate() {
-                        let path =
-                            alloc::format!("collator-selection/last-authored-block/{addr}");
+                        let path = alloc::format!("collator-selection/last-authored-block/{addr}");
                         if let Ok((entry, _)) = chain
                             .query_at_hash(&path, &hash)
                             .await

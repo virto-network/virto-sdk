@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 
 use crate::extrinsic::{EncodeCall, ExtrinsicBody};
 use crate::prelude::*;
-use crate::{Backend, JsonValue, Metadata, Response, Result as SubeResult, Signer};
+use crate::{Backend, DynValue, Metadata, Response, Result as SubeResult, Signer};
 
 #[cfg(any(feature = "ws", feature = "smoldot"))]
 use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
@@ -22,7 +22,7 @@ struct TxBuilder<Body, Sign> {
     body: Body,
     signer: Sign,
     nonce: Option<u64>,
-    extensions: Vec<(String, JsonValue)>,
+    extensions: Vec<(String, DynValue)>,
     wait_for_finalization: bool,
 }
 
@@ -57,11 +57,11 @@ impl<B, S> TxBuilder<B, S> {
         self.nonce = Some(nonce);
         self.extensions.retain(|(id, _)| id != "CheckNonce");
         self.extensions
-            .push(("CheckNonce".into(), crate::json!(nonce)));
+            .push(("CheckNonce".into(), DynValue::from(nonce)));
         self
     }
 
-    fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
+    fn with_extension(mut self, identifier: &str, value: DynValue) -> Self {
         self.extensions.retain(|(id, _)| id != identifier);
         self.extensions.push((identifier.into(), value));
         self
@@ -469,7 +469,7 @@ pub async fn connect_edge(
     url: &str,
     net: &'static crate::rpc::edge::EdgeNet,
     rng: impl rand_core::CryptoRng + Send + 'static,
-    pallets: &[&str],
+    _pallets: &[&str],
 ) -> SubeResult<EdgeSube> {
     let ws = crate::rpc::edge::edge_connect(url, net, rng).await?;
     log::info!("sube: starting ChainHead session");
@@ -640,7 +640,7 @@ impl<'a, Bk: Backend, B, S> CallBuilder<'a, Bk, B, S> {
         self
     }
 
-    pub fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
+    pub fn with_extension(mut self, identifier: &str, value: DynValue) -> Self {
         self.tx = self.tx.with_extension(identifier, value);
         self
     }
@@ -703,7 +703,7 @@ impl<B, S> OneShotCall<B, S> {
         self
     }
 
-    pub fn with_extension(mut self, identifier: &str, value: JsonValue) -> Self {
+    pub fn with_extension(mut self, identifier: &str, value: DynValue) -> Self {
         self.tx = self.tx.with_extension(identifier, value);
         self
     }

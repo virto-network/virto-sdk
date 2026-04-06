@@ -37,8 +37,12 @@ pub fn save(data: &[u8]) -> Result<(), &'static str> {
     header[..4].copy_from_slice(&MAGIC);
     header[4..8].copy_from_slice(&len.to_le_bytes());
 
-    flash.write(FLASH_OFFSET, &header).map_err(|_| "flash write header")?;
-    flash.write(FLASH_OFFSET + 8, data).map_err(|_| "flash write data")?;
+    flash
+        .write(FLASH_OFFSET, &header)
+        .map_err(|_| "flash write header")?;
+    flash
+        .write(FLASH_OFFSET + 8, data)
+        .map_err(|_| "flash write data")?;
 
     log::info!("flash: saved {} bytes of metadata", data.len());
     Ok(())

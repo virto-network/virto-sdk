@@ -23,6 +23,14 @@ pub struct MetadataSlot {
 
 unsafe impl Sync for MetadataSlot {}
 
+impl Default for MetadataSlot {
+    fn default() -> Self {
+        Self {
+            buf: UnsafeCell::new(None),
+        }
+    }
+}
+
 impl MetadataSlot {
     pub const fn new() -> Self {
         Self {
@@ -87,7 +95,10 @@ async fn handle_connection(socket: &mut TcpSocket<'_>) -> Result<(), &'static st
         if total >= buf.len() {
             return Err("headers too large");
         }
-        let n = socket.read(&mut buf[total..]).await.map_err(|_| "read error")?;
+        let n = socket
+            .read(&mut buf[total..])
+            .await
+            .map_err(|_| "read error")?;
         if n == 0 {
             return Err("connection closed");
         }

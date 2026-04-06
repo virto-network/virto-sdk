@@ -5,10 +5,10 @@ use crate::metadata::{self as meta, Hasher, SignedExtensionMeta, TypeId};
 use crate::prelude::*;
 use crate::{Backend, Error, Metadata, Response, Result};
 
+use crate::value::DynValue;
 use codec::{Compact, Encode};
 use scales::Value;
 use serde::Serialize;
-use serde_json::{json, Value as JsonValue};
 
 /// Encode a call body into SCALE bytes given the call variant name and type.
 ///
@@ -32,8 +32,11 @@ impl<T: Serialize> EncodeCall for T {
         registry: &scales::Registry,
         calls_ty: TypeId,
     ) -> Result<Vec<u8>> {
-        let call_json = json!({ variant: self });
-        scales::to_vec_with_info(&call_json, Some((registry, calls_ty)))
+        // Wraps body as {"VariantName": body} for scales SCALE encoding.
+        use alloc::collections::BTreeMap;
+        let mut map = BTreeMap::new();
+        map.insert(variant, self);
+        scales::to_vec_with_info(&map, Some((registry, calls_ty)))
             .map_err(|e| Error::Encode(e.to_string()))
     }
 }
@@ -73,7 +76,7 @@ impl EncodeCall for Text<'_> {
 pub struct ExtrinsicBody<Body> {
     pub nonce: Option<u64>,
     pub body: Body,
-    pub extensions: Vec<(String, JsonValue)>,
+    pub extensions: Vec<(String, DynValue)>,
 }
 
 /// Chain context fetched once for extension defaults.
@@ -85,7 +88,7 @@ pub struct ChainContext {
 }
 
 /// Look up a caller-provided extension value by identifier.
-fn find_override(extensions: &[(String, JsonValue)], id: &str) -> Option<JsonValue> {
+fn find_override(extensions: &[(String, DynValue)], id: &str) -> Option<DynValue> {
     extensions
         .iter()
         .find(|(k, _)| k == id)
@@ -93,24 +96,28 @@ fn find_override(extensions: &[(String, JsonValue)], id: &str) -> Option<JsonVal
 }
 
 /// Default JSON value for a well-known extension's "extra" data.
-fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<JsonValue> {
+fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
-        "CheckMortality" => Some(json!({"Immortal": null})),
-        "CheckNonce" => Some(json!(ctx.account_nonce)),
-        "ChargeTransactionPayment" => Some(json!(0)),
-        "ChargeAssetTxPayment" => Some(json!({"tip": 0, "asset_id": null})),
+        "CheckMortality" => Some(DynValue::obj(&[("Immortal", DynValue::Null)])),
+        "CheckNonce" => Some(DynValue::from(ctx.account_nonce)),
+        "ChargeTransactionPayment" => Some(DynValue::from(0u32)),
+        "ChargeAssetTxPayment" => Some(DynValue::obj(&[
+            ("tip", DynValue::from(0u32)),
+            ("asset_id", DynValue::Null),
+        ])),
         _ => None,
     }
 }
 
 /// Default JSON value for a well-known extension's "additional_signed" data.
-fn default_additional(identifier: &str, ctx: &ChainContext) -> Option<JsonValue> {
+fn default_additional(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
-        "CheckSpecVersion" => Some(json!(ctx.spec_version)),
-        "CheckTxVersion" => Some(json!(ctx.tx_version)),
-        "CheckGenesis" | "CheckMortality" => {
-            Some(json!(format!("0x{}", hex::encode(ctx.genesis_hash))))
-        }
+        "CheckSpecVersion" => Some(DynValue::from(ctx.spec_version)),
+        "CheckTxVersion" => Some(DynValue::from(ctx.tx_version)),
+        "CheckGenesis" | "CheckMortality" => Some(DynValue::from(format!(
+            "0x{}",
+            hex::encode(ctx.genesis_hash)
+        ))),
         _ => None,
     }
 }
@@ -122,7 +129,7 @@ pub fn encode_extensions(
     extensions: &[SignedExtensionMeta],
     registry: &scales::Registry,
     ctx: &ChainContext,
-    overrides: &[(String, JsonValue)],
+    overrides: &[(String, DynValue)],
 ) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut extra = Vec::new();
     let mut additional = Vec::new();
@@ -258,7 +265,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn test_ctx() -> ChainContext {
         ChainContext {
@@ -274,14 +280,17 @@ mod tests {
         let ctx = test_ctx();
         assert_eq!(
             default_extra("CheckMortality", &ctx),
-            Some(json!({"Immortal": null}))
+            Some(DynValue::obj(&[("Immortal", DynValue::Null)]))
         );
     }
 
     #[test]
     fn default_extra_check_nonce() {
         let ctx = test_ctx();
-        assert_eq!(default_extra("CheckNonce", &ctx), Some(json!(42)));
+        assert_eq!(
+            default_extra("CheckNonce", &ctx),
+            Some(DynValue::from(42u64))
+        );
     }
 
     #[test]
@@ -289,7 +298,7 @@ mod tests {
         let ctx = test_ctx();
         assert_eq!(
             default_extra("ChargeTransactionPayment", &ctx),
-            Some(json!(0))
+            Some(DynValue::from(0u32))
         );
     }
 
@@ -304,14 +313,17 @@ mod tests {
         let ctx = test_ctx();
         assert_eq!(
             default_additional("CheckSpecVersion", &ctx),
-            Some(json!(100))
+            Some(DynValue::from(100u32))
         );
     }
 
     #[test]
     fn default_additional_check_tx_version() {
         let ctx = test_ctx();
-        assert_eq!(default_additional("CheckTxVersion", &ctx), Some(json!(2)));
+        assert_eq!(
+            default_additional("CheckTxVersion", &ctx),
+            Some(DynValue::from(2u32))
+        );
     }
 
     #[test]
@@ -320,7 +332,7 @@ mod tests {
         let expected = format!("0x{}", hex::encode([0xab; 32]));
         assert_eq!(
             default_additional("CheckGenesis", &ctx),
-            Some(json!(expected))
+            Some(DynValue::from(expected))
         );
     }
 
@@ -332,13 +344,16 @@ mod tests {
 
     #[test]
     fn find_override_present() {
-        let overrides = vec![("CheckNonce".to_string(), json!(99))];
-        assert_eq!(find_override(&overrides, "CheckNonce"), Some(json!(99)));
+        let overrides = vec![("CheckNonce".to_string(), DynValue::from(99u32))];
+        assert_eq!(
+            find_override(&overrides, "CheckNonce"),
+            Some(DynValue::from(99u32))
+        );
     }
 
     #[test]
     fn find_override_absent() {
-        let overrides: Vec<(String, JsonValue)> = vec![];
+        let overrides: Vec<(String, DynValue)> = vec![];
         assert_eq!(find_override(&overrides, "CheckNonce"), None);
     }
 }
@@ -348,7 +363,7 @@ async fn build_context(
     chain: &mut (impl Backend + ?Sized),
     meta: &Arc<Metadata>,
     nonce: Option<u64>,
-    extensions: &[(String, JsonValue)],
+    extensions: &[(String, DynValue)],
     account: &[u8],
 ) -> Result<ChainContext> {
     // System::Version constant
@@ -360,22 +375,29 @@ async fn build_context(
         .iter()
         .find(|c| c.name == "Version")
         .ok_or(Error::ConstantNotFound("System_Version".into()))?;
-    let version_json: JsonValue =
-        Value::new(&version_const.value, version_const.ty, &meta.registry)
+    let version = Value::new(&version_const.value, version_const.ty, &meta.registry);
+    // Try direct field access first, fall back to DynValue conversion
+    let (spec_version, tx_version) = if let (Some(sv), Some(tv)) = (
+        version.field("spec_version").and_then(|v| v.as_u32()),
+        version
+            .field("transaction_version")
+            .and_then(|v| v.as_u32()),
+    ) {
+        (sv, tv)
+    } else {
+        let dyn_val: DynValue = version
             .try_into()
             .map_err(|_| Error::Mapping("failed to decode System::Version".into()))?;
-    let obj = version_json
-        .as_object()
-        .ok_or(Error::ConstantNotFound("System_Version".into()))?;
-
-    let spec_version = obj
-        .get("spec_version")
-        .and_then(|v| v.as_u64())
-        .ok_or(Error::Mapping("spec_version not found".into()))? as u32;
-    let tx_version = obj
-        .get("transaction_version")
-        .and_then(|v| v.as_u64())
-        .ok_or(Error::Mapping("transaction_version not found".into()))? as u32;
+        let sv = dyn_val
+            .get("spec_version")
+            .and_then(|v| v.as_u64())
+            .ok_or(Error::Mapping("spec_version not found".into()))? as u32;
+        let tv = dyn_val
+            .get("transaction_version")
+            .and_then(|v| v.as_u64())
+            .ok_or(Error::Mapping("transaction_version not found".into()))? as u32;
+        (sv, tv)
+    };
 
     // Genesis hash
     let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
@@ -399,7 +421,7 @@ async fn resolve_nonce(
     chain: &mut (impl Backend + ?Sized),
     meta: &Arc<Metadata>,
     nonce: Option<u64>,
-    extensions: &[(String, JsonValue)],
+    extensions: &[(String, DynValue)],
     account: &[u8],
 ) -> Result<u64> {
     if let Some(nonce) = nonce {
@@ -428,12 +450,11 @@ async fn resolve_nonce(
             {
                 return Ok(n);
             }
-            let json_val: JsonValue = value
+            let dyn_val: DynValue = value
                 .try_into()
                 .map_err(|_| Error::Mapping("failed to decode account info".into()))?;
-            json_val
-                .as_object()
-                .and_then(|o| o.get("nonce"))
+            dyn_val
+                .get("nonce")
                 .and_then(|v| v.as_u64())
                 .ok_or(Error::Mapping("nonce not found in account info".into()))
         }
