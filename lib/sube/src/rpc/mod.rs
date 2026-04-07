@@ -257,6 +257,7 @@ impl core::fmt::Display for JsonRpcError {
 pub type RpcResult<T> = Result<T, JsonRpcError>;
 
 /// Helper: extract result as a JSON string value (strips quotes).
+#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 pub(crate) fn result_as_str(result: &str) -> Option<&str> {
     let trimmed = result.trim();
     if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
@@ -367,6 +368,7 @@ mod tests {
         assert!(IncomingMessage::parse("not json at all").is_none());
     }
 
+    #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
     #[test]
     fn result_as_str_strips_quotes() {
         assert_eq!(result_as_str("\"hello\""), Some("hello"));
