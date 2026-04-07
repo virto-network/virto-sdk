@@ -15,6 +15,7 @@ log = { workspace = true }
 scales = { path = "../scales", package = "scale-serialization", default-features = false, features = [
 	"serializer",
 	"frame",
+	"text",
 ] }
 serde = { workspace = true }
 serde-json-core = { version = "0.6", default-features = false }
@@ -60,7 +61,6 @@ rand_core = "0.6"
 [features]
 default = []
 test = ["std", "wss", "dep:smol", "dep:rand_core"]
-text = ["scales/text"]
 async = ["scales/async"]
 std = ["scales/std", "log/std", "serde/std", "hex/std"]
 
