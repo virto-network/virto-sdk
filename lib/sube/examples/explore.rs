@@ -1,6 +1,6 @@
 //! Explore storage maps and historical state.
 //!
-//! Run with: cargo run --example explore --features wss,text
+//! Run with: cargo run --example explore --features wss
 
 use sube::{Response, Sube};
 

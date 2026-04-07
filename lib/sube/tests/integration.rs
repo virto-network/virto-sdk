@@ -3,6 +3,8 @@
 //! These tests require network access and are ignored by default.
 //! Run with: cargo test --features test --test integration -- --ignored
 
+#![cfg(feature = "test")]
+
 use sube::{ChainEvent, Response, Sube};
 
 const CHAIN: &str = "wss://kreivo.io";
@@ -35,9 +37,9 @@ fn query_system_account() {
             .expect("queries");
         match response {
             Response::Value(entry, meta) => {
-                let json = entry.to_json(&meta.registry).expect("decodes");
-                assert!(json.get("nonce").is_some(), "has nonce field");
-                assert!(json.get("data").is_some(), "has data field");
+                let text = entry.to_text(&meta.registry).expect("decodes");
+                assert!(text.contains("nonce"), "has nonce field");
+                assert!(text.contains("data"), "has data field");
             }
             other => panic!("expected Value, got {other:?}"),
         }
@@ -55,9 +57,9 @@ fn query_constant() {
             .expect("queries constant");
         match response {
             Response::Value(entry, meta) => {
-                let json = entry.to_json(&meta.registry).expect("decodes");
-                assert!(json.get("spec_name").is_some(), "has spec_name");
-                assert!(json.get("spec_version").is_some(), "has spec_version");
+                let text = entry.to_text(&meta.registry).expect("decodes");
+                assert!(text.contains("spec_name"), "has spec_name");
+                assert!(text.contains("spec_version"), "has spec_version");
             }
             other => panic!("expected Value, got {other:?}"),
         }
@@ -106,8 +108,8 @@ fn one_shot_query() {
             .expect("one-shot query");
         match response {
             Response::Value(entry, meta) => {
-                let json = entry.to_json(&meta.registry).expect("decodes");
-                assert!(json.get("nonce").is_some());
+                let text = entry.to_text(&meta.registry).expect("decodes");
+                assert!(text.contains("nonce"));
             }
             other => panic!("expected Value, got {other:?}"),
         }
@@ -180,8 +182,8 @@ fn query_at_new_block() {
                         .expect("queries at block hash");
                     match response {
                         Response::Value(entry, meta) => {
-                            let json = entry.to_json(&meta.registry).expect("decodes");
-                            assert!(json.get("nonce").is_some(), "has nonce");
+                            let text = entry.to_text(&meta.registry).expect("decodes");
+                            assert!(text.contains("nonce"), "has nonce");
                         }
                         Response::None => {} // account may not exist at this block
                         other => panic!("expected Value or None, got {other:?}"),
@@ -214,14 +216,10 @@ fn decode_block_events() {
 
                     match response {
                         Response::Value(entry, meta) => {
-                            let json = entry.to_json(&meta.registry).expect("decodes events");
-                            let events = json.as_array().expect("events is an array");
-                            assert!(!events.is_empty(), "block {number} has events");
-
-                            // Each event has phase and event fields
-                            let first = &events[0];
-                            assert!(first.get("phase").is_some(), "event has phase");
-                            assert!(first.get("event").is_some(), "event has event body");
+                            let text = entry.to_text(&meta.registry).expect("decodes events");
+                            assert!(!text.is_empty(), "block {number} has events");
+                            assert!(text.contains("phase"), "event has phase");
+                            assert!(text.contains("event"), "event has event body");
                         }
                         other => panic!("expected Value, got {other:?}"),
                     }
@@ -272,8 +270,8 @@ fn query_after_finalization() {
             .expect("queries after finalization");
         match response {
             Response::Value(entry, meta) => {
-                let json = entry.to_json(&meta.registry).expect("decodes");
-                assert!(json.get("nonce").is_some(), "has nonce");
+                let text = entry.to_text(&meta.registry).expect("decodes");
+                assert!(text.contains("nonce"), "has nonce");
             }
             other => panic!("expected Value, got {other:?}"),
         }

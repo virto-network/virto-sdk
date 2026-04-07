@@ -1,6 +1,6 @@
 //! Query on-chain storage using sube.
 //!
-//! Run with: cargo run --example query --features wss,text
+//! Run with: cargo run --example query --features wss
 
 use sube::Sube;
 

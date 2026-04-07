@@ -1,6 +1,6 @@
 //! Benchmarks for metadata parsing and SCALE decoding.
 //!
-//! Run with: cargo bench --features json,text
+//! Run with: cargo bench
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -48,10 +48,6 @@ fn main() {
         .unwrap();
     let entry = StorageEntry::new(version.value.clone(), version.ty);
 
-    bench("constant_decode_json", || {
-        let _ = black_box(entry.to_json(&meta.registry).unwrap());
-    });
-
     bench("constant_decode_text", || {
         let _ = black_box(entry.to_text(&meta.registry).unwrap());
     });
@@ -86,16 +82,19 @@ fn main() {
                         fields.len() * std::mem::size_of::<sube::scales::registry::Field>();
                 }
                 sube::scales::TypeDef::Variant(vdef) => {
-                    string_bytes += vdef.name.len();
-                    for v in &vdef.variants {
-                        string_bytes += v.name.len();
-                        match &v.fields {
+                    string_bytes += vdef.name().len();
+                    let variants = vdef.variants();
+                    let variant_count = variants.len();
+                    for v in variants {
+                        string_bytes += v.name().len();
+                        match v.fields() {
                             sube::scales::registry::Fields::Struct(fields) => {
+                                let n = fields.len();
                                 for f in fields {
                                     string_bytes += f.name.len();
                                 }
-                                vec_overhead += fields.len()
-                                    * std::mem::size_of::<sube::scales::registry::Field>();
+                                vec_overhead +=
+                                    n * std::mem::size_of::<sube::scales::registry::Field>();
                             }
                             sube::scales::registry::Fields::Tuple(ids) => {
                                 vec_overhead += ids.len() * 4;
@@ -103,8 +102,8 @@ fn main() {
                             _ => {}
                         }
                     }
-                    vec_overhead += vdef.variants.len()
-                        * std::mem::size_of::<sube::scales::registry::Variant>();
+                    vec_overhead +=
+                        variant_count * std::mem::size_of::<sube::scales::registry::Variant>();
                 }
                 sube::scales::TypeDef::Tuple(ids) | sube::scales::TypeDef::StructTuple(ids) => {
                     vec_overhead += ids.len() * 4;
@@ -173,16 +172,19 @@ fn main() {
                         fields.len() * std::mem::size_of::<sube::scales::registry::Field>();
                 }
                 sube::scales::TypeDef::Variant(vdef) => {
-                    f_string_bytes += vdef.name.len();
-                    for v in &vdef.variants {
-                        f_string_bytes += v.name.len();
-                        match &v.fields {
+                    f_string_bytes += vdef.name().len();
+                    let variants = vdef.variants();
+                    let variant_count = variants.len();
+                    for v in variants {
+                        f_string_bytes += v.name().len();
+                        match v.fields() {
                             sube::scales::registry::Fields::Struct(fields) => {
+                                let n = fields.len();
                                 for f in fields {
                                     f_string_bytes += f.name.len();
                                 }
-                                f_vec_overhead += fields.len()
-                                    * std::mem::size_of::<sube::scales::registry::Field>();
+                                f_vec_overhead +=
+                                    n * std::mem::size_of::<sube::scales::registry::Field>();
                             }
                             sube::scales::registry::Fields::Tuple(ids) => {
                                 f_vec_overhead += ids.len() * 4;
@@ -190,8 +192,8 @@ fn main() {
                             _ => {}
                         }
                     }
-                    f_vec_overhead += vdef.variants.len()
-                        * std::mem::size_of::<sube::scales::registry::Variant>();
+                    f_vec_overhead +=
+                        variant_count * std::mem::size_of::<sube::scales::registry::Variant>();
                 }
                 sube::scales::TypeDef::Tuple(ids) | sube::scales::TypeDef::StructTuple(ids) => {
                     f_vec_overhead += ids.len() * 4;

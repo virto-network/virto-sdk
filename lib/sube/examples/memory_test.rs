@@ -1,6 +1,6 @@
 //! Memory usage test for metadata parsing.
 //!
-//! Run with: cargo run --example memory_test --features json,text --release
+//! Run with: cargo run --example memory_test --release
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

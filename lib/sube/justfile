@@ -1,17 +1,17 @@
 default: check lint test
 
 check:
-    cargo check --features wss,json,text
-    cargo check --features smoldot-std,json,text
-    cargo check --no-default-features --features ws-edge,json,text
+    cargo check --features wss
+    cargo check --features smoldot-std
+    cargo check --no-default-features --features ws-edge
 
 lint:
-    cargo clippy --features wss,json,text -- -D warnings
-    cargo clippy --no-default-features --features ws-edge,json,text -- -D warnings
-    cargo clippy --features smoldot-std,json,text -- -D warnings
+    cargo clippy --features wss -- -D warnings
+    cargo clippy --no-default-features --features ws-edge -- -D warnings
+    cargo clippy --features smoldot-std -- -D warnings
 
 test:
-    cargo test --features wss,json,text
+    cargo test --features wss
 
 test-integration:
     cargo test --features test --test integration -- --ignored
@@ -19,24 +19,20 @@ test-integration:
 # no_std compatibility checks — proves no hidden std dependencies
 check-no-std:
     cargo check --no-default-features
-    cargo check --no-default-features --features json,text
-    cargo check --no-default-features --features ws-edge,json,text
+    cargo check --no-default-features --features ws-edge
 
 check-thumbv7em:
     cargo check --target thumbv7em-none-eabihf --no-default-features
-    cargo check --target thumbv7em-none-eabihf --no-default-features --features json,text
 
 check-riscv32:
     cargo check --target riscv32imac-unknown-none-elf --no-default-features
-    cargo check --target riscv32imac-unknown-none-elf --no-default-features --features json,text
 
 check-wasm:
     cargo check --target wasm32-unknown-unknown --no-default-features
-    cargo check --target wasm32-unknown-unknown --no-default-features --features json,text
 
 check-xtensa:
     source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features -Zbuild-std=core,alloc
-    source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features --features ws-edge,json,text -Zbuild-std=core,alloc
+    source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features --features ws-edge -Zbuild-std=core,alloc
 
 check-targets: check-no-std check-thumbv7em check-riscv32 check-wasm check-xtensa
 

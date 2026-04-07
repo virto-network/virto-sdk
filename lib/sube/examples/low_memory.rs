@@ -1,7 +1,7 @@
 //! End-to-end low-memory demo — connect, fetch filtered metadata,
 //! query storage, watch blocks, all with memory tracking.
 //!
-//! Run: cargo run --example low_memory --features wss,text --release
+//! Run: cargo run --example low_memory --features wss --release
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};

@@ -8,7 +8,7 @@ name = "sube"
 path = "src/main.rs"
 
 [dependencies]
-sube = { path = "..", features = ["std", "wss", "text", "json"] }
+sube = { path = "..", features = ["std", "wss"] }
 clap = { version = "4", features = ["derive"] }
 smol = "2"
 ratatui = "0.30"
