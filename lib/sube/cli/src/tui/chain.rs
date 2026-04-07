@@ -1,7 +1,7 @@
 use std::sync::mpsc;
 use std::thread;
 
-use super::format::{format_events_detail, format_response, is_interesting_event};
+use super::format::format_response;
 use super::BlockInfo;
 
 // --- Messages ---
@@ -23,13 +23,22 @@ pub enum FromChain {
 
 // --- Chain task ---
 
+/// Single-owner wrapper to move a `Sube` handle into a worker thread.
+/// Safe because ownership is transferred once and the original thread
+/// never touches the value again; the worker is the sole owner.
+struct SendSube(sube::Sube);
+unsafe impl Send for SendSube {}
+
 pub fn spawn(
-    mut chain: sube::Sube,
+    chain: sube::Sube,
     from_ui: mpsc::Receiver<ToChain>,
     to_ui: smol::channel::Sender<FromChain>,
 ) {
+    let chain = SendSube(chain);
     thread::spawn(move || {
+        let mut chain = chain;
         smol::block_on(async {
+            let chain = &mut chain.0;
             loop {
                 while let Ok(cmd) = from_ui.try_recv() {
                     match cmd {
@@ -62,11 +71,7 @@ pub fn spawn(
                         ToChain::FetchBlockDetail(hash) => {
                             let events =
                                 match chain.query_at_hash("system/events", &hash).await {
-                                    Ok(resp) => match resp.to_json() {
-                                        Ok(Some(json)) => format_events_detail(&json),
-                                        Ok(None) => "(no events)".into(),
-                                        Err(e) => format!("decode error: {e}"),
-                                    },
+                                    Ok(resp) => format_response(resp),
                                     Err(e) => format!("error: {e}"),
                                 };
                             let _ = to_ui.send(FromChain::BlockDetail(hash, events)).await;
@@ -78,34 +83,25 @@ pub fn spawn(
                     Ok(sube::ChainEvent::NewBlock { hash, .. }) => {
                         let number =
                             chain.header(&hash).await.map(|h| h.number).unwrap_or(0);
-                        let (event_count, interesting) =
+                        // Count events by rough text-scan heuristic; precise
+                        // introspection would need to walk scales::Value.
+                        let (event_count, has_extrinsics) =
                             match chain.query_at_hash("system/events", &hash).await {
                                 Ok(sube::Response::Value(entry, meta)) => {
-                                    match entry.to_json(&meta.registry) {
-                                        Ok(json) => {
-                                            let events = json.as_array();
-                                            let total =
-                                                events.map(|a| a.len()).unwrap_or(0);
-                                            let interesting = events
-                                                .map(|arr| {
-                                                    arr.iter()
-                                                        .filter(|e| is_interesting_event(e))
-                                                        .count()
-                                                })
-                                                .unwrap_or(0);
-                                            (total, interesting)
-                                        }
-                                        Err(_) => (0, 0),
-                                    }
+                                    let text = entry.to_text(&meta.registry).unwrap_or_default();
+                                    let total = text.matches("phase").count();
+                                    let interesting =
+                                        text.matches("ApplyExtrinsic").count() > 0;
+                                    (total, interesting)
                                 }
-                                _ => (0, 0),
+                                _ => (0, false),
                             };
                         let _ = to_ui
                             .send(FromChain::Block(BlockInfo {
                                 number,
                                 hash,
                                 finalized: false,
-                                has_extrinsics: interesting > 0,
+                                has_extrinsics,
                                 event_count,
                             }))
                             .await;

@@ -74,7 +74,7 @@ enum Focus {
 
 struct App {
     chain_url: String,
-    meta: sube::Arc<Metadata>,
+    meta: sube::Rc<Metadata>,
 
     all_pallets: Vec<String>,
     pallets: Vec<String>,
@@ -160,7 +160,7 @@ impl App {
             .as_ref()
             .and_then(|s| s.entries.iter().find(|e| e.name == item_name));
         if let Some(entry) = entry {
-            let reg = sube::Arc::new(self.meta.registry.clone());
+            let reg = sube::Rc::new(self.meta.registry.clone());
             match &entry.ty {
                 StorageEntryType::Plain(_) => {
                     self.storage_form = Some(FormState::new(vec![], reg));
@@ -219,7 +219,7 @@ impl App {
                     };
                     self.call_form = Some(FormState::new(
                         fields,
-                        sube::Arc::new(self.meta.registry.clone()),
+                        sube::Rc::new(self.meta.registry.clone()),
                     ));
                 }
             }

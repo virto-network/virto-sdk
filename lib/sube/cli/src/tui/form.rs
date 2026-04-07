@@ -198,11 +198,11 @@ pub struct FormState {
     pub fields: Vec<Field>,
     /// Flat cursor into the visible field list.
     pub cursor: usize,
-    registry: sube::Arc<sube::Registry>,
+    registry: sube::Rc<sube::Registry>,
 }
 
 impl FormState {
-    pub fn new(fields: Vec<Field>, registry: sube::Arc<sube::Registry>) -> Self {
+    pub fn new(fields: Vec<Field>, registry: sube::Rc<sube::Registry>) -> Self {
         FormState {
             fields,
             cursor: 0,
