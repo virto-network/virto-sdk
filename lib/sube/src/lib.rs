@@ -49,12 +49,12 @@ chain.call("balances/transfer_keep_alive")
 #[macro_use]
 extern crate alloc;
 
-pub use alloc::sync::Arc;
+pub use alloc::rc::Rc;
 pub use scales::{self, Registry, Value};
 pub use value::DynValue;
 
 #[cfg(feature = "ws-edge")]
-pub use builder::{connect_edge, EdgeNet};
+pub use builder::{connect_edge, EdgeNet, EdgeSube};
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 pub use extrinsic::{EncodeCall, Text};
 pub use meta::Metadata;
@@ -103,7 +103,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 pub(crate) async fn query(
     chain: &mut (impl Backend + ?Sized),
-    meta: &Arc<Metadata>,
+    meta: &Rc<Metadata>,
     path: &str,
     block: Option<u32>,
 ) -> Result<Response> {
@@ -122,7 +122,7 @@ pub(crate) async fn query(
 
         return Ok(Response::Value(
             StorageEntry::new(const_meta.value.clone(), const_meta.ty),
-            Arc::clone(meta),
+            Rc::clone(meta),
         ));
     }
 
@@ -134,7 +134,7 @@ pub(crate) async fn query(
 
             let value = match res {
                 None => Response::None,
-                Some(res) => Response::Value(StorageEntry::new(res, key_res.ty), Arc::clone(meta)),
+                Some(res) => Response::Value(StorageEntry::new(res, key_res.ty), Rc::clone(meta)),
             };
 
             return Ok(value);
@@ -171,7 +171,7 @@ pub(crate) async fn query(
             })
             .collect::<Vec<_>>();
 
-        Ok(Response::ValueSet(value, Arc::clone(meta)))
+        Ok(Response::ValueSet(value, Rc::clone(meta)))
     } else {
         Err(Error::ChainUnavailable)
     }
@@ -228,12 +228,9 @@ impl StorageEntry {
 pub enum Response {
     Void,
     None,
-    Value(StorageEntry, Arc<Metadata>),
-    ValueSet(
-        Vec<(Vec<StorageEntry>, Option<StorageEntry>)>,
-        Arc<Metadata>,
-    ),
-    Meta(Arc<Metadata>),
+    Value(StorageEntry, Rc<Metadata>),
+    ValueSet(Vec<(Vec<StorageEntry>, Option<StorageEntry>)>, Rc<Metadata>),
+    Meta(Rc<Metadata>),
 }
 
 impl Response {
@@ -258,7 +255,7 @@ impl Response {
     }
 
     /// Extract the single storage entry, or error if not a `Value` response.
-    pub fn into_value(self) -> Result<(StorageEntry, Arc<Metadata>)> {
+    pub fn into_value(self) -> Result<(StorageEntry, Rc<Metadata>)> {
         match self {
             Response::Value(entry, meta) => Ok((entry, meta)),
             Response::None => Err(Error::StorageKeyNotFound),

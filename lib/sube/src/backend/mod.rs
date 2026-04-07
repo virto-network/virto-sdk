@@ -1,7 +1,7 @@
 use core::fmt::Write;
 use core::time::Duration;
 
-use alloc::sync::Arc;
+use alloc::rc::Rc;
 use heapless::index_map::FnvIndexMap as Map;
 use no_std_async::Mutex;
 
@@ -121,13 +121,13 @@ impl crate::rpc::chainhead::ChainSession for AnyBackend {
 
 // --- Global metadata cache ---
 
-static META_CACHE: Mutex<Option<Map<CacheKey, Arc<Metadata>, 16>>> = Mutex::new(None);
+static META_CACHE: Mutex<Option<Map<CacheKey, Rc<Metadata>, 16>>> = Mutex::new(None);
 
 pub(crate) async fn get_metadata(
     backend: &mut AnyBackend,
     url: &Url,
     preloaded: Option<Metadata>,
-) -> SubeResult<Arc<Metadata>> {
+) -> SubeResult<Rc<Metadata>> {
     let key = base_key(url).map_err(|_| Error::BadInput)?;
     get_or_fetch(key, backend, preloaded).await
 }
@@ -137,7 +137,7 @@ pub(crate) async fn get_metadata_by_key(
     backend: &mut AnyBackend,
     cache_key: &str,
     preloaded: Option<Metadata>,
-) -> SubeResult<Arc<Metadata>> {
+) -> SubeResult<Rc<Metadata>> {
     let key: CacheKey = cache_key.try_into().map_err(|_| Error::BadInput)?;
     get_or_fetch(key, backend, preloaded).await
 }
@@ -146,21 +146,21 @@ async fn get_or_fetch(
     key: CacheKey,
     backend: &mut AnyBackend,
     preloaded: Option<Metadata>,
-) -> SubeResult<Arc<Metadata>> {
+) -> SubeResult<Rc<Metadata>> {
     let mut cache = META_CACHE.lock().await;
     let map = cache.get_or_insert_with(Map::new);
 
     if let Some(meta) = map.get(&key) {
-        return Ok(Arc::clone(meta));
+        return Ok(Rc::clone(meta));
     }
 
     let meta = match preloaded {
         Some(m) => m,
         None => backend.metadata().await.map_err(|_| Error::BadMetadata)?,
     };
-    let meta = Arc::new(meta);
+    let meta = Rc::new(meta);
 
-    map.insert(key, Arc::clone(&meta))
+    map.insert(key, Rc::clone(&meta))
         .map_err(|_| Error::BadMetadata)?;
 
     Ok(meta)

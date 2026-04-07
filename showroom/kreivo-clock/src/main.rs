@@ -1,9 +1,9 @@
-//! Kreivo Clock — live blockchain data on your wrist
+//! Kreivo Clock — sube on a watch.
 //!
-//! Showcases sube on an ESP32-S3 (T-Watch S3).
-//! Metadata is pushed from a phone browser via HTTP — the device
-//! serves a config page that fetches metadata from the chain and
-//! uploads it to the watch.
+//! Connects to a Substrate chain over WebSocket+TLS, watches blocks,
+//! and queries collator activity. Everything device-specific (display,
+//! battery, WiFi, HTTP config server, metadata persistence) lives in
+//! the library — `main.rs` is the sube showcase.
 //!
 //! Flash: espflash flash -p /dev/ttyACM0 -M target/xtensa-esp32s3-none-elf/release/kreivo-clock
 
@@ -13,13 +13,14 @@
 extern crate alloc;
 extern crate tinyrlibc;
 
+use alloc::rc::Rc;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use sube::ChainEvent;
 
-use kreivo_clock::device::event::{Status, UiEvent};
-use kreivo_clock::http;
+use kreivo_clock::device::event::Status;
+use kreivo_clock::{metadata, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -40,78 +41,12 @@ async fn main(spawner: Spawner) -> ! {
     let mut rt = kreivo_clock::start(spawner).await;
     NET.init(rt.stack);
 
-    spawner.spawn(http::http_task(rt.stack)).ok();
-    if let Some(cfg) = rt.stack.config_v4() {
-        let ip = cfg.address.address();
-        log::info!("config: http://{ip}/");
-        let mut url = heapless::String::<32>::new();
-        core::fmt::Write::write_fmt(&mut url, format_args!("http://{ip}/")).ok();
-        rt.events.enqueue(UiEvent::ConfigUrl(url)).ok();
-    }
-
-    let meta = if let Some(raw) = kreivo_clock::flash::load() {
-        log::info!("decoding flash metadata ({} bytes)...", raw.len());
-        match sube::metadata::from_bytes_filtered(&raw, &["CollatorSelection"]) {
-            Ok(meta) => {
-                log::info!("flash metadata: {} pallets", meta.pallets.len());
-                http::PALLET_COUNT.store(
-                    meta.pallets.len() as u8,
-                    core::sync::atomic::Ordering::Relaxed,
-                );
-                http::META_SAVED.store(true, core::sync::atomic::Ordering::Relaxed);
-                Some(meta)
-            }
-            Err(e) => {
-                log::warn!("flash metadata invalid: {:?}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    let meta = if let Some(meta) = meta {
-        meta
-    } else {
-        // Wait for metadata push via HTTP
-        log::info!("waiting for metadata via http...");
-        loop {
-            if let Some(raw) = http::METADATA_SLOT.take() {
-                log::info!("decoding {} bytes of metadata...", raw.len());
-                match sube::metadata::from_bytes_filtered(&raw, &["CollatorSelection"]) {
-                    Ok(meta) => {
-                        // Save to flash for next boot
-                        if let Err(e) = kreivo_clock::flash::save(&raw) {
-                            log::warn!("flash save failed: {e}");
-                        } else {
-                            http::META_SAVED.store(true, core::sync::atomic::Ordering::Relaxed);
-                        }
-
-                        log::info!("metadata decoded ({} pallets)", meta.pallets.len());
-                        http::PALLET_COUNT.store(
-                            meta.pallets.len() as u8,
-                            core::sync::atomic::Ordering::Relaxed,
-                        );
-                        break meta;
-                    }
-                    Err(e) => {
-                        log::error!("metadata decode failed: {:?}", e);
-                        rt.events
-                            .enqueue(UiEvent::Status(Status::Error("bad metadata")))
-                            .ok();
-                    }
-                }
-            }
-            Timer::after(Duration::from_millis(200)).await;
-        }
-    };
-    let meta = alloc::sync::Arc::new(meta);
+    // Load metadata: from flash if present, otherwise wait for an HTTP push.
+    let meta = Rc::new(metadata::load_or_fetch(&mut rt).await);
 
     let mut retries = 0u8;
     loop {
-        rt.events
-            .enqueue(UiEvent::Status(Status::Dim("connecting...")))
-            .ok();
+        rt.status(Status::Dim("connecting..."));
         match watch_chain(&mut rt, &meta).await {
             Ok(()) => retries = 0,
             Err(e) => {
@@ -121,10 +56,8 @@ async fn main(spawner: Spawner) -> ! {
                     log::error!("too many failures, rebooting");
                     esp_hal::system::software_reset();
                 }
-                rt.events.enqueue(UiEvent::Live(false)).ok();
-                rt.events
-                    .enqueue(UiEvent::Status(Status::Error("reconnecting...")))
-                    .ok();
+                rt.set_live(false);
+                rt.status(Status::Error("reconnecting..."));
                 Timer::after(Duration::from_secs(3)).await;
             }
         }
@@ -133,12 +66,7 @@ async fn main(spawner: Spawner) -> ! {
 
 // ── sube: chain watcher ────────────────────────────────────────────────
 
-async fn watch_chain(
-    rt: &mut kreivo_clock::Runtime,
-    meta: &alloc::sync::Arc<sube::Metadata>,
-) -> Result<(), &'static str> {
-    let tx = &mut rt.events;
-
+async fn watch_chain(rt: &mut Runtime, meta: &Rc<sube::Metadata>) -> Result<(), &'static str> {
     let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
     let mut chain = sube::connect_edge("wss://kreivo.io", &NET, rng, &[])
         .await
@@ -146,56 +74,34 @@ async fn watch_chain(
             log::error!("connect: {e}");
             "connect failed"
         })?;
-    log::info!("heap after connect: {} free", esp_alloc::HEAP.free());
+    *chain.metadata_mut() = Rc::clone(meta);
 
-    *chain.metadata_mut() = alloc::sync::Arc::clone(meta);
-
-    tx.enqueue(UiEvent::Live(true)).ok();
-    tx.enqueue(UiEvent::Status(Status::Good(""))).ok();
+    rt.set_live(true);
+    rt.status(Status::Good(""));
 
     let mut block_count = 0u32;
-
     loop {
-        // Check for hot-swapped metadata from HTTP
-        if let Some(raw) = http::METADATA_SLOT.take() {
-            if let Ok(meta) = sube::metadata::from_bytes_filtered(&raw, &["CollatorSelection"]) {
-                log::info!("hot-swapped metadata ({} pallets)", meta.pallets.len());
-                *chain.metadata_mut() = alloc::sync::Arc::new(meta);
-            }
-            drop(raw);
+        // Hot-swap metadata if a new push arrived
+        if let Some(new_meta) = metadata::take_pushed() {
+            log::info!("hot-swapped metadata ({} pallets)", new_meta.pallets.len());
+            *chain.metadata_mut() = Rc::new(new_meta);
         }
 
         match chain.next_event().await {
             Ok(ChainEvent::NewBlock { hash, .. }) => {
                 block_count += 1;
-                let screen = kreivo_clock::SCREEN_ON.load(core::sync::atomic::Ordering::Relaxed);
-
-                // Skip all RPC queries when screen is off — saves bandwidth + CPU.
-                // Chain events still arrive (keeping the subscription alive).
-                if !screen {
+                // Skip queries when screen is off — saves bandwidth + CPU.
+                if !rt.screen_on() {
                     continue;
                 }
 
                 if let Ok(header) = chain.header(&hash).await {
-                    let num = header.number as u32;
-                    tx.enqueue(UiEvent::Block(num)).ok();
-                    http::BLOCK_NUMBER.store(num, core::sync::atomic::Ordering::Relaxed);
+                    rt.set_block(header.number as u32);
                 }
 
                 let has_meta = !chain.metadata().pallets.is_empty();
                 if has_meta && block_count % 5 == 1 {
-                    let mut blocks = [0u32; 6];
-                    for (i, addr) in COLLATORS.iter().enumerate() {
-                        let path = alloc::format!("collator-selection/last-authored-block/{addr}");
-                        if let Ok((entry, _)) = chain
-                            .query_at_hash(&path, &hash)
-                            .await
-                            .and_then(|r| r.into_value())
-                        {
-                            blocks[i] = entry.as_u32().unwrap_or(0);
-                        }
-                    }
-                    tx.enqueue(UiEvent::Collators(blocks)).ok();
+                    rt.set_collators(query_collators(&mut chain, &hash).await);
                 }
             }
             Ok(_) => {}
@@ -205,4 +111,23 @@ async fn watch_chain(
             }
         }
     }
+}
+
+/// Query each collator's last-authored-block via human-readable storage path.
+async fn query_collators(
+    chain: &mut sube::EdgeSube,
+    hash: &str,
+) -> [u32; 6] {
+    let mut blocks = [0u32; 6];
+    for (i, addr) in COLLATORS.iter().enumerate() {
+        let path = alloc::format!("collator-selection/last-authored-block/{addr}");
+        if let Ok((entry, _)) = chain
+            .query_at_hash(&path, hash)
+            .await
+            .and_then(|r| r.into_value())
+        {
+            blocks[i] = entry.as_u32().unwrap_or(0);
+        }
+    }
+    blocks
 }

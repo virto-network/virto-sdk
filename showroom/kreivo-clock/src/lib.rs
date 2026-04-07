@@ -4,6 +4,7 @@ extern crate alloc;
 pub mod device;
 pub mod flash;
 pub mod http;
+pub mod metadata;
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -39,8 +40,35 @@ pub struct Runtime {
     pub stack: embassy_net::Stack<'static>,
     pub events: Producer<'static, UiEvent, 16>,
     /// Pre-allocated registry for metadata loading.
-    /// Allocated early (before WiFi) from clean, unfragmented heap.
     pub registry: sube::Registry,
+}
+
+impl Runtime {
+    /// Push a status line to the watch face.
+    pub fn status(&mut self, status: device::event::Status) {
+        self.events.enqueue(UiEvent::Status(status)).ok();
+    }
+
+    /// Update the live indicator (chain connected ↔ disconnected).
+    pub fn set_live(&mut self, live: bool) {
+        self.events.enqueue(UiEvent::Live(live)).ok();
+    }
+
+    /// Push a new block number to the display.
+    pub fn set_block(&mut self, number: u32) {
+        self.events.enqueue(UiEvent::Block(number)).ok();
+        http::BLOCK_NUMBER.store(number, Ordering::Relaxed);
+    }
+
+    /// Push collator block numbers to the grid.
+    pub fn set_collators(&mut self, blocks: [u32; 6]) {
+        self.events.enqueue(UiEvent::Collators(blocks)).ok();
+    }
+
+    /// True when the screen is on (chain loop should query storage).
+    pub fn screen_on(&self) -> bool {
+        SCREEN_ON.load(Ordering::Relaxed)
+    }
 }
 
 /// Initialize hardware, start background tasks (WiFi, PMU), and UI core.
@@ -81,6 +109,17 @@ pub async fn start(spawner: Spawner) -> Runtime {
         Timer::after(Duration::from_millis(200)).await;
     }
     log::info!("IP: {:?}", system.stack.config_v4().map(|c| c.address));
+
+    // Start the HTTP config server and announce its URL on the watch face
+    spawner.spawn(http::http_task(system.stack)).ok();
+    let mut producer = producer;
+    if let Some(cfg) = system.stack.config_v4() {
+        let ip = cfg.address.address();
+        log::info!("config: http://{ip}/");
+        let mut url = heapless::String::<32>::new();
+        let _ = core::fmt::Write::write_fmt(&mut url, format_args!("http://{ip}/"));
+        producer.enqueue(UiEvent::ConfigUrl(url)).ok();
+    }
 
     Runtime {
         stack: system.stack,

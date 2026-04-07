@@ -1,4 +1,4 @@
-use alloc::sync::Arc;
+use alloc::rc::Rc;
 
 use crate::hasher::hash;
 use crate::metadata::{self as meta, Hasher, SignedExtensionMeta, TypeId};
@@ -168,7 +168,7 @@ pub fn encode_extensions(
 /// Build and submit a signed extrinsic using metadata-driven extensions.
 pub async fn submit<V>(
     chain: &mut (impl Backend + ?Sized),
-    meta: &Arc<Metadata>,
+    meta: &Rc<Metadata>,
     path: &str,
     tx_data: &ExtrinsicBody<V>,
     signer: &(impl crate::Signer + ?Sized),
@@ -361,7 +361,7 @@ mod tests {
 /// Fetch spec/tx version, genesis hash, and account nonce.
 async fn build_context(
     chain: &mut (impl Backend + ?Sized),
-    meta: &Arc<Metadata>,
+    meta: &Rc<Metadata>,
     nonce: Option<u64>,
     extensions: &[(String, DynValue)],
     account: &[u8],
@@ -419,7 +419,7 @@ async fn build_context(
 /// Resolve nonce from: explicit field, extension override, or on-chain query.
 async fn resolve_nonce(
     chain: &mut (impl Backend + ?Sized),
-    meta: &Arc<Metadata>,
+    meta: &Rc<Metadata>,
     nonce: Option<u64>,
     extensions: &[(String, DynValue)],
     account: &[u8],

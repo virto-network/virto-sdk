@@ -1,7 +1,7 @@
 use core::future::{Future, IntoFuture};
 use core::pin::Pin;
 
-use alloc::sync::Arc;
+use alloc::rc::Rc;
 
 use crate::extrinsic::{EncodeCall, ExtrinsicBody};
 use crate::prelude::*;
@@ -165,7 +165,7 @@ impl IntoFuture for SubeBuilder {
             let meta = get_metadata(&mut backend, &url, self.metadata).await?;
 
             Ok(match path {
-                "/" | "" | "_meta" | "_meta/registry" => Response::Meta(Arc::clone(&meta)),
+                "/" | "" | "_meta" | "_meta/registry" => Response::Meta(Rc::clone(&meta)),
                 _ => crate::query(&mut backend, &meta, path, block).await?,
             })
         })
@@ -187,7 +187,7 @@ impl IntoFuture for SubeBuilder {
 /// // From pre-built backend (embedded, returns Sube<ChainHead<R>>)
 /// let chain_head = ChainHead::new(ws).await?;
 /// let meta = chain_head.metadata_filtered(&["CollatorSelection"]).await?;
-/// let mut chain = Sube::from_parts(chain_head, Arc::new(meta));
+/// let mut chain = Sube::from_parts(chain_head, Rc::new(meta));
 ///
 /// // Both support the same query API:
 /// let r = chain.query("system/account/0x1234").await?;
@@ -198,7 +198,7 @@ impl IntoFuture for SubeBuilder {
 #[cfg(any(feature = "ws", feature = "smoldot"))]
 pub struct Sube<B = AnyBackend> {
     backend: B,
-    metadata: Arc<Metadata>,
+    metadata: Rc<Metadata>,
     url: String,
     timeout: core::time::Duration,
 }
@@ -206,7 +206,7 @@ pub struct Sube<B = AnyBackend> {
 #[cfg(not(any(feature = "ws", feature = "smoldot")))]
 pub struct Sube<B> {
     backend: B,
-    metadata: Arc<Metadata>,
+    metadata: Rc<Metadata>,
 }
 
 // --- Generic methods (any Backend) ---
@@ -221,9 +221,9 @@ impl<B: Backend> Sube<B> {
     /// let ws = edge::Backend::connect(session, "kreivo.io", "/").await?;
     /// let mut chain_head = ChainHead::new(ws).await?;
     /// let meta = chain_head.metadata_filtered(&["CollatorSelection"]).await?;
-    /// let mut chain = Sube::from_parts(chain_head, Arc::new(meta));
+    /// let mut chain = Sube::from_parts(chain_head, Rc::new(meta));
     /// ```
-    pub fn from_parts(backend: B, metadata: Arc<Metadata>) -> Self {
+    pub fn from_parts(backend: B, metadata: Rc<Metadata>) -> Self {
         Sube {
             backend,
             metadata,
@@ -235,7 +235,7 @@ impl<B: Backend> Sube<B> {
     }
 
     /// Mutable access to the metadata (for replacing it after construction).
-    pub fn metadata_mut(&mut self) -> &mut Arc<Metadata> {
+    pub fn metadata_mut(&mut self) -> &mut Rc<Metadata> {
         &mut self.metadata
     }
 
@@ -251,7 +251,7 @@ impl<B: Backend> Sube<B> {
     pub async fn query(&mut self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
-            "_meta" | "_meta/registry" => Ok(Response::Meta(Arc::clone(&self.metadata))),
+            "_meta" | "_meta/registry" => Ok(Response::Meta(Rc::clone(&self.metadata))),
             _ => crate::query(&mut self.backend, &self.metadata, path, None).await,
         }
     }
@@ -283,8 +283,8 @@ impl<B: Backend> Sube<B> {
     }
 
     /// Get a shared reference-counted handle to the metadata.
-    pub fn metadata_arc(&self) -> Arc<Metadata> {
-        Arc::clone(&self.metadata)
+    pub fn metadata_arc(&self) -> Rc<Metadata> {
+        Rc::clone(&self.metadata)
     }
 
     /// Access the type registry.
@@ -373,7 +373,7 @@ impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
     pub async fn query_at_hash(&mut self, path: &str, block_hash: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         match path {
-            "_meta" | "_meta/registry" => Ok(Response::Meta(Arc::clone(&self.metadata))),
+            "_meta" | "_meta/registry" => Ok(Response::Meta(Rc::clone(&self.metadata))),
             _ => {
                 let (pallet, item_or_call, mut keys) =
                     crate::parse_uri(path).ok_or(crate::Error::BadInput)?;
@@ -391,7 +391,7 @@ impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
                         .ok_or(crate::Error::ConstantNotFound(const_name))?;
                     return Ok(Response::Value(
                         crate::StorageEntry::new(const_meta.value.clone(), const_meta.ty),
-                        Arc::clone(&self.metadata),
+                        Rc::clone(&self.metadata),
                     ));
                 }
 
@@ -411,7 +411,7 @@ impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
                             None => Response::None,
                             Some(data) => Response::Value(
                                 crate::StorageEntry::new(data, key_res.ty),
-                                Arc::clone(&self.metadata),
+                                Rc::clone(&self.metadata),
                             ),
                         });
                     }
@@ -435,7 +435,7 @@ impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
     pub async fn load_filtered_metadata(&mut self, pallets: &[&str]) -> crate::Result<()> {
         let refs: Vec<&str> = pallets.to_vec();
         let meta = self.backend.metadata_filtered(&refs).await?;
-        self.metadata = Arc::new(meta);
+        self.metadata = Rc::new(meta);
         Ok(())
     }
 }
@@ -475,7 +475,7 @@ pub async fn connect_edge(
     log::info!("sube: starting ChainHead session");
     let chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
     log::info!("sube: ready");
-    Ok(Sube::from_parts(chain_head, Arc::new(Metadata::empty())))
+    Ok(Sube::from_parts(chain_head, Rc::new(Metadata::empty())))
 }
 
 // --- URL-based constructors and reconnect (AnyBackend only) ---
@@ -517,7 +517,7 @@ impl Sube {
         let metadata = backend.metadata_filtered(pallets).await?;
         Ok(Sube {
             backend,
-            metadata: Arc::new(metadata),
+            metadata: Rc::new(metadata),
             url: url.into(),
             timeout: crate::DEFAULT_TIMEOUT,
         })
