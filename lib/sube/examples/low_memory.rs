@@ -1,7 +1,7 @@
 //! End-to-end low-memory demo — connect, fetch filtered metadata,
 //! query storage, watch blocks, all with memory tracking.
 //!
-//! Run: cargo run --example low_memory --features wss,json,text --release
+//! Run: cargo run --example low_memory --features wss,text --release
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,15 +85,8 @@ fn main() {
             .query(&format!("system/account/{addr}"))
             .await
             .expect("query account");
-        if let Some(json) = response.to_json().expect("decode") {
-            if let Some(nonce) = json.get("nonce") {
-                println!("    nonce: {nonce}");
-            }
-            if let Some(data) = json.get("data") {
-                if let Some(free) = data.get("free") {
-                    println!("    free balance: {free}");
-                }
-            }
+        if let Some(text) = response.to_text().expect("decode") {
+            println!("    account: {text}");
         }
         let (after, peak) = mem();
         println!(

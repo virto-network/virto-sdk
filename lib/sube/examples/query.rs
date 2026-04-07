@@ -1,6 +1,6 @@
 //! Query on-chain storage using sube.
 //!
-//! Run with: cargo run --example query --features wss,json,text
+//! Run with: cargo run --example query --features wss,text
 
 use sube::Sube;
 
@@ -10,11 +10,8 @@ fn main() -> sube::Result<()> {
 
         // One-liner: connect, query and get the result in a single expression
         let response = sube::sube(&format!("wss://kreivo.io/system/account/{addr}")).await?;
-        if let Some(json) = response.to_json()? {
-            println!(
-                "Account (one-liner): {}",
-                serde_json::to_string_pretty(&json).unwrap()
-            );
+        if let Some(text) = response.to_text()? {
+            println!("Account (one-liner): {text}");
         }
 
         // Reusable handle: connect once, query many times
@@ -27,8 +24,8 @@ fn main() -> sube::Result<()> {
 
         // Query a constant
         let response = chain.query("system/_constants/Version").await?;
-        if let Some(json) = response.to_json()? {
-            println!("Version: {}", serde_json::to_string_pretty(&json).unwrap());
+        if let Some(text) = response.to_text()? {
+            println!("Version: {text}");
         }
 
         Ok(())

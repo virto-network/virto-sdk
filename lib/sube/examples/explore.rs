@@ -1,6 +1,6 @@
 //! Explore storage maps and historical state.
 //!
-//! Run with: cargo run --example explore --features wss,json
+//! Run with: cargo run --example explore --features wss,text
 
 use sube::{Response, Sube};
 
@@ -13,12 +13,12 @@ fn main() -> sube::Result<()> {
         if let Response::ValueSet(entries, meta) = response {
             for (keys, value) in &entries {
                 for key in keys {
-                    let k = key.to_json(&meta.registry)?;
-                    println!("key: {k:?}");
+                    let k = key.to_text(&meta.registry)?;
+                    println!("key: {k}");
                 }
                 if let Some(val) = value {
-                    let v = val.to_json(&meta.registry)?;
-                    println!("val: {v:?}");
+                    let v = val.to_text(&meta.registry)?;
+                    println!("val: {v}");
                 }
             }
             println!("total entries: {}", entries.len());
@@ -30,11 +30,8 @@ fn main() -> sube::Result<()> {
             .query_at(&format!("system/account/{addr}"), 2067321)
             .await?;
         if let Response::Value(entry, meta) = response {
-            let data = entry.to_json(&meta.registry)?;
-            println!(
-                "Account at block 2067321: {}",
-                serde_json::to_string_pretty(&data).unwrap()
-            );
+            let data = entry.to_text(&meta.registry)?;
+            println!("Account at block 2067321: {data}");
         }
 
         Ok(())
