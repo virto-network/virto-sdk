@@ -121,7 +121,16 @@ impl crate::rpc::chainhead::ChainSession for AnyBackend {
 
 // --- Global metadata cache ---
 
-static META_CACHE: Mutex<Option<Map<CacheKey, Rc<Metadata>, 16>>> = Mutex::new(None);
+/// Sync wrapper for the cache: sube is single-threaded by design (Rc, no spawn),
+/// so the cache is never accessed from more than one thread. This wrapper lets
+/// us put a `Rc<Metadata>`-bearing map in a `static` without giving up Rc.
+struct SingleThreaded<T>(T);
+// SAFETY: sube is single-threaded; the cache is only ever touched from the
+// thread that drives the async runtime.
+unsafe impl<T> Sync for SingleThreaded<T> {}
+
+static META_CACHE: SingleThreaded<Mutex<Option<Map<CacheKey, Rc<Metadata>, 16>>>> =
+    SingleThreaded(Mutex::new(None));
 
 pub(crate) async fn get_metadata(
     backend: &mut AnyBackend,
@@ -147,7 +156,7 @@ async fn get_or_fetch(
     backend: &mut AnyBackend,
     preloaded: Option<Metadata>,
 ) -> SubeResult<Rc<Metadata>> {
-    let mut cache = META_CACHE.lock().await;
+    let mut cache = META_CACHE.0.lock().await;
     let map = cache.get_or_insert_with(Map::new);
 
     if let Some(meta) = map.get(&key) {
