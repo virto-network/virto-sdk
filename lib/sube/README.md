@@ -12,6 +12,9 @@ use sube::sube;
 
 // One-liner query
 let response = sube("wss://kreivo.io/system/account/0x1234...").await?;
+if let Some(text) = response.to_text()? {
+    println!("{text}");
+}
 
 // Reusable handle
 let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
@@ -20,15 +23,15 @@ let account = chain.query("system/account/0x1234...").await?;
 // Historical block query
 let old = chain.query_at("system/account/0x1234...", 1000).await?;
 
-// Submit an extrinsic (waits for finalization)
+// Submit an extrinsic with a text-format body (waits for finalization)
 chain.call("balances/transfer_keep_alive")
-    .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
+    .body_text("(dest:MultiAddress::Id(0xd435...);value:1000)")
     .signer(my_signer)
     .await?;
 
-// Or use compact text format
+// Any serde::Serialize body works too
 chain.call("system/remark")
-    .body_text("(remark:0x68656c6c6f)")
+    .body(json!({ "remark": "0x68656c6c6f" }))
     .signer(my_signer)
     .await?;
 ```
@@ -53,8 +56,7 @@ let r = chain.query("system/account/0x1234").await?;
 
 | Feature | Description |
 |---------|-------------|
-| `json` | JSON serialization via `scales` |
-| `text` | Compact text format via `scales` |
+| `text` | Compact text format via `scales` (call bodies, response decoding) |
 | `std` | Standard library support |
 
 ## Testing

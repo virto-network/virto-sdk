@@ -81,7 +81,7 @@ name = "metadata"
 harness = false
 
 [package.metadata.docs.rs]
-features = ["wss"]
+features = ["wss", "text"]
 
 [workspace]
 members = ["."]
