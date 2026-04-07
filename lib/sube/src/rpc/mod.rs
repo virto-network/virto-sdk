@@ -256,33 +256,6 @@ impl core::fmt::Display for JsonRpcError {
 
 pub type RpcResult<T> = Result<T, JsonRpcError>;
 
-/// Extract and hex-decode the `"result":"0x..."` value from raw JSON-RPC text.
-#[cfg(feature = "ws")]
-pub(crate) fn extract_hex_result(json: &str) -> Result<crate::prelude::Vec<u8>, JsonRpcError> {
-    // Check for error first
-    if json.contains("\"error\"") {
-        if let (Some(code), Some(message)) = (
-            extract_json_number(json, "\"code\":"),
-            extract_json_string(json, "\"message\":\""),
-        ) {
-            return Err(JsonRpcError { code, message });
-        }
-    }
-
-    let marker = "\"result\":\"0x";
-    let start = json
-        .find(marker)
-        .ok_or_else(|| JsonRpcError::new(-32603, "no result in response"))?;
-    let hex_start = start + marker.len();
-
-    let hex_end = json[hex_start..]
-        .find('"')
-        .ok_or_else(|| JsonRpcError::new(-32603, "unterminated hex string"))?;
-
-    let hex_str = &json[hex_start..hex_start + hex_end];
-    hex::decode(hex_str).map_err(|_| JsonRpcError::new(-32603, "invalid hex"))
-}
-
 /// Helper: extract result as a JSON string value (strips quotes).
 pub(crate) fn result_as_str(result: &str) -> Option<&str> {
     let trimmed = result.trim();

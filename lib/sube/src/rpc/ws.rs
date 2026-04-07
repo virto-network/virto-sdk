@@ -8,7 +8,7 @@ use async_tungstenite::tungstenite::Message;
 use async_tungstenite::WebSocketStream;
 use futures_util::StreamExt;
 
-use super::{IncomingMessage, JsonRpcError, JsonRpcRequest, Rpc, RpcResult};
+use super::{IncomingMessage, JsonRpcError, Rpc, RpcResult};
 use crate::Error;
 
 #[cfg(feature = "wss")]
@@ -92,40 +92,6 @@ impl Backend {
     }
 }
 
-impl Backend {
-    /// Read the next text message from the WebSocket, returning the raw string.
-    /// Buffers any notifications encountered along the way.
-    async fn read_raw_text(&mut self) -> Result<String, JsonRpcError> {
-        loop {
-            let frame = self
-                .ws
-                .next()
-                .await
-                .ok_or_else(|| JsonRpcError::new(-32603, "connection closed"))?
-                .map_err(|e| JsonRpcError::new(-32603, &format!("ws read: {e}")))?;
-            match frame {
-                Message::Text(text) => {
-                    // Check if it's a notification — if so, buffer and continue
-                    if text.contains("\"subscription\"") && !text.contains("\"id\"") {
-                        if let Some(IncomingMessage::Notification(n)) =
-                            IncomingMessage::parse(&text)
-                        {
-                            self.event_buffer
-                                .push_back((n.params.subscription, n.params.result));
-                            continue;
-                        }
-                    }
-                    return Ok(text.to_string());
-                }
-                Message::Close(_) => {
-                    return Err(JsonRpcError::new(-32603, "connection closed by server"));
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
 impl super::Rpc for Backend {
     async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String> {
         let id = self.next_id;
@@ -158,22 +124,6 @@ impl super::Rpc for Backend {
         }
     }
 
-    /// Hex-decode the result directly from the raw JSON text.
-    async fn rpc_raw_hex(&mut self, method: &str, params: &str) -> RpcResult<alloc::vec::Vec<u8>> {
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let mut req = String::new();
-        super::format_request(&mut req, id, method, params);
-
-        self.ws
-            .send(Message::Text(req.into()))
-            .await
-            .map_err(|e| JsonRpcError::new(-32603, &format!("ws send: {e}")))?;
-
-        let text = self.read_raw_text().await?;
-        super::extract_hex_result(&text)
-    }
 }
 
 impl super::RpcSubscription for Backend {
