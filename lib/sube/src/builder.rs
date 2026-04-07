@@ -283,7 +283,7 @@ impl<B: Backend> Sube<B> {
     }
 
     /// Get a shared reference-counted handle to the metadata.
-    pub fn metadata_arc(&self) -> Rc<Metadata> {
+    pub fn metadata_rc(&self) -> Rc<Metadata> {
         Rc::clone(&self.metadata)
     }
 

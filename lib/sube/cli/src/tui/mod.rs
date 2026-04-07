@@ -399,7 +399,7 @@ pub async fn run(chain_url: &str) -> Result<()> {
     eprintln!("Connecting to {chain_url}...");
     let chain = sube::Sube::connect(chain_url).await?;
     eprintln!("Connected, loading metadata...");
-    let meta = chain.metadata_arc();
+    let meta = chain.metadata_rc();
 
     let (ui_tx, chain_rx) = mpsc::channel::<ToChain>();
     let (chain_tx, ui_rx) = smol::channel::unbounded::<FromChain>();
