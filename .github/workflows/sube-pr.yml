@@ -24,4 +24,10 @@ jobs:
       - name: Lint
         working-directory: lib/sube
         run: just lint
-      
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Check wasm (browser)
+        working-directory: lib/sube
+        run: just check-wasm
