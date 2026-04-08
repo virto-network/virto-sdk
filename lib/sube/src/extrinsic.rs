@@ -109,15 +109,14 @@ fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     }
 }
 
-/// Default JSON value for a well-known extension's "additional_signed" data.
+/// Default value for a well-known extension's "additional_signed" data.
 fn default_additional(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
         "CheckSpecVersion" => Some(DynValue::from(ctx.spec_version)),
         "CheckTxVersion" => Some(DynValue::from(ctx.tx_version)),
-        "CheckGenesis" | "CheckMortality" => Some(DynValue::from(format!(
-            "0x{}",
-            hex::encode(ctx.genesis_hash)
-        ))),
+        // Genesis hash must be encoded as raw bytes — the target is a `[u8; 32]`
+        // which scales does not accept as a hex string.
+        "CheckGenesis" | "CheckMortality" => Some(DynValue::from(ctx.genesis_hash)),
         _ => None,
     }
 }
@@ -353,10 +352,9 @@ mod tests {
     #[test]
     fn default_additional_check_genesis() {
         let ctx = test_ctx();
-        let expected = format!("0x{}", hex::encode([0xab; 32]));
         assert_eq!(
             default_additional("CheckGenesis", &ctx),
-            Some(DynValue::from(expected))
+            Some(DynValue::from([0xab; 32]))
         );
     }
 

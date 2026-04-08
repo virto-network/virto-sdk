@@ -6,7 +6,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use serde::ser::{SerializeMap, Serializer};
+use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 use serde::Serialize;
 
 /// A simple dynamic value — enough for extension defaults and call bodies.
@@ -17,6 +17,10 @@ pub enum DynValue {
     U32(u32),
     U64(u64),
     Str(String),
+    /// Raw bytes. Serializes via `serialize_seq` so scales can write them
+    /// into either a fixed-size `[u8; N]` target (no length prefix) or a
+    /// `Vec<u8>` / `Bytes` target (SCALE compact length prefix).
+    Bytes(Vec<u8>),
     Map(Vec<(String, DynValue)>),
 }
 
@@ -28,6 +32,13 @@ impl Serialize for DynValue {
             DynValue::U32(n) => serializer.serialize_u32(*n),
             DynValue::U64(n) => serializer.serialize_u64(*n),
             DynValue::Str(s) => serializer.serialize_str(s),
+            DynValue::Bytes(bs) => {
+                let mut seq = serializer.serialize_seq(Some(bs.len()))?;
+                for b in bs {
+                    seq.serialize_element(b)?;
+                }
+                seq.end()
+            }
             DynValue::Map(entries) => {
                 let mut map = serializer.serialize_map(Some(entries.len()))?;
                 for (k, v) in entries {
@@ -72,6 +83,30 @@ impl From<&str> for DynValue {
 impl From<String> for DynValue {
     fn from(s: String) -> Self {
         DynValue::Str(s)
+    }
+}
+
+impl From<Vec<u8>> for DynValue {
+    fn from(bs: Vec<u8>) -> Self {
+        DynValue::Bytes(bs)
+    }
+}
+
+impl From<&[u8]> for DynValue {
+    fn from(bs: &[u8]) -> Self {
+        DynValue::Bytes(bs.to_vec())
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for DynValue {
+    fn from(bs: [u8; N]) -> Self {
+        DynValue::Bytes(bs.to_vec())
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for DynValue {
+    fn from(bs: &[u8; N]) -> Self {
+        DynValue::Bytes(bs.to_vec())
     }
 }
 
