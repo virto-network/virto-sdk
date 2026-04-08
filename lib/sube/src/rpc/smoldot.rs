@@ -1,4 +1,17 @@
 //! Smoldot light client transport — no_std compatible, no spawning.
+//!
+//! # Browser / wasm32 status
+//!
+//! This module is std-only because `smoldot-light` 0.19's only shipped
+//! `PlatformRef` implementation (`DefaultPlatform`) depends on
+//! `std::thread`, `std::net`, `std::time::Instant`, and `UNIX_EPOCH`,
+//! none of which compile on `wasm32-unknown-unknown`.
+//!
+//! Running a smoldot light client inside the browser from Rust/wasm
+//! requires a custom `PlatformRef` that bridges to browser APIs
+//! (`web-sys::WebSocket`, `gloo-timers`, `getrandom/js`, ...). That is
+//! tracked as future work; browser applications should use the
+//! `ws-web` backend against a public RPC endpoint today.
 
 use alloc::collections::VecDeque;
 use alloc::{format, string::String, sync::Arc, vec::Vec};

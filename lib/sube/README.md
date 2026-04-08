@@ -43,7 +43,25 @@ chain.call("system/remark")
 | `ws` | WebSocket via `async-tungstenite` + `smol` (std) |
 | `wss` | WebSocket with TLS (implies `ws`) |
 | `ws-edge` | WebSocket via `edge-ws` for embedded targets (no_std) |
-| `smoldot-std` | Embedded light client via `smoldot-light` (no external node) |
+| `ws-web` | Browser WebSocket via `gloo-net` (wasm32-unknown-unknown) |
+| `smoldot-std` | Embedded light client via `smoldot-light` (std, no external node) |
+
+### Browser / wasm
+
+Build with `--target wasm32-unknown-unknown --features ws-web`. The browser
+handles TCP, TLS and framing natively, so `Sube::connect("wss://...")` works
+unchanged from a wasm-bindgen app:
+
+```rust
+// In a wasm-bindgen entry point
+let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
+let r = chain.query("system/account/0x1234").await?;
+```
+
+Full in-browser light client (smoldot in wasm) is **not yet supported** —
+upstream `smoldot-light` 0.19 only ships `DefaultPlatform`, which is std-only.
+A browser-capable `PlatformRef` impl is tracked as future work; in the
+meantime, browser apps should use `ws-web` against a public RPC endpoint.
 
 ### Light Client
 

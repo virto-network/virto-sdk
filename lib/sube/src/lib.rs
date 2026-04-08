@@ -38,13 +38,18 @@ chain.call("balances/transfer_keep_alive")
 | `ws` | WebSocket via `async-tungstenite` + `smol` (std) |
 | `wss` | WebSocket with TLS (implies `ws`) |
 | `ws-edge` | WebSocket via `edge-ws` for embedded targets (no_std) |
-| `smoldot-std` | Embedded light client via `smoldot-light` (no external node) |
+| `ws-web` | Browser WebSocket via `gloo-net` (wasm32-unknown-unknown) |
+| `smoldot-std` | Light client via `smoldot-light` (std, no external node) |
+
+Browser apps target `wasm32-unknown-unknown` with `--features ws-web`. A full
+in-browser light client (smoldot in wasm) is not yet available — upstream
+`smoldot-light` only ships a std-only platform — so wasm apps should use
+`ws-web` against a public RPC endpoint.
 
 # Other Features
 
 | Feature | Description |
 |---------|-------------|
-| `text` | Compact text format via `scales` (call bodies, response decoding) |
 | `std` | Standard library support |
 */
 
