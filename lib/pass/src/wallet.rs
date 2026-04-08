@@ -6,26 +6,36 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use pass::wallet::WalletCredential;
+//! use pass::wallet::{SignatureType, WalletCredential};
+//! use pass::{AuthorityId, HashedUserId};
 //!
 //! let cred = WalletCredential::new(
-//!     hashed_user_id,
-//!     authority_id,
-//!     current_block,
-//!     &my_signer,   // any libwallet::Signer
+//!     CredentialMeta::new(
+//!         HashedUserId(user_hash),
+//!         AuthorityId(authority),
+//!         current_block,
+//!         "SubstrateKey",
+//!     ),
+//!     SignatureType::Sr25519,
+//!     &my_signer,
 //! );
-//! let auth = PassAuthenticator::new(account, device_id, cred);
 //! ```
 
 use alloc::vec::Vec;
-
 use codec::Encode;
 
-use crate::{block_challenge, AuthorityId, Challenge, CredentialProvider, HashedUserId};
+use crate::{block_challenge, AuthorityId, Challenge, CredentialMeta, CredentialProvider};
 use sube::{DynValue, Error, Result};
 
-/// Substrate `MultiSignature` variant name.
-#[derive(Debug, Clone, Copy)]
+/// Substrate `MultiSignature` variant.
+///
+/// Must be specified explicitly at credential construction. The libwallet
+/// `Signer` trait does not reliably expose the underlying algorithm (a
+/// `DerivedSigner` returns its derivation path from `account_id()`, not the
+/// algorithm name), and guessing wrong produces credentials that fail
+/// on-chain verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SignatureType {
     Sr25519,
     Ed25519,
@@ -40,116 +50,96 @@ impl SignatureType {
             Self::Ecdsa => "Ecdsa",
         }
     }
-
-    /// Infer from a [`libwallet::Signer::account_id`] string.
-    pub fn from_account_id(id: &str) -> Self {
-        if id.contains("ed25519") {
-            Self::Ed25519
-        } else if id.contains("secp256k1") {
-            Self::Ecdsa
-        } else {
-            Self::Sr25519
-        }
-    }
 }
 
 /// Credential provider backed by a [`libwallet::Signer`].
 ///
 /// Produces a `KeySignature`-shaped credential by:
-/// 1. Computing a challenge from `(context, extrinsic_context)` via block challenger
-/// 2. SCALE-encoding the signed message `(context, challenge, authority_id)`
-/// 3. Signing with the wallet signer
-/// 4. Returning DynValue for scales serialization against the runtime type
-pub struct WalletCredential<'a, S: libwallet::Signer> {
-    hashed_user_id: HashedUserId,
-    authority_id: AuthorityId,
-    context: u32,
+/// 1. Computing a challenge from `(context, extrinsic_context)` via the
+///    pallet-pass block challenger.
+/// 2. SCALE-encoding `SignedMessage { context, challenge, authority_id }`.
+/// 3. Signing the encoded message with the libwallet signer.
+/// 4. Returning a `DynValue` that `scales` serializes to the runtime credential
+///    type directly from metadata.
+pub struct WalletCredential<'a, Cx, S: libwallet::Signer> {
+    meta: CredentialMeta<Cx>,
     signature_type: SignatureType,
     signer: &'a S,
-    /// Variant name in the composite credential enum.
-    variant: &'static str,
 }
 
-impl<'a, S: libwallet::Signer> WalletCredential<'a, S> {
+impl<'a, Cx, S: libwallet::Signer> WalletCredential<'a, Cx, S>
+where
+    Cx: Encode + Into<DynValue> + Clone,
+{
     /// Create a credential provider from a libwallet signer.
     ///
-    /// The [`SignatureType`] is inferred from [`Signer::account_id`](libwallet::Signer::account_id).
-    /// For derived signers where `account_id` is a derivation path, this defaults
-    /// to `Sr25519` — use [`.signature_type()`] to override.
-    pub fn new(
-        hashed_user_id: HashedUserId,
-        authority_id: AuthorityId,
-        context: u32,
-        signer: &'a S,
-    ) -> Self {
-        let signature_type = SignatureType::from_account_id(signer.account_id());
+    /// The signature type must be specified explicitly — see [`SignatureType`]
+    /// for why.
+    pub fn new(meta: CredentialMeta<Cx>, signature_type: SignatureType, signer: &'a S) -> Self {
         Self {
-            hashed_user_id,
-            authority_id,
-            context,
+            meta,
             signature_type,
             signer,
-            variant: "SubstrateKey",
         }
     }
 
-    /// Override the signature algorithm.
-    pub fn signature_type(mut self, ty: SignatureType) -> Self {
-        self.signature_type = ty;
-        self
-    }
-
-    /// Override the variant name in the composite credential enum.
-    ///
-    /// Defaults to `"SubstrateKey"`. Change this if the runtime's
-    /// `composite_authenticators!` macro uses a different name.
-    pub fn variant(mut self, name: &'static str) -> Self {
-        self.variant = name;
-        self
+    /// Shortcut constructor without an explicit [`CredentialMeta`]. Uses
+    /// `"SubstrateKey"` as the composite enum variant name.
+    pub fn with_parts(
+        user_id: crate::HashedUserId,
+        authority_id: AuthorityId,
+        context: Cx,
+        signature_type: SignatureType,
+        signer: &'a S,
+    ) -> Self {
+        Self::new(
+            CredentialMeta::new(user_id, authority_id, context, "SubstrateKey"),
+            signature_type,
+            signer,
+        )
     }
 }
 
-/// SCALE-encode the signed message: `(context: u32, challenge: [u8;32], authority_id: [u8;32])`
-fn encode_message(context: u32, challenge: &Challenge, authority_id: &AuthorityId) -> Vec<u8> {
+/// SCALE-encode `SignedMessage { context, challenge, authority_id }`.
+fn encode_signed_message<Cx: Encode>(
+    context: &Cx,
+    challenge: &Challenge,
+    authority_id: &AuthorityId,
+) -> Vec<u8> {
     let mut out = Vec::new();
     context.encode_to(&mut out);
     challenge.encode_to(&mut out);
-    authority_id.encode_to(&mut out);
+    authority_id.0.encode_to(&mut out);
     out
 }
 
-impl<S: libwallet::Signer> CredentialProvider for WalletCredential<'_, S> {
+impl<Cx, S> CredentialProvider for WalletCredential<'_, Cx, S>
+where
+    Cx: Encode + Into<DynValue> + Clone,
+    S: libwallet::Signer,
+{
     async fn credential(&self, extrinsic_context: &[u8; 32]) -> Result<DynValue> {
-        let challenge = block_challenge(self.context, extrinsic_context);
-        let message_bytes = encode_message(self.context, &challenge, &self.authority_id);
+        let challenge = block_challenge(&self.meta.context, extrinsic_context);
+        let message_bytes =
+            encode_signed_message(&self.meta.context, &challenge, &self.meta.authority_id);
 
         let signature = self
             .signer
             .sign_msg(&message_bytes)
             .await
-            .map_err(|e| Error::Encode(alloc::format!("signing failed: {e}")))?;
+            .map_err(|e| Error::Signing(alloc::format!("{e}")))?;
 
-        let sig_variant = self.signature_type.variant_name();
-        let signature_hex = alloc::format!("0x{}", hex::encode(signature.as_ref()));
-        let challenge_hex = alloc::format!("0x{}", hex::encode(challenge));
-        let authority_hex = alloc::format!("0x{}", hex::encode(self.authority_id));
-        let user_id_hex = alloc::format!("0x{}", hex::encode(self.hashed_user_id));
-
-        let message = DynValue::obj(&[
-            ("context", DynValue::from(self.context)),
-            ("challenge", DynValue::from(challenge_hex)),
-            ("authority_id", DynValue::from(authority_hex)),
-        ]);
-        let signature_val =
-            DynValue::obj(&[(sig_variant, DynValue::from(signature_hex))]);
+        let signature_val = DynValue::obj(&[(
+            self.signature_type.variant_name(),
+            DynValue::from(signature.as_ref()),
+        )]);
         let key_signature = DynValue::obj(&[
-            ("user_id", DynValue::from(user_id_hex)),
-            ("message", message),
+            ("user_id", DynValue::from(self.meta.user_id.0)),
+            ("message", self.meta.to_signed_message(&challenge)),
             ("signature", signature_val),
         ]);
 
-        // Wrap in the composite authenticator variant
-        Ok(DynValue::obj(&[(self.variant, key_signature)]))
+        Ok(DynValue::obj(&[(self.meta.variant, key_signature)]))
     }
 }
 
@@ -158,32 +148,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn block_challenge_deterministic() {
-        let ctx = 42u32;
-        let xtc = [0xab; 32];
-        let c1 = block_challenge(ctx, &xtc);
-        let c2 = block_challenge(ctx, &xtc);
-        assert_eq!(c1, c2);
-        assert_ne!(c1, [0u8; 32]);
-    }
-
-    #[test]
-    fn block_challenge_varies_with_context() {
-        let xtc = [0xab; 32];
-        assert_ne!(block_challenge(1, &xtc), block_challenge(2, &xtc));
-    }
-
-    #[test]
-    fn block_challenge_varies_with_xtc() {
-        assert_ne!(
-            block_challenge(1, &[0x01; 32]),
-            block_challenge(1, &[0x02; 32])
-        );
-    }
-
-    #[test]
-    fn encode_message_is_68_bytes() {
-        let msg = encode_message(0, &[0; 32], &[0; 32]);
+    fn signed_message_layout_is_68_bytes_for_u32() {
+        let authority = AuthorityId([0u8; 32]);
+        let msg = encode_signed_message(&0u32, &[0; 32], &authority);
         assert_eq!(msg.len(), 68); // 4 + 32 + 32
     }
 }

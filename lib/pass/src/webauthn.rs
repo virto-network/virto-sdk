@@ -1,34 +1,66 @@
 //! WebAuthn credential provider for pallet-pass.
 //!
-//! Supports three authenticator backends (feature-gated):
-//! - **`webauthn-web`**: Browser passkeys via `web-sys` (WASM)
-//! - **`webauthn-soft`**: Software authenticator via `passkey-authenticator` (1Password)
-//! - **`webauthn-ctap`**: Hardware tokens via USB+CTAP (YubiKey, SoloKey, etc.)
+//! The core of this module is the [`Authenticator`] trait, which abstracts
+//! over the platform that actually performs the FIDO2 assertion. Concrete
+//! backends (browser passkeys via `web-sys`, CTAP-HID via USB, software
+//! authenticators via `passkey-authenticator`) live behind feature flags.
 //!
-//! All backends implement the [`Authenticator`] trait. The [`WebAuthnCredential`]
-//! struct wraps any backend and implements [`CredentialProvider`].
+//! The [`WebAuthnCredential`] struct wraps any [`Authenticator`] and
+//! implements [`CredentialProvider`] for pallet-pass.
 //!
 //! # Example
 //!
 //! ```rust,ignore
-//! use pass::webauthn::{WebAuthnCredential, Authenticator, AssertionResponse};
+//! use pass::webauthn::{Authenticator, AssertionResponse, WebAuthnCredential};
+//! use pass::{AuthorityId, CredentialMeta, HashedUserId};
 //!
-//! // Use any Authenticator implementation
 //! let cred = WebAuthnCredential::new(
-//!     hashed_user_id,
-//!     authority_id,
-//!     current_block,
+//!     CredentialMeta::new(
+//!         HashedUserId(user_hash),
+//!         AuthorityId(authority),
+//!         current_block,
+//!         "WebAuthn",
+//!     ),
 //!     my_authenticator,
 //! );
-//! let auth = PassAuthenticator::new(account, device_id, cred);
 //! ```
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::{block_challenge, AuthorityId, CredentialProvider, HashedUserId};
+use codec::Encode;
+
+use crate::{block_challenge, CredentialMeta, CredentialProvider};
 use sube::{DynValue, Result};
 
+/// Errors a WebAuthn [`Authenticator`] backend may report.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum AuthenticatorError {
+    /// The user declined or canceled the assertion prompt.
+    Canceled,
+    /// No registered credential matched the request.
+    NoCredential,
+    /// Transport-level failure (USB disconnect, WebSocket drop, JS exception).
+    Transport(String),
+    /// Any other backend-specific failure.
+    Other(String),
+}
+
+impl core::fmt::Display for AuthenticatorError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Canceled => f.write_str("user canceled"),
+            Self::NoCredential => f.write_str("no matching credential"),
+            Self::Transport(m) => write!(f, "transport error: {m}"),
+            Self::Other(m) => write!(f, "{m}"),
+        }
+    }
+}
+
 /// Raw assertion response from a WebAuthn authenticator.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AssertionResponse {
     /// Authenticator data (RP ID hash + flags + counter).
     pub authenticator_data: Vec<u8>,
@@ -41,80 +73,75 @@ pub struct AssertionResponse {
 /// Abstraction over a WebAuthn authenticator.
 ///
 /// Backends implement this to perform a FIDO2 assertion (authentication).
-/// The challenge is a 32-byte blake2-256 hash that gets base64url-encoded
-/// into the WebAuthn `client_data.challenge` field.
+/// The challenge is a 32-byte blake2b-256 hash that the backend must
+/// base64url-encode into the WebAuthn `client_data.challenge` field.
 pub trait Authenticator {
-    /// Perform a WebAuthn assertion with the given 32-byte challenge.
-    ///
-    /// Returns the raw assertion response containing authenticator data,
-    /// client data JSON, and signature bytes.
-    async fn assert(&self, challenge: &[u8; 32]) -> Result<AssertionResponse>;
+    async fn assert(
+        &self,
+        challenge: &[u8; 32],
+    ) -> core::result::Result<AssertionResponse, AuthenticatorError>;
 }
 
 /// WebAuthn credential provider for pallet-pass.
 ///
-/// Wraps any [`Authenticator`] backend and produces a JSON credential
-/// matching pallet-pass's WebAuthn assertion structure:
+/// Wraps any [`Authenticator`] backend and produces a credential matching
+/// pallet-pass's WebAuthn `Assertion` type:
 ///
 /// ```text
-/// { "WebAuthn": { meta: { authority_id, user_id, context }, authenticator_data, client_data, signature } }
+/// { "WebAuthn": {
+///     meta: { authority_id, user_id, context },
+///     authenticator_data, client_data, signature
+/// } }
 /// ```
-pub struct WebAuthnCredential<A> {
-    hashed_user_id: HashedUserId,
-    authority_id: AuthorityId,
-    context: u32,
+pub struct WebAuthnCredential<Cx, A> {
+    meta: CredentialMeta<Cx>,
     authenticator: A,
-    /// Variant name in the composite credential enum.
-    variant: &'static str,
 }
 
-impl<A> WebAuthnCredential<A> {
-    pub fn new(
-        hashed_user_id: HashedUserId,
-        authority_id: AuthorityId,
-        context: u32,
+impl<Cx, A> WebAuthnCredential<Cx, A>
+where
+    Cx: Encode + Into<DynValue> + Clone,
+{
+    pub fn new(meta: CredentialMeta<Cx>, authenticator: A) -> Self {
+        Self { meta, authenticator }
+    }
+
+    /// Shortcut constructor without an explicit [`CredentialMeta`]. Uses
+    /// `"WebAuthn"` as the composite enum variant name.
+    pub fn with_parts(
+        user_id: crate::HashedUserId,
+        authority_id: crate::AuthorityId,
+        context: Cx,
         authenticator: A,
     ) -> Self {
-        Self {
-            hashed_user_id,
-            authority_id,
-            context,
+        Self::new(
+            CredentialMeta::new(user_id, authority_id, context, "WebAuthn"),
             authenticator,
-            variant: "WebAuthn",
-        }
-    }
-
-    /// Override the variant name in the composite credential enum.
-    pub fn variant(mut self, name: &'static str) -> Self {
-        self.variant = name;
-        self
+        )
     }
 }
 
-impl<A: Authenticator> CredentialProvider for WebAuthnCredential<A> {
+impl<Cx, A> CredentialProvider for WebAuthnCredential<Cx, A>
+where
+    Cx: Encode + Into<DynValue> + Clone,
+    A: Authenticator,
+{
     async fn credential(&self, extrinsic_context: &[u8; 32]) -> Result<DynValue> {
-        let challenge = block_challenge(self.context, extrinsic_context);
+        let challenge = block_challenge(&self.meta.context, extrinsic_context);
 
-        let resp = self.authenticator.assert(&challenge).await?;
+        let resp = self
+            .authenticator
+            .assert(&challenge)
+            .await
+            .map_err(|e| sube::Error::Signing(alloc::format!("{e}")))?;
 
-        let authority_hex = alloc::format!("0x{}", hex::encode(self.authority_id));
-        let user_id_hex = alloc::format!("0x{}", hex::encode(self.hashed_user_id));
-        let auth_data_hex = alloc::format!("0x{}", hex::encode(&resp.authenticator_data));
-        let client_data_hex = alloc::format!("0x{}", hex::encode(&resp.client_data));
-        let signature_hex = alloc::format!("0x{}", hex::encode(&resp.signature));
-
-        let meta = DynValue::obj(&[
-            ("authority_id", DynValue::from(authority_hex)),
-            ("user_id", DynValue::from(user_id_hex)),
-            ("context", DynValue::from(self.context)),
-        ]);
         let assertion = DynValue::obj(&[
-            ("meta", meta),
-            ("authenticator_data", DynValue::from(auth_data_hex)),
-            ("client_data", DynValue::from(client_data_hex)),
-            ("signature", DynValue::from(signature_hex)),
+            ("meta", self.meta.to_assertion_meta()),
+            ("authenticator_data", DynValue::from(resp.authenticator_data)),
+            ("client_data", DynValue::from(resp.client_data)),
+            ("signature", DynValue::from(resp.signature)),
         ]);
 
-        Ok(DynValue::obj(&[(self.variant, assertion)]))
+        Ok(DynValue::obj(&[(self.meta.variant, assertion)]))
     }
 }
