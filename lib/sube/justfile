@@ -29,6 +29,7 @@ check-riscv32:
 
 check-wasm:
     cargo check --target wasm32-unknown-unknown --no-default-features
+    cargo check --target wasm32-unknown-unknown --no-default-features --features ws-web
 
 check-xtensa:
     source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features -Zbuild-std=core,alloc

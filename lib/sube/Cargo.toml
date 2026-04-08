@@ -38,6 +38,9 @@ embassy-net = { version = "0.9", optional = true, default-features = false, feat
 embassy-time = { version = "0.5", optional = true }
 mbedtls-rs = { git = "https://github.com/esp-rs/mbedtls-rs", optional = true }
 
+# ws backend (browser, wasm32)
+gloo-net = { version = "0.6", default-features = false, features = ["websocket"], optional = true }
+
 # light client
 smoldot-light = { version = "0.19", optional = true }
 
@@ -72,6 +75,7 @@ ws = [
 ]
 wss = ["ws", "async-tungstenite/async-tls", "dep:async-tls"]
 ws-edge = ["dep:edge-ws", "dep:embedded-io-async", "dep:embassy-net", "dep:embassy-time", "dep:mbedtls-rs", "dep:rand_core", "async"]
+ws-web = ["dep:gloo-net", "dep:futures-util"]
 smoldot = ["dep:smoldot-light"]
 smoldot-std = ["smoldot", "std", "dep:smol", "dep:futures-util"]
 examples = ["dep:rand_core"]

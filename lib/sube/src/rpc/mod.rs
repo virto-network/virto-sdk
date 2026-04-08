@@ -6,14 +6,24 @@
 //! All trait methods take `&mut self` — single-threaded, no spawning.
 //! Params and results are raw JSON strings — no `serde_json::Value`.
 
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 use core::fmt::Write;
 use serde::Deserialize;
 
 use crate::prelude::*;
 
 /// Hex-encode bytes with `0x` prefix into an existing String, avoiding a new allocation.
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 fn push_hex(buf: &mut String, bytes: &[u8]) {
     buf.push_str("0x");
     for &b in bytes {
@@ -22,7 +32,12 @@ fn push_hex(buf: &mut String, bytes: &[u8]) {
 }
 
 /// Hex-encode bytes with `0x` prefix, returning a new String.
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 pub(crate) fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(2 + bytes.len() * 2);
     push_hex(&mut s, bytes);
@@ -33,7 +48,12 @@ pub(crate) fn to_hex(bytes: &[u8]) -> String {
 
 /// Format a JSON-RPC request into `buf`. Returns the written length.
 /// `params` is a pre-serialized JSON string (e.g. `"[]"` or `"[true]"`).
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 pub(crate) fn format_request(buf: &mut String, id: u32, method: &str, params: &str) {
     buf.clear();
     let _ = write!(
@@ -257,7 +277,12 @@ impl core::fmt::Display for JsonRpcError {
 pub type RpcResult<T> = Result<T, JsonRpcError>;
 
 /// Helper: extract result as a JSON string value (strips quotes).
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 pub(crate) fn result_as_str(result: &str) -> Option<&str> {
     let trimmed = result.trim();
     if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
@@ -278,7 +303,12 @@ pub trait Rpc {
 }
 
 /// Backends that support JSON-RPC subscriptions (WebSocket, smoldot).
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 #[allow(async_fn_in_trait)]
 pub trait RpcSubscription: Rpc {
     /// Subscribe to a method. Returns the subscription ID.
@@ -303,22 +333,39 @@ pub mod edge;
 pub mod smoldot;
 #[cfg(feature = "ws")]
 pub mod ws;
+#[cfg(all(feature = "ws-web", target_arch = "wasm32"))]
+pub mod ws_web;
 
 /// ChainHead v1 session manager.
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 pub mod chainhead;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+    #[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
     #[test]
     fn to_hex_encodes_bytes() {
         assert_eq!(super::to_hex(&[0xde, 0xad]), "0xdead");
     }
 
-    #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+    #[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
     #[test]
     fn to_hex_empty() {
         assert_eq!(super::to_hex(&[]), "0x");
@@ -368,7 +415,12 @@ mod tests {
         assert!(IncomingMessage::parse("not json at all").is_none());
     }
 
-    #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+    #[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
     #[test]
     fn result_as_str_strips_quotes() {
         assert_eq!(result_as_str("\"hello\""), Some("hello"));

@@ -22,6 +22,8 @@ type CacheKey = heapless::String<64>;
 pub enum AnyBackend {
     #[cfg(feature = "ws")]
     Ws(Box<ChainHead<crate::rpc::ws::Backend>>),
+    #[cfg(all(feature = "ws-web", target_arch = "wasm32"))]
+    WsWeb(Box<ChainHead<crate::rpc::ws_web::Backend>>),
     #[cfg(all(feature = "smoldot", feature = "std"))]
     Smoldot(Box<ChainHead<crate::rpc::smoldot::Backend<SmoldotPlatform>>>),
 }
@@ -31,6 +33,8 @@ macro_rules! dispatch {
         match $self {
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.$method($($arg),*).await,
+            #[cfg(all(feature = "ws-web", target_arch = "wasm32"))]
+            AnyBackend::WsWeb(b) => b.$method($($arg),*).await,
             #[cfg(all(feature = "smoldot", feature = "std"))]
             AnyBackend::Smoldot(b) => b.$method($($arg),*).await,
             #[allow(unreachable_patterns)]
@@ -82,6 +86,8 @@ impl crate::rpc::chainhead::ChainSession for AnyBackend {
         match self {
             #[cfg(feature = "ws")]
             AnyBackend::Ws(b) => b.try_next_chain_event(),
+            #[cfg(all(feature = "ws-web", target_arch = "wasm32"))]
+            AnyBackend::WsWeb(b) => b.try_next_chain_event(),
             #[cfg(all(feature = "smoldot", feature = "std"))]
             AnyBackend::Smoldot(b) => b.try_next_chain_event(),
             #[allow(unreachable_patterns)]
@@ -254,6 +260,16 @@ pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBacke
                     .await
                     .map_err(|e| Error::Node(format!("chain session for {url}: {e}")))?;
                 Ok(AnyBackend::Ws(Box::new(chainhead)))
+            }
+            #[cfg(all(feature = "ws-web", target_arch = "wasm32", not(feature = "ws")))]
+            "ws" | "wss" => {
+                let ws = crate::rpc::ws_web::Backend::new(url.to_string().as_str())
+                    .await
+                    .map_err(|e| Error::Node(format!("connecting to {url}: {e}")))?;
+                let chainhead = ChainHead::new(ws)
+                    .await
+                    .map_err(|e| Error::Node(format!("chain session for {url}: {e}")))?;
+                Ok(AnyBackend::WsWeb(Box::new(chainhead)))
             }
             _ => Err(Error::BadInput),
         }
