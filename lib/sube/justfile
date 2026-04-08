@@ -23,6 +23,7 @@ check-no-std:
 
 check-thumbv7em:
     cargo check --target thumbv7em-none-eabihf --no-default-features
+    cargo check --target thumbv7em-none-eabihf --no-default-features --features ws-edge
 
 check-riscv32:
     cargo check --target riscv32imac-unknown-none-elf --no-default-features
@@ -35,7 +36,10 @@ check-xtensa:
     source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features -Zbuild-std=core,alloc
     source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features --features ws-edge -Zbuild-std=core,alloc
 
-check-targets: check-no-std check-thumbv7em check-riscv32 check-wasm check-xtensa
+# CI-safe target sweep: omits xtensa, which needs the +esp toolchain.
+check-targets-ci: check-no-std check-thumbv7em check-riscv32 check-wasm
+
+check-targets: check-targets-ci check-xtensa
 
 # run the qemu smoke test — exercises sube on bare-metal cortex-m4
 test-qemu:

@@ -25,9 +25,9 @@ jobs:
         working-directory: lib/sube
         run: just lint
 
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Add cross targets
+        run: rustup target add wasm32-unknown-unknown thumbv7em-none-eabihf riscv32imac-unknown-none-elf
 
-      - name: Check wasm (browser)
+      - name: Check cross targets (no_std, wasm, thumbv7em, riscv32)
         working-directory: lib/sube
-        run: just check-wasm
+        run: just check-targets-ci
