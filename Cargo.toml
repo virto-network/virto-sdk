@@ -6,6 +6,7 @@ members = [
     "crates/libwallet",
     "crates/pass",
     "crates/pjs-rs",
+    "crates/sdk",
 ]
 exclude = [
     "crates/sube/cli",

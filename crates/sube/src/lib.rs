@@ -88,7 +88,7 @@ mod hasher;
 pub mod metadata;
 pub mod rpc;
 pub mod signer;
-pub(crate) mod util;
+pub mod util;
 pub mod value;
 
 /// Connect to a Substrate chain.

@@ -1,0 +1,16 @@
+[package]
+name = "virto-sdk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sube = { path = "../sube", default-features = false }
+log = { workspace = true }
+
+# std HTTP server
+smol = { workspace = true, optional = true }
+env_logger = { version = "0.11", optional = true }
+
+[features]
+default = ["server"]
+server = ["sube/wss", "dep:smol", "dep:env_logger"]
