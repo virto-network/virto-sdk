@@ -2,11 +2,10 @@
 //!
 //! Maps HTTP requests directly to sube operations:
 //!
-//! - `GET /query/{pallet}/{item}/{keys...}` → storage query
+//! - `GET  /query/{pallet}/{item}/{keys...}` → storage query
 //! - `POST /call/{pallet}/{method}` → submit extrinsic (body = text-format args)
-//! - `GET /meta` → list pallets
-//! - `GET /meta/{pallet}` → pallet detail
-//! - `GET /meta/{pallet}/{item}` → item type info
+//! - `GET  /meta[/{pallet}[/{item}]]` → metadata introspection
+//! - `GET  /events[?watch={path}]` → SSE stream (chain events + optional watched query)
 
 use sube::{Backend, Metadata, Response as SubeResponse, Sube};
 
@@ -27,6 +26,17 @@ pub struct Request {
     pub query: String,
 }
 
+impl Request {
+    pub fn query_param(&self, key: &str) -> Option<&str> {
+        self.query
+            .split('&')
+            .find_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                (k == key).then_some(v)
+            })
+    }
+}
+
 pub struct Response {
     pub status: u16,
     pub content_type: &'static str,
@@ -42,9 +52,10 @@ impl Response {
     pub fn error(msg: impl Into<String>) -> Self { Self::text(500, msg) }
 }
 
-// --- Core handler ---
+// --- Core handler (non-streaming) ---
 
 /// Route a request to the appropriate sube operation.
+/// Streaming endpoints (/events) are handled at the server layer.
 pub async fn handle<B: Backend>(chain: &mut Sube<B>, req: &Request) -> Response {
     let path = req.path.trim_start_matches('/');
 
@@ -52,14 +63,21 @@ pub async fn handle<B: Backend>(chain: &mut Sube<B>, req: &Request) -> Response 
         return handle_query(chain, rest).await;
     }
     if let Some(rest) = path.strip_prefix("call/") {
-        return handle_call(chain, rest, &req.body).await;
+        return handle_call(rest, &req.body);
     }
-    if path == "meta" || path.strip_prefix("meta/").is_some() {
+    if path == "meta" || path.starts_with("meta/") {
         let sub = path.strip_prefix("meta").unwrap_or("").trim_start_matches('/');
         return handle_meta(chain.metadata(), sub);
     }
+    if path == "events" || path.starts_with("events?") {
+        return Response::bad_request("use an SSE client (EventSource) for /events");
+    }
 
     Response::not_found()
+}
+
+pub fn is_sse_request(req: &Request) -> bool {
+    req.path.trim_start_matches('/').starts_with("events")
 }
 
 async fn handle_query<B: Backend>(chain: &mut Sube<B>, path: &str) -> Response {
@@ -72,11 +90,13 @@ async fn handle_query<B: Backend>(chain: &mut Sube<B>, path: &str) -> Response {
     }
 }
 
-async fn handle_call<B: Backend>(_chain: &mut Sube<B>, path: &str, _body: &str) -> Response {
+fn handle_call(path: &str, _body: &str) -> Response {
     if path.is_empty() {
         return Response::bad_request("usage: /call/{pallet}/{method}");
     }
-    // Submitting extrinsics requires a signer — future phase.
+    // Signing is wired at the server layer where the concrete assembler type
+    // is known (SignerFn, PassAuthenticator, etc.). The framework-agnostic
+    // core doesn't handle /call yet.
     Response::text(501, "signing not yet configured")
 }
 
@@ -103,9 +123,39 @@ fn handle_meta(meta: &Metadata, sub_path: &str) -> Response {
     }
 }
 
+// --- SSE event formatting ---
+
+/// Format a chain event as an SSE frame (returns `event: ...\ndata: ...\n\n`).
+pub fn format_chain_event(event: &sube::ChainEvent) -> String {
+    match event {
+        sube::ChainEvent::NewBlock { hash, number, .. } => {
+            format!("event: new_block\ndata: #{number} {hash}\n\n")
+        }
+        sube::ChainEvent::Finalized { hashes, .. } => {
+            let data = hashes.join(",");
+            format!("event: finalized\ndata: {data}\n\n")
+        }
+        sube::ChainEvent::BestBlock { hash } => {
+            format!("event: best_block\ndata: {hash}\n\n")
+        }
+    }
+}
+
+/// Format a watched-query result as an SSE frame.
+pub fn format_watch_event(path: &str, result: &SubeResponse) -> String {
+    let text = match result {
+        SubeResponse::Value(entry, meta) => {
+            entry.to_text(&meta.registry).unwrap_or_else(|e| e.to_string())
+        }
+        SubeResponse::None => "(none)".into(),
+        _ => "(complex)".into(),
+    };
+    format!("event: query\ndata: {path} {text}\n\n")
+}
+
 // --- Formatting helpers ---
 
-fn format_response(r: &SubeResponse) -> Response {
+pub fn format_response(r: &SubeResponse) -> Response {
     match r {
         SubeResponse::None => Response::text(200, "(none)"),
         SubeResponse::Void => Response::text(200, ""),
