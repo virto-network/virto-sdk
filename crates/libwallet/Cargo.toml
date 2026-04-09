@@ -68,4 +68,3 @@ vault_os = ["keyring"]
 vault_pass = ["prs-lib"]
 vault_simple = ["mnemonic", "rand"]
 
-[workspace]

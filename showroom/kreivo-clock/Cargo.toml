@@ -11,7 +11,7 @@ name = "kreivo-clock"
 
 [dependencies]
 # Chain client
-sube = { path = "../../lib/sube", default-features = false, features = ["ws-edge", "text"] }
+sube = { path = "../../crates/sube", default-features = false, features = ["ws-edge"] }
 
 # ESP32-S3 HAL + runtime
 esp-hal              = { version = "~1.0", features = ["esp32s3", "log-04", "unstable", "psram"] }

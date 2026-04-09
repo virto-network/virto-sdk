@@ -1,6 +1,6 @@
 on: 
   pull_request:
-    paths: ['scales/**']
+    paths: ['crates/scales/**']
 
 name: Scales
 
@@ -11,9 +11,9 @@ jobs:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
       - name: Check
-        run: just -f lib/scales/justfile check
+        run: just -f crates/scales/justfile check
       - name: Lint
-        run: just -f lib/scales/justfile lint
+        run: just -f crates/scales/justfile lint
    
   test:
     runs-on: ubuntu-latest
@@ -22,4 +22,4 @@ jobs:
       - uses: actions/checkout@v2
       - uses: extractions/setup-just@v2
       - name: Test
-        run: just -f lib/scales/justfile test
+        run: just -f crates/scales/justfile test

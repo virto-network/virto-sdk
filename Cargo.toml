@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sube",
+    "crates/scales",
+    "crates/libwallet",
+    "crates/pass",
+    "crates/pjs-rs",
+]
+exclude = [
+    "crates/sube/cli",
+    "crates/sube/tests/qemu",
+    "showroom/*",
+]
+
+[workspace.dependencies]
+serde = { version = "1", default-features = false }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+log = { version = "0.4", default-features = false }
+codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
+smol = { version = "2" }

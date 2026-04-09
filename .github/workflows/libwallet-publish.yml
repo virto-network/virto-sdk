@@ -3,7 +3,7 @@ name: Libwallet Publish
 on:
   push:
     branches: [main]
-    paths: ['lib/libwallet/**']
+    paths: ['crates/libwallet/**']
 
 jobs:
   publish:
@@ -33,7 +33,7 @@ jobs:
           source "$HOME/.cargo/env"
 
       - name: Install dependencies
-        working-directory: lib/libwallet/js
+        working-directory: crates/libwallet/js
         run: npm ci
 
       - name: Install wasm-pack
@@ -41,11 +41,11 @@ jobs:
           curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build
-        working-directory: lib/libwallet/js
+        working-directory: crates/libwallet/js
         run: npm run build
 
       - name: Publish
-        working-directory: lib/libwallet/js
+        working-directory: crates/libwallet/js
         run: |
           VERSION_OUTPUT=$(npm version patch -m "chore: bump version to %s")
 

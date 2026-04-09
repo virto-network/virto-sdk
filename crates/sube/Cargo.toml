@@ -87,13 +87,3 @@ harness = false
 [package.metadata.docs.rs]
 features = ["wss"]
 
-[workspace]
-members = ["."]
-exclude = ["tests/qemu", ".wt_alt"]
-
-[workspace.dependencies]
-serde = { version = "1", default-features = false }
-hex = { version = "0.4", default-features = false, features = ["alloc"] }
-log = { version = "0.4", default-features = false }
-codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
-smol = { version = "2" }

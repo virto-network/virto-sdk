@@ -15,4 +15,3 @@ libwallet = { path = "../libwallet", default-features = false, optional = true }
 default = ["wallet"]
 wallet = ["dep:libwallet", "libwallet/sr25519"]
 
-[workspace]

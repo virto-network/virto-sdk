@@ -1,6 +1,6 @@
 on: 
   pull_request:
-    paths: ['lib/sube/**']
+    paths: ['crates/sube/**']
 
 name: Sube
 
@@ -18,16 +18,16 @@ jobs:
           source "$HOME/.cargo/env"
 
       - name: Check
-        working-directory: lib/sube
+        working-directory: crates/sube
         run: just check
 
       - name: Lint
-        working-directory: lib/sube
+        working-directory: crates/sube
         run: just lint
 
       - name: Add cross targets
         run: rustup target add wasm32-unknown-unknown thumbv7em-none-eabihf riscv32imac-unknown-none-elf
 
       - name: Check cross targets (no_std, wasm, thumbv7em, riscv32)
-        working-directory: lib/sube
+        working-directory: crates/sube
         run: just check-targets-ci

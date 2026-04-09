@@ -1,6 +1,6 @@
 on: 
   pull_request:
-    paths: ['lib/libwallet/**']
+    paths: ['crates/libwallet/**']
 
 name: Libwallet
 
@@ -18,10 +18,10 @@ jobs:
           source "$HOME/.cargo/env"
 
       - name: Check
-        working-directory: lib/libwallet
+        working-directory: crates/libwallet
         run: just check
 
       - name: Lint
-        working-directory: lib/libwallet
+        working-directory: crates/libwallet
         run: just lint
 
