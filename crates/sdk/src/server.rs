@@ -1,50 +1,163 @@
-//! Minimal HTTP/1.1 server using smol — single-threaded, no Send required.
+//! Concurrent HTTP/1.1 + SSE server using smol's `LocalExecutor`.
+//!
+//! Single-threaded by design — `Sube` is not thread-safe and we never need
+//! to be. One **core actor** task owns the `Sube` instance and serializes all
+//! chain operations; per-connection tasks talk to it through a command
+//! channel. The accept loop spawns a task per TCP connection so long-running
+//! SSE streams don't block new clients.
 
+use smol::channel::{self, Receiver, Sender};
 use smol::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use smol::net::TcpListener;
-use sube::Sube;
+use smol::net::{TcpListener, TcpStream};
+use smol::{future, LocalExecutor};
+use sube::{ChainEvent, Sube};
 
-use crate::{format_chain_event, format_watch_event, handle, is_sse_request, Method, Request, Response};
+use crate::{
+    format_chain_event, format_watch_event, handle, is_sse_request, Method,
+    Request, Response,
+};
+
+/// Per-subscriber channel capacity. Slow SSE clients drop events past this.
+const SUB_CHANNEL_CAP: usize = 64;
+
+enum Cmd {
+    Handle {
+        req: Request,
+        reply: Sender<Response>,
+    },
+    QueryAt {
+        path: String,
+        hash: String,
+        reply: Sender<sube::Result<sube::Response>>,
+    },
+    Subscribe {
+        events: Sender<ChainEvent>,
+    },
+}
 
 pub async fn run(addr: &str, chain: &mut Sube) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     log::info!("listening on http://{addr}");
 
+    let (cmd_tx, cmd_rx) = channel::unbounded::<Cmd>();
+    let ex = LocalExecutor::new();
+    let ex = &ex;
+
+    let core = ex.spawn(core_actor(chain, cmd_rx));
+
+    ex.run(async move {
+        let _core = core;
+        accept_loop(listener, cmd_tx, ex).await
+    })
+    .await
+}
+
+async fn accept_loop(
+    listener: TcpListener,
+    cmd_tx: Sender<Cmd>,
+    ex: &LocalExecutor<'_>,
+) -> std::io::Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         log::debug!("connection from {peer}");
+        let cmd_tx = cmd_tx.clone();
+        ex.spawn(async move {
+            if let Err(e) = serve_one(stream, cmd_tx).await {
+                log::warn!("conn {peer}: {e}");
+            }
+        })
+        .detach();
+    }
+}
 
-        if let Err(e) = serve_one(chain, stream).await {
-            log::warn!("request error: {e}");
+/// Owns `Sube`. Races command receipt against `next_event`; on each event,
+/// fans out to live subscribers (dropping closed senders).
+async fn core_actor(chain: &mut Sube, cmd_rx: Receiver<Cmd>) {
+    enum Outcome {
+        Cmd(Result<Cmd, channel::RecvError>),
+        Event(sube::Result<ChainEvent>),
+    }
+
+    let mut subs: Vec<Sender<ChainEvent>> = Vec::new();
+
+    loop {
+        let outcome = {
+            let cmd_fut = cmd_rx.recv();
+            let event_fut = chain.next_event();
+            future::or(
+                async { Outcome::Cmd(cmd_fut.await) },
+                async { Outcome::Event(event_fut.await) },
+            )
+            .await
+        };
+
+        match outcome {
+            Outcome::Cmd(Err(_)) => return,
+            Outcome::Cmd(Ok(Cmd::Handle { req, reply })) => {
+                let resp = handle(chain, &req).await;
+                let _ = reply.try_send(resp);
+            }
+            Outcome::Cmd(Ok(Cmd::QueryAt { path, hash, reply })) => {
+                let r = chain.query_at_hash(&path, &hash).await;
+                let _ = reply.try_send(r);
+            }
+            Outcome::Cmd(Ok(Cmd::Subscribe { events })) => {
+                subs.push(events);
+            }
+            Outcome::Event(Ok(ev)) => {
+                subs.retain(|s| !s.is_closed());
+                for s in &subs {
+                    let _ = s.try_send(ev.clone());
+                }
+            }
+            Outcome::Event(Err(e)) => {
+                log::warn!("chain event error: {e}");
+                subs.clear();
+                return;
+            }
         }
     }
 }
 
-async fn serve_one(chain: &mut Sube, stream: smol::net::TcpStream) -> std::io::Result<()> {
-    let (reader_half, writer_half) = smol::io::split(stream);
+async fn serve_one(stream: TcpStream, cmd_tx: Sender<Cmd>) -> std::io::Result<()> {
+    let (reader_half, mut writer) = smol::io::split(stream);
     let mut reader = BufReader::new(reader_half);
-    let mut writer = writer_half;
 
-    let req = parse_request(&mut reader).await?;
-    let Some(req) = req else { return Ok(()) };
+    let Some(req) = parse_request(&mut reader).await? else {
+        return Ok(());
+    };
 
     if is_sse_request(&req) {
-        return serve_sse(chain, &req, &mut writer).await;
+        return serve_sse(req, &mut writer, cmd_tx).await;
     }
 
-    let resp = handle(chain, &req).await;
+    let (reply_tx, reply_rx) = channel::bounded(1);
+    cmd_tx
+        .send(Cmd::Handle { req, reply: reply_tx })
+        .await
+        .map_err(|e| io_err(format!("core unavailable: {e}")))?;
+
+    let resp = reply_rx
+        .recv()
+        .await
+        .map_err(|e| io_err(format!("core dropped reply: {e}")))?;
+
     send(&mut writer, &resp).await
 }
 
-/// SSE: stream chain events (and optionally re-query on each block).
 async fn serve_sse(
-    chain: &mut Sube,
-    req: &Request,
+    req: Request,
     writer: &mut (impl AsyncWriteExt + Unpin),
+    cmd_tx: Sender<Cmd>,
 ) -> std::io::Result<()> {
-    let watch_path = req.query_param("watch");
+    let watch_path = req.query_param("watch").map(String::from);
 
-    // SSE preamble
+    let (ev_tx, ev_rx) = channel::bounded(SUB_CHANNEL_CAP);
+    cmd_tx
+        .send(Cmd::Subscribe { events: ev_tx })
+        .await
+        .map_err(|e| io_err(format!("core unavailable: {e}")))?;
+
     writer
         .write_all(
             b"HTTP/1.1 200 OK\r\n\
@@ -57,33 +170,32 @@ async fn serve_sse(
 
     let mut prev_raw: Vec<u8> = Vec::new();
 
-    loop {
-        let event = match chain.next_event().await {
-            Ok(e) => e,
-            Err(e) => {
-                let frame = format!("event: error\ndata: {e}\n\n");
-                writer.write_all(frame.as_bytes()).await?;
-                writer.flush().await?;
-                break;
-            }
-        };
-
-        // Always emit the chain event
+    while let Ok(event) = ev_rx.recv().await {
         let frame = format_chain_event(&event);
         if writer.write_all(frame.as_bytes()).await.is_err() {
-            break; // client disconnected
+            break;
         }
 
-        // If watching a query, re-run it on new blocks
-        if let (Some(path), sube::ChainEvent::NewBlock { ref hash, .. }) = (watch_path, &event) {
-            if let Ok(resp) = chain.query_at_hash(path, hash).await {
-                // Only emit if the value changed
+        if let (Some(p), ChainEvent::NewBlock { hash, .. }) = (&watch_path, &event) {
+            let (tx, rx) = channel::bounded(1);
+            if cmd_tx
+                .send(Cmd::QueryAt {
+                    path: p.clone(),
+                    hash: hash.clone(),
+                    reply: tx,
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+            if let Ok(Ok(resp)) = rx.recv().await {
                 let current_raw: Vec<u8> = match &resp {
                     sube::Response::Value(e, _) => e.data.clone(),
                     _ => Vec::new(),
                 };
                 if current_raw != prev_raw {
-                    let frame = format_watch_event(path, &resp);
+                    let frame = format_watch_event(p, &resp);
                     if writer.write_all(frame.as_bytes()).await.is_err() {
                         break;
                     }
@@ -93,10 +205,14 @@ async fn serve_sse(
         }
 
         if writer.flush().await.is_err() {
-            break; // client disconnected
+            break;
         }
     }
     Ok(())
+}
+
+fn io_err(msg: impl Into<String>) -> std::io::Error {
+    std::io::Error::other(msg.into())
 }
 
 // --- HTTP parsing ---
@@ -104,7 +220,6 @@ async fn serve_sse(
 async fn parse_request(
     reader: &mut (impl AsyncBufReadExt + Unpin),
 ) -> std::io::Result<Option<Request>> {
-    // Request line: "GET /path HTTP/1.1"
     let mut line = String::new();
     reader.read_line(&mut line).await?;
     let parts: Vec<&str> = line.trim().splitn(3, ' ').collect();
@@ -123,7 +238,6 @@ async fn parse_request(
         None => (parts[1].to_string(), String::new()),
     };
 
-    // Read headers
     let mut content_length = 0usize;
     loop {
         let mut header = String::new();
@@ -137,7 +251,6 @@ async fn parse_request(
         }
     }
 
-    // Read body
     let mut body_buf = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body_buf).await?;
@@ -163,7 +276,10 @@ async fn send(writer: &mut (impl AsyncWriteExt + Unpin), resp: &Response) -> std
     };
     let header = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        resp.status, reason, resp.content_type, resp.body.len(),
+        resp.status,
+        reason,
+        resp.content_type,
+        resp.body.len(),
     );
     writer.write_all(header.as_bytes()).await?;
     writer.write_all(resp.body.as_bytes()).await?;
