@@ -140,6 +140,103 @@ pub fn decode_block_extrinsics<'a>(
     Ok(extrinsics)
 }
 
+/// Skip past a SCALE-encoded value of the given type without allocating.
+///
+/// Advances the cursor past a value of `ty_id` using the registry
+/// to determine the wire size. Useful for skipping over fields
+/// we don't need to decode (e.g., signature, extensions in extrinsics).
+pub fn skip_type(c: &mut Cursor, ty_id: TypeId, registry: &Registry) -> Result<(), Error> {
+    let td = registry
+        .resolve(ty_id)
+        .ok_or(Error::BadInput("unresolved type in extrinsic".into()))?;
+
+    match td {
+        TypeDef::Bool | TypeDef::U8 | TypeDef::I8 => {
+            c.read_byte()?;
+        }
+        TypeDef::U16 | TypeDef::I16 => {
+            c.read_bytes(2)?;
+        }
+        TypeDef::U32 | TypeDef::I32 => {
+            c.read_bytes(4)?;
+        }
+        TypeDef::U64 | TypeDef::I64 => {
+            c.read_bytes(8)?;
+        }
+        TypeDef::U128 | TypeDef::I128 => {
+            c.read_bytes(16)?;
+        }
+        TypeDef::Char => {
+            c.read_bytes(4)?;
+        }
+        TypeDef::Str | TypeDef::Bytes => {
+            c.skip_string()?;
+        }
+        TypeDef::Sequence(inner) => {
+            let count = c.read_compact_u32()?;
+            for _ in 0..count {
+                skip_type(c, inner, registry)?;
+            }
+        }
+        TypeDef::Array(inner, len) => {
+            for _ in 0..len {
+                skip_type(c, inner, registry)?;
+            }
+        }
+        TypeDef::Tuple(ids) | TypeDef::StructTuple(ids) => {
+            for id in ids {
+                skip_type(c, *id, registry)?;
+            }
+        }
+        TypeDef::Struct(fields) => {
+            for f in fields {
+                skip_type(c, f.ty, registry)?;
+            }
+        }
+        TypeDef::StructUnit => {}
+        TypeDef::StructNewType(inner) => {
+            skip_type(c, inner, registry)?;
+        }
+        TypeDef::Variant(vdef) => {
+            let index = c.read_byte()?;
+            let variant = vdef
+                .variant(index)
+                .map_err(|_| Error::BadInput("invalid variant index in extrinsic".into()))?;
+            match variant.fields() {
+                crate::registry::Fields::Unit => {}
+                crate::registry::Fields::NewType(id) => skip_type(c, id, registry)?,
+                crate::registry::Fields::Tuple(ids) => {
+                    for id in ids {
+                        skip_type(c, *id, registry)?;
+                    }
+                }
+                crate::registry::Fields::Struct(fields) => {
+                    for f in fields {
+                        skip_type(c, f.ty, registry)?;
+                    }
+                }
+            }
+        }
+        TypeDef::Compact(_) => {
+            c.read_compact_u32()?;
+        }
+        TypeDef::Map(k, v) => {
+            let count = c.read_compact_u32()?;
+            for _ in 0..count {
+                skip_type(c, k, registry)?;
+                skip_type(c, v, registry)?;
+            }
+        }
+        TypeDef::BitSequence(_, _) => {
+            // BitVec: compact length in bits, then ceil(bits/8) bytes
+            let bits = c.read_compact_u32()?;
+            let byte_count = (bits as usize).div_ceil(8);
+            c.read_bytes(byte_count)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,101 +389,4 @@ mod tests {
         assert_eq!(exts[1].pallet_index, 1);
         assert_eq!(exts[1].call_args, &[0x22, 0x33]);
     }
-}
-
-/// Skip past a SCALE-encoded value of the given type without allocating.
-///
-/// Advances the cursor past a value of `ty_id` using the registry
-/// to determine the wire size. Useful for skipping over fields
-/// we don't need to decode (e.g., signature, extensions in extrinsics).
-pub fn skip_type(c: &mut Cursor, ty_id: TypeId, registry: &Registry) -> Result<(), Error> {
-    let td = registry
-        .resolve(ty_id)
-        .ok_or(Error::BadInput("unresolved type in extrinsic".into()))?;
-
-    match td {
-        TypeDef::Bool | TypeDef::U8 | TypeDef::I8 => {
-            c.read_byte()?;
-        }
-        TypeDef::U16 | TypeDef::I16 => {
-            c.read_bytes(2)?;
-        }
-        TypeDef::U32 | TypeDef::I32 => {
-            c.read_bytes(4)?;
-        }
-        TypeDef::U64 | TypeDef::I64 => {
-            c.read_bytes(8)?;
-        }
-        TypeDef::U128 | TypeDef::I128 => {
-            c.read_bytes(16)?;
-        }
-        TypeDef::Char => {
-            c.read_bytes(4)?;
-        }
-        TypeDef::Str | TypeDef::Bytes => {
-            c.skip_string()?;
-        }
-        TypeDef::Sequence(inner) => {
-            let count = c.read_compact_u32()?;
-            for _ in 0..count {
-                skip_type(c, inner, registry)?;
-            }
-        }
-        TypeDef::Array(inner, len) => {
-            for _ in 0..len {
-                skip_type(c, inner, registry)?;
-            }
-        }
-        TypeDef::Tuple(ids) | TypeDef::StructTuple(ids) => {
-            for id in ids {
-                skip_type(c, *id, registry)?;
-            }
-        }
-        TypeDef::Struct(fields) => {
-            for f in fields {
-                skip_type(c, f.ty, registry)?;
-            }
-        }
-        TypeDef::StructUnit => {}
-        TypeDef::StructNewType(inner) => {
-            skip_type(c, inner, registry)?;
-        }
-        TypeDef::Variant(vdef) => {
-            let index = c.read_byte()?;
-            let variant = vdef
-                .variant(index)
-                .map_err(|_| Error::BadInput("invalid variant index in extrinsic".into()))?;
-            match variant.fields() {
-                crate::registry::Fields::Unit => {}
-                crate::registry::Fields::NewType(id) => skip_type(c, id, registry)?,
-                crate::registry::Fields::Tuple(ids) => {
-                    for id in ids {
-                        skip_type(c, *id, registry)?;
-                    }
-                }
-                crate::registry::Fields::Struct(fields) => {
-                    for f in fields {
-                        skip_type(c, f.ty, registry)?;
-                    }
-                }
-            }
-        }
-        TypeDef::Compact(_) => {
-            c.read_compact_u32()?;
-        }
-        TypeDef::Map(k, v) => {
-            let count = c.read_compact_u32()?;
-            for _ in 0..count {
-                skip_type(c, k, registry)?;
-                skip_type(c, v, registry)?;
-            }
-        }
-        TypeDef::BitSequence(_, _) => {
-            // BitVec: compact length in bits, then ceil(bits/8) bytes
-            let bits = c.read_compact_u32()?;
-            let byte_count = (bits as usize + 7) / 8;
-            c.read_bytes(byte_count)?;
-        }
-    }
-    Ok(())
 }

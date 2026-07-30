@@ -14,5 +14,5 @@ pub mod stream_cursor;
 #[cfg(feature = "async")]
 pub mod streaming_metadata;
 
-#[cfg(feature = "compress")]
+#[cfg(any(feature = "compress", test))]
 pub mod compress;

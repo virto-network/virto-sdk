@@ -129,7 +129,7 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
                 if i > 0 {
                     out.write_char(';')?;
                 }
-                out.write_str(&f.name)?;
+                out.write_str(f.name)?;
                 out.write_char(':')?;
                 fmt_value(&cursor.next_value(f.ty)?, out, depth)?;
             }
@@ -167,7 +167,7 @@ fn fmt_value(value: &Value<'_>, out: &mut impl Write, depth: usize) -> Result<()
                         if i > 0 {
                             out.write_char(';')?;
                         }
-                        out.write_str(&f.name)?;
+                        out.write_str(f.name)?;
                         out.write_char(':')?;
                         fmt_value(&cursor.next_value(f.ty)?, out, depth)?;
                     }
@@ -495,7 +495,7 @@ impl<'a> Parser<'a> {
                     if i > 0 {
                         self.expect(';')?;
                     }
-                    if !self.consume(&f.name) {
+                    if !self.consume(f.name) {
                         return Err(Error::BadInput(alloc::format!(
                             "expected field '{}'",
                             f.name

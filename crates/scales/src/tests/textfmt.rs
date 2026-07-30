@@ -256,6 +256,7 @@ fn enum_variants() {
     }
     roundtrip(&Color::Red, "Color::Red");
     roundtrip(&Color::Green, "Color::Green");
+    roundtrip(&Color::Blue, "Color::Blue");
 }
 
 #[test]

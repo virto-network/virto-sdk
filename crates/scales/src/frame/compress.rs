@@ -179,7 +179,7 @@ pub fn compress_filtered(
             let ty = source
                 .resolve(old_id)
                 .ok_or(Error::BadInput("missing type in filtered set".into()))?;
-            let mut td = convert_type(&ty, source)?;
+            let mut td = convert_type(ty, source)?;
             remap_type_ids(&mut td, &id_map);
             Ok(td)
         })

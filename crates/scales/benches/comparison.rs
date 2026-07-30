@@ -325,10 +325,10 @@ fn bench_registry_size(c: &mut Criterion) {
                     }
                 }
                 scale_serialization::TypeDef::Variant(vdef) => {
-                    compressed_wire += 1 + vdef.name.len() + 1;
-                    for v in &vdef.variants {
-                        compressed_wire += 1 + 1 + v.name.len() + 1;
-                        match &v.fields {
+                    compressed_wire += 1 + vdef.name().len() + 1;
+                    for v in vdef.variants() {
+                        compressed_wire += 1 + 1 + v.name().len() + 1;
+                        match v.fields() {
                             scale_serialization::registry::Fields::Unit => {}
                             scale_serialization::registry::Fields::NewType(_) => {
                                 compressed_wire += 4;

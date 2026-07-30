@@ -201,7 +201,7 @@ pub fn decode_metadata_filtered(data: &[u8], pallet_filter: &[&str]) -> Result<R
     // Filter pallets
     let keep: Vec<&str> = {
         let mut v: Vec<&str> = pallet_filter.to_vec();
-        if !v.iter().any(|n| *n == "System") {
+        if !v.contains(&"System") {
             v.push("System");
         }
         v
@@ -397,7 +397,7 @@ pub fn remap_pallet_ids(pallets: Vec<RawPallet>, remap: &dyn Fn(u32) -> u32) -> 
     pallets
         .into_iter()
         .map(|mut p| {
-            p.calls_ty = p.calls_ty.map(&*remap);
+            p.calls_ty = p.calls_ty.map(remap);
             if let Some(ref mut s) = p.storage {
                 for e in &mut s.entries {
                     match &mut e.ty {
@@ -418,8 +418,8 @@ pub fn remap_pallet_ids(pallets: Vec<RawPallet>, remap: &dyn Fn(u32) -> u32) -> 
 }
 
 pub fn remap_extrinsic_ids(mut ext: RawExtrinsic, remap: &dyn Fn(u32) -> u32) -> RawExtrinsic {
-    ext.address_ty = ext.address_ty.map(&*remap);
-    ext.signature_ty = ext.signature_ty.map(&*remap);
+    ext.address_ty = ext.address_ty.map(remap);
+    ext.signature_ty = ext.signature_ty.map(remap);
     for e in &mut ext.extensions {
         e.ty = remap(e.ty);
         e.additional_signed = remap(e.additional_signed);
@@ -969,30 +969,34 @@ mod tests {
 mod streaming_size_tests {
     use super::*;
     use alloc::collections::BTreeSet;
-    
+
     const KREIVO_META: &[u8] = include_bytes!("../../tests/fixtures/kreivo.scale");
-    
+
     #[test]
     fn measure_filtered_registry_storage_only() {
         let raw = decode_metadata(KREIVO_META).unwrap();
-        let pallets: Vec<_> = raw.pallets.into_iter()
+        let pallets: Vec<_> = raw
+            .pallets
+            .into_iter()
             .filter(|p| p.name == "System" || p.name == "CollatorSelection")
             .collect();
-        
+
         let root = collect_storage_type_ids(&pallets);
         println!("Root storage type IDs: {} entries", root.len());
-        
+
         // Transitive closure
         let mut needed = BTreeSet::new();
         let mut queue = root;
         while let Some(id) = queue.pop() {
-            if !needed.insert(id) { continue; }
+            if !needed.insert(id) {
+                continue;
+            }
             if let Some(td) = raw.types.get(id as usize) {
                 collect_type_refs(td, &mut queue);
             }
         }
         println!("Transitive types needed: {}", needed.len());
-        
+
         // Build filtered types
         let mut id_map: Vec<Option<u32>> = vec![None; raw.types.len()];
         let mut filtered = Vec::new();
@@ -1007,7 +1011,7 @@ mod streaming_size_tests {
             }
         }
         postprocess_types(&mut filtered);
-        
+
         // Measure type sizes
         let mut total_strings = 0usize;
         let mut total_fields = 0usize;
@@ -1017,7 +1021,9 @@ mod streaming_size_tests {
             match td {
                 TypeDefOwned::Struct(fields) => {
                     total_fields += fields.len();
-                    for f in fields { total_strings += f.name.len(); }
+                    for f in fields {
+                        total_strings += f.name.len();
+                    }
                 }
                 TypeDefOwned::Variant(vdef) => {
                     total_variants += vdef.variants.len();
@@ -1027,7 +1033,9 @@ mod streaming_size_tests {
                         match &v.fields {
                             FieldsOwned::Struct(fields) => {
                                 total_fields += fields.len();
-                                for f in fields { total_strings += f.name.len(); }
+                                for f in fields {
+                                    total_strings += f.name.len();
+                                }
                             }
                             FieldsOwned::Tuple(ids) => total_type_ids += ids.len(),
                             _ => {}
@@ -1040,16 +1048,21 @@ mod streaming_size_tests {
                 _ => {}
             }
         }
-        
+
         let tdi_size = filtered.len() * 12; // approx TDI enum size
         let fields_size = total_fields * 8; // FI = StrId + TypeId
         let variants_size = total_variants * 12; // VI = u8 + StrId + VFI
         let type_ids_size = total_type_ids * 4;
         let str_idx_size = (total_fields + total_variants + filtered.len()) * 6; // (u32, u16) per string
-        let total = tdi_size + fields_size + variants_size + type_ids_size + total_strings + str_idx_size;
-        
+        let total =
+            tdi_size + fields_size + variants_size + type_ids_size + total_strings + str_idx_size;
+
         println!("Filtered registry estimate:");
-        println!("  types:    {} entries, ~{} bytes", filtered.len(), tdi_size);
+        println!(
+            "  types:    {} entries, ~{} bytes",
+            filtered.len(),
+            tdi_size
+        );
         println!("  fields:   {}, ~{} bytes", total_fields, fields_size);
         println!("  variants: {}, ~{} bytes", total_variants, variants_size);
         println!("  type_ids: {}, ~{} bytes", total_type_ids, type_ids_size);

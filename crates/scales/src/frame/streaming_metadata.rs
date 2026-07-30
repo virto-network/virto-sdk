@@ -37,9 +37,9 @@ pub async fn scan_pallets_streaming<R: Read>(
     // Skip all types — zero allocation
     let type_count = c.read_compact_u32().await?;
     if type_count > 10_000 {
-        return Err(Error::BadInput(
-            alloc::format!("type_count too large: {type_count} (metadata corrupt?)").into(),
-        ));
+        return Err(Error::BadInput(alloc::format!(
+            "type_count too large: {type_count} (metadata corrupt?)"
+        )));
     }
     for _ in 0..type_count {
         c.read_compact_u32().await?; // id
@@ -48,9 +48,9 @@ pub async fn scan_pallets_streaming<R: Read>(
 
     let pallet_count = c.read_compact_u32().await?;
     if pallet_count > 500 {
-        return Err(Error::BadInput(
-            alloc::format!("pallet_count too large: {pallet_count} (type skipping off?)").into(),
-        ));
+        return Err(Error::BadInput(alloc::format!(
+            "pallet_count too large: {pallet_count} (type skipping off?)"
+        )));
     }
     let mut pallets = Vec::with_capacity(pallet_count as usize);
     for _ in 0..pallet_count {
@@ -186,15 +186,16 @@ pub async fn decode_filtered_types<R: Read>(
 async fn read_header_async<R: Read>(c: &mut StreamCursor<R>) -> Result<u8, Error> {
     let magic = c.read_u32_le().await?;
     if magic != 0x6174656d {
-        return Err(Error::BadInput(
-            alloc::format!("not metadata (magic={:#010x}, expected 0x6174656d)", magic).into(),
-        ));
+        return Err(Error::BadInput(alloc::format!(
+            "not metadata (magic={:#010x}, expected 0x6174656d)",
+            magic
+        )));
     }
     let version = c.read_byte().await?;
     if version != 14 && version != 15 {
-        return Err(Error::BadInput(
-            alloc::format!("unsupported metadata version: {version}").into(),
-        ));
+        return Err(Error::BadInput(alloc::format!(
+            "unsupported metadata version: {version}"
+        )));
     }
     Ok(version)
 }

@@ -15,6 +15,7 @@ struct Span(u32, u16);
 
 #[derive(Debug, Clone)]
 #[rustfmt::skip]
+#[allow(clippy::upper_case_acronyms)]
 enum TDI {
     Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, Char, Str, Bytes,
     Sequence(TypeId), Map(TypeId, TypeId), Array(TypeId, u32),
@@ -37,6 +38,7 @@ struct VI {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::upper_case_acronyms)]
 enum VFI {
     Unit,
     NewType(TypeId),
@@ -202,14 +204,13 @@ impl Registry {
         let variants_cap = 850;
         let type_ids_cap = 64;
         let str_idx_cap = 2200;
-        let strings_cap = buf.len()
-            .saturating_sub(
-                types_cap * core::mem::size_of::<TDI>()
-                    + fields_cap * core::mem::size_of::<FI>()
-                    + variants_cap * core::mem::size_of::<VI>()
-                    + type_ids_cap * core::mem::size_of::<TypeId>()
-                    + str_idx_cap * core::mem::size_of::<(u32, u16)>(),
-            );
+        let strings_cap = buf.len().saturating_sub(
+            types_cap * core::mem::size_of::<TDI>()
+                + fields_cap * core::mem::size_of::<FI>()
+                + variants_cap * core::mem::size_of::<VI>()
+                + type_ids_cap * core::mem::size_of::<TypeId>()
+                + str_idx_cap * core::mem::size_of::<(u32, u16)>(),
+        );
 
         // Safety: we're creating Vecs from aligned, owned static memory.
         // The buffer is exclusively ours (leaked Box). Each Vec region
@@ -226,7 +227,13 @@ impl Registry {
         // Simpler: just use with_capacity_detailed. The fragmentation
         // issue is about the allocator, not the Vecs themselves.
         let _ = buf; // not used directly
-        Self::with_capacity_detailed(types_cap, fields_cap, variants_cap, type_ids_cap, strings_cap)
+        Self::with_capacity_detailed(
+            types_cap,
+            fields_cap,
+            variants_cap,
+            type_ids_cap,
+            strings_cap,
+        )
     }
 
     /// Pre-allocate capacity for the string index.
