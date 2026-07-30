@@ -1,94 +1,125 @@
 # Sube
 
-A lightweight Substrate client focused on size and portability.
-Runs in `no_std` environments including embedded targets (Cortex-M), the browser, and standard servers.
+A lightweight, metadata-driven Substrate client for `no_std`, embedded, browser,
+and native Rust applications.
 
-Uses runtime metadata (≥ v15) and our [Scales](../scales/) library to automatically convert between SCALE binary and human-readable formats (JSON, text) without hardcoded type information.
+Sube uses runtime metadata v15+ and
+[`scale-serialization`](../scales/) to encode calls and decode storage without
+generated runtime types.
 
-## Quick Start
+## Quick start
+
+The default feature set is intentionally empty. Native TLS applications should
+enable `wss`:
+
+```toml
+[dependencies]
+sube = { version = "1.0", features = ["wss"] }
+```
 
 ```rust
-use sube::sube;
+use sube::Sube;
 
-// One-liner query
-let response = sube("wss://kreivo.io/system/account/0x1234...").await?;
+# async fn example() -> sube::Result<()> {
+let mut chain = Sube::connect("wss://kreivo.io").await?;
+let response = chain.query("system/account/0x1284...b2b").await?;
+
 if let Some(text) = response.to_text()? {
     println!("{text}");
 }
-
-// Reusable handle
-let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
-let account = chain.query("system/account/0x1234...").await?;
-
-// Historical block query
-let old = chain.query_at("system/account/0x1234...", 1000).await?;
-
-// Submit an extrinsic with a text-format body (waits for finalization)
-chain.call("balances/transfer_keep_alive")
-    .body_text("(dest:MultiAddress::Id(0xd435...);value:1000)")
-    .signer(my_signer)
-    .await?;
-
-// Any serde::Serialize body works too
-chain.call("system/remark")
-    .body(json!({ "remark": "0x68656c6c6f" }))
-    .signer(my_signer)
-    .await?;
+# Ok(())
+# }
 ```
 
-## Backends
-
-| Feature | Description |
-|---------|-------------|
-| `ws` | WebSocket via `async-tungstenite` + `smol` (std) |
-| `wss` | WebSocket with TLS (implies `ws`) |
-| `ws-edge` | WebSocket via `edge-ws` for embedded targets (no_std) |
-| `ws-web` | Browser WebSocket via `gloo-net` (wasm32-unknown-unknown) |
-| `smoldot-std` | Embedded light client via `smoldot-light` (std, no external node) |
-
-### Browser / wasm
-
-Build with `--target wasm32-unknown-unknown --features ws-web`. The browser
-handles TCP, TLS and framing natively, so `Sube::connect("wss://...")` works
-unchanged from a wasm-bindgen app:
+Reuse a connected `Sube` handle for repeated queries so the transport and
+metadata remain local to that connection. One-shot queries are also available:
 
 ```rust
-// In a wasm-bindgen entry point
-let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
-let r = chain.query("system/account/0x1234").await?;
+# async fn example() -> sube::Result<()> {
+let response = sube::sube("wss://kreivo.io/system/number").await?;
+assert!(response.to_text()?.is_some());
+# Ok(())
+# }
 ```
 
-Full in-browser light client (smoldot in wasm) is **not yet supported** —
-upstream `smoldot-light` 0.19 only ships `DefaultPlatform`, which is std-only.
-A browser-capable `PlatformRef` impl is tracked as future work; in the
-meantime, browser apps should use `ws-web` against a public RPC endpoint.
+## Features
 
-### Light Client
+| Feature | Environment | Description |
+| --- | --- | --- |
+| *(default)* | `no_std` | Metadata, SCALE values, offline backends, and builders |
+| `ws` | native `std` | Plain WebSocket using `async-tungstenite` and `smol` |
+| `wss` | native `std` | WebSocket with Rustls and WebPKI roots; implies `ws` |
+| `ws-edge` | embedded `no_std` | Embassy TCP, mbedTLS, and `edge-ws` |
+| `ws-web` | browser | Browser WebSocket for `wasm32-unknown-unknown` |
+| `smoldot` | custom `no_std` platform | Smoldot light-client backend |
+| `smoldot-std` | native `std` | Smoldot default platform with Wasmtime |
 
-```rust
-let chain = sube::Sube::connect_light(include_str!("chain_spec.json")).await?;
-let r = chain.query("system/account/0x1234").await?;
-```
+Text-format encoding and decoding are always available; there is no separate
+`text` feature.
 
-## Other Features
+### Browser
 
-| Feature | Description |
-|---------|-------------|
-| `text` | Compact text format via `scales` (call bodies, response decoding) |
-| `std` | Standard library support |
-
-## Testing
+Build with:
 
 ```sh
-# Unit tests
-cargo test
-
-# Integration tests (requires network)
-cargo test --features test --test integration -- --ignored
-
-# Embedded smoke test (requires qemu-system-arm)
-cd tests/qemu && cargo build --release
-qemu-system-arm -cpu cortex-m4 -machine lm3s6965evb \
-  -nographic -semihosting-config enable=on,target=native \
-  -kernel target/thumbv7em-none-eabihf/release/sube-qemu-test
+cargo build --target wasm32-unknown-unknown --features ws-web
 ```
+
+Browser applications use `Sube::connect("wss://…")` normally. Smoldot's
+provided default platform is native-only, so browser builds should use
+`ws-web` or provide a custom `smoldot` platform.
+
+### Embedded
+
+`connect_edge` consumes unique stack and socket-buffer resources, preventing
+overlapping connections from aliasing the same buffers:
+
+```rust,ignore
+static RX: StaticCell<[u8; 2048]> = StaticCell::new();
+static TX: StaticCell<[u8; 2048]> = StaticCell::new();
+
+let resources = sube::EdgeResources::new(
+    stack,
+    RX.init([0; 2048]),
+    TX.init([0; 2048]),
+)
+.with_ca_certificate_der(include_bytes!("root-ca.der"));
+let chain = sube::connect_edge(
+    "wss://kreivo.io",
+    resources,
+    rng,
+    &["Balances"],
+)
+.await?;
+```
+
+The filtered pallet list is fetched during connection; `System` is retained
+automatically. A `wss://` connection requires a trusted DER-encoded CA
+certificate; plain `ws://` remains available for local development.
+
+## CLI
+
+The workspace includes an unpublished explorer:
+
+```sh
+cargo run -p sube-cli -- --chain wss://kreivo.io system/number
+cargo run -p sube-cli -- --chain wss://kreivo.io
+```
+
+The second form opens the terminal UI.
+
+## Verification
+
+```sh
+just ci
+```
+
+Live-chain tests are ignored by default:
+
+```sh
+SUBE_TEST_CHAIN=wss://kreivo.io \
+  cargo test --features wss --test integration -- --ignored
+```
+
+The crate requires Rust 1.88 or newer. See [CHANGELOG.md](CHANGELOG.md) for the
+1.0 migration notes.
