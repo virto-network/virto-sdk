@@ -1,19 +1,19 @@
 [package]
 name = "sube-cli"
 version = "1.0.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.88"
+publish = false
 
 [[bin]]
 name = "sube"
 path = "src/main.rs"
 
 [dependencies]
-sube = { path = "..", features = ["std", "wss"] }
+sube = { path = "..", features = ["wss"] }
 clap = { version = "4", features = ["derive"] }
 smol = "2"
 ratatui = "0.30"
 crossterm = "0.29"
 anyhow = "1"
 hex = "0.4"
-
-[workspace]

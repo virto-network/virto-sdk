@@ -15,10 +15,7 @@ pub enum Field {
         is_bytes: bool,
     },
     /// Boolean toggle.
-    Bool {
-        name: String,
-        value: bool,
-    },
+    Bool { name: String, value: bool },
     /// Enum with selectable variants. Each variant may have sub-fields.
     Enum {
         name: String,
@@ -51,7 +48,9 @@ impl Field {
     #[allow(clippy::only_used_in_recursion)]
     fn to_value(&self, registry: &Registry) -> String {
         match self {
-            Field::Text { input, is_bytes, .. } => {
+            Field::Text {
+                input, is_bytes, ..
+            } => {
                 if *is_bytes && !input.starts_with("0x") {
                     // Auto-encode plain string to hex bytes
                     format!("0x{}", hex::encode(input.as_bytes()))
@@ -60,7 +59,11 @@ impl Field {
                 }
             }
             Field::Bool { value, .. } => {
-                if *value { "true".into() } else { "false".into() }
+                if *value {
+                    "true".into()
+                } else {
+                    "false".into()
+                }
             }
             Field::Enum {
                 variants,
@@ -128,7 +131,10 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
         Some(TypeDef::Variant(vdef)) => {
             let variants: Vec<String> = vdef.variants().map(|v| v.name().to_string()).collect();
             let sub_fields = if !variants.is_empty() {
-                vdef.variants().next().map(|v| variant_sub_fields(&v, registry)).unwrap_or_default()
+                vdef.variants()
+                    .next()
+                    .map(|v| variant_sub_fields(&v, registry))
+                    .unwrap_or_default()
             } else {
                 vec![]
             };
@@ -172,10 +178,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
     }
 }
 
-fn variant_sub_fields(
-    variant: &sube::scales::Variant,
-    registry: &Registry,
-) -> Vec<Field> {
+fn variant_sub_fields(variant: &sube::scales::Variant, registry: &Registry) -> Vec<Field> {
     match variant.fields() {
         sube::scales::Fields::Unit => vec![],
         sube::scales::Fields::NewType(ty_id) => {
@@ -289,7 +292,12 @@ impl FormState {
             }
             CycleAction::CycleEnum(ty_id, new_selected) => {
                 let new_sub = resolve_variant_sub_fields(ty_id, new_selected, &self.registry);
-                if let Some(Field::Enum { selected, sub_fields, .. }) = self.field_at_cursor_mut() {
+                if let Some(Field::Enum {
+                    selected,
+                    sub_fields,
+                    ..
+                }) = self.field_at_cursor_mut()
+                {
                     *selected = new_selected;
                     *sub_fields = new_sub;
                 }
@@ -350,26 +358,35 @@ impl FormState {
             if y >= area.y + area.height {
                 break;
             }
-            y = render_field(f, field, area.x, y, area.width, area.y + area.height, &mut flat_idx, self.cursor);
+            y = render_field(
+                f,
+                field,
+                area.x,
+                y,
+                area.width,
+                area.y + area.height,
+                &mut flat_idx,
+                self.cursor,
+            );
         }
     }
 }
 
-fn resolve_variant_sub_fields(
-    ty_id: TypeId,
-    selected: usize,
-    registry: &Registry,
-) -> Vec<Field> {
-    if let Some(TypeDef::Variant(vdef)) = registry.resolve(ty_id) {
-        if let Some(variant) = vdef.variants().nth(selected) {
-            return variant_sub_fields(&variant, registry);
-        }
+fn resolve_variant_sub_fields(ty_id: TypeId, selected: usize, registry: &Registry) -> Vec<Field> {
+    if let Some(TypeDef::Variant(vdef)) = registry.resolve(ty_id)
+        && let Some(variant) = vdef.variants().nth(selected)
+    {
+        return variant_sub_fields(&variant, registry);
     }
     vec![]
 }
 
 /// Find the mutable field at a flat cursor position.
-fn find_field_at<'a>(field: &'a mut Field, target: usize, pos: &mut usize) -> Option<&'a mut Field> {
+fn find_field_at<'a>(
+    field: &'a mut Field,
+    target: usize,
+    pos: &mut usize,
+) -> Option<&'a mut Field> {
     if *pos == target {
         return Some(field);
     }
@@ -403,11 +420,21 @@ enum CycleAction {
     None,
 }
 
-fn find_cycle_action(field: &Field, target: usize, pos: &mut usize, forward: bool) -> Option<CycleAction> {
+fn find_cycle_action(
+    field: &Field,
+    target: usize,
+    pos: &mut usize,
+    forward: bool,
+) -> Option<CycleAction> {
     if *pos == target {
         return Some(match field {
             Field::Bool { .. } => CycleAction::ToggleBool,
-            Field::Enum { ty_id, selected, variants, .. } if !variants.is_empty() => {
+            Field::Enum {
+                ty_id,
+                selected,
+                variants,
+                ..
+            } if !variants.is_empty() => {
                 let new = if forward {
                     (*selected + 1) % variants.len()
                 } else if *selected == 0 {
@@ -445,10 +472,10 @@ fn find_cycle_action(field: &Field, target: usize, pos: &mut usize, forward: boo
 
 /// Find the item_ty of a List field at cursor.
 fn find_list_ty(field: &Field, target: usize, pos: &mut usize) -> Option<TypeId> {
-    if *pos == target {
-        if let Field::List { item_ty, .. } = field {
-            return Some(*item_ty);
-        }
+    if *pos == target
+        && let Field::List { item_ty, .. } = field
+    {
+        return Some(*item_ty);
     }
     *pos += 1;
     match field {
@@ -535,15 +562,20 @@ fn render_field(
             *flat_idx += 1;
             let mut next_y = y + 1;
             for sf in sub_fields {
-                next_y = render_field(f, sf, x + 2, next_y, width.saturating_sub(2), max_y, flat_idx, cursor);
+                next_y = render_field(
+                    f,
+                    sf,
+                    x + 2,
+                    next_y,
+                    width.saturating_sub(2),
+                    max_y,
+                    flat_idx,
+                    cursor,
+                );
             }
             next_y
         }
-        Field::List {
-            name,
-            items,
-            ..
-        } => {
+        Field::List { name, items, .. } => {
             let hint = if is_focused { "  (+add  -remove)" } else { "" };
             let text = format!("{name}: [{} items]{hint}", items.len());
             f.render_widget(Paragraph::new(text).style(style), area);
@@ -561,7 +593,16 @@ fn render_field(
                 );
                 next_y += 1;
                 for sf in item_fields {
-                    next_y = render_field(f, sf, x + 4, next_y, width.saturating_sub(4), max_y, flat_idx, cursor);
+                    next_y = render_field(
+                        f,
+                        sf,
+                        x + 4,
+                        next_y,
+                        width.saturating_sub(4),
+                        max_y,
+                        flat_idx,
+                        cursor,
+                    );
                 }
             }
             next_y

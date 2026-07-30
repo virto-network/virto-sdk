@@ -158,17 +158,18 @@ fn draw_storage(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, split[0], &mut state);
 
     let result_area = split[1];
-    if matches!(app.focus, Focus::Form) && app.panel == Panel::Storage {
-        if let Some(ref form) = app.storage_form {
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title("Parameters")
-                .border_style(Style::default().fg(Color::Yellow));
-            let inner = block.inner(result_area);
-            f.render_widget(block, result_area);
-            form.render(f, inner);
-            return;
-        }
+    if matches!(app.focus, Focus::Form)
+        && app.panel == Panel::Storage
+        && let Some(ref form) = app.storage_form
+    {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Parameters")
+            .border_style(Style::default().fg(Color::Yellow));
+        let inner = block.inner(result_area);
+        f.render_widget(block, result_area);
+        form.render(f, inner);
+        return;
     }
     f.render_widget(
         Paragraph::new(app.storage_result.as_deref().unwrap_or(""))
@@ -221,17 +222,18 @@ fn draw_calls(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, split[0], &mut state);
 
     let result_area = split[1];
-    if matches!(app.focus, Focus::Form) && app.panel == Panel::Calls {
-        if let Some(ref form) = app.call_form {
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title("Parameters")
-                .border_style(Style::default().fg(Color::Yellow));
-            let inner = block.inner(result_area);
-            f.render_widget(block, result_area);
-            form.render(f, inner);
-            return;
-        }
+    if matches!(app.focus, Focus::Form)
+        && app.panel == Panel::Calls
+        && let Some(ref form) = app.call_form
+    {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title("Parameters")
+            .border_style(Style::default().fg(Color::Yellow));
+        let inner = block.inner(result_area);
+        f.render_widget(block, result_area);
+        form.render(f, inner);
+        return;
     }
     f.render_widget(
         Paragraph::new(app.call_result.as_deref().unwrap_or(""))
@@ -325,10 +327,7 @@ fn draw_block_detail(f: &mut Frame, app: &App, detail: &BlockDetail) {
         })
         .collect();
 
-    let rev_idx = app
-        .recent_blocks
-        .len()
-        .saturating_sub(1 + detail.block_idx);
+    let rev_idx = app.recent_blocks.len().saturating_sub(1 + detail.block_idx);
     let list = List::new(items)
         .block(
             Block::default()

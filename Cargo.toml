@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/sube",
+    "crates/sube/cli",
     "crates/scales",
     "crates/libwallet",
     "crates/pass",
@@ -9,7 +10,6 @@ members = [
     "crates/sdk",
 ]
 exclude = [
-    "crates/sube/cli",
     "crates/sube/tests/qemu",
     "showroom/*",
 ]

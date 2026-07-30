@@ -3,12 +3,12 @@ use std::sync::mpsc;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::prelude::*;
 
-use sube::metadata::{PalletMeta, StorageEntryType};
 use sube::Metadata;
+use sube::metadata::{PalletMeta, StorageEntryType};
 
 mod chain;
 mod draw;
@@ -17,7 +17,7 @@ mod format;
 mod types;
 
 use chain::{FromChain, ToChain};
-use form::{field_from_type, FormState};
+use form::{FormState, field_from_type};
 use format::fuzzy_match;
 
 // --- Types ---
@@ -132,12 +132,10 @@ impl App {
             self.storage_items = storage.entries.iter().map(|e| e.name.clone()).collect();
         }
 
-        if let Some(calls_ty) = pallet.calls_ty {
-            if let Some(sube::scales::TypeDef::Variant(vdef)) =
-                self.meta.registry.resolve(calls_ty)
-            {
-                self.call_items = vdef.variants().map(|v| v.name().to_string()).collect();
-            }
+        if let Some(calls_ty) = pallet.calls_ty
+            && let Some(sube::scales::TypeDef::Variant(vdef)) = self.meta.registry.resolve(calls_ty)
+        {
+            self.call_items = vdef.variants().map(|v| v.name().to_string()).collect();
         }
     }
 
@@ -195,34 +193,29 @@ impl App {
             None => return,
         };
 
-        if let Some(calls_ty) = pallet.calls_ty {
-            if let Some(sube::scales::TypeDef::Variant(vdef)) =
-                self.meta.registry.resolve(calls_ty)
-            {
-                if let Some(variant) = vdef.variants().find(|v| v.name() == item_name) {
-                    let fields = match variant.fields() {
-                        sube::scales::Fields::Unit => vec![],
-                        sube::scales::Fields::NewType(ty_id) => {
-                            vec![field_from_type("value", ty_id, &self.meta.registry)]
-                        }
-                        sube::scales::Fields::Tuple(ids) => ids
-                            .iter()
-                            .enumerate()
-                            .map(|(i, id)| {
-                                field_from_type(&format!("field{i}"), *id, &self.meta.registry)
-                            })
-                            .collect(),
-                        sube::scales::Fields::Struct(fields) => fields
-                            .iter()
-                            .map(|f| field_from_type(f.name, f.ty, &self.meta.registry))
-                            .collect(),
-                    };
-                    self.call_form = Some(FormState::new(
-                        fields,
-                        sube::Rc::new(self.meta.registry.clone()),
-                    ));
+        if let Some(calls_ty) = pallet.calls_ty
+            && let Some(sube::scales::TypeDef::Variant(vdef)) = self.meta.registry.resolve(calls_ty)
+            && let Some(variant) = vdef.variants().find(|v| v.name() == item_name)
+        {
+            let fields = match variant.fields() {
+                sube::scales::Fields::Unit => vec![],
+                sube::scales::Fields::NewType(ty_id) => {
+                    vec![field_from_type("value", ty_id, &self.meta.registry)]
                 }
-            }
+                sube::scales::Fields::Tuple(ids) => ids
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| field_from_type(&format!("field{i}"), *id, &self.meta.registry))
+                    .collect(),
+                sube::scales::Fields::Struct(fields) => fields
+                    .iter()
+                    .map(|f| field_from_type(f.name, f.ty, &self.meta.registry))
+                    .collect(),
+            };
+            self.call_form = Some(FormState::new(
+                fields,
+                sube::Rc::new(self.meta.registry.clone()),
+            ));
         }
     }
 
@@ -316,12 +309,11 @@ impl App {
                 self.storage_result = None;
             }
             FromChain::BlockDetail(hash, events) => {
-                if let Some(ref mut d) = self.block_detail {
-                    if let Some(idx) = self.recent_blocks.iter().position(|b| b.hash == hash) {
-                        if d.block_idx == idx {
-                            d.events = Some(events);
-                        }
-                    }
+                if let Some(ref mut d) = self.block_detail
+                    && let Some(idx) = self.recent_blocks.iter().position(|b| b.hash == hash)
+                    && d.block_idx == idx
+                {
+                    d.events = Some(events);
                 }
             }
         }
@@ -397,14 +389,18 @@ impl App {
 
 pub async fn run(chain_url: &str) -> Result<()> {
     eprintln!("Connecting to {chain_url}...");
-    let chain = sube::Sube::connect(chain_url).await?;
-    eprintln!("Connected, loading metadata...");
-    let meta = chain.metadata_rc();
 
     let (ui_tx, chain_rx) = mpsc::channel::<ToChain>();
     let (chain_tx, ui_rx) = smol::channel::unbounded::<FromChain>();
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
-    chain::spawn(chain, chain_rx, chain_tx);
+    chain::spawn(chain_url.into(), chain_rx, chain_tx, ready_tx);
+    let meta = ready_rx
+        .recv()
+        .map_err(|_| anyhow::anyhow!("chain worker stopped during startup"))?
+        .map_err(anyhow::Error::msg)?;
+    let meta = sube::Rc::new(meta);
+    eprintln!("Connected, metadata loaded.");
 
     enable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
@@ -447,21 +443,19 @@ pub async fn run(chain_url: &str) -> Result<()> {
         }
         app.flush_pending_detail();
 
-        if event::poll(std::time::Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Press {
-                    continue;
-                }
-                if key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
-                    app.should_quit = true;
-                }
-                if key.code == KeyCode::Char('q') && matches!(app.focus, Focus::Navigate) {
-                    app.should_quit = true;
-                }
-                handle_key(&mut app, key.code);
+        if event::poll(std::time::Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            if key.kind != KeyEventKind::Press {
+                continue;
             }
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                app.should_quit = true;
+            }
+            if key.code == KeyCode::Char('q') && matches!(app.focus, Focus::Navigate) {
+                app.should_quit = true;
+            }
+            handle_key(&mut app, key.code);
         }
 
         if app.should_quit {
