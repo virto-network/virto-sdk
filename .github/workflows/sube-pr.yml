@@ -1,33 +1,103 @@
-on: 
-  pull_request:
-    paths: ['crates/sube/**']
-
 name: Sube
 
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/scales/**"
+      - "crates/sube/**"
+      - ".github/workflows/sube-*.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/scales/**"
+      - "crates/sube/**"
+      - ".github/workflows/sube-*.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  check:
+  host:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: extractions/setup-just@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
-      - name: Install Rust
+      - name: Formatting
+        run: cargo fmt -p scale-serialization -p sube -p sube-cli -- --check
+
+      - name: Core and native transports
         run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          source "$HOME/.cargo/env"
+          cargo check -p sube --no-default-features
+          cargo check -p sube --features wss
+          cargo check -p sube --features smoldot-std
+          cargo check -p sube-cli
 
-      - name: Check
+      - name: Tests and documentation
+        run: |
+          cargo test -p sube --features wss
+          cargo test -p sube --features wss --doc
+          RUSTDOCFLAGS="-D warnings" cargo doc -p sube --features wss --no-deps
+
+      - name: Clippy
+        run: |
+          cargo clippy -p sube --all-targets --features wss --no-deps -- -D warnings
+          cargo clippy -p sube-cli --all-targets --no-deps -- -D warnings
+
+      - name: Package contents
+        run: |
+          cargo package -p scale-serialization
+          cargo package -p sube --list
+
+  targets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,thumbv7em-none-eabi,thumbv7em-none-eabihf,riscv32imac-unknown-none-elf
+
+      - name: Cross-target checks
+        run: |
+          cargo check -p sube --target wasm32-unknown-unknown --no-default-features
+          cargo check -p sube --target wasm32-unknown-unknown --features ws-web
+          cargo check -p sube --target thumbv7em-none-eabihf --no-default-features
+          cargo check -p sube --target thumbv7em-none-eabi --no-default-features --features ws-edge
+          cargo check -p sube --target riscv32imac-unknown-none-elf --no-default-features
+
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+
+      - name: Bare-metal smoke test
         working-directory: crates/sube
-        run: just check
+        run: |
+          cargo build --manifest-path tests/qemu/Cargo.toml --target thumbv7em-none-eabihf --release
+          qemu-system-arm \
+            -cpu cortex-m4 \
+            -machine lm3s6965evb \
+            -nographic \
+            -semihosting-config enable=on,target=native \
+            -kernel tests/qemu/target/thumbv7em-none-eabihf/release/sube-qemu-test
 
-      - name: Lint
-        working-directory: crates/sube
-        run: just lint
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
 
-      - name: Add cross targets
-        run: rustup target add wasm32-unknown-unknown thumbv7em-none-eabihf riscv32imac-unknown-none-elf
-
-      - name: Check cross targets (no_std, wasm, thumbv7em, riscv32)
-        working-directory: crates/sube
-        run: just check-targets-ci
+      - name: Check declared MSRV
+        run: |
+          cargo check -p sube --no-default-features
+          cargo check -p sube --features wss
+          cargo check -p sube-cli

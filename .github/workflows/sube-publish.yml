@@ -1,61 +1,70 @@
-name: Sube Publish
+name: Publish Sube crates
 
 on:
   push:
-    branches: [main]
-    paths: ['crates/sube/**']
+    tags:
+      - "scale-serialization-v*"
+      - "sube-v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  publish:
+  publish-scales:
+    if: startsWith(github.ref_name, 'scale-serialization-v')
     runs-on: ubuntu-latest
-    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: 20
-          registry-url: 'https://registry.npmjs.org/'
+          components: clippy
 
-      - name: Ensure access to npmjs
-        run: npm whoami --registry https://registry.npmjs.org/
+      - name: Validate tag
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Config git user
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+          expected="${RELEASE_TAG#scale-serialization-v}"
+          actual="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "scale-serialization") | .version')"
+          test "$expected" = "$actual"
 
-      - name: Install Rust
+      - name: Verify
         run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          source "$HOME/.cargo/env"
-
-      - name: Install dependencies
-        working-directory: crates/sube/sube-js
-        run: npm ci
-
-      - name: Install wasm-pack
-        run: |
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
-      - name: Build
-        working-directory: crates/sube/sube-js
-        run: npm run build
+          cargo test -p scale-serialization
+          cargo clippy -p scale-serialization --all-targets --all-features --no-deps -- -D warnings
+          cargo publish -p scale-serialization --dry-run
 
       - name: Publish
-        working-directory: crates/sube/sube-js
-        run: |
-          VERSION_OUTPUT=$(npm version prerelease --preid=alpha -m "chore: bump version to %s")
-
-          echo "New version: $VERSION_OUTPUT"
-
-          git add package.json package-lock.json
-          git commit -m "chore: bump version to $VERSION_OUTPUT"
-          git push origin main
-
-          npm publish --access public
+        run: cargo publish -p scale-serialization
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-sube:
+    if: startsWith(github.ref_name, 'sube-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Validate tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          expected="${RELEASE_TAG#sube-v}"
+          actual="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "sube") | .version')"
+          test "$expected" = "$actual"
+
+      - name: Verify
+        run: |
+          cargo test -p sube --features wss
+          cargo clippy -p sube --all-targets --features wss --no-deps -- -D warnings
+          cargo publish -p sube --dry-run
+
+      - name: Publish
+        run: cargo publish -p sube
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

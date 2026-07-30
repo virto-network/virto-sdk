@@ -1,47 +1,45 @@
 default: check lint test
 
 check:
+    cargo check --no-default-features
     cargo check --features wss
     cargo check --features smoldot-std
-    cargo check --no-default-features --features ws-edge
+    cargo check -p sube-cli
 
 lint:
-    cargo clippy --features wss -- -D warnings
-    cargo clippy --no-default-features --features ws-edge -- -D warnings
-    cargo clippy --features smoldot-std -- -D warnings
+    cargo clippy --all-targets --features wss --no-deps -- -D warnings
+    cargo clippy -p sube-cli --all-targets --no-deps -- -D warnings
 
 test:
     cargo test --features wss
+    cargo test --features wss --doc
 
 test-integration:
-    cargo test --features test --test integration -- --ignored
-
-# no_std compatibility checks — proves no hidden std dependencies
-check-no-std:
-    cargo check --no-default-features
-    cargo check --no-default-features --features ws-edge
+    cargo test --features wss --test integration -- --ignored
 
 check-thumbv7em:
     cargo check --target thumbv7em-none-eabihf --no-default-features
-    cargo check --target thumbv7em-none-eabihf --no-default-features --features ws-edge
+    cargo check --target thumbv7em-none-eabi --no-default-features --features ws-edge
 
 check-riscv32:
     cargo check --target riscv32imac-unknown-none-elf --no-default-features
 
 check-wasm:
     cargo check --target wasm32-unknown-unknown --no-default-features
-    cargo check --target wasm32-unknown-unknown --no-default-features --features ws-web
+    cargo check --target wasm32-unknown-unknown --features ws-web
 
 check-xtensa:
     source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features -Zbuild-std=core,alloc
     source ~/export-esp.sh && cargo +esp check --target xtensa-esp32s3-none-elf --no-default-features --features ws-edge -Zbuild-std=core,alloc
 
-# CI-safe target sweep: omits xtensa, which needs the +esp toolchain.
-check-targets-ci: check-no-std check-thumbv7em check-riscv32 check-wasm
+check-targets-ci: check-thumbv7em check-riscv32 check-wasm
 
 check-targets: check-targets-ci check-xtensa
 
-# run the qemu smoke test — exercises sube on bare-metal cortex-m4
+package:
+    cargo package -p scale-serialization
+    cargo package -p sube --list
+
 test-qemu:
     cd tests/qemu && cargo build --target thumbv7em-none-eabihf --release
     qemu-system-arm \
@@ -51,4 +49,4 @@ test-qemu:
         -semihosting-config enable=on,target=native \
         -kernel tests/qemu/target/thumbv7em-none-eabihf/release/sube-qemu-test
 
-ci: check-targets lint test test-qemu
+ci: check lint test check-targets-ci test-qemu package
