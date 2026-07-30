@@ -6,8 +6,8 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 use serde::Serialize;
+use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 
 /// A simple dynamic value — enough for extension defaults and call bodies.
 #[derive(Debug, Clone, PartialEq)]

@@ -12,8 +12,8 @@ use alloc::{collections::BTreeMap, collections::VecDeque, format, string::String
 use codec::Decode;
 
 use super::{
-    extract_json_object, extract_json_str, extract_json_string, result_as_str, to_hex, Rpc,
-    RpcSubscription,
+    Rpc, RpcSubscription, extract_json_object, extract_json_str, extract_json_string,
+    result_as_str, to_hex,
 };
 use crate::meta::{self, Metadata};
 use crate::prelude::*;
@@ -780,7 +780,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         match started {
             OperationStarted::Started { operation_id } => {
-                match self.wait_for_operation(&operation_id).await? {
+                match self.wait_for_operation(operation_id).await? {
                     OperationResult::StorageItems(items) => Ok(items),
                     OperationResult::Error(e) => Err(crate::Error::Node(e)),
                     _ => Err(crate::Error::Node("unexpected result".into())),
@@ -814,7 +814,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         match started {
             OperationStarted::Started { operation_id } => {
-                match self.wait_for_operation(&operation_id).await? {
+                match self.wait_for_operation(operation_id).await? {
                     OperationResult::StorageItems(items) => Ok(items),
                     OperationResult::Error(e) => Err(crate::Error::Node(e)),
                     _ => Err(crate::Error::Node("unexpected result".into())),
@@ -868,7 +868,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         match started {
             OperationStarted::Started { operation_id } => {
-                match self.wait_for_operation(&operation_id).await? {
+                match self.wait_for_operation(operation_id).await? {
                     OperationResult::CallDone(hex_output) => {
                         hex::decode(hex_output.trim_start_matches("0x"))
                             .map_err(|_| crate::Error::Decode("runtime call hex decode".into()))
@@ -1163,12 +1163,12 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                     // Validated, Broadcasted, BestChainBlockIncluded(false) — keep waiting
                     _ => {}
                 }
-            } else if event_sub_id == self.follow_sub_id {
-                if let Ok(event) = parse_follow_event(&event_json) {
-                    match event {
-                        FollowEvent::Stop => self.needs_refollow = true,
-                        other => self.record_lifecycle_event(other),
-                    }
+            } else if event_sub_id == self.follow_sub_id
+                && let Ok(event) = parse_follow_event(&event_json)
+            {
+                match event {
+                    FollowEvent::Stop => self.needs_refollow = true,
+                    other => self.record_lifecycle_event(other),
                 }
             }
         }

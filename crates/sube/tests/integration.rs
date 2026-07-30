@@ -1,14 +1,15 @@
 //! Integration tests against a live Substrate chain.
 //!
 //! These tests require network access and are ignored by default.
-//! Run with: cargo test --features test --test integration -- --ignored
-
-#![cfg(feature = "test")]
+//! Run with: `SUBE_TEST_CHAIN=wss://… cargo test --features wss --test integration -- --ignored`.
 
 use sube::{ChainEvent, Response, Sube};
 
-const CHAIN: &str = "wss://kreivo.io";
 const ADDR: &str = "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b";
+
+fn chain_url() -> String {
+    std::env::var("SUBE_TEST_CHAIN").unwrap_or_else(|_| "wss://kreivo.io".into())
+}
 
 fn block_on<T>(fut: impl core::future::Future<Output = T>) -> T {
     smol::block_on(fut)
@@ -18,7 +19,7 @@ fn block_on<T>(fut: impl core::future::Future<Output = T>) -> T {
 #[ignore]
 fn connect_and_get_metadata() {
     block_on(async {
-        let chain = Sube::connect(CHAIN).await.expect("connects");
+        let chain = Sube::connect(&chain_url()).await.expect("connects");
         let meta = chain.metadata();
         assert!(!meta.pallets.is_empty(), "has pallets");
         let system = meta.pallet_by_name("System");
@@ -30,7 +31,7 @@ fn connect_and_get_metadata() {
 #[ignore]
 fn query_system_account() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
         let response = chain
             .query(&format!("system/account/{ADDR}"))
             .await
@@ -50,7 +51,7 @@ fn query_system_account() {
 #[ignore]
 fn query_constant() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
         let response = chain
             .query("system/_constants/Version")
             .await
@@ -70,7 +71,7 @@ fn query_constant() {
 #[ignore]
 fn query_storage_map_iteration() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
         let response = chain
             .query("communityMemberships/collection")
             .await
@@ -88,7 +89,7 @@ fn query_storage_map_iteration() {
 #[ignore]
 fn query_meta_path() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
         let response = chain.query("_meta").await.expect("queries _meta");
         match response {
             Response::Meta(meta) => {
@@ -103,7 +104,7 @@ fn query_meta_path() {
 #[ignore]
 fn one_shot_query() {
     block_on(async {
-        let response = sube::sube(&format!("{CHAIN}/system/account/{ADDR}"))
+        let response = sube::sube(&format!("{}/system/account/{ADDR}", chain_url()))
             .await
             .expect("one-shot query");
         match response {
@@ -120,7 +121,7 @@ fn one_shot_query() {
 #[ignore]
 fn text_format_output() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
         let response = chain
             .query("system/_constants/Version")
             .await
@@ -136,7 +137,7 @@ fn text_format_output() {
 #[ignore]
 fn follow_chain_events() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
 
         // Receive a few chain events
         let mut saw_new_block = false;
@@ -170,7 +171,7 @@ fn follow_chain_events() {
 #[ignore]
 fn query_at_new_block() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
 
         // Wait for a new block, then query at that block hash
         loop {
@@ -200,7 +201,7 @@ fn query_at_new_block() {
 #[ignore]
 fn decode_block_events() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
 
         // Wait for a new block and decode its events
         loop {
@@ -235,7 +236,7 @@ fn decode_block_events() {
 #[ignore]
 fn fetch_block_header() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
 
         // Wait for a new block and fetch its full header
         loop {
@@ -260,7 +261,7 @@ fn fetch_block_header() {
 #[ignore]
 fn query_after_finalization() {
     block_on(async {
-        let mut chain = Sube::connect(CHAIN).await.expect("connects");
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
 
         // Wait for a finalization, then query storage
         chain.next_finalized().await.expect("gets finalized");

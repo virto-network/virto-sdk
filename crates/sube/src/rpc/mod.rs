@@ -95,34 +95,34 @@ pub enum IncomingMessage {
 
 impl IncomingMessage {
     /// Parse a JSON string into either a Response, Error, or Notification.
-    /// All parsing uses lightweight string scanning — no serde_json.
+    /// Parsing is structural and allocation-light, while result payloads remain raw JSON.
     pub fn parse(json: &str) -> Option<Self> {
-        // Check for error first
-        if json.contains("\"error\"") && json.contains("\"id\"") {
-            if let (Some(code), Some(message)) = (
-                extract_json_number(json, "\"code\":"),
-                extract_json_string(json, "\"message\":\""),
-            ) {
-                return Some(IncomingMessage::Error(JsonRpcError { code, message }));
-            }
+        valid_json_value(json).then_some(())?;
+        let id = object_field(json, "id").and_then(parse_json_i64);
+        let method = object_field(json, "method");
+
+        if let (Some(id), Some(error)) = (id, object_field(json, "error"))
+            && let (Some(code), Some(message)) = (
+                object_field(error, "code").and_then(parse_json_i64),
+                object_field(error, "message").and_then(parse_json_string),
+            )
+        {
+            let _ = u32::try_from(id).ok()?;
+            return Some(IncomingMessage::Error(JsonRpcError { code, message }));
         }
 
-        // Response: has "id" and "result"
-        if json.contains("\"id\"") && !json.contains("\"method\"") {
-            let id = extract_json_number(json, "\"id\":")?;
-            let result = extract_json_object(json, "\"result\":");
-            return Some(IncomingMessage::Response(RpcResponse {
-                id: id as u32,
-                result,
-            }));
+        if let (Some(id), None) = (id, method) {
+            let id = u32::try_from(id).ok()?;
+            let result = object_field(json, "result").map(Into::into);
+            return Some(IncomingMessage::Response(RpcResponse { id, result }));
         }
 
-        // Notification: has "method" and "params.subscription"
-        if json.contains("\"method\"") {
-            let subscription = extract_json_string(json, "\"subscription\":\"")?;
-            let result = extract_json_object(json, "\"result\":")?;
+        if let Some(method) = method {
+            let params = object_field(json, "params")?;
+            let subscription = object_field(params, "subscription").and_then(parse_json_string)?;
+            let result = object_field(params, "result")?.into();
             return Some(IncomingMessage::Notification(Notification {
-                method: extract_json_string(json, "\"method\":\"")?,
+                method: parse_json_string(method)?,
                 params: NotificationParams {
                     subscription,
                     result,
@@ -130,127 +130,252 @@ impl IncomingMessage {
             }));
         }
 
-        // Ambiguous — try as response
-        if json.contains("\"id\"") {
-            let id = extract_json_number(json, "\"id\":")?;
-            let result = extract_json_object(json, "\"result\":");
-            return Some(IncomingMessage::Response(RpcResponse {
-                id: id as u32,
-                result,
-            }));
-        }
-
         None
     }
 }
 
-/// Extract a JSON string value by scanning for a `"key":"value"` pattern.
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
+fn marker_key(marker: &str) -> Option<&str> {
+    marker
+        .strip_prefix('"')?
+        .split_once('"')
+        .map(|(key, _)| key)
+}
+
+/// Extract an unescaped JSON string field without allocating.
 ///
-/// Safe for values that don't contain escape sequences (hex hashes,
-/// identifiers, operation IDs). The marker must end with `"` to anchor
-/// at the start of the value string.
+/// This is used for identifiers and hashes. Escaped values return `None`;
+/// callers that accept escaped text use [`extract_json_string`].
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 pub(crate) fn extract_json_str<'a>(json: &'a str, marker: &str) -> Option<&'a str> {
-    let start = json.find(marker)? + marker.len();
-    let end = json[start..].find('"')?;
-    Some(&json[start..start + end])
+    let raw = object_field(json, marker_key(marker)?)?;
+    let value = raw.strip_prefix('"')?.strip_suffix('"')?;
+    (!value.as_bytes().contains(&b'\\')).then_some(value)
 }
 
 /// Like [`extract_json_str`] but returns an owned String.
 /// Use when the result must outlive the input (e.g. buffered notifications).
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 fn extract_json_string(json: &str, marker: &str) -> Option<String> {
-    extract_json_str(json, marker).map(Into::into)
+    object_field(json, marker_key(marker)?).and_then(parse_json_string)
 }
 
-/// Extract a JSON number after a marker.
-fn extract_json_number(json: &str, marker: &str) -> Option<i64> {
-    let start = json.find(marker)? + marker.len();
-    let rest = json[start..].trim_start();
-    let end = rest
-        .find(|c: char| !c.is_ascii_digit() && c != '-')
-        .unwrap_or(rest.len());
-    rest[..end].parse().ok()
-}
-
-/// Extract a raw JSON object/value after a key marker.
-/// Handles nested braces to find the correct end.
+/// Extract a raw JSON value for a top-level object field.
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
 pub(crate) fn extract_json_object(json: &str, marker: &str) -> Option<String> {
-    let start = json.find(marker)? + marker.len();
-    let rest = &json[start..];
+    object_field(json, marker_key(marker)?).map(Into::into)
+}
 
-    let first = rest.trim_start().chars().next()?;
-    let rest = &json[start + (rest.len() - rest.trim_start().len())..];
-    match first {
-        '{' => {
-            let mut depth = 0i32;
-            let mut in_string = false;
-            let mut escape = false;
-            for (i, ch) in rest.char_indices() {
-                if escape {
-                    escape = false;
-                    continue;
-                }
-                if ch == '\\' && in_string {
-                    escape = true;
-                    continue;
-                }
-                if ch == '"' {
-                    in_string = !in_string;
-                }
-                if !in_string {
-                    if ch == '{' {
-                        depth += 1;
-                    }
-                    if ch == '}' {
-                        depth -= 1;
-                        if depth == 0 {
-                            return Some(rest[..=i].into());
+fn skip_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while bytes
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        index += 1;
+    }
+    index
+}
+
+fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    (bytes.get(start) == Some(&b'"')).then_some(())?;
+    let mut index = start + 1;
+    while let Some(byte) = bytes.get(index) {
+        match byte {
+            b'"' => return Some(index + 1),
+            b'\\' => {
+                index += 1;
+                match bytes.get(index)? {
+                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {}
+                    b'u' => {
+                        for _ in 0..4 {
+                            index += 1;
+                            bytes.get(index)?.is_ascii_hexdigit().then_some(())?;
                         }
                     }
+                    _ => return None,
+                }
+            }
+            0x00..=0x1f => return None,
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+fn value_end(bytes: &[u8], start: usize) -> Option<usize> {
+    match *bytes.get(start)? {
+        b'"' => string_end(bytes, start),
+        b'{' | b'[' => {
+            let mut stack = Vec::with_capacity(4);
+            stack.push(bytes[start]);
+            let mut index = start + 1;
+            while let Some(byte) = bytes.get(index) {
+                match byte {
+                    b'"' => index = string_end(bytes, index)?,
+                    b'{' | b'[' => {
+                        stack.push(*byte);
+                        index += 1;
+                    }
+                    b'}' if stack.last() == Some(&b'{') => {
+                        stack.pop();
+                        index += 1;
+                        if stack.is_empty() {
+                            return Some(index);
+                        }
+                    }
+                    b']' if stack.last() == Some(&b'[') => {
+                        stack.pop();
+                        index += 1;
+                        if stack.is_empty() {
+                            return Some(index);
+                        }
+                    }
+                    b'}' | b']' => return None,
+                    _ => index += 1,
                 }
             }
             None
-        }
-        '[' => {
-            let mut depth = 0i32;
-            let mut in_string = false;
-            let mut escape = false;
-            for (i, ch) in rest.char_indices() {
-                if escape {
-                    escape = false;
-                    continue;
-                }
-                if ch == '\\' && in_string {
-                    escape = true;
-                    continue;
-                }
-                if ch == '"' {
-                    in_string = !in_string;
-                }
-                if !in_string {
-                    if ch == '[' {
-                        depth += 1;
-                    }
-                    if ch == ']' {
-                        depth -= 1;
-                        if depth == 0 {
-                            return Some(rest[..=i].into());
-                        }
-                    }
-                }
-            }
-            None
-        }
-        '"' => {
-            let end = rest[1..].find('"').map(|i| i + 2)?;
-            Some(rest[..end].into())
         }
         _ => {
-            let end = rest
-                .find(|c: char| c == ',' || c == '}' || c == ']')
-                .unwrap_or(rest.len());
-            Some(rest[..end].trim().into())
+            let mut index = start;
+            while bytes.get(index).is_some_and(|byte| {
+                !matches!(byte, b',' | b'}' | b']') && !byte.is_ascii_whitespace()
+            }) {
+                index += 1;
+            }
+            (index > start).then_some(index)
         }
     }
+}
+
+fn object_field<'a>(json: &'a str, wanted: &str) -> Option<&'a str> {
+    let bytes = json.as_bytes();
+    let mut index = skip_whitespace(bytes, 0);
+    (bytes.get(index) == Some(&b'{')).then_some(())?;
+    index += 1;
+
+    loop {
+        index = skip_whitespace(bytes, index);
+        if bytes.get(index) == Some(&b'}') {
+            return None;
+        }
+
+        let key_end = string_end(bytes, index)?;
+        let key = &json[index + 1..key_end - 1];
+        index = skip_whitespace(bytes, key_end);
+        (bytes.get(index) == Some(&b':')).then_some(())?;
+        index = skip_whitespace(bytes, index + 1);
+
+        let end = value_end(bytes, index)?;
+        if key == wanted {
+            return Some(&json[index..end]);
+        }
+
+        index = skip_whitespace(bytes, end);
+        match bytes.get(index) {
+            Some(b',') => index += 1,
+            Some(b'}') => return None,
+            _ => return None,
+        }
+    }
+}
+
+fn valid_json_value(json: &str) -> bool {
+    let bytes = json.as_bytes();
+    let start = skip_whitespace(bytes, 0);
+    value_end(bytes, start)
+        .map(|end| skip_whitespace(bytes, end) == bytes.len())
+        .unwrap_or(false)
+}
+
+fn parse_json_i64(raw: &str) -> Option<i64> {
+    raw.parse().ok()
+}
+
+fn parse_hex_quad(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() != 4 {
+        return None;
+    }
+    bytes.iter().try_fold(0u16, |value, byte| {
+        let digit = match byte {
+            b'0'..=b'9' => u16::from(byte - b'0'),
+            b'a'..=b'f' => u16::from(byte - b'a' + 10),
+            b'A'..=b'F' => u16::from(byte - b'A' + 10),
+            _ => return None,
+        };
+        value.checked_mul(16)?.checked_add(digit)
+    })
+}
+
+fn parse_json_string(raw: &str) -> Option<String> {
+    let body = raw.strip_prefix('"')?.strip_suffix('"')?;
+    if !body.as_bytes().contains(&b'\\') {
+        return Some(body.into());
+    }
+
+    let bytes = body.as_bytes();
+    let mut output = String::with_capacity(body.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            let start = index;
+            while index < bytes.len() && bytes[index] != b'\\' {
+                index += 1;
+            }
+            output.push_str(core::str::from_utf8(&bytes[start..index]).ok()?);
+            continue;
+        }
+
+        index += 1;
+        match *bytes.get(index)? {
+            b'"' => output.push('"'),
+            b'\\' => output.push('\\'),
+            b'/' => output.push('/'),
+            b'b' => output.push('\u{0008}'),
+            b'f' => output.push('\u{000c}'),
+            b'n' => output.push('\n'),
+            b'r' => output.push('\r'),
+            b't' => output.push('\t'),
+            b'u' => {
+                let first = parse_hex_quad(bytes.get(index + 1..index + 5)?)?;
+                index += 4;
+                let codepoint = if (0xd800..=0xdbff).contains(&first) {
+                    (bytes.get(index + 1..index + 3) == Some(&b"\\u"[..])).then_some(())?;
+                    let second = parse_hex_quad(bytes.get(index + 3..index + 7)?)?;
+                    (0xdc00..=0xdfff).contains(&second).then_some(())?;
+                    index += 6;
+                    0x10000 + ((u32::from(first) - 0xd800) << 10) + (u32::from(second) - 0xdc00)
+                } else {
+                    u32::from(first)
+                };
+                output.push(char::from_u32(codepoint)?);
+            }
+            _ => return None,
+        }
+        index += 1;
+    }
+    Some(output)
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -350,22 +475,22 @@ mod tests {
     use super::*;
 
     #[cfg(any(
-    feature = "ws",
-    feature = "ws-edge",
-    feature = "smoldot",
-    all(feature = "ws-web", target_arch = "wasm32")
-))]
+        feature = "ws",
+        feature = "ws-edge",
+        feature = "smoldot",
+        all(feature = "ws-web", target_arch = "wasm32")
+    ))]
     #[test]
     fn to_hex_encodes_bytes() {
         assert_eq!(super::to_hex(&[0xde, 0xad]), "0xdead");
     }
 
     #[cfg(any(
-    feature = "ws",
-    feature = "ws-edge",
-    feature = "smoldot",
-    all(feature = "ws-web", target_arch = "wasm32")
-))]
+        feature = "ws",
+        feature = "ws-edge",
+        feature = "smoldot",
+        all(feature = "ws-web", target_arch = "wasm32")
+    ))]
     #[test]
     fn to_hex_empty() {
         assert_eq!(super::to_hex(&[]), "0x");
@@ -411,16 +536,55 @@ mod tests {
     }
 
     #[test]
+    fn parse_response_with_whitespace_and_nested_content() {
+        let json = r#"{ "result" : {"message":"contains \"error\"","items":[1,{"id":99}]}, "id" : 7, "jsonrpc" : "2.0" }"#;
+        let msg = IncomingMessage::parse(json).unwrap();
+        match msg {
+            IncomingMessage::Response(response) => {
+                assert_eq!(response.id, 7);
+                assert_eq!(
+                    response.result.as_deref(),
+                    Some(r#"{"message":"contains \"error\"","items":[1,{"id":99}]}"#)
+                );
+            }
+            _ => panic!("expected Response"),
+        }
+    }
+
+    #[test]
+    fn parse_notification_with_escaped_strings() {
+        let json = r#"{"jsonrpc":"2.0","method":"chainHead_\u0076\u0031_event","params":{"subscription":"sub\u0031","result":{"event":"initialized"}}}"#;
+        let msg = IncomingMessage::parse(json).unwrap();
+        match msg {
+            IncomingMessage::Notification(notification) => {
+                assert_eq!(notification.method, "chainHead_v1_event");
+                assert_eq!(notification.params.subscription, "sub1");
+            }
+            _ => panic!("expected Notification"),
+        }
+    }
+
+    #[test]
+    fn result_error_text_does_not_become_rpc_error() {
+        let json = r#"{"jsonrpc":"2.0","id":1,"result":{"error":"domain value"}}"#;
+        assert!(matches!(
+            IncomingMessage::parse(json),
+            Some(IncomingMessage::Response(_))
+        ));
+    }
+
+    #[test]
     fn parse_invalid_json_returns_none() {
         assert!(IncomingMessage::parse("not json at all").is_none());
+        assert!(IncomingMessage::parse(r#"{"id":1,"result":[}"#).is_none());
     }
 
     #[cfg(any(
-    feature = "ws",
-    feature = "ws-edge",
-    feature = "smoldot",
-    all(feature = "ws-web", target_arch = "wasm32")
-))]
+        feature = "ws",
+        feature = "ws-edge",
+        feature = "smoldot",
+        all(feature = "ws-web", target_arch = "wasm32")
+    ))]
     #[test]
     fn result_as_str_strips_quotes() {
         assert_eq!(result_as_str("\"hello\""), Some("hello"));

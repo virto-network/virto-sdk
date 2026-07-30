@@ -6,9 +6,8 @@
 //! Run with: cargo run --example submit --features wss,examples -- [seed phrase]
 
 use libwallet::{
-    self,
-    vault::{utils::DerivedSigner, Simple, Vault as _},
-    Signer as _, Substrate,
+    self, Signer as _, Substrate,
+    vault::{Simple, Vault as _, utils::DerivedSigner},
 };
 use std::env;
 use sube::{SignerFn, Sube};
@@ -34,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Phrase: \"{phrase}\"");
 
         // Adapt libwallet::Signer into sube::SignerFn
-        let signer = SignerFn::from((&account_id, |message: &[u8]| {
+        let signer = SignerFn::new(account_id, |message: &[u8]| {
             let msg = message.to_vec();
             let account = &account;
             async move {
@@ -44,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|sig| sig.as_ref().try_into().unwrap())
                     .map_err(|_| sube::Error::Encode("signing failed".into()))
             }
-        }));
+        });
 
         let mut chain = Sube::connect("wss://kreivo.io").await?;
 

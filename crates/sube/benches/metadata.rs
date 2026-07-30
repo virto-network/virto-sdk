@@ -70,7 +70,7 @@ fn main() {
     // Estimate registry memory: enum discriminants + inline data + heap strings/vecs
     let mut string_bytes = 0usize;
     let mut vec_overhead = 0usize;
-    let mut enum_overhead = type_count as usize * std::mem::size_of::<sube::scales::TypeDef>();
+    let enum_overhead = type_count as usize * std::mem::size_of::<sube::scales::TypeDef>();
     for i in 0..type_count {
         if let Some(td) = meta.registry.resolve(i) {
             match td {

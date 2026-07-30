@@ -1,11 +1,11 @@
 use crate::metadata::Hasher;
 use crate::prelude::*;
 use blake2::{
-    digest::{
-        typenum::{U16, U32},
-        Output,
-    },
     Blake2b, Digest,
+    digest::{
+        Output,
+        typenum::{U16, U32},
+    },
 };
 use core::hash::Hasher as _;
 

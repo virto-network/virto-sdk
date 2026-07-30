@@ -7,6 +7,7 @@ use core::fmt;
 pub struct Url {
     scheme: String,
     host: String,
+    bracketed_host: bool,
     port: Option<u16>,
     path: String,
     query: Option<String>,
@@ -14,8 +15,14 @@ pub struct Url {
 
 impl Url {
     pub fn parse(input: &str) -> Result<Self, ()> {
+        if input.is_empty()
+            || input.bytes().any(|byte| byte.is_ascii_whitespace())
+            || input.contains('#')
+        {
+            return Err(());
+        }
         let (scheme, rest) = input.split_once("://").ok_or(())?;
-        if scheme.is_empty() {
+        if !matches!(scheme, "ws" | "wss" | "http" | "https") {
             return Err(());
         }
         let scheme = scheme.to_lowercase();
@@ -32,13 +39,35 @@ impl Url {
             None => (authority_path, "/"),
         };
 
-        // Split host from port
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => match p.parse::<u16>() {
-                Ok(port) => (h, Some(port)),
-                Err(_) => (authority, None),
-            },
-            None => (authority, None),
+        if authority.is_empty() || authority.contains('@') {
+            return Err(());
+        }
+
+        // Split host from port, requiring brackets around IPv6 literals.
+        let (host, port, bracketed_host) = if let Some(rest) = authority.strip_prefix('[') {
+            let close = rest.find(']').ok_or(())?;
+            let host = &rest[..close];
+            let suffix = &rest[close + 1..];
+            let port = if suffix.is_empty() {
+                None
+            } else {
+                Some(
+                    suffix
+                        .strip_prefix(':')
+                        .ok_or(())?
+                        .parse::<u16>()
+                        .map_err(|_| ())?,
+                )
+            };
+            (host, port, true)
+        } else {
+            if authority.matches(':').count() > 1 {
+                return Err(());
+            }
+            match authority.split_once(':') {
+                Some((host, port)) => (host, Some(port.parse::<u16>().map_err(|_| ())?), false),
+                None => (authority, None, false),
+            }
         };
 
         if host.is_empty() {
@@ -48,6 +77,7 @@ impl Url {
         Ok(Url {
             scheme,
             host: String::from(host),
+            bracketed_host,
             port,
             path: String::from(path),
             query,
@@ -83,7 +113,12 @@ impl Url {
 
 impl fmt::Display for Url {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}://{}", self.scheme, self.host)?;
+        write!(f, "{}://", self.scheme)?;
+        if self.bracketed_host {
+            write!(f, "[{}]", self.host)?;
+        } else {
+            write!(f, "{}", self.host)?;
+        }
         if let Some(port) = self.port {
             write!(f, ":{}", port)?;
         }
@@ -160,8 +195,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_bracketed_ipv6() {
+        let url = Url::parse("wss://[2001:db8::1]:443/path").unwrap();
+        assert_eq!(url.host_str(), Some("2001:db8::1"));
+        assert_eq!(url.port(), Some(443));
+        assert_eq!(url.to_string(), "wss://[2001:db8::1]:443/path");
+    }
+
+    #[test]
     fn invalid_url() {
         assert!(Url::parse("not-a-url").is_err());
         assert!(Url::parse("://empty").is_err());
+        assert!(Url::parse("ftp://example.com").is_err());
+        assert!(Url::parse("wss://user@example.com").is_err());
+        assert!(Url::parse("wss://example.com:abc").is_err());
+        assert!(Url::parse("wss://2001:db8::1").is_err());
+        assert!(Url::parse("wss://example.com/#fragment").is_err());
     }
 }

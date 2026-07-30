@@ -14,7 +14,9 @@
 //! `ws-web` backend against a public RPC endpoint today.
 
 use alloc::collections::VecDeque;
-use alloc::{format, string::String, sync::Arc, vec::Vec};
+#[cfg(feature = "std")]
+use alloc::sync::Arc;
+use alloc::{format, string::String, vec::Vec};
 
 use smoldot_light::platform::PlatformRef;
 use smoldot_light::{AddChainConfig, AddChainConfigJsonRpc, Client};
@@ -43,6 +45,7 @@ impl<P: PlatformRef> Backend<P> {
                     specification: relay,
                     database_content: "",
                     potential_relay_chains: core::iter::empty(),
+                    statement_protocol_config: None,
                     json_rpc: AddChainConfigJsonRpc::Disabled,
                 })
                 .map_err(|e| Error::Node(format!("relay chain: {e}")))?;
@@ -57,6 +60,7 @@ impl<P: PlatformRef> Backend<P> {
                 specification: chain_spec,
                 database_content: "",
                 potential_relay_chains: relay_chain_ids.into_iter(),
+                statement_protocol_config: None,
                 json_rpc: AddChainConfigJsonRpc::Enabled {
                     max_pending_requests: 128.try_into().expect("non-zero"),
                     max_subscriptions: 1024,
@@ -142,7 +146,7 @@ impl<P: PlatformRef> super::RpcSubscription for Backend<P> {
             log::trace!("smoldot response: {}", &json);
             match IncomingMessage::parse(&json) {
                 Some(IncomingMessage::Notification(n)) => {
-                    return Some((n.params.subscription, n.params.result))
+                    return Some((n.params.subscription, n.params.result));
                 }
                 Some(IncomingMessage::Response(_)) | Some(IncomingMessage::Error(_)) => {}
                 None => {

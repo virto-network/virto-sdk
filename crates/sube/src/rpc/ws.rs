@@ -3,19 +3,16 @@
 use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 
-use async_tungstenite::tungstenite::client::IntoClientRequest;
-use async_tungstenite::tungstenite::Message;
 use async_tungstenite::WebSocketStream;
+use async_tungstenite::tungstenite::Message;
+use async_tungstenite::tungstenite::client::IntoClientRequest;
 use futures_util::StreamExt;
 
 use super::{IncomingMessage, JsonRpcError, Rpc, RpcResult};
 use crate::Error;
 
 #[cfg(feature = "wss")]
-type WsInner = async_tungstenite::stream::Stream<
-    smol::net::TcpStream,
-    async_tls::client::TlsStream<smol::net::TcpStream>,
->;
+type WsInner = async_tungstenite::smol::ClientStream<smol::net::TcpStream>;
 #[cfg(not(feature = "wss"))]
 type WsInner = smol::net::TcpStream;
 
@@ -32,9 +29,12 @@ impl Backend {
         let mut request = url
             .into_client_request()
             .map_err(|e| Error::Node(format!("websocket request: {e}")))?;
-        request
-            .headers_mut()
-            .insert("User-Agent", "sube/1.0".parse().expect("valid header"));
+        request.headers_mut().insert(
+            "User-Agent",
+            concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"))
+                .parse()
+                .expect("package name and version form a valid header"),
+        );
 
         let host = request.uri().host().unwrap_or("localhost").to_string();
         let scheme = request.uri().scheme_str().unwrap_or("ws");
@@ -52,7 +52,7 @@ impl Backend {
             .map_err(|e| Error::Node(format!("tcp connect: {e}")))?;
 
         #[cfg(feature = "wss")]
-        let (ws, _) = async_tungstenite::async_tls::client_async_tls(request, tcp)
+        let (ws, _) = async_tungstenite::smol::client_async_tls(request, tcp)
             .await
             .map_err(|e| Error::Node(format!("websocket connect: {e}")))?;
         #[cfg(not(feature = "wss"))]
@@ -123,7 +123,6 @@ impl super::Rpc for Backend {
             }
         }
     }
-
 }
 
 impl super::RpcSubscription for Backend {
@@ -141,7 +140,7 @@ impl super::RpcSubscription for Backend {
         loop {
             match self.read_message().await {
                 Ok(IncomingMessage::Notification(n)) => {
-                    return Some((n.params.subscription, n.params.result))
+                    return Some((n.params.subscription, n.params.result));
                 }
                 Ok(IncomingMessage::Response(_)) => {}
                 Ok(IncomingMessage::Error(e)) => {

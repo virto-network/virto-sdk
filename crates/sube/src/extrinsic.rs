@@ -286,6 +286,7 @@ pub async fn assemble_signed_v4(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

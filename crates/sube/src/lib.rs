@@ -8,35 +8,21 @@ and human-readable formats (JSON, text) without hardcoded type information.
 
 # Usage
 
-```rust,ignore
-use sube::sube;
-
-// One-liner query
-let r = sube("wss://kreivo.io/system/account/0x1234").await?;
-if let Some(text) = r.to_text()? {
-    println!("{text}");
-}
-
-// Reusable handle
+```no_run
+# async fn example() -> sube::Result<()> {
 let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
-let r = chain.query("system/account/0x1234").await?;
-
-// Historical block query (via archive API)
-let old = chain.query_at("system/account/0x1234", 1000).await?;
-
-// Submit extrinsic (waits for finalization)
-chain.call("balances/transfer_keep_alive")
-    .body_text("(dest:MultiAddress::Id(0xd435...);value:1000)")
-    .signer(my_signer)
-    .await?;
+let response = chain.query("system/number").await?;
+assert!(response.to_text()?.is_some());
+# Ok(())
+# }
 ```
 
 # Backends
 
 | Feature | Description |
 |---------|-------------|
-| `ws` | WebSocket via `async-tungstenite` + `smol` (std) |
-| `wss` | WebSocket with TLS (implies `ws`) |
+| `ws` | Plain WebSocket via `async-tungstenite` + `smol` (std) |
+| `wss` | WebSocket with Rustls/WebPKI TLS (implies `ws`) |
 | `ws-edge` | WebSocket via `edge-ws` for embedded targets (no_std) |
 | `ws-web` | Browser WebSocket via `gloo-net` (wasm32-unknown-unknown) |
 | `smoldot-std` | Light client via `smoldot-light` (std, no external node) |
@@ -60,9 +46,9 @@ pub use alloc::rc::Rc;
 pub use scales::{self, Registry, Value};
 pub use value::DynValue;
 
-#[cfg(feature = "ws-edge")]
-pub use builder::{connect_edge, EdgeNet, EdgeSube};
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
+#[cfg(feature = "ws-edge")]
+pub use builder::{EdgeResources, EdgeSube, connect_edge};
 pub use extrinsic::{EncodeCall, Text};
 pub use meta::Metadata;
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
@@ -80,7 +66,7 @@ mod prelude {
     pub use alloc::vec::Vec;
 }
 
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 pub mod backend;
 pub mod builder;
 pub mod extrinsic;
@@ -95,9 +81,12 @@ pub mod value;
 ///
 /// Returns a [`SubeBuilder`] — `.await` it to get a connected [`Sube`] handle.
 ///
-/// ```rust,ignore
-/// let chain = sube("wss://kreivo.io").await?;
-/// let response = chain.query("system/account/0x1234").await?;
+/// ```no_run
+/// # async fn example() -> sube::Result<()> {
+/// let response = sube::sube("wss://kreivo.io/system/number").await?;
+/// assert!(response.to_text()?.is_some());
+/// # Ok(())
+/// # }
 /// ```
 pub fn sube(url: &str) -> SubeBuilder {
     SubeBuilder::new(url)
@@ -114,74 +103,110 @@ pub(crate) async fn query(
     path: &str,
     block: Option<u32>,
 ) -> Result<Response> {
-    let (pallet, item_or_call, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
-    let pallet = meta
-        .pallet_by_name(&pallet)
-        .ok_or(Error::PalletNotFound(pallet))?;
+    match resolve_query(meta, path)? {
+        ResolvedQuery::Constant(entry) => Ok(Response::Value(entry, Rc::clone(meta))),
+        ResolvedQuery::Storage(key) if !key.is_partial() => {
+            let value = chain.get_storage_item(key.key(), block).await?;
+            Ok(storage_response(value, key.ty, meta))
+        }
+        ResolvedQuery::Storage(key) => {
+            let keys = chain.get_keys_paged(key.key(), 1000, None).await?;
+            let values = chain.get_storage_items(keys, block).await?;
+            partial_storage_response(values, &key, meta)
+        }
+    }
+}
 
-    if item_or_call == "_constants" {
-        let const_name = keys.pop().ok_or(Error::MissingConstantName)?;
-        let const_meta = pallet
+pub(crate) enum ResolvedQuery {
+    Constant(StorageEntry),
+    Storage(StorageKey),
+}
+
+pub(crate) fn resolve_query(meta: &Metadata, path: &str) -> Result<ResolvedQuery> {
+    let (pallet_name, item, mut keys) = parse_uri(path).ok_or(Error::BadInput)?;
+    let pallet = meta
+        .pallet_by_name(&pallet_name)
+        .ok_or(Error::PalletNotFound(pallet_name))?;
+
+    if item == "_constants" {
+        let constant_name = keys.pop().ok_or(Error::MissingConstantName)?;
+        let constant = pallet
             .constants
             .iter()
-            .find(|c| c.name == const_name)
-            .ok_or(Error::ConstantNotFound(const_name))?;
+            .find(|constant| constant.name.eq_ignore_ascii_case(&constant_name))
+            .ok_or_else(|| Error::ConstantNotFound(constant_name.clone()))?;
+        return Ok(ResolvedQuery::Constant(StorageEntry::new(
+            constant.value.clone(),
+            constant.ty,
+        )));
+    }
 
-        return Ok(Response::Value(
-            StorageEntry::new(const_meta.value.clone(), const_meta.ty),
-            Rc::clone(meta),
+    StorageKey::build_with_registry(&meta.registry, pallet, &item, &keys)
+        .map(ResolvedQuery::Storage)
+}
+
+pub(crate) fn storage_response(
+    value: Option<RawValue>,
+    ty: scales::TypeId,
+    meta: &Rc<Metadata>,
+) -> Response {
+    match value {
+        Some(data) => Response::Value(StorageEntry::new(data, ty), Rc::clone(meta)),
+        None => Response::None,
+    }
+}
+
+fn partial_storage_response(
+    values: Vec<(RawKey, Option<RawValue>)>,
+    storage_key: &StorageKey,
+    meta: &Rc<Metadata>,
+) -> Result<Response> {
+    let prefix_len = storage_key.pallet.len() + storage_key.call.len();
+    let mut decoded = Vec::with_capacity(values.len());
+
+    for (raw_key, value) in values {
+        let key = raw_key.get(prefix_len..).ok_or_else(|| {
+            Error::Decode("storage key is shorter than its pallet/item prefix".into())
+        })?;
+        let mut offset = 0usize;
+        let mut parts = Vec::with_capacity(storage_key.args.len());
+
+        for (index, argument) in storage_key.args.iter().enumerate() {
+            let type_id = match argument {
+                KeyValue::Empty(ty) | KeyValue::Value((ty, _, _, _)) => *ty,
+            };
+            let hasher = storage_key
+                .hashers
+                .get(index)
+                .ok_or_else(|| Error::Decode("storage key hasher mismatch".into()))?;
+            offset = offset
+                .checked_add(hasher.key_prefix_len())
+                .ok_or_else(|| Error::Decode("storage key offset overflow".into()))?;
+            let encoded = key
+                .get(offset..)
+                .ok_or_else(|| Error::Decode("truncated storage map key".into()))?;
+            let entry = StorageEntry::new(encoded.to_vec(), type_id);
+            let size = entry
+                .as_value(&meta.registry)
+                .size()
+                .map_err(|error| Error::Decode(error.to_string()))?;
+            let end = offset
+                .checked_add(size)
+                .ok_or_else(|| Error::Decode("storage key offset overflow".into()))?;
+            let bytes = key
+                .get(offset..end)
+                .ok_or_else(|| Error::Decode("truncated storage map key".into()))?;
+            parts.push(StorageEntry::new(bytes.to_vec(), type_id));
+            offset = end;
+        }
+
+        decoded.push((
+            parts,
+            value.map(|data| StorageEntry::new(data, storage_key.ty)),
         ));
     }
 
-    if let Ok(key_res) =
-        StorageKey::build_with_registry(&meta.registry, pallet, &item_or_call, &keys)
-    {
-        if !key_res.is_partial() {
-            let res = chain.get_storage_item(key_res.key(), block).await?;
-
-            let value = match res {
-                None => Response::None,
-                Some(res) => Response::Value(StorageEntry::new(res, key_res.ty), Rc::clone(meta)),
-            };
-
-            return Ok(value);
-        }
-
-        let res = chain.get_keys_paged(key_res.key(), 1000, None).await?;
-        let result = chain.get_storage_items(res, block).await?;
-
-        let value = result
-            .into_iter()
-            .map(|(key, data)| {
-                let key = &key[(key_res.pallet.len() + key_res.call.len())..];
-                let mut offset = 0;
-                let keys = key_res
-                    .args
-                    .iter()
-                    .enumerate()
-                    .map(|(i, arg)| {
-                        let type_id = match arg {
-                            KeyValue::Empty(ty) | KeyValue::Value((ty, _, _, _)) => *ty,
-                        };
-                        let hasher = &key_res.hashers[i];
-                        let prefix_len = hasher.key_prefix_len();
-                        offset += prefix_len;
-                        let entry = StorageEntry::new(key[offset..].to_vec(), type_id);
-                        let size = entry.as_value(&meta.registry).size().unwrap_or(0);
-                        offset += size;
-                        entry
-                    })
-                    .collect::<Vec<StorageEntry>>();
-
-                let value = data.map(|data| StorageEntry::new(data, key_res.ty));
-                (keys, value)
-            })
-            .collect::<Vec<_>>();
-
-        Ok(Response::ValueSet(value, Rc::clone(meta)))
-    } else {
-        Err(Error::ChainUnavailable)
-    }
+    Ok(Response::ValueSet(decoded, Rc::clone(meta)))
 }
 
 pub(crate) fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
@@ -273,18 +298,6 @@ impl Response {
     /// Returns `true` if this is a `None` response (key exists but has no value).
     pub fn is_none(&self) -> bool {
         matches!(self, Response::None)
-    }
-}
-
-impl From<Response> for Vec<u8> {
-    fn from(res: Response) -> Self {
-        match res {
-            Response::Value(v, _) => v.data,
-            Response::None => vec![0],
-            Response::Meta(_) => vec![],
-            Response::ValueSet(_, _) => vec![],
-            Response::Void => vec![],
-        }
     }
 }
 
@@ -425,6 +438,60 @@ impl core::error::Error for Error {}
 mod tests {
     use super::*;
 
+    struct MockBackend {
+        storage: Vec<(RawKey, Option<RawValue>)>,
+        keys: Vec<RawKey>,
+        last_block: Option<u32>,
+        storage_calls: usize,
+    }
+
+    impl Backend for MockBackend {
+        async fn get_storage_items(
+            &mut self,
+            keys: Vec<RawKey>,
+            block: Option<u32>,
+        ) -> Result<Vec<(RawKey, Option<RawValue>)>> {
+            self.last_block = block;
+            self.storage_calls += 1;
+            Ok(keys
+                .into_iter()
+                .map(|key| {
+                    let value = self
+                        .storage
+                        .iter()
+                        .find(|(stored_key, _)| stored_key == &key)
+                        .and_then(|(_, value)| value.clone());
+                    (key, value)
+                })
+                .collect())
+        }
+
+        async fn get_keys_paged(
+            &mut self,
+            _from: RawKey,
+            _size: u16,
+            _to: Option<RawKey>,
+        ) -> Result<Vec<RawKey>> {
+            Ok(self.keys.clone())
+        }
+
+        async fn submit(&mut self, _ext: &[u8], _wait_for_finalization: bool) -> Result<()> {
+            Err(Error::ChainUnavailable)
+        }
+
+        async fn metadata(&mut self) -> Result<Metadata> {
+            Err(Error::ChainUnavailable)
+        }
+
+        async fn block_info(&mut self, _at: Option<u32>) -> Result<meta::BlockInfo> {
+            Err(Error::ChainUnavailable)
+        }
+    }
+
+    fn fixture_metadata() -> Rc<Metadata> {
+        Rc::new(Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap())
+    }
+
     #[test]
     fn parse_uri_pallet_and_item() {
         let (pallet, item, keys) = parse_uri("system/account").unwrap();
@@ -493,5 +560,89 @@ mod tests {
             encoded[2], 0xd4,
             "address starts with 0xd4 after variant + MultiAddress idx"
         );
+    }
+
+    #[test]
+    fn query_uses_requested_block_and_decodes_value() {
+        smol::block_on(async {
+            let metadata = fixture_metadata();
+            let storage_key = match resolve_query(&metadata, "system/number").unwrap() {
+                ResolvedQuery::Storage(key) => key.key(),
+                ResolvedQuery::Constant(_) => panic!("expected storage"),
+            };
+            let mut backend = MockBackend {
+                storage: vec![(storage_key, Some(42u32.to_le_bytes().to_vec()))],
+                keys: Vec::new(),
+                last_block: None,
+                storage_calls: 0,
+            };
+
+            let response = query(&mut backend, &metadata, "system/number", Some(17))
+                .await
+                .unwrap();
+            let (entry, _) = response.into_value().unwrap();
+            assert_eq!(entry.as_u32(), Some(42));
+            assert_eq!(backend.last_block, Some(17));
+        });
+    }
+
+    #[test]
+    fn constants_do_not_touch_the_backend() {
+        smol::block_on(async {
+            let metadata = fixture_metadata();
+            let mut backend = MockBackend {
+                storage: Vec::new(),
+                keys: Vec::new(),
+                last_block: None,
+                storage_calls: 0,
+            };
+
+            let response = query(&mut backend, &metadata, "system/_constants/version", None)
+                .await
+                .unwrap();
+            assert!(matches!(response, Response::Value(_, _)));
+            assert_eq!(backend.storage_calls, 0);
+        });
+    }
+
+    #[test]
+    fn partial_map_query_decodes_returned_keys() {
+        smol::block_on(async {
+            let metadata = fixture_metadata();
+            let address = "0x12840f0626ac847d41089c4e05cf0719c5698af1e3bb87b66542de70b2de4b2b";
+            let full_key =
+                match resolve_query(&metadata, &format!("system/account/{address}")).unwrap() {
+                    ResolvedQuery::Storage(key) => key.key(),
+                    ResolvedQuery::Constant(_) => panic!("expected storage"),
+                };
+            let mut backend = MockBackend {
+                storage: vec![(full_key.clone(), Some(vec![0]))],
+                keys: vec![full_key],
+                last_block: None,
+                storage_calls: 0,
+            };
+
+            let response = query(&mut backend, &metadata, "system/account", None)
+                .await
+                .unwrap();
+            match response {
+                Response::ValueSet(entries, _) => {
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(entries[0].0.len(), 1);
+                    assert_eq!(entries[0].0[0].data.len(), 32);
+                }
+                other => panic!("expected value set, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn missing_storage_item_has_a_specific_error() {
+        let metadata = fixture_metadata();
+        let error = match resolve_query(&metadata, "system/not-a-storage-item") {
+            Ok(_) => panic!("unexpected query resolution"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, Error::StorageKeyNotFound));
     }
 }

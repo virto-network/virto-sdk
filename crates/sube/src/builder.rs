@@ -7,8 +7,8 @@ use crate::extrinsic::{EncodeCall, ExtrinsicBody};
 use crate::prelude::*;
 use crate::{Backend, DynValue, ExtrinsicAssembler, Metadata, Response, Result as SubeResult};
 
-#[cfg(any(feature = "ws", feature = "smoldot"))]
-use crate::backend::{chain_string_to_url, connect, get_metadata, AnyBackend};
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+use crate::backend::{AnyBackend, chain_string_to_url, connect, get_metadata};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
@@ -146,7 +146,7 @@ impl SubeBuilder {
 }
 
 /// One-liner query: `sube("wss://host/pallet/item/key").await?`
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 impl IntoFuture for SubeBuilder {
     type Output = SubeResult<Response>;
     type IntoFuture = BoxFuture<'static, SubeResult<Response>>;
@@ -162,7 +162,7 @@ impl IntoFuture for SubeBuilder {
 
             let path = url.path();
             let mut backend = connect(&url, self.timeout).await?;
-            let meta = get_metadata(&mut backend, &url, self.metadata).await?;
+            let meta = get_metadata(&mut backend, self.metadata).await?;
 
             Ok(match path {
                 "/" | "" | "_meta" | "_meta/registry" => Response::Meta(Rc::clone(&meta)),
@@ -192,10 +192,10 @@ impl IntoFuture for SubeBuilder {
 /// // Both support the same query API:
 /// let r = chain.query("system/account/0x1234").await?;
 /// ```
-/// When `ws` or `smoldot` is enabled, `B` defaults to
-/// [`AnyBackend`](crate::backend::AnyBackend) and includes URL/timeout
+/// When `ws` or `smoldot-std` is enabled, `B` defaults to
+/// [`AnyBackend`] and includes URL/timeout
 /// for reconnect support.
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 pub struct Sube<B = AnyBackend> {
     backend: B,
     metadata: Rc<Metadata>,
@@ -203,7 +203,7 @@ pub struct Sube<B = AnyBackend> {
     timeout: core::time::Duration,
 }
 
-#[cfg(not(any(feature = "ws", feature = "smoldot")))]
+#[cfg(not(any(feature = "ws", feature = "smoldot-std")))]
 pub struct Sube<B> {
     backend: B,
     metadata: Rc<Metadata>,
@@ -227,16 +227,16 @@ impl<B: Backend> Sube<B> {
         Sube {
             backend,
             metadata,
-            #[cfg(any(feature = "ws", feature = "smoldot"))]
+            #[cfg(any(feature = "ws", feature = "smoldot-std"))]
             url: String::new(),
-            #[cfg(any(feature = "ws", feature = "smoldot"))]
+            #[cfg(any(feature = "ws", feature = "smoldot-std"))]
             timeout: crate::DEFAULT_TIMEOUT,
         }
     }
 
-    /// Mutable access to the metadata (for replacing it after construction).
-    pub fn metadata_mut(&mut self) -> &mut Rc<Metadata> {
-        &mut self.metadata
+    /// Replace the metadata used for subsequent queries and submissions.
+    pub fn set_metadata(&mut self, metadata: Metadata) {
+        self.metadata = Rc::new(metadata);
     }
 
     /// Query a storage path using human-readable names.
@@ -374,51 +374,22 @@ impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
         let path = path.trim_matches('/');
         match path {
             "_meta" | "_meta/registry" => Ok(Response::Meta(Rc::clone(&self.metadata))),
-            _ => {
-                let (pallet, item_or_call, mut keys) =
-                    crate::parse_uri(path).ok_or(crate::Error::BadInput)?;
-                let pallet = self
-                    .metadata
-                    .pallet_by_name(&pallet)
-                    .ok_or(crate::Error::PalletNotFound(pallet))?;
-
-                if item_or_call == "_constants" {
-                    let const_name = keys.pop().ok_or(crate::Error::MissingConstantName)?;
-                    let const_meta = pallet
-                        .constants
-                        .iter()
-                        .find(|c| c.name == const_name)
-                        .ok_or(crate::Error::ConstantNotFound(const_name))?;
-                    return Ok(Response::Value(
-                        crate::StorageEntry::new(const_meta.value.clone(), const_meta.ty),
-                        Rc::clone(&self.metadata),
-                    ));
+            _ => match crate::resolve_query(&self.metadata, path)? {
+                crate::ResolvedQuery::Constant(entry) => {
+                    Ok(Response::Value(entry, Rc::clone(&self.metadata)))
                 }
-
-                if let Ok(key_res) = crate::metadata::StorageKey::build_with_registry(
-                    &self.metadata.registry,
-                    pallet,
-                    &item_or_call,
-                    &keys,
-                ) {
-                    if !key_res.is_partial() {
-                        let results = self
-                            .backend
-                            .get_storage_at_hash(block_hash, vec![key_res.key()])
-                            .await?;
-                        let value = results.into_iter().next().and_then(|(_, v)| v);
-                        return Ok(match value {
-                            None => Response::None,
-                            Some(data) => Response::Value(
-                                crate::StorageEntry::new(data, key_res.ty),
-                                Rc::clone(&self.metadata),
-                            ),
-                        });
-                    }
+                crate::ResolvedQuery::Storage(key) if key.is_partial() => {
+                    Err(crate::Error::BadInput)
                 }
-
-                Err(crate::Error::BadInput)
-            }
+                crate::ResolvedQuery::Storage(key) => {
+                    let results = self
+                        .backend
+                        .get_storage_at_hash(block_hash, vec![key.key()])
+                        .await?;
+                    let value = results.into_iter().next().and_then(|(_, value)| value);
+                    Ok(crate::storage_response(value, key.ty, &self.metadata))
+                }
+            },
         }
     }
 
@@ -449,7 +420,7 @@ pub type EdgeSube =
 
 /// Re-export for callers.
 #[cfg(feature = "ws-edge")]
-pub use crate::rpc::edge::EdgeNet;
+pub use crate::rpc::edge::EdgeResources;
 
 /// Connect to a Substrate chain from an embedded device.
 ///
@@ -457,33 +428,44 @@ pub use crate::rpc::edge::EdgeNet;
 /// metadata. Returns a [`Sube`] handle ready for human-readable queries.
 ///
 /// ```rust,ignore
-/// static NET: sube::EdgeNet = sube::EdgeNet::new();
-/// // after WiFi:
-/// NET.init(stack);
+/// static RX: StaticCell<[u8; 2048]> = StaticCell::new();
+/// static TX: StaticCell<[u8; 2048]> = StaticCell::new();
+/// let resources = sube::EdgeResources::new(
+///     stack,
+///     RX.init([0; 2048]),
+///     TX.init([0; 2048]),
+/// )
+/// .with_ca_certificate_der(include_bytes!("root-ca.der"));
 /// let rng = esp_hal::rng::Trng::try_new()?;
-/// let mut chain = sube::connect_edge("wss://kreivo.io", &NET, rng, &["CollatorSelection"])
+/// let mut chain = sube::connect_edge(
+///     "wss://kreivo.io",
+///     resources,
+///     rng,
+///     &["CollatorSelection"],
+/// )
 ///     .await?;
 /// ```
 #[cfg(feature = "ws-edge")]
 pub async fn connect_edge(
     url: &str,
-    net: &'static crate::rpc::edge::EdgeNet,
+    resources: crate::rpc::edge::EdgeResources,
     rng: impl rand_core::CryptoRng + Send + 'static,
-    _pallets: &[&str],
+    pallets: &[&str],
 ) -> SubeResult<EdgeSube> {
-    let ws = crate::rpc::edge::edge_connect(url, net, rng).await?;
+    let ws = crate::rpc::edge::edge_connect(url, resources, rng).await?;
     log::info!("sube: starting ChainHead session");
-    let chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
+    let mut chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
+    let metadata = chain_head.metadata_filtered(pallets).await?;
     log::info!("sube: ready");
-    Ok(Sube::from_parts(chain_head, Rc::new(Metadata::empty())))
+    Ok(Sube::from_parts(chain_head, Rc::new(metadata)))
 }
 
 // --- URL-based constructors and reconnect (AnyBackend only) ---
 
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 use crate::rpc::chainhead::ChainSession as _;
 
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 impl Sube {
     /// Connect to a chain and return a reusable handle.
     pub async fn connect(url: &str) -> SubeResult<Self> {
@@ -530,7 +512,7 @@ impl Sube {
     ) -> SubeResult<Self> {
         let url = chain_string_to_url(url_str)?;
         let mut backend = connect(&url, timeout).await?;
-        let metadata = get_metadata(&mut backend, &url, preloaded).await?;
+        let metadata = get_metadata(&mut backend, preloaded).await?;
         Ok(Sube {
             backend,
             metadata,
@@ -552,8 +534,7 @@ impl Sube {
         preloaded: Option<Metadata>,
     ) -> SubeResult<Self> {
         let mut backend = crate::backend::connect_light(chain_spec, crate::DEFAULT_TIMEOUT).await?;
-        let metadata =
-            crate::backend::get_metadata_by_key(&mut backend, "light://chain", preloaded).await?;
+        let metadata = get_metadata(&mut backend, preloaded).await?;
         Ok(Sube {
             backend,
             metadata,
@@ -568,8 +549,7 @@ impl Sube {
         let mut backend =
             crate::backend::connect_light_para(chain_spec, relay_spec, crate::DEFAULT_TIMEOUT)
                 .await?;
-        let metadata =
-            crate::backend::get_metadata_by_key(&mut backend, "light://parachain", None).await?;
+        let metadata = get_metadata(&mut backend, None).await?;
         Ok(Sube {
             backend,
             metadata,
@@ -709,7 +689,7 @@ impl<B, S> OneShotCall<B, S> {
     }
 }
 
-#[cfg(any(feature = "ws", feature = "smoldot"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 impl<B, S> IntoFuture for OneShotCall<B, S>
 where
     B: EncodeCall + core::fmt::Debug + 'static,
@@ -723,7 +703,7 @@ where
             let url = chain_string_to_url(&self.url)?;
             let path = url.path();
             let mut backend = connect(&url, self.timeout).await?;
-            let meta = get_metadata(&mut backend, &url, self.preloaded_meta).await?;
+            let meta = get_metadata(&mut backend, self.preloaded_meta).await?;
 
             let (_, body, assembler, finalize) = self.tx.into_parts();
             crate::extrinsic::submit(&mut backend, &meta, path, &body, &assembler, finalize).await

@@ -4,12 +4,14 @@
 //! `edge-ws` crate, which works on any `embedded_io_async::{Read, Write}` stream.
 //! This enables sube to run on ESP32, embassy, and other no_std targets.
 //!
-//! Implement [`Connect`] to provide your platform's TCP/TLS transport,
-//! then use [`Sube::connect_edge`](crate::Sube::connect_edge) for a
-//! one-liner connection:
+//! Provide unique socket resources, then use [`connect_edge`](crate::connect_edge)
+//! for a one-liner connection:
 //!
 //! ```rust,ignore
-//! let mut chain = Sube::connect_edge("wss://kreivo.io", &mut tls, &["Balances"]).await?;
+//! let resources =
+//!     EdgeResources::new(stack, rx, tx).with_ca_certificate_der(ROOT_CA_DER);
+//! let mut chain =
+//!     sube::connect_edge("wss://kreivo.io", resources, rng, &["Balances"]).await?;
 //! let r = chain.query("balances/total-issuance").await?;
 //! ```
 
@@ -186,7 +188,7 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
         loop {
             match self.read_message().await {
                 Ok(IncomingMessage::Notification(n)) => {
-                    return Some((n.params.subscription, n.params.result))
+                    return Some((n.params.subscription, n.params.result));
                 }
                 Ok(IncomingMessage::Response(_)) => {}
                 Ok(IncomingMessage::Error(e)) => {
@@ -607,6 +609,14 @@ struct WsUrl<'a> {
 ///
 /// Supports `ws://`, `wss://`, or bare `host:port/path` (defaults to wss).
 fn parse_url(url: &str) -> crate::Result<WsUrl<'_>> {
+    if url.is_empty()
+        || url.bytes().any(|byte| byte.is_ascii_whitespace())
+        || url.contains('#')
+        || url.contains('@')
+    {
+        return Err(Error::BadInput);
+    }
+
     let (tls, rest) = if let Some(r) = url.strip_prefix("wss://") {
         (true, r)
     } else if let Some(r) = url.strip_prefix("ws://") {
@@ -615,20 +625,27 @@ fn parse_url(url: &str) -> crate::Result<WsUrl<'_>> {
         (true, url)
     };
 
-    let (host_port, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
+    let split = rest
+        .char_indices()
+        .find(|(_, character)| matches!(character, '/' | '?'))
+        .map(|(index, _)| index);
+    let (host_port, path) = match split {
+        Some(index) if rest.as_bytes()[index] == b'?' => return Err(Error::BadInput),
+        Some(index) => (&rest[..index], &rest[index..]),
         None => (rest, "/"),
     };
 
-    let (host, port) = match host_port.rfind(':') {
-        Some(i) => {
-            let p = host_port[i + 1..]
-                .parse::<u16>()
-                .map_err(|_| Error::BadInput)?;
-            (&host_port[..i], p)
-        }
+    if host_port.is_empty() || host_port.starts_with('[') || host_port.matches(':').count() > 1 {
+        return Err(Error::BadInput);
+    }
+
+    let (host, port) = match host_port.split_once(':') {
+        Some((host, port)) => (host, port.parse::<u16>().map_err(|_| Error::BadInput)?),
         None => (host_port, if tls { 443 } else { 80 }),
     };
+    if host.is_empty() {
+        return Err(Error::BadInput);
+    }
 
     Ok(WsUrl {
         host,
@@ -694,47 +711,35 @@ impl Write for EdgeSocket {
 /// For `wss://` URLs: DNS → TCP → TLS → WebSocket.
 /// For `ws://` URLs: DNS → TCP → WebSocket (no TLS, for local testing).
 ///
-/// Socket buffers and TLS state are heap-allocated with `'static` lifetime,
-/// suitable for single-connection embedded devices.
-/// Network context for embedded edge connections.
+/// Unique network resources consumed by one embedded connection.
 ///
-/// Groups the embassy network stack, socket buffers, and provides
-/// everything [`connect_edge`](crate::connect_edge) needs besides the URL.
-/// Store in a `static` and initialize once at startup.
-///
-/// ```rust,ignore
-/// static NET: sube::EdgeNet = sube::EdgeNet::new();
-/// // after WiFi is up:
-/// NET.init(stack, rng);
-/// let mut chain = sube::connect_edge("wss://kreivo.io", &NET, &["CollatorSelection"]).await?;
-/// ```
-pub struct EdgeNet {
-    stack: core::cell::UnsafeCell<Option<embassy_net::Stack<'static>>>,
-    rx: core::cell::UnsafeCell<[u8; 2048]>,
-    tx: core::cell::UnsafeCell<[u8; 2048]>,
+/// The buffers must have static lifetime, typically provided by `StaticCell`.
+/// Consuming this value prevents two live sockets from aliasing the same buffers.
+pub struct EdgeResources {
+    stack: embassy_net::Stack<'static>,
+    rx: &'static mut [u8],
+    tx: &'static mut [u8],
+    ca_certificate_der: Option<&'static [u8]>,
 }
 
-// SAFETY: single-threaded embassy executor, only one connection at a time.
-unsafe impl Sync for EdgeNet {}
-
-impl EdgeNet {
-    pub const fn new() -> Self {
+impl EdgeResources {
+    pub fn new(
+        stack: embassy_net::Stack<'static>,
+        rx: &'static mut [u8],
+        tx: &'static mut [u8],
+    ) -> Self {
         Self {
-            stack: core::cell::UnsafeCell::new(None),
-            rx: core::cell::UnsafeCell::new([0u8; 2048]),
-            tx: core::cell::UnsafeCell::new([0u8; 2048]),
+            stack,
+            rx,
+            tx,
+            ca_certificate_der: None,
         }
     }
 
-    /// Set the network stack. Call once after WiFi is connected.
-    pub fn init(&self, stack: embassy_net::Stack<'static>) {
-        // SAFETY: single-threaded, called once at startup.
-        unsafe { *self.stack.get() = Some(stack) };
-    }
-
-    fn stack(&self) -> crate::Result<embassy_net::Stack<'static>> {
-        // SAFETY: single-threaded, init called before use.
-        unsafe { (*self.stack.get()).ok_or(crate::Error::ChainUnavailable) }
+    /// Configure a DER-encoded CA certificate for `wss://` verification.
+    pub fn with_ca_certificate_der(mut self, certificate: &'static [u8]) -> Self {
+        self.ca_certificate_der = Some(certificate);
+        self
     }
 }
 
@@ -743,23 +748,25 @@ impl EdgeNet {
 /// For `wss://` URLs: DNS → TCP → TLS → WebSocket.
 /// For `ws://` URLs: DNS → TCP → WebSocket (no TLS, for local testing).
 ///
-/// `bufs` must have `'static` lifetime — use a `StaticCell` on embedded.
-/// TLS state is heap-allocated on first call. The `Tls` singleton is
-/// reused if this function is called again (mbedtls drops the old one).
+/// Socket buffers must have `'static` lifetime. TLS state is allocated for
+/// the lifetime of the connection and is never shared with another session.
 pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
     url: &str,
-    net: &'static EdgeNet,
+    resources: EdgeResources,
     rng: R,
 ) -> crate::Result<Backend<EdgeSocket>> {
     use alloc::boxed::Box;
     use alloc::format;
 
     let parsed = parse_url(url)?;
-    let stack = net.stack()?;
+    let EdgeResources {
+        stack,
+        rx,
+        tx,
+        ca_certificate_der,
+    } = resources;
     log::info!("edge: connecting to {} (tls={})", parsed.host, parsed.tls);
 
-    // SAFETY: single-threaded executor, only one connection at a time.
-    let (rx, tx) = unsafe { (&mut *net.rx.get(), &mut *net.tx.get()) };
     let mut socket = TcpSocket::new(stack, rx, tx);
     socket.set_timeout(Some(embassy_time::Duration::from_secs(60)));
     socket.set_keep_alive(Some(embassy_time::Duration::from_secs(10)));
@@ -791,28 +798,24 @@ pub async fn edge_connect<R: rand_core::CryptoRng + Send + 'static>(
     let stream = if parsed.tls {
         log::debug!("edge: starting TLS handshake");
 
-        // Drop the previous Tls singleton (if any) so we can create a new one.
-        // SAFETY: single-threaded, the old Session referencing it has been dropped.
-        use core::sync::atomic::{AtomicPtr, Ordering};
-        static TLS_PTR: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
-        let old = TLS_PTR.swap(core::ptr::null_mut(), Ordering::Relaxed);
-        if !old.is_null() {
-            unsafe { drop(Box::from_raw(old as *mut mbedtls_rs::Tls<'static>)) };
-        }
-
         let rng = Box::leak(Box::new(rng));
         let tls_ctx =
             mbedtls_rs::Tls::new(rng).map_err(|e| Error::Node(format!("TLS init: {e:?}")))?;
         let tls_ctx = Box::leak(Box::new(tls_ctx));
 
-        TLS_PTR.store(tls_ctx as *mut _ as *mut u8, Ordering::Relaxed);
         let host_cstr = Box::leak(format!("{}\0", parsed.host).into_boxed_str());
+        let ca_chain = ca_certificate_der
+            .ok_or_else(|| Error::Node("wss requires a trusted CA certificate".into()))
+            .and_then(|certificate| {
+                mbedtls_rs::Certificate::new_no_copy(certificate)
+                    .map_err(|error| Error::Node(format!("invalid CA certificate: {error:?}")))
+            })?;
         let conf = Box::leak(Box::new(mbedtls_rs::SessionConfig::Client(
             mbedtls_rs::ClientSessionConfig {
+                ca_chain: Some(ca_chain),
                 server_name: Some(
                     core::ffi::CStr::from_bytes_with_nul(host_cstr.as_bytes()).unwrap(),
                 ),
-                auth_mode: mbedtls_rs::AuthMode::None,
                 ..mbedtls_rs::ClientSessionConfig::new()
             },
         )));
@@ -854,7 +857,13 @@ async fn ws_handshake(
     request.push_str("Connection: Upgrade\r\n");
     request.push_str("Sec-WebSocket-Key: c3ViZS1lbWJlZGRlZC1rZXk=\r\n");
     request.push_str("Sec-WebSocket-Version: 13\r\n");
-    request.push_str("User-Agent: sube/1.0\r\n");
+    request.push_str("User-Agent: ");
+    request.push_str(concat!(
+        env!("CARGO_PKG_NAME"),
+        "/",
+        env!("CARGO_PKG_VERSION")
+    ));
+    request.push_str("\r\n");
     request.push_str("\r\n");
 
     stream

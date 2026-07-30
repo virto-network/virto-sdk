@@ -1,9 +1,6 @@
-use core::fmt::Write;
 use core::time::Duration;
 
 use alloc::rc::Rc;
-use heapless::index_map::FnvIndexMap as Map;
-use no_std_async::Mutex;
 
 use crate::prelude::*;
 use crate::rpc::chainhead::ChainHead;
@@ -14,8 +11,6 @@ use url::Url;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]
 type SmoldotPlatform = alloc::sync::Arc<smoldot_light::platform::DefaultPlatform>;
-
-type CacheKey = heapless::String<64>;
 
 // --- Internal backend enum + dispatch ---
 
@@ -125,76 +120,15 @@ impl crate::rpc::chainhead::ChainSession for AnyBackend {
     }
 }
 
-// --- Global metadata cache ---
-
-/// Sync wrapper for the cache: sube is single-threaded by design (Rc, no spawn),
-/// so the cache is never accessed from more than one thread. This wrapper lets
-/// us put a `Rc<Metadata>`-bearing map in a `static` without giving up Rc.
-struct SingleThreaded<T>(T);
-// SAFETY: sube is single-threaded; the cache is only ever touched from the
-// thread that drives the async runtime.
-unsafe impl<T> Sync for SingleThreaded<T> {}
-
-static META_CACHE: SingleThreaded<Mutex<Option<Map<CacheKey, Rc<Metadata>, 16>>>> =
-    SingleThreaded(Mutex::new(None));
-
 pub(crate) async fn get_metadata(
     backend: &mut AnyBackend,
-    url: &Url,
     preloaded: Option<Metadata>,
 ) -> SubeResult<Rc<Metadata>> {
-    let key = base_key(url).map_err(|_| Error::BadInput)?;
-    get_or_fetch(key, backend, preloaded).await
-}
-
-#[cfg(all(feature = "smoldot", feature = "std"))]
-pub(crate) async fn get_metadata_by_key(
-    backend: &mut AnyBackend,
-    cache_key: &str,
-    preloaded: Option<Metadata>,
-) -> SubeResult<Rc<Metadata>> {
-    let key: CacheKey = cache_key.try_into().map_err(|_| Error::BadInput)?;
-    get_or_fetch(key, backend, preloaded).await
-}
-
-async fn get_or_fetch(
-    key: CacheKey,
-    backend: &mut AnyBackend,
-    preloaded: Option<Metadata>,
-) -> SubeResult<Rc<Metadata>> {
-    let mut cache = META_CACHE.0.lock().await;
-    let map = cache.get_or_insert_with(Map::new);
-
-    if let Some(meta) = map.get(&key) {
-        return Ok(Rc::clone(meta));
-    }
-
     let meta = match preloaded {
         Some(m) => m,
         None => backend.metadata().await.map_err(|_| Error::BadMetadata)?,
     };
-    let meta = Rc::new(meta);
-
-    map.insert(key, Rc::clone(&meta))
-        .map_err(|_| Error::BadMetadata)?;
-
-    Ok(meta)
-}
-
-fn base_key(url: &Url) -> core::result::Result<CacheKey, core::fmt::Error> {
-    let mut key = CacheKey::new();
-    let port = url.port().unwrap_or(match url.scheme() {
-        "wss" | "https" => 443,
-        _ => 80,
-    });
-    write!(
-        key,
-        "{}://{}:{}",
-        url.scheme(),
-        url.host_str().unwrap_or("unknown"),
-        port
-    )?;
-    Ok(key)
+    Ok(Rc::new(meta))
 }
 
 // --- URL parsing ---

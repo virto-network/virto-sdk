@@ -8,7 +8,7 @@ use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 
 use futures_util::{SinkExt, StreamExt};
-use gloo_net::websocket::{futures::WebSocket, Message};
+use gloo_net::websocket::{Message, futures::WebSocket};
 
 use super::{IncomingMessage, JsonRpcError, Rpc, RpcResult};
 use crate::Error;
@@ -22,8 +22,7 @@ pub struct Backend {
 impl Backend {
     pub async fn new(url: &str) -> Result<Self, Error> {
         log::trace!("WS(web) connecting to {}", url);
-        let ws = WebSocket::open(url)
-            .map_err(|e| Error::Node(format!("websocket open: {e}")))?;
+        let ws = WebSocket::open(url).map_err(|e| Error::Node(format!("websocket open: {e}")))?;
         Ok(Backend {
             ws,
             event_buffer: VecDeque::new(),
@@ -102,7 +101,7 @@ impl super::RpcSubscription for Backend {
         loop {
             match self.read_message().await {
                 Ok(IncomingMessage::Notification(n)) => {
-                    return Some((n.params.subscription, n.params.result))
+                    return Some((n.params.subscription, n.params.result));
                 }
                 Ok(IncomingMessage::Response(_)) => {}
                 Ok(IncomingMessage::Error(e)) => {
