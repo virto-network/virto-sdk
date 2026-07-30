@@ -26,6 +26,7 @@ futures-util = { version = "0.3", default-features = false, features = [
 	"sink",
 ], optional = true }
 async-tungstenite = { version = "0.35", optional = true, default-features = false }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring"] }
 smol = { workspace = true, optional = true }
 
 # ws backend (embedded, edge-ws)
@@ -69,7 +70,7 @@ ws = [
 	"dep:futures-util",
 	"async-tungstenite/smol-runtime",
 ]
-wss = ["ws", "async-tungstenite/futures-rustls-webpki-roots"]
+wss = ["ws", "async-tungstenite/futures-rustls-webpki-roots", "dep:rustls"]
 ws-edge = ["dep:edge-ws", "dep:embedded-io-async", "dep:embassy-net", "dep:embassy-time", "dep:mbedtls-rs", "dep:rand_core", "scales/async"]
 ws-web = ["std", "dep:gloo-net", "dep:futures-util"]
 smoldot = ["dep:smoldot-light"]
