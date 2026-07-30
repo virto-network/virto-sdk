@@ -452,12 +452,39 @@ pub async fn connect_edge(
     rng: impl rand_core::CryptoRng + Send + 'static,
     pallets: &[&str],
 ) -> SubeResult<EdgeSube> {
-    let ws = crate::rpc::edge::edge_connect(url, resources, rng).await?;
-    log::info!("sube: starting ChainHead session");
-    let mut chain_head = crate::rpc::chainhead::ChainHead::new(ws).await?;
+    let mut chain_head = connect_edge_chain_head(url, resources, rng).await?;
     let metadata = chain_head.metadata_filtered(pallets).await?;
     log::info!("sube: ready");
     Ok(Sube::from_parts(chain_head, Rc::new(metadata)))
+}
+
+/// Connect from an embedded device using previously decoded metadata.
+///
+/// This avoids downloading and decoding metadata during connection, which is
+/// useful when a device persists filtered metadata in flash.
+#[cfg(feature = "ws-edge")]
+pub async fn connect_edge_with_meta(
+    url: &str,
+    resources: crate::rpc::edge::EdgeResources,
+    rng: impl rand_core::CryptoRng + Send + 'static,
+    metadata: Metadata,
+) -> SubeResult<EdgeSube> {
+    let chain_head = connect_edge_chain_head(url, resources, rng).await?;
+    log::info!("sube: ready with preloaded metadata");
+    Ok(Sube::from_parts(chain_head, Rc::new(metadata)))
+}
+
+#[cfg(feature = "ws-edge")]
+async fn connect_edge_chain_head(
+    url: &str,
+    resources: crate::rpc::edge::EdgeResources,
+    rng: impl rand_core::CryptoRng + Send + 'static,
+) -> SubeResult<
+    crate::rpc::chainhead::ChainHead<crate::rpc::edge::Backend<crate::rpc::edge::EdgeSocket>>,
+> {
+    let ws = crate::rpc::edge::edge_connect(url, resources, rng).await?;
+    log::info!("sube: starting ChainHead session");
+    crate::rpc::chainhead::ChainHead::new(ws).await
 }
 
 // --- URL-based constructors and reconnect (AnyBackend only) ---

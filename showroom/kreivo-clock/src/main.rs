@@ -13,14 +13,16 @@
 extern crate alloc;
 extern crate tinyrlibc;
 
-use alloc::rc::Rc;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
+use static_cell::StaticCell;
 use sube::ChainEvent;
 
 use kreivo_clock::device::event::Status;
-use kreivo_clock::{metadata, Runtime};
+use kreivo_clock::{Runtime, metadata};
+
+mod gts_root_r4;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -34,47 +36,64 @@ const COLLATORS: [&str; 6] = [
     "0x51c08fd82068187f9f12b22ea50985dd0c0e9902da50c93beb5251b8cc6a7aeb",
 ];
 
-static NET: sube::EdgeNet = sube::EdgeNet::new();
+static RX: StaticCell<[u8; 2048]> = StaticCell::new();
+static TX: StaticCell<[u8; 2048]> = StaticCell::new();
+
+/// Bridge ESP HAL's rand_core 0.9 implementation to mbedtls-rs's 0.10 API.
+struct RngCompat<R>(R);
+
+impl<R: rand_core_09::RngCore> rand_core_10::TryRng for RngCompat<R> {
+    type Error = rand_core_10::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok(rand_core_09::RngCore::next_u32(&mut self.0))
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(rand_core_09::RngCore::next_u64(&mut self.0))
+    }
+
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        rand_core_09::RngCore::fill_bytes(&mut self.0, dst);
+        Ok(())
+    }
+}
+
+impl<R: rand_core_09::CryptoRng> rand_core_10::TryCryptoRng for RngCompat<R> {}
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     let mut rt = kreivo_clock::start(spawner).await;
-    NET.init(rt.stack);
 
     // Load metadata: from flash if present, otherwise wait for an HTTP push.
-    let meta = Rc::new(metadata::load_or_fetch(&mut rt).await);
+    let meta = metadata::load_or_fetch(&mut rt).await;
+    let resources = sube::EdgeResources::new(rt.stack, RX.init([0; 2048]), TX.init([0; 2048]))
+        .with_ca_certificate_der(gts_root_r4::DER);
 
-    let mut retries = 0u8;
-    loop {
-        rt.status(Status::Dim("connecting..."));
-        match watch_chain(&mut rt, &meta).await {
-            Ok(()) => retries = 0,
-            Err(e) => {
-                log::error!("chain: {e}");
-                retries += 1;
-                if retries > 3 {
-                    log::error!("too many failures, rebooting");
-                    esp_hal::system::software_reset();
-                }
-                rt.set_live(false);
-                rt.status(Status::Error("reconnecting..."));
-                Timer::after(Duration::from_secs(3)).await;
-            }
-        }
+    rt.status(Status::Dim("connecting..."));
+    if let Err(e) = watch_chain(&mut rt, meta, resources).await {
+        log::error!("chain: {e}");
+        rt.set_live(false);
+        rt.status(Status::Error("rebooting..."));
+        Timer::after(Duration::from_secs(3)).await;
     }
+    esp_hal::system::software_reset();
 }
 
 // ── sube: chain watcher ────────────────────────────────────────────────
 
-async fn watch_chain(rt: &mut Runtime, meta: &Rc<sube::Metadata>) -> Result<(), &'static str> {
-    let rng = esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?;
-    let mut chain = sube::connect_edge("wss://kreivo.io", &NET, rng, &[])
+async fn watch_chain(
+    rt: &mut Runtime,
+    meta: sube::Metadata,
+    resources: sube::EdgeResources,
+) -> Result<(), &'static str> {
+    let rng = RngCompat(esp_hal::rng::Trng::try_new().map_err(|_| "TRNG")?);
+    let mut chain = sube::connect_edge_with_meta("wss://kreivo.io", resources, rng, meta)
         .await
         .map_err(|e| {
             log::error!("connect: {e}");
             "connect failed"
         })?;
-    *chain.metadata_mut() = Rc::clone(meta);
 
     rt.set_live(true);
     rt.status(Status::Good(""));
@@ -84,7 +103,7 @@ async fn watch_chain(rt: &mut Runtime, meta: &Rc<sube::Metadata>) -> Result<(), 
         // Hot-swap metadata if a new push arrived
         if let Some(new_meta) = metadata::take_pushed() {
             log::info!("hot-swapped metadata ({} pallets)", new_meta.pallets.len());
-            *chain.metadata_mut() = Rc::new(new_meta);
+            chain.set_metadata(new_meta);
         }
 
         match chain.next_event().await {
@@ -114,10 +133,7 @@ async fn watch_chain(rt: &mut Runtime, meta: &Rc<sube::Metadata>) -> Result<(), 
 }
 
 /// Query each collator's last-authored-block via human-readable storage path.
-async fn query_collators(
-    chain: &mut sube::EdgeSube,
-    hash: &str,
-) -> [u32; 6] {
+async fn query_collators(chain: &mut sube::EdgeSube, hash: &str) -> [u32; 6] {
     let mut blocks = [0u32; 6];
     for (i, addr) in COLLATORS.iter().enumerate() {
         let path = alloc::format!("collator-selection/last-authored-block/{addr}");

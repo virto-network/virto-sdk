@@ -33,7 +33,7 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
 ] }
 
 # TLS
-mbedtls-rs = { git = "https://github.com/esp-rs/mbedtls-rs", features = ["embassy-time", "log", "use-gcc"] }
+mbedtls-rs = { version = "0.1", features = ["embassy-time", "log", "use-gcc"] }
 tinyrlibc  = { version = "0.5", default-features = false, features = ["memchr"] }
 
 # Display (T-Watch S3: ST7789 240x240 via SPI)
@@ -56,6 +56,8 @@ log              = "0.4"
 critical-section = "1.2"
 static_cell      = "2.1"
 heapless         = "0.8"
+rand-core-09     = { package = "rand_core", version = "0.9" }
+rand-core-10     = { package = "rand_core", version = "0.10" }
 
 [build-dependencies]
 slint-build = "1.15"

@@ -48,7 +48,7 @@ pub use value::DynValue;
 
 pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
 #[cfg(feature = "ws-edge")]
-pub use builder::{EdgeResources, EdgeSube, connect_edge};
+pub use builder::{EdgeResources, EdgeSube, connect_edge, connect_edge_with_meta};
 pub use extrinsic::{EncodeCall, Text};
 pub use meta::Metadata;
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]

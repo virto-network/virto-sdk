@@ -12,7 +12,7 @@ component LogoLayer inherits Image {
     source-clip-x: on ? (index + 8) * 80 : index * 80;
 }
 
-export component KreivoLogo inherits Rectangle {
+component KreivoLogo inherits Rectangle {
     in property <bool> live: false;
     /// Set to 0-7 to light up one segment at a time, or -1 for no loading highlight.
     in property <int> loading-step: -1;
