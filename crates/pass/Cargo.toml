@@ -19,3 +19,5 @@ futures-lite = "2"
 default = ["wallet"]
 wallet = ["dep:libwallet", "libwallet/sr25519"]
 ssh-agent = ["dep:sha2"]
+std = ["sube/std"]
+unix-ssh-agent = ["ssh-agent", "std"]

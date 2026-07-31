@@ -31,6 +31,8 @@
 //! ```
 
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 pub mod config;
 pub mod session;
