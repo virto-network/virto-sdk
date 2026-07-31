@@ -80,6 +80,10 @@ enum Focus {
     ConfirmForgetSession,
     #[cfg(feature = "pass")]
     PassEnrollment,
+    #[cfg(feature = "pass")]
+    PassDeviceAddition,
+    #[cfg(feature = "pass")]
+    PassDeviceRemoval,
 }
 
 #[cfg(feature = "wallet")]
@@ -141,6 +145,25 @@ struct PassEnrollmentState {
     provider_secondary: String,
 }
 
+#[cfg(feature = "pass")]
+struct PassDeviceAdditionState {
+    profile: String,
+    field: u8,
+    provider: DeviceProviderKind,
+    provider_primary: String,
+    provider_secondary: String,
+    filter: String,
+    admin_confirmation: String,
+}
+
+#[cfg(feature = "pass")]
+struct PassDeviceRemovalState {
+    profile: String,
+    devices: Vec<([u8; 32], String, bool)>,
+    device_idx: usize,
+    confirmation: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CallInputMode {
     Typed,
@@ -183,6 +206,10 @@ struct App {
     forget_session_profile: Option<String>,
     #[cfg(feature = "pass")]
     pass_enrollment: Option<PassEnrollmentState>,
+    #[cfg(feature = "pass")]
+    pass_device_addition: Option<PassDeviceAdditionState>,
+    #[cfg(feature = "pass")]
+    pass_device_removal: Option<PassDeviceRemovalState>,
 
     all_pallets: Vec<String>,
     pallets: Vec<String>,
@@ -553,6 +580,8 @@ impl App {
                 {
                     self.pass_session = None;
                     self.pass_enrollment = None;
+                    self.pass_device_addition = None;
+                    self.pass_device_removal = None;
                 }
             }
             #[cfg(feature = "wallet")]
@@ -682,6 +711,10 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         forget_session_profile: None,
         #[cfg(feature = "pass")]
         pass_enrollment: None,
+        #[cfg(feature = "pass")]
+        pass_device_addition: None,
+        #[cfg(feature = "pass")]
+        pass_device_removal: None,
         all_pallets,
         pallets,
         pallet_idx: 0,
@@ -769,6 +802,10 @@ fn handle_key(app: &mut App, key: KeyCode) {
         Focus::ConfirmForgetSession => handle_forget_session_confirmation(app, key),
         #[cfg(feature = "pass")]
         Focus::PassEnrollment => handle_pass_enrollment(app, key),
+        #[cfg(feature = "pass")]
+        Focus::PassDeviceAddition => handle_pass_device_addition(app, key),
+        #[cfg(feature = "pass")]
+        Focus::PassDeviceRemoval => handle_pass_device_removal(app, key),
     }
 }
 
@@ -940,6 +977,60 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
             app.error = None;
             app.focus = Focus::PassEnrollment;
         }
+        #[cfg(feature = "pass")]
+        KeyCode::Char('d') => {
+            let profile = match app.profiles.profiles.get(app.profile_idx) {
+                Some(crate::profiles::Profile::Pass(profile)) => profile.name.clone(),
+                _ => {
+                    app.error = Some("Select a pass profile to add a device.".into());
+                    return;
+                }
+            };
+            app.pass_device_addition = Some(PassDeviceAdditionState {
+                profile,
+                field: 0,
+                provider: DeviceProviderKind::SubstrateKey,
+                provider_primary: String::new(),
+                provider_secondary: String::new(),
+                filter: String::new(),
+                admin_confirmation: String::new(),
+            });
+            app.error = None;
+            app.focus = Focus::PassDeviceAddition;
+        }
+        #[cfg(feature = "pass")]
+        KeyCode::Char('r') => {
+            let profile = match app.profiles.profiles.get(app.profile_idx) {
+                Some(crate::profiles::Profile::Pass(profile)) => profile,
+                _ => {
+                    app.error = Some("Select a pass profile to remove a device.".into());
+                    return;
+                }
+            };
+            let mut devices = vec![(
+                profile.device_id,
+                format!(
+                    "primary · {}",
+                    device_provider_label(&profile.primary_device())
+                ),
+                true,
+            )];
+            devices.extend(profile.additional_devices.iter().map(|record| {
+                (
+                    record.device_id,
+                    format!("additional · {}", device_provider_label(&record.device)),
+                    false,
+                )
+            }));
+            app.pass_device_removal = Some(PassDeviceRemovalState {
+                profile: profile.name.clone(),
+                devices,
+                device_idx: 0,
+                confirmation: String::new(),
+            });
+            app.error = None;
+            app.focus = Focus::PassDeviceRemoval;
+        }
         #[cfg(feature = "wallet")]
         KeyCode::Enter => {
             if let Some(profile) = app.profiles.profiles.get(app.profile_idx) {
@@ -948,6 +1039,168 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
                     .to_chain
                     .send(ToChain::ActivateProfile(profile.name().into()));
             }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "pass")]
+fn device_provider_label(device: &crate::profiles::DeviceProviderProfile) -> &'static str {
+    match device {
+        crate::profiles::DeviceProviderProfile::SubstrateKey { .. } => "Substrate key",
+        crate::profiles::DeviceProviderProfile::WebAuthn { .. } => "WebAuthn",
+        crate::profiles::DeviceProviderProfile::SshAgent { .. } => "SSH agent",
+    }
+}
+
+#[cfg(feature = "pass")]
+fn handle_pass_device_addition(app: &mut App, key: KeyCode) {
+    let Some(device) = app.pass_device_addition.as_mut() else {
+        app.focus = Focus::Profiles;
+        return;
+    };
+    match key {
+        KeyCode::Esc => {
+            app.pass_device_addition = None;
+            app.error = None;
+            app.focus = Focus::Profiles;
+        }
+        KeyCode::Tab | KeyCode::Down => device.field = (device.field + 1).min(4),
+        KeyCode::BackTab | KeyCode::Up => device.field = device.field.saturating_sub(1),
+        KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if device.field == 0 => {
+            device.provider = device.provider.next();
+            device.provider_primary.clear();
+            device.provider_secondary.clear();
+            #[cfg(all(feature = "ssh-agent", unix))]
+            if matches!(device.provider, DeviceProviderKind::SshAgent) {
+                device.provider_secondary = "sube".into();
+            }
+        }
+        KeyCode::Backspace => match device.field {
+            1 => {
+                device.provider_primary.pop();
+            }
+            2 => {
+                device.provider_secondary.pop();
+            }
+            3 => {
+                device.filter.pop();
+                device.admin_confirmation.clear();
+            }
+            4 => {
+                device.admin_confirmation.pop();
+            }
+            _ => {}
+        },
+        KeyCode::Char(c) => match device.field {
+            1 => device.provider_primary.push(c),
+            2 => device.provider_secondary.push(c),
+            3 => {
+                device.filter.push(c);
+                device.admin_confirmation.clear();
+            }
+            4 => device.admin_confirmation.push(c),
+            _ => {}
+        },
+        KeyCode::Enter if device.field < 4 => device.field += 1,
+        KeyCode::Enter => {
+            if device.provider_primary.trim().is_empty() || device.filter.trim().is_empty() {
+                app.error =
+                    Some("Provider selection and an explicit device filter are required.".into());
+                return;
+            }
+            let admin = device.filter.trim().eq_ignore_ascii_case("admin");
+            if admin && device.admin_confirmation != "ADMIN" {
+                app.error = Some("Type ADMIN in the separate confirmation field.".into());
+                return;
+            }
+            let provider = match device.provider {
+                DeviceProviderKind::SubstrateKey => {
+                    crate::profiles::DeviceProviderProfile::SubstrateKey {
+                        wallet: device.provider_primary.trim().into(),
+                    }
+                }
+                #[cfg(feature = "desktop-webauthn")]
+                DeviceProviderKind::WebAuthn => {
+                    if device.provider_secondary.trim().is_empty() {
+                        app.error = Some("WebAuthn origin is required.".into());
+                        return;
+                    }
+                    crate::profiles::DeviceProviderProfile::WebAuthn {
+                        rp_id: device.provider_primary.trim().into(),
+                        origin: device.provider_secondary.trim().into(),
+                        credential_id: Vec::new(),
+                    }
+                }
+                #[cfg(all(feature = "ssh-agent", unix))]
+                DeviceProviderKind::SshAgent => {
+                    if device.provider_secondary.trim().is_empty() {
+                        app.error = Some("SSHSIG namespace is required.".into());
+                        return;
+                    }
+                    crate::profiles::DeviceProviderProfile::SshAgent {
+                        fingerprint: device.provider_primary.trim().into(),
+                        namespace: device.provider_secondary.trim().into(),
+                    }
+                }
+            };
+            app.review_returns_to_profiles = true;
+            app.error = Some("Creating the new device attestation...".into());
+            let _ = app.to_chain.send(ToChain::PrepareDeviceAddition(
+                crate::workflow::DeviceAdditionRequest {
+                    profile: device.profile.clone(),
+                    device: provider,
+                    filter: device.filter.trim().into(),
+                    admin_confirmed: admin,
+                },
+            ));
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "pass")]
+fn handle_pass_device_removal(app: &mut App, key: KeyCode) {
+    let Some(removal) = app.pass_device_removal.as_mut() else {
+        app.focus = Focus::Profiles;
+        return;
+    };
+    match key {
+        KeyCode::Esc => {
+            app.pass_device_removal = None;
+            app.error = None;
+            app.focus = Focus::Profiles;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            removal.device_idx = removal.device_idx.saturating_sub(1);
+            removal.confirmation.clear();
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if removal.device_idx + 1 < removal.devices.len() {
+                removal.device_idx += 1;
+                removal.confirmation.clear();
+            }
+        }
+        KeyCode::Backspace => {
+            removal.confirmation.pop();
+        }
+        KeyCode::Char(c) => removal.confirmation.push(c),
+        KeyCode::Enter => {
+            if removal.confirmation != "REMOVE" {
+                app.error = Some("Type REMOVE to prepare this device removal.".into());
+                return;
+            }
+            let Some((device_id, _, _)) = removal.devices.get(removal.device_idx) else {
+                return;
+            };
+            app.review_returns_to_profiles = true;
+            app.error = Some("Authenticating and preparing device removal...".into());
+            let _ = app.to_chain.send(ToChain::PrepareDeviceRemoval(
+                crate::workflow::DeviceRemovalRequest {
+                    profile: removal.profile.clone(),
+                    device_id: *device_id,
+                },
+            ));
         }
         _ => {}
     }

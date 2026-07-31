@@ -102,7 +102,7 @@ pub enum SessionPreparation {
 #[cfg(feature = "pass")]
 pub enum PendingEffect {
     Session {
-        profile: crate::profiles::PassProfile,
+        profile: Box<crate::profiles::PassProfile>,
         session_account: [u8; 32],
         secure_entry: String,
         policy: String,
@@ -110,8 +110,28 @@ pub enum PendingEffect {
         pending_seed: Option<zeroize::Zeroizing<[u8; 32]>>,
     },
     Enrollment {
-        pending: crate::profiles::PendingEnrollment,
+        pending: Box<crate::profiles::PendingEnrollment>,
     },
+    DeviceAddition {
+        profile: Box<crate::profiles::PassProfile>,
+        pending: Box<crate::profiles::PendingDeviceAddition>,
+    },
+    DeviceRemoval {
+        profile: Box<crate::profiles::PassProfile>,
+        device_id: [u8; 32],
+    },
+}
+
+#[cfg(feature = "pass")]
+impl PendingEffect {
+    pub fn finalized_message(&self) -> &'static str {
+        match self {
+            Self::Session { .. } => "Finalized session persisted and profile connected.",
+            Self::Enrollment { .. } => "Finalized enrollment persisted as a pass profile.",
+            Self::DeviceAddition { .. } => "Finalized device addition persisted.",
+            Self::DeviceRemoval { .. } => "Finalized device removal persisted.",
+        }
+    }
 }
 
 #[cfg(feature = "pass")]
@@ -120,6 +140,20 @@ pub struct EnrollmentRequest {
     pub user_id: String,
     pub registrar: String,
     pub device: crate::profiles::DeviceProviderProfile,
+}
+
+#[cfg(feature = "pass")]
+pub struct DeviceAdditionRequest {
+    pub profile: String,
+    pub device: crate::profiles::DeviceProviderProfile,
+    pub filter: String,
+    pub admin_confirmed: bool,
+}
+
+#[cfg(feature = "pass")]
+pub struct DeviceRemovalRequest {
+    pub profile: String,
+    pub device_id: [u8; 32],
 }
 
 #[cfg(feature = "pass")]
@@ -219,7 +253,7 @@ pub async fn prepare_enrollment(
     Ok((
         prepared,
         PendingEffect::Enrollment {
-            pending: pending.clone(),
+            pending: Box::new(pending.clone()),
         },
         pending.pass_account,
         pending.valid_through,
@@ -344,6 +378,251 @@ async fn prepare_enrollment_device(
 }
 
 #[cfg(feature = "pass")]
+pub async fn prepare_device_addition(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profile_path: &std::path::Path,
+    genesis_hash: [u8; 32],
+    request: DeviceAdditionRequest,
+) -> Result<(PreparedTransaction, PendingEffect, [u8; 32], u64)> {
+    use sube::Backend;
+
+    let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+    let profile = crate::pass_profile(&profiles, &request.profile, genesis_hash)?.clone();
+    let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
+    let checkpoint = chain.backend().block_info(None).await?;
+    let context = u32::try_from(checkpoint.number)
+        .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
+    let variant = crate::device_variant(&request.device);
+    if !config.supports_attestation(variant) {
+        anyhow::bail!("runtime does not advertise {variant} device registration");
+    }
+    let filter = crate::parse_device_filter(chain.metadata(), &request.filter)?;
+    if matches!(filter, pass::workflow::DeviceFilter::Admin) && !request.admin_confirmed {
+        anyhow::bail!("Admin device filter requires separate confirmation");
+    }
+    let pending = profiles
+        .pending_devices
+        .iter()
+        .find(|pending| {
+            pending.profile == request.profile
+                && pending.genesis_hash == genesis_hash
+                && pending.filter == request.filter
+                && pending.admin_confirm == request.admin_confirmed
+                && pending.valid_through >= checkpoint.number
+                && crate::same_requested_device(&pending.device, &request.device)
+        })
+        .cloned();
+    let pending = if let Some(pending) = pending {
+        pending
+    } else {
+        let attestation_request = pass::workflow::AttestationRequest {
+            user_id: pass::HashedUserId(profile.user_id),
+            pass_account: pass::Account(profile.pass_account),
+            authority_id: config.authority_id,
+            context,
+            block_hash: checkpoint.hash,
+            challenge: pass::enrollment_challenge(
+                &checkpoint.hash,
+                pass::Account(profile.pass_account),
+            ),
+        };
+        let (attestation, enrolled_device) = prepare_added_device(
+            &profiles,
+            genesis_hash,
+            request.device,
+            &attestation_request,
+        )
+        .await?;
+        let call = pass::workflow::prepare_add_device(
+            chain.metadata(),
+            &config,
+            &attestation,
+            &filter,
+            true,
+            request.admin_confirmed,
+        )?;
+        let pending = crate::profiles::PendingDeviceAddition {
+            profile: request.profile,
+            genesis_hash,
+            device_id: attestation.device_id.0,
+            device: enrolled_device,
+            filter: request.filter,
+            admin_confirm: request.admin_confirmed,
+            pallet: call.pallet,
+            call: call.call,
+            call_bytes: call.bytes,
+            call_hex: call.hex,
+            checkpoint_number: checkpoint.number,
+            checkpoint_hash: checkpoint.hash,
+            valid_through: checkpoint.number.saturating_add(2),
+        };
+        profiles.upsert_pending_device(pending.clone());
+        profiles.save(profile_path)?;
+        pending
+    };
+    let call = sube::PreparedCall {
+        pallet: pending.pallet.clone(),
+        call: pending.call.clone(),
+        bytes: pending.call_bytes.clone(),
+        hex: pending.call_hex.clone(),
+    };
+    let prepared = prepare_profile_device_transaction(
+        chain,
+        chain_url,
+        &profiles,
+        &profile,
+        &config,
+        context,
+        checkpoint.hash,
+        &call,
+    )
+    .await?;
+    Ok((
+        prepared,
+        PendingEffect::DeviceAddition {
+            profile: Box::new(profile),
+            pending: Box::new(pending.clone()),
+        },
+        pending.device_id,
+        pending.valid_through,
+    ))
+}
+
+#[cfg(feature = "pass")]
+async fn prepare_added_device(
+    profiles: &crate::profiles::Profiles,
+    genesis_hash: [u8; 32],
+    device: crate::profiles::DeviceProviderProfile,
+    request: &pass::workflow::AttestationRequest,
+) -> Result<(
+    pass::workflow::DeviceAttestation,
+    crate::profiles::DeviceProviderProfile,
+)> {
+    use pass::DeviceAuthenticator;
+
+    match device {
+        crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
+            let wallet_profile = crate::wallet_profile(profiles, &wallet, genesis_hash)?.clone();
+            let signer = crate::wallet_signer(&wallet_profile).await?;
+            let public = signer.inner().public();
+            let device = pass::wallet::WalletDevice::new(
+                signer.inner(),
+                public.as_ref(),
+                pass::wallet::SignatureType::Sr25519,
+            );
+            Ok((
+                device.attest(request).await?,
+                crate::profiles::DeviceProviderProfile::SubstrateKey { wallet },
+            ))
+        }
+        crate::profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
+            #[cfg(feature = "desktop-webauthn")]
+            {
+                let device = pass::webauthn::WebAuthnDevice::for_enrollment(
+                    pass::webauthn::DesktopWebAuthnTransport,
+                    rp_id,
+                    origin,
+                );
+                let attestation = device.attest(request).await?;
+                let stored = device.profile().ok_or_else(|| {
+                    anyhow::anyhow!("WebAuthn authenticator returned no credential id")
+                })?;
+                Ok((
+                    attestation,
+                    crate::profiles::DeviceProviderProfile::WebAuthn {
+                        rp_id: stored.rp_id,
+                        origin: stored.origin,
+                        credential_id: stored.credential_id,
+                    },
+                ))
+            }
+            #[cfg(not(feature = "desktop-webauthn"))]
+            {
+                let _ = (rp_id, origin, request);
+                anyhow::bail!("this build has no desktop WebAuthn support")
+            }
+        }
+        crate::profiles::DeviceProviderProfile::SshAgent {
+            fingerprint,
+            namespace,
+        } => {
+            #[cfg(all(feature = "ssh-agent", unix))]
+            {
+                let transport =
+                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
+                let device = pass::ssh_agent::SshAgentDevice::new(
+                    transport,
+                    fingerprint.clone(),
+                    namespace.clone(),
+                );
+                Ok((
+                    device.attest(request).await?,
+                    crate::profiles::DeviceProviderProfile::SshAgent {
+                        fingerprint,
+                        namespace,
+                    },
+                ))
+            }
+            #[cfg(not(all(feature = "ssh-agent", unix)))]
+            {
+                let _ = (fingerprint, namespace, request);
+                anyhow::bail!("this build has no native SSH-agent support")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "pass")]
+pub async fn prepare_device_removal(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profile_path: &std::path::Path,
+    genesis_hash: [u8; 32],
+    request: DeviceRemovalRequest,
+) -> Result<(PreparedTransaction, PendingEffect)> {
+    use sube::Backend;
+
+    let profiles = crate::profiles::Profiles::load(profile_path)?;
+    let profile = crate::pass_profile(&profiles, &request.profile, genesis_hash)?.clone();
+    let known = profile.device_id == request.device_id
+        || profile
+            .additional_devices
+            .iter()
+            .any(|device| device.device_id == request.device_id);
+    if !known {
+        anyhow::bail!("selected device is not recorded in the local pass profile");
+    }
+    let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
+    let checkpoint = chain.backend().block_info(None).await?;
+    let context = u32::try_from(checkpoint.number)
+        .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
+    let call = pass::workflow::prepare_remove_device(
+        chain.metadata(),
+        &config,
+        pass::DeviceId(request.device_id),
+    )?;
+    let prepared = prepare_profile_device_transaction(
+        chain,
+        chain_url,
+        &profiles,
+        &profile,
+        &config,
+        context,
+        checkpoint.hash,
+        &call,
+    )
+    .await?;
+    Ok((
+        prepared,
+        PendingEffect::DeviceRemoval {
+            profile: Box::new(profile),
+            device_id: request.device_id,
+        },
+    ))
+}
+
+#[cfg(feature = "pass")]
 pub async fn prepare_pass_session(
     chain: &mut sube::Sube,
     chain_url: &str,
@@ -420,7 +699,7 @@ pub async fn prepare_pass_session(
     )
     .await?;
     let effect = PendingEffect::Session {
-        profile,
+        profile: Box::new(profile),
         session_account,
         secure_entry,
         policy: policy_text.into(),
@@ -468,7 +747,7 @@ pub fn apply_finalized_effect(
             let name = profile.name.clone();
             let genesis_hash = profile.genesis_hash;
             let mut profiles = crate::profiles::Profiles::load(profile_path)?;
-            profiles.upsert(crate::profiles::Profile::Pass(profile));
+            profiles.upsert(crate::profiles::Profile::Pass(*profile));
             profiles.activate(&name, genesis_hash)?;
             if let Err(error) = profiles.save(profile_path) {
                 if pending_seed.is_some() {
@@ -495,6 +774,53 @@ pub fn apply_finalized_effect(
                 },
             ));
             profiles.remove_pending(&pending.name);
+            profiles.save(profile_path)?;
+            Ok(profiles)
+        }
+        PendingEffect::DeviceAddition {
+            mut profile,
+            pending,
+        } => {
+            profile
+                .additional_devices
+                .retain(|device| device.device_id != pending.device_id);
+            profile
+                .additional_devices
+                .push(crate::profiles::DeviceRecord {
+                    device_id: pending.device_id,
+                    device: pending.device,
+                });
+            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+            profiles.remove_pending_device(&profile.name);
+            profiles.upsert(crate::profiles::Profile::Pass(*profile));
+            profiles.save(profile_path)?;
+            Ok(profiles)
+        }
+        PendingEffect::DeviceRemoval {
+            mut profile,
+            device_id,
+        } => {
+            let mut promoted = None;
+            if profile.device_id == device_id
+                && let Some(replacement) = profile
+                    .additional_devices
+                    .iter()
+                    .find(|device| device.device_id != device_id)
+                    .cloned()
+            {
+                promoted = Some(replacement.device_id);
+                profile.device_id = replacement.device_id;
+                profile.device = Some(replacement.device.clone());
+                profile.device_wallet = match replacement.device {
+                    crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => wallet,
+                    _ => String::new(),
+                };
+            }
+            profile.additional_devices.retain(|device| {
+                device.device_id != device_id && Some(device.device_id) != promoted
+            });
+            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+            profiles.upsert(crate::profiles::Profile::Pass(*profile));
             profiles.save(profile_path)?;
             Ok(profiles)
         }
@@ -837,6 +1163,41 @@ pub fn receipt_json(receipt: &sube::TransactionReceipt) -> serde_json::Value {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "pass")]
+    fn finalized_receipt() -> sube::TransactionReceipt {
+        sube::TransactionReceipt {
+            finalized_block_hash: Some("0x01".into()),
+            dispatch_outcome: sube::DispatchOutcome::Success,
+            ..Default::default()
+        }
+    }
+
+    #[cfg(feature = "pass")]
+    fn test_profile() -> crate::profiles::PassProfile {
+        crate::profiles::PassProfile {
+            name: "pass".into(),
+            genesis_hash: [1; 32],
+            pass_account: [2; 32],
+            user_id: [3; 32],
+            device_id: [4; 32],
+            device_wallet: "primary".into(),
+            device: Some(crate::profiles::DeviceProviderProfile::SubstrateKey {
+                wallet: "primary".into(),
+            }),
+            additional_devices: Vec::new(),
+            session: None,
+        }
+    }
+
+    #[cfg(feature = "pass")]
+    fn test_profile_path(label: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("sube-{label}-{}-{unique}.json", std::process::id()))
+    }
+
     #[test]
     fn artifact_contains_extensions_and_no_secret_fields() {
         let extrinsic = sube::EncodedExtrinsic {
@@ -880,5 +1241,111 @@ mod tests {
         let encoded = artifact.to_string();
         assert!(!encoded.contains("mnemonic"));
         assert!(!encoded.contains("secret"));
+    }
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn device_changes_persist_only_after_successful_finalization() {
+        let path = test_profile_path("device-finalization");
+        let profile = test_profile();
+        let mut profiles = crate::profiles::Profiles::default();
+        profiles.upsert(crate::profiles::Profile::Pass(profile.clone()));
+        profiles.save(&path).unwrap();
+        let pending = crate::profiles::PendingDeviceAddition {
+            profile: profile.name.clone(),
+            genesis_hash: profile.genesis_hash,
+            device_id: [5; 32],
+            device: crate::profiles::DeviceProviderProfile::SubstrateKey {
+                wallet: "additional".into(),
+            },
+            filter: "pallets:Balances".into(),
+            admin_confirm: false,
+            pallet: "Pass".into(),
+            call: "add_device".into(),
+            call_bytes: vec![1],
+            call_hex: "0x01".into(),
+            checkpoint_number: 10,
+            checkpoint_hash: [6; 32],
+            valid_through: 12,
+        };
+        profiles.upsert_pending_device(pending.clone());
+        profiles.save(&path).unwrap();
+
+        let error = apply_finalized_effect(
+            &path,
+            &sube::TransactionReceipt::default(),
+            PendingEffect::DeviceAddition {
+                profile: Box::new(profile.clone()),
+                pending: Box::new(pending.clone()),
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("remains unchanged"));
+        let unchanged = crate::profiles::Profiles::load(&path).unwrap();
+        let crate::profiles::Profile::Pass(unchanged) = unchanged.find("pass").unwrap() else {
+            panic!("expected pass profile")
+        };
+        assert!(unchanged.additional_devices.is_empty());
+
+        let changed = apply_finalized_effect(
+            &path,
+            &finalized_receipt(),
+            PendingEffect::DeviceAddition {
+                profile: Box::new(profile),
+                pending: Box::new(pending),
+            },
+        )
+        .unwrap();
+        let crate::profiles::Profile::Pass(changed) = changed.find("pass").unwrap() else {
+            panic!("expected pass profile")
+        };
+        assert_eq!(changed.additional_devices.len(), 1);
+        assert!(
+            changed
+                .additional_devices
+                .iter()
+                .any(|device| device.device_id == [5; 32])
+        );
+        assert!(
+            crate::profiles::Profiles::load(&path)
+                .unwrap()
+                .pending_devices
+                .is_empty()
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn removing_primary_promotes_one_known_additional_device() {
+        let path = test_profile_path("device-promotion");
+        let mut profile = test_profile();
+        profile
+            .additional_devices
+            .push(crate::profiles::DeviceRecord {
+                device_id: [5; 32],
+                device: crate::profiles::DeviceProviderProfile::SubstrateKey {
+                    wallet: "replacement".into(),
+                },
+            });
+        let mut profiles = crate::profiles::Profiles::default();
+        profiles.upsert(crate::profiles::Profile::Pass(profile.clone()));
+        profiles.save(&path).unwrap();
+        let changed = apply_finalized_effect(
+            &path,
+            &finalized_receipt(),
+            PendingEffect::DeviceRemoval {
+                profile: Box::new(profile),
+                device_id: [4; 32],
+            },
+        )
+        .unwrap();
+        let crate::profiles::Profile::Pass(changed) = changed.find("pass").unwrap() else {
+            panic!("expected pass profile")
+        };
+        assert_eq!(changed.device_id, [5; 32]);
+        assert_eq!(changed.device_wallet, "replacement");
+        assert!(changed.additional_devices.is_empty());
+        let _ = std::fs::remove_file(path);
     }
 }

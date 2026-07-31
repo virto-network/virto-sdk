@@ -32,6 +32,10 @@ pub enum ToChain {
     ForgetPassSession(String),
     #[cfg(feature = "pass")]
     PrepareEnrollment(crate::workflow::EnrollmentRequest),
+    #[cfg(feature = "pass")]
+    PrepareDeviceAddition(crate::workflow::DeviceAdditionRequest),
+    #[cfg(feature = "pass")]
+    PrepareDeviceRemoval(crate::workflow::DeviceRemovalRequest),
 }
 
 pub enum CallBody {
@@ -242,6 +246,7 @@ pub fn spawn(
                                     prepared_artifact = None;
                                     #[cfg(feature = "pass")]
                                     if let Some(effect) = effect {
+                                        let message = effect.finalized_message();
                                         match crate::workflow::apply_finalized_effect(
                                             &profile_path,
                                             &receipt,
@@ -251,8 +256,7 @@ pub fn spawn(
                                                 let _ = to_ui
                                                     .send(FromChain::ProfilesUpdated(
                                                         profiles,
-                                                        "Finalized session persisted and profile connected."
-                                                            .into(),
+                                                        message.into(),
                                                     ))
                                                     .await;
                                             }
@@ -480,6 +484,101 @@ pub fn spawn(
                                         valid_through,
                                         prepared.review_text()
                                     );
+                                    review.push_str(
+                                        "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
+                                    );
+                                    prepared_artifact = Some(artifact.clone());
+                                    prepared_effect = Some(effect);
+                                    prepared_transaction = Some(prepared);
+                                    let _ = to_ui
+                                        .send(FromChain::CallPrepared(CallReview {
+                                            text: review,
+                                            call_hex: Some(call_hex),
+                                            extrinsic_hex: Some(extrinsic_hex),
+                                            artifact: Some(artifact),
+                                            submittable: true,
+                                            requires_finalized: true,
+                                        }))
+                                        .await;
+                                }
+                                Err(error) => {
+                                    let _ = to_ui
+                                        .send(FromChain::ProfileError(error.to_string()))
+                                        .await;
+                                }
+                            }
+                        }
+                        #[cfg(feature = "pass")]
+                        ToChain::PrepareDeviceAddition(request) => {
+                            prepared_transaction = None;
+                            prepared_artifact = None;
+                            prepared_effect = None;
+                            match crate::workflow::prepare_device_addition(
+                                &mut chain,
+                                &chain_url,
+                                &profile_path,
+                                genesis_hash,
+                                request,
+                            )
+                            .await
+                            {
+                                Ok((prepared, effect, device_id, valid_through)) => {
+                                    let call_hex = prepared.transaction.call.hex.clone();
+                                    let extrinsic_hex = prepared.transaction.hex.clone();
+                                    let artifact =
+                                        serde_json::to_string_pretty(&prepared.artifact())
+                                            .unwrap_or_else(|_| "{}".into());
+                                    let mut review = format!(
+                                        "New device ID: 0x{}\nPending draft valid through #{}\n\n{}",
+                                        hex::encode(device_id),
+                                        valid_through,
+                                        prepared.review_text()
+                                    );
+                                    review.push_str(
+                                        "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
+                                    );
+                                    prepared_artifact = Some(artifact.clone());
+                                    prepared_effect = Some(effect);
+                                    prepared_transaction = Some(prepared);
+                                    let _ = to_ui
+                                        .send(FromChain::CallPrepared(CallReview {
+                                            text: review,
+                                            call_hex: Some(call_hex),
+                                            extrinsic_hex: Some(extrinsic_hex),
+                                            artifact: Some(artifact),
+                                            submittable: true,
+                                            requires_finalized: true,
+                                        }))
+                                        .await;
+                                }
+                                Err(error) => {
+                                    let _ = to_ui
+                                        .send(FromChain::ProfileError(error.to_string()))
+                                        .await;
+                                }
+                            }
+                        }
+                        #[cfg(feature = "pass")]
+                        ToChain::PrepareDeviceRemoval(request) => {
+                            prepared_transaction = None;
+                            prepared_artifact = None;
+                            prepared_effect = None;
+                            match crate::workflow::prepare_device_removal(
+                                &mut chain,
+                                &chain_url,
+                                &profile_path,
+                                genesis_hash,
+                                request,
+                            )
+                            .await
+                            {
+                                Ok((prepared, effect)) => {
+                                    let call_hex = prepared.transaction.call.hex.clone();
+                                    let extrinsic_hex = prepared.transaction.hex.clone();
+                                    let artifact =
+                                        serde_json::to_string_pretty(&prepared.artifact())
+                                            .unwrap_or_else(|_| "{}".into());
+                                    let mut review = prepared.review_text();
                                     review.push_str(
                                         "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
                                     );

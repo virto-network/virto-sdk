@@ -26,6 +26,16 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_pass_enrollment(f, app);
         return;
     }
+    #[cfg(feature = "pass")]
+    if matches!(app.focus, Focus::PassDeviceAddition) {
+        draw_pass_device_addition(f, app);
+        return;
+    }
+    #[cfg(feature = "pass")]
+    if matches!(app.focus, Focus::PassDeviceRemoval) {
+        draw_pass_device_removal(f, app);
+        return;
+    }
     #[cfg(feature = "wallet")]
     if matches!(app.focus, Focus::WalletImport) {
         draw_wallet_import(f, app);
@@ -94,6 +104,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         (Focus::ConfirmForgetSession, _) => unreachable!(),
         #[cfg(feature = "pass")]
         (Focus::PassEnrollment, _) => unreachable!(),
+        #[cfg(feature = "pass")]
+        (Focus::PassDeviceAddition, _) => unreachable!(),
+        #[cfg(feature = "pass")]
+        (Focus::PassDeviceRemoval, _) => unreachable!(),
         (Focus::BlockDetail, _) => " ↑↓ navigate  Esc back",
         (Focus::Review | Focus::ConfirmSubmit, _) => unreachable!(),
         (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  p profiles  q quit",
@@ -173,7 +187,7 @@ fn draw_profiles(f: &mut Frame, app: &App) {
     let mut state = ListState::default().with_selected(selected);
     f.render_stateful_widget(list, layout[1], &mut state);
     let message = app.error.as_deref().unwrap_or(
-        "↑↓ Select  Enter Connect  a Add wallet  e Enroll pass  s Session  f Forget  Esc Close",
+        "↑↓ Select  Enter Connect  a Wallet  e Enroll  d Add device  r Remove  s Session  f Forget  Esc Close",
     );
     f.render_widget(
         Paragraph::new(message).wrap(Wrap { trim: false }),
@@ -238,6 +252,141 @@ fn draw_pass_enrollment(f: &mut Frame, app: &App) {
                 .title("Enroll pass account"),
         ),
         area,
+    );
+}
+
+#[cfg(feature = "pass")]
+fn draw_pass_device_addition(f: &mut Frame, app: &App) {
+    let area = centered_rect(100, 19, f.area());
+    f.render_widget(Clear, area);
+    let Some(device) = app.pass_device_addition.as_ref() else {
+        return;
+    };
+    let style = |field| {
+        if device.field == field {
+            Style::default().fg(Color::Yellow).bold()
+        } else {
+            Style::default()
+        }
+    };
+    let (primary_label, secondary_label) = match device.provider {
+        super::DeviceProviderKind::SubstrateKey => ("Device wallet profile", "Unused"),
+        #[cfg(feature = "desktop-webauthn")]
+        super::DeviceProviderKind::WebAuthn => ("WebAuthn RP ID", "WebAuthn origin"),
+        #[cfg(all(feature = "ssh-agent", unix))]
+        super::DeviceProviderKind::SshAgent => ("SSH fingerprint", "SSHSIG namespace"),
+    };
+    let lines = vec![
+        Line::raw(format!("Pass profile: {}", device.profile)),
+        Line::styled(format!("Provider: {:?}", device.provider), style(0)),
+        Line::styled(
+            format!("{primary_label}: {}", device.provider_primary),
+            style(1),
+        ),
+        Line::styled(
+            format!("{secondary_label}: {}", device.provider_secondary),
+            style(2),
+        ),
+        Line::styled(
+            format!(
+                "Filter (calls:..., pallets:..., or admin): {}",
+                device.filter
+            ),
+            style(3),
+        ),
+        Line::styled(
+            format!(
+                "Admin confirmation (type ADMIN): {}",
+                device.admin_confirmation
+            ),
+            style(4),
+        ),
+        Line::raw(""),
+        Line::raw("←→/Space provider  Tab fields  Enter continue  Esc cancel"),
+        Line::raw("Adding a device is authenticated directly by the profile's primary device."),
+        Line::styled(
+            app.error.as_deref().unwrap_or(""),
+            Style::default().fg(Color::Red),
+        ),
+    ];
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Add pass device"),
+        ),
+        area,
+    );
+}
+
+#[cfg(feature = "pass")]
+fn draw_pass_device_removal(f: &mut Frame, app: &App) {
+    let area = centered_rect(100, 22, f.area());
+    f.render_widget(Clear, area);
+    let Some(removal) = app.pass_device_removal.as_ref() else {
+        return;
+    };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(5),
+            Constraint::Length(8),
+        ])
+        .split(area);
+    f.render_widget(
+        Paragraph::new(format!("Pass profile: {}", removal.profile)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Remove pass device"),
+        ),
+        layout[0],
+    );
+    let items = removal
+        .devices
+        .iter()
+        .map(|(device_id, label, _)| {
+            ListItem::new(format!("{label} · 0x{}", hex::encode(device_id)))
+        })
+        .collect::<Vec<_>>();
+    let mut state = ListState::default().with_selected(Some(removal.device_idx));
+    f.render_stateful_widget(
+        List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Known devices"),
+            )
+            .highlight_style(Style::default().bg(Color::DarkGray).bold())
+            .highlight_symbol("▸ "),
+        layout[1],
+        &mut state,
+    );
+    let selected_primary = removal
+        .devices
+        .get(removal.device_idx)
+        .map(|(_, _, primary)| *primary)
+        .unwrap_or(false);
+    let warning = if selected_primary && removal.devices.len() == 1 {
+        "WARNING: this is the last locally known usable device and may also be the last Admin device. The local profile can become unusable."
+    } else if selected_primary {
+        "WARNING: removing the primary device promotes the first locally recorded additional device. Verify it has a usable/Admin on-chain filter."
+    } else {
+        "Verify another usable and Admin device remains on-chain; local profiles do not retain authoritative on-chain filter counts."
+    };
+    f.render_widget(
+        Paragraph::new(format!(
+            "{warning}\n\nType REMOVE: {}\n↑↓ Select  Enter review  Esc cancel\n{}",
+            removal.confirmation,
+            app.error.as_deref().unwrap_or("")
+        ))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        layout[2],
     );
 }
 
