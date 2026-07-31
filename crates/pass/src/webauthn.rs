@@ -119,6 +119,244 @@ pub trait WebAuthnTransport {
     ) -> core::result::Result<AssertionResponse, AuthenticatorError>;
 }
 
+#[cfg(all(
+    feature = "desktop-webauthn",
+    any(target_os = "linux", target_os = "macos", windows)
+))]
+mod desktop {
+    use super::{
+        AssertionResponse, AttestationResponse, AuthenticatorError, CreateRequest, GetRequest,
+        WebAuthnTransport,
+    };
+    use alloc::format;
+    use alloc::string::ToString;
+    use alloc::vec::Vec;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use serde_cbor_2::Value;
+    use webauthn_authenticator_rs::WebauthnAuthenticator;
+    use webauthn_authenticator_rs::prelude::{
+        CreationChallengeResponse, RequestChallengeResponse, Url, WebauthnCError,
+    };
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    type PlatformBackend = webauthn_authenticator_rs::mozilla::MozillaAuthenticator;
+    #[cfg(windows)]
+    type PlatformBackend = webauthn_authenticator_rs::win10::Win10;
+
+    /// Native desktop WebAuthn transport.
+    ///
+    /// Linux and macOS use the Mozilla USB HID backend. Windows uses the
+    /// operating system WebAuthn API, which can reach platform and roaming
+    /// authenticators without direct private-key access.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct DesktopWebAuthnTransport;
+
+    impl WebAuthnTransport for DesktopWebAuthnTransport {
+        async fn create(
+            &self,
+            request: &CreateRequest<'_>,
+        ) -> core::result::Result<AttestationResponse, AuthenticatorError> {
+            let origin = parse_origin(request.origin)?;
+            let options = create_options(request)?;
+            let mut backend = PlatformBackend::default();
+            let credential = backend
+                .do_registration(origin, options)
+                .map_err(map_backend_error)?;
+            let authenticator_data =
+                attestation_authenticator_data(&credential.response.attestation_object)?;
+
+            // pallet-pass calls this field `public_key`, but its WebAuthn
+            // verifier uses the opaque credential id to select the registered
+            // authenticator key.
+            Ok(AttestationResponse {
+                credential_id: credential.raw_id.clone(),
+                authenticator_data,
+                client_data: credential.response.client_data_json,
+                public_key: credential.raw_id,
+            })
+        }
+
+        async fn get(
+            &self,
+            request: &GetRequest<'_>,
+        ) -> core::result::Result<AssertionResponse, AuthenticatorError> {
+            let origin = parse_origin(request.origin)?;
+            let options = get_options(request)?;
+            let mut backend = PlatformBackend::default();
+            let credential = backend
+                .do_authentication(origin, options)
+                .map_err(map_backend_error)?;
+            if credential.raw_id != request.credential_id {
+                return Err(AuthenticatorError::NoCredential);
+            }
+
+            Ok(AssertionResponse {
+                authenticator_data: credential.response.authenticator_data,
+                client_data: credential.response.client_data_json,
+                signature: credential.response.signature,
+            })
+        }
+    }
+
+    fn parse_origin(origin: &str) -> core::result::Result<Url, AuthenticatorError> {
+        Url::parse(origin)
+            .map_err(|error| AuthenticatorError::Other(format!("invalid WebAuthn origin: {error}")))
+    }
+
+    fn create_options(
+        request: &CreateRequest<'_>,
+    ) -> core::result::Result<CreationChallengeResponse, AuthenticatorError> {
+        serde_json::from_value(serde_json::json!({
+            "publicKey": {
+                "rp": {
+                    "name": request.rp_id,
+                    "id": request.rp_id,
+                },
+                "user": {
+                    "id": URL_SAFE_NO_PAD.encode(request.user_id),
+                    "name": hex::encode(request.user_id),
+                    "displayName": hex::encode(request.user_id),
+                },
+                "challenge": URL_SAFE_NO_PAD.encode(request.challenge),
+                "pubKeyCredParams": [
+                    { "type": "public-key", "alg": -7 }
+                ],
+                "timeout": 60_000,
+                "authenticatorSelection": {
+                    "residentKey": "preferred",
+                    "requireResidentKey": false,
+                    "userVerification": "preferred"
+                },
+                "attestation": "none"
+            }
+        }))
+        .map_err(|error| {
+            AuthenticatorError::Other(format!("cannot construct WebAuthn create request: {error}"))
+        })
+    }
+
+    fn get_options(
+        request: &GetRequest<'_>,
+    ) -> core::result::Result<RequestChallengeResponse, AuthenticatorError> {
+        serde_json::from_value(serde_json::json!({
+            "publicKey": {
+                "challenge": URL_SAFE_NO_PAD.encode(request.challenge),
+                "timeout": 60_000,
+                "rpId": request.rp_id,
+                "allowCredentials": [{
+                    "type": "public-key",
+                    "id": URL_SAFE_NO_PAD.encode(request.credential_id),
+                    "transports": ["usb", "internal"]
+                }],
+                "userVerification": "preferred"
+            }
+        }))
+        .map_err(|error| {
+            AuthenticatorError::Other(format!("cannot construct WebAuthn get request: {error}"))
+        })
+    }
+
+    fn attestation_authenticator_data(
+        attestation_object: &[u8],
+    ) -> core::result::Result<Vec<u8>, AuthenticatorError> {
+        let Value::Map(entries) =
+            serde_cbor_2::from_slice(attestation_object).map_err(|error| {
+                AuthenticatorError::Other(format!("invalid WebAuthn attestation object: {error}"))
+            })?
+        else {
+            return Err(AuthenticatorError::Other(
+                "WebAuthn attestation object is not a CBOR map".into(),
+            ));
+        };
+        entries
+            .into_iter()
+            .find_map(|(key, value)| match (key, value) {
+                (Value::Text(key), Value::Bytes(bytes)) if key == "authData" => Some(bytes),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                AuthenticatorError::Other(
+                    "WebAuthn attestation object has no authenticator data".into(),
+                )
+            })
+    }
+
+    fn map_backend_error(error: WebauthnCError) -> AuthenticatorError {
+        match error {
+            WebauthnCError::Cancelled => AuthenticatorError::Canceled,
+            WebauthnCError::InvalidAssertion
+            | WebauthnCError::NoSelectedToken
+            | WebauthnCError::NoHidDevices => AuthenticatorError::NoCredential,
+            error => AuthenticatorError::Transport(error.to_string()),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use alloc::vec;
+
+        #[test]
+        fn requests_preserve_rp_credential_and_exact_challenge() {
+            let create = create_options(&CreateRequest {
+                rp_id: "example.com",
+                origin: "https://example.com",
+                user_id: &[1; 32],
+                challenge: &[2; 32],
+            })
+            .unwrap();
+            assert_eq!(create.public_key.rp.id, "example.com");
+            assert_eq!(create.public_key.user.id, [1; 32]);
+            assert_eq!(create.public_key.challenge, [2; 32]);
+
+            let get = get_options(&GetRequest {
+                rp_id: "example.com",
+                origin: "https://example.com",
+                credential_id: &[3, 4, 5],
+                challenge: &[6; 32],
+            })
+            .unwrap();
+            assert_eq!(get.public_key.rp_id, "example.com");
+            assert_eq!(get.public_key.challenge, [6; 32]);
+            assert_eq!(get.public_key.allow_credentials[0].id, [3, 4, 5]);
+        }
+
+        #[test]
+        fn attestation_parser_extracts_authenticator_data() {
+            let object = serde_cbor_2::to_vec(&Value::Map(
+                vec![
+                    (Value::Text("fmt".into()), Value::Text("none".into())),
+                    (Value::Text("authData".into()), Value::Bytes(vec![7; 37])),
+                    (
+                        Value::Text("attStmt".into()),
+                        Value::Map(Default::default()),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            ))
+            .unwrap();
+            assert_eq!(
+                attestation_authenticator_data(&object).unwrap(),
+                vec![7; 37]
+            );
+        }
+
+        #[test]
+        fn passkey_shared_bytes_keep_challenge_exact() {
+            let challenge: passkey::types::Bytes = vec![9; 32].into();
+            assert_eq!(challenge.as_slice(), &[9; 32]);
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "desktop-webauthn",
+    any(target_os = "linux", target_os = "macos", windows)
+))]
+pub use desktop::DesktopWebAuthnTransport;
+
 /// Desktop WebAuthn provider independent of the concrete platform transport.
 pub struct WebAuthnDevice<T> {
     transport: T,
