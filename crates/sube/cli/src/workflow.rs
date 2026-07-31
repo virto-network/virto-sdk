@@ -1,5 +1,95 @@
 use anyhow::Result;
 
+#[cfg(feature = "wallet")]
+pub fn import_wallet_profile(
+    profile_path: &std::path::Path,
+    genesis_hash: [u8; 32],
+    name: String,
+    mnemonic: &str,
+) -> Result<crate::profiles::Profiles> {
+    use libwallet::{MutableKeyStore, Pair};
+
+    let mnemonic: libwallet::Mnemonic = mnemonic
+        .parse()
+        .map_err(|_| anyhow::anyhow!("mnemonic is invalid"))?;
+    let seed = libwallet::seed_from_entropy(mnemonic.entropy(), "");
+    let root = libwallet::vault::utils::RootAccount::from_bytes(&*seed)
+        .ok_or_else(|| anyhow::anyhow!("could not derive wallet root"))?;
+    let account: [u8; 32] = root
+        .derive("//default")
+        .public()
+        .as_ref()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("wallet signer is not AccountId32"))?;
+
+    let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+    if profiles.find(&name).is_some() {
+        anyhow::bail!("profile {name:?} already exists");
+    }
+    let secure_entry = format!("wallet-profile-v1-{name}");
+    let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
+    keys.update(mnemonic.phrase())?;
+    profiles.upsert(crate::profiles::Profile::Wallet(
+        crate::profiles::WalletProfile {
+            name,
+            genesis_hash,
+            account,
+            secure_entry,
+            scheme: "sr25519".into(),
+        },
+    ));
+    if let Err(error) = profiles.save(profile_path) {
+        let _ = keys.delete();
+        return Err(error);
+    }
+    Ok(profiles)
+}
+
+#[cfg(feature = "wallet")]
+pub async fn activate_existing_profile(
+    chain: &mut sube::Sube,
+    profile_path: &std::path::Path,
+    genesis_hash: [u8; 32],
+    name: &str,
+) -> Result<crate::profiles::Profiles> {
+    let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+    let selected = profiles
+        .find(name)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("profile {name:?} not found"))?;
+    if selected.genesis_hash() != genesis_hash {
+        anyhow::bail!("profile genesis hash does not match the connected chain");
+    }
+    match selected {
+        crate::profiles::Profile::Wallet(profile) => {
+            let _ = crate::wallet_signer(&profile).await?;
+        }
+        #[cfg(feature = "pass")]
+        crate::profiles::Profile::Pass(profile) => {
+            use sube::Backend;
+
+            let session = profile.session.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("pass profile requires a scoped session before activation")
+            })?;
+            let checkpoint = chain.backend().block_info(None).await?;
+            if session.expires_at <= checkpoint.number {
+                anyhow::bail!("pass session expired; register or update it before activation");
+            }
+            let policy = crate::parse_session_policy(chain.metadata(), &session.policy)?;
+            if !crate::on_chain_session_matches(chain, &profile, session, &policy).await {
+                anyhow::bail!(
+                    "local pass session does not exactly match on-chain storage; register or update it before activation"
+                );
+            }
+            let _ =
+                crate::load_session_signer(&session.secure_entry, Some(session.account)).await?;
+        }
+    }
+    profiles.activate(name, genesis_hash)?;
+    profiles.save(profile_path)?;
+    Ok(profiles)
+}
+
 /// One signed transaction together with the non-mutating diagnostics shown
 /// before submission.
 pub struct PreparedTransaction {

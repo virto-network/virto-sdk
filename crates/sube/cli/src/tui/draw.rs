@@ -7,6 +7,15 @@ use super::types;
 use super::{App, BlockDetail, Focus, Panel};
 
 pub fn draw(f: &mut Frame, app: &App) {
+    if matches!(app.focus, Focus::Profiles) {
+        draw_profiles(f, app);
+        return;
+    }
+    #[cfg(feature = "wallet")]
+    if matches!(app.focus, Focus::WalletImport) {
+        draw_wallet_import(f, app);
+        return;
+    }
     if matches!(app.focus, Focus::Review | Focus::ConfirmSubmit) {
         draw_review(f, app);
         if matches!(app.focus, Focus::ConfirmSubmit) {
@@ -61,9 +70,12 @@ pub fn draw(f: &mut Frame, app: &App) {
             " ↑↓ fields  ←→ enum  Space toggle  +/- list  Enter next/submit  Esc cancel"
         }
         (Focus::BodyInput, _) => " Enter review  Esc cancel  Type JSON/text or a file path",
+        (Focus::Profiles, _) => unreachable!(),
+        #[cfg(feature = "wallet")]
+        (Focus::WalletImport, _) => unreachable!(),
         (Focus::BlockDetail, _) => " ↑↓ navigate  Esc back",
         (Focus::Review | Focus::ConfirmSubmit, _) => unreachable!(),
-        (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  q quit",
+        (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  p profiles  q quit",
         (_, Panel::Storage) => " ↑↓ navigate  Tab panel  Enter query  q quit",
         (_, Panel::Calls) => " ↑↓ navigate  Tab panel  m input mode  Enter select  q quit",
         (_, Panel::Blocks) => " Tab panel  Enter details  q quit",
@@ -76,6 +88,116 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else {
         f.render_widget(Paragraph::new(help).fg(Color::DarkGray), outer[3]);
     }
+}
+
+fn draw_profiles(f: &mut Frame, app: &App) {
+    let area = centered_rect(88, 24, f.area());
+    f.render_widget(Clear, area);
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(5),
+            Constraint::Length(3),
+        ])
+        .split(area);
+    f.render_widget(
+        Paragraph::new(format!(
+            "Connected genesis: 0x{}",
+            hex::encode(app.genesis_hash)
+        ))
+        .block(Block::default().borders(Borders::ALL).title("Profiles")),
+        layout[0],
+    );
+    let items = app
+        .profiles
+        .profiles
+        .iter()
+        .map(|profile| {
+            let active = if app.profiles.active.as_deref() == Some(profile.name()) {
+                "*"
+            } else {
+                " "
+            };
+            let compatible = if profile.genesis_hash() == app.genesis_hash {
+                ""
+            } else {
+                " [GENESIS MISMATCH]"
+            };
+            #[allow(unreachable_patterns)]
+            let kind = match profile {
+                crate::profiles::Profile::Wallet(_) => "wallet",
+                #[cfg(feature = "pass")]
+                crate::profiles::Profile::Pass(profile) => {
+                    if profile.session.is_some() {
+                        "pass/session"
+                    } else {
+                        "pass/no-session"
+                    }
+                }
+                _ => "profile",
+            };
+            ListItem::new(format!("{active} {} ({kind}){compatible}", profile.name()))
+        })
+        .collect::<Vec<_>>();
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Chain-bound profiles"),
+        )
+        .highlight_style(Style::default().bg(Color::DarkGray).bold())
+        .highlight_symbol("▸ ");
+    let selected = (!app.profiles.profiles.is_empty()).then_some(app.profile_idx);
+    let mut state = ListState::default().with_selected(selected);
+    f.render_stateful_widget(list, layout[1], &mut state);
+    let message = app
+        .error
+        .as_deref()
+        .unwrap_or("↑↓ Select  Enter Connect  a Add wallet  Esc Close");
+    f.render_widget(
+        Paragraph::new(message).wrap(Wrap { trim: false }),
+        layout[2],
+    );
+}
+
+#[cfg(feature = "wallet")]
+fn draw_wallet_import(f: &mut Frame, app: &App) {
+    let area = centered_rect(88, 12, f.area());
+    f.render_widget(Clear, area);
+    let Some(import) = app.wallet_import.as_ref() else {
+        return;
+    };
+    let name_style = if import.field == 0 {
+        Style::default().fg(Color::Yellow).bold()
+    } else {
+        Style::default()
+    };
+    let mnemonic_style = if import.field == 1 {
+        Style::default().fg(Color::Yellow).bold()
+    } else {
+        Style::default()
+    };
+    let masked = "•".repeat(import.mnemonic.chars().count());
+    let lines = vec![
+        Line::styled(format!("Profile name: {}", import.name), name_style),
+        Line::styled(format!("Mnemonic: {masked}"), mnemonic_style),
+        Line::raw(""),
+        Line::raw("The //default Sr25519 account is derived and verified before storage."),
+        Line::raw("Tab fields  Enter import  Esc cancel"),
+        Line::styled(
+            app.error.as_deref().unwrap_or(""),
+            Style::default().fg(Color::Red),
+        ),
+    ];
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Import wallet profile"),
+        ),
+        area,
+    );
 }
 
 fn draw_review(f: &mut Frame, app: &App) {

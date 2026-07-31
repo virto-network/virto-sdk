@@ -15,6 +15,13 @@ pub enum ToChain {
     PrepareCall(String, CallBody),
     SubmitPrepared(sube::WaitFor),
     FetchBlockDetail(String),
+    #[cfg(feature = "wallet")]
+    ImportWallet {
+        name: String,
+        mnemonic: zeroize::Zeroizing<String>,
+    },
+    #[cfg(feature = "wallet")]
+    ActivateProfile(String),
 }
 
 pub enum CallBody {
@@ -30,6 +37,10 @@ pub enum FromChain {
     CallPrepared(CallReview),
     CallError(String),
     BlockDetail(String, String),
+    #[cfg(feature = "wallet")]
+    ProfilesUpdated(crate::profiles::Profiles, String),
+    #[cfg(feature = "wallet")]
+    ProfileError(String),
 }
 
 pub struct CallReview {
@@ -43,6 +54,7 @@ pub struct CallReview {
 pub struct ChainReady {
     pub metadata: Metadata,
     pub properties: ChainProperties,
+    pub genesis_hash: [u8; 32],
 }
 
 // --- Chain task ---
@@ -65,10 +77,19 @@ pub fn spawn(
             };
             let metadata = chain.metadata().clone();
             let properties = chain.chain_properties().await.cloned().unwrap_or_default();
+            use sube::Backend;
+            let genesis_hash = match chain.backend().block_info(Some(0)).await {
+                Ok(block) => block.hash,
+                Err(error) => {
+                    let _ = ready.send(Err(error.to_string()));
+                    return;
+                }
+            };
             if ready
                 .send(Ok(ChainReady {
                     metadata,
                     properties,
+                    genesis_hash,
                 }))
                 .is_err()
             {
@@ -246,6 +267,54 @@ pub fn spawn(
                                 Err(e) => format!("error: {e}"),
                             };
                             let _ = to_ui.send(FromChain::BlockDetail(hash, events)).await;
+                        }
+                        #[cfg(feature = "wallet")]
+                        ToChain::ImportWallet { name, mnemonic } => {
+                            match crate::workflow::import_wallet_profile(
+                                &profile_path,
+                                genesis_hash,
+                                name,
+                                &mnemonic,
+                            ) {
+                                Ok(profiles) => {
+                                    let _ = to_ui
+                                        .send(FromChain::ProfilesUpdated(
+                                            profiles,
+                                            "Wallet profile imported; select it to connect.".into(),
+                                        ))
+                                        .await;
+                                }
+                                Err(error) => {
+                                    let _ = to_ui
+                                        .send(FromChain::ProfileError(error.to_string()))
+                                        .await;
+                                }
+                            }
+                        }
+                        #[cfg(feature = "wallet")]
+                        ToChain::ActivateProfile(name) => {
+                            match crate::workflow::activate_existing_profile(
+                                &mut chain,
+                                &profile_path,
+                                genesis_hash,
+                                &name,
+                            )
+                            .await
+                            {
+                                Ok(profiles) => {
+                                    let _ = to_ui
+                                        .send(FromChain::ProfilesUpdated(
+                                            profiles,
+                                            format!("Connected profile {name}."),
+                                        ))
+                                        .await;
+                                }
+                                Err(error) => {
+                                    let _ = to_ui
+                                        .send(FromChain::ProfileError(error.to_string()))
+                                        .await;
+                                }
+                            }
                         }
                     }
                 }

@@ -71,6 +71,16 @@ enum Focus {
     Review,
     ConfirmSubmit,
     BodyInput,
+    Profiles,
+    #[cfg(feature = "wallet")]
+    WalletImport,
+}
+
+#[cfg(feature = "wallet")]
+struct WalletImportState {
+    field: u8,
+    name: String,
+    mnemonic: zeroize::Zeroizing<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +114,11 @@ struct App {
     chain_url: String,
     meta: sube::Rc<Metadata>,
     form_context: FormContext,
+    genesis_hash: [u8; 32],
+    profiles: crate::profiles::Profiles,
+    profile_idx: usize,
+    #[cfg(feature = "wallet")]
+    wallet_import: Option<WalletImportState>,
 
     all_pallets: Vec<String>,
     pallets: Vec<String>,
@@ -450,6 +465,21 @@ impl App {
                     d.events = Some(events);
                 }
             }
+            #[cfg(feature = "wallet")]
+            FromChain::ProfilesUpdated(profiles, message) => {
+                self.profiles = profiles;
+                self.profile_idx = self
+                    .profile_idx
+                    .min(self.profiles.profiles.len().saturating_sub(1));
+                self.error = Some(message);
+                self.focus = Focus::Profiles;
+                #[cfg(feature = "wallet")]
+                {
+                    self.wallet_import = None;
+                }
+            }
+            #[cfg(feature = "wallet")]
+            FromChain::ProfileError(error) => self.error = Some(error),
         }
     }
 
@@ -544,6 +574,7 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         token_decimals: ready.properties.token_decimals.first().copied(),
     };
     let meta = sube::Rc::new(ready.metadata);
+    let profiles = crate::profiles::Profiles::load(profile_path)?;
     eprintln!("Connected, metadata loaded.");
 
     enable_raw_mode()?;
@@ -563,6 +594,11 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         chain_url: chain_url.into(),
         meta,
         form_context,
+        genesis_hash: ready.genesis_hash,
+        profiles,
+        profile_idx: 0,
+        #[cfg(feature = "wallet")]
+        wallet_import: None,
         all_pallets,
         pallets,
         pallet_idx: 0,
@@ -639,6 +675,9 @@ fn handle_key(app: &mut App, key: KeyCode) {
         Focus::Review => handle_review(app, key),
         Focus::ConfirmSubmit => handle_submit_confirmation(app, key),
         Focus::BodyInput => handle_body_input(app, key),
+        Focus::Profiles => handle_profiles(app, key),
+        #[cfg(feature = "wallet")]
+        Focus::WalletImport => handle_wallet_import(app, key),
     }
 }
 
@@ -721,6 +760,85 @@ fn handle_navigate(app: &mut App, key: KeyCode) {
         KeyCode::Char('/') => {
             app.search_query.clear();
             app.focus = Focus::Search;
+        }
+        KeyCode::Char('p') => {
+            app.error = None;
+            app.focus = Focus::Profiles;
+        }
+        _ => {}
+    }
+}
+
+fn handle_profiles(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc | KeyCode::Char('p') => {
+            app.error = None;
+            app.focus = Focus::Navigate;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.profile_idx = app.profile_idx.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.profile_idx + 1 < app.profiles.profiles.len() {
+                app.profile_idx += 1;
+            }
+        }
+        #[cfg(feature = "wallet")]
+        KeyCode::Char('a') => {
+            app.wallet_import = Some(WalletImportState {
+                field: 0,
+                name: String::new(),
+                mnemonic: zeroize::Zeroizing::new(String::new()),
+            });
+            app.error = None;
+            app.focus = Focus::WalletImport;
+        }
+        #[cfg(feature = "wallet")]
+        KeyCode::Enter => {
+            if let Some(profile) = app.profiles.profiles.get(app.profile_idx) {
+                app.error = Some(format!("Connecting profile {:?}...", profile.name()));
+                let _ = app
+                    .to_chain
+                    .send(ToChain::ActivateProfile(profile.name().into()));
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "wallet")]
+fn handle_wallet_import(app: &mut App, key: KeyCode) {
+    let Some(import) = app.wallet_import.as_mut() else {
+        app.focus = Focus::Profiles;
+        return;
+    };
+    match key {
+        KeyCode::Esc => {
+            app.wallet_import = None;
+            app.error = None;
+            app.focus = Focus::Profiles;
+        }
+        KeyCode::Tab | KeyCode::Down => import.field = (import.field + 1).min(1),
+        KeyCode::BackTab | KeyCode::Up => import.field = import.field.saturating_sub(1),
+        KeyCode::Backspace if import.field == 0 => {
+            import.name.pop();
+        }
+        KeyCode::Backspace => {
+            import.mnemonic.pop();
+        }
+        KeyCode::Char(c) if import.field == 0 => import.name.push(c),
+        KeyCode::Char(c) => import.mnemonic.push(c),
+        KeyCode::Enter if import.field == 0 => import.field = 1,
+        KeyCode::Enter => {
+            if import.name.trim().is_empty() || import.mnemonic.trim().is_empty() {
+                app.error = Some("Profile name and mnemonic are required.".into());
+                return;
+            }
+            let name = import.name.trim().to_owned();
+            let mnemonic = core::mem::take(&mut import.mnemonic);
+            import.name.clear();
+            app.error = Some("Validating and importing wallet profile...".into());
+            let _ = app.to_chain.send(ToChain::ImportWallet { name, mnemonic });
         }
         _ => {}
     }
