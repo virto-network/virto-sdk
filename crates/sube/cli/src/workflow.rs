@@ -109,6 +109,238 @@ pub enum PendingEffect {
         expires_at: u64,
         pending_seed: Option<zeroize::Zeroizing<[u8; 32]>>,
     },
+    Enrollment {
+        pending: crate::profiles::PendingEnrollment,
+    },
+}
+
+#[cfg(feature = "pass")]
+pub struct EnrollmentRequest {
+    pub name: String,
+    pub user_id: String,
+    pub registrar: String,
+    pub device: crate::profiles::DeviceProviderProfile,
+}
+
+#[cfg(feature = "pass")]
+pub async fn prepare_enrollment(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profile_path: &std::path::Path,
+    genesis_hash: [u8; 32],
+    request: EnrollmentRequest,
+) -> Result<(PreparedTransaction, PendingEffect, [u8; 32], u64)> {
+    use sube::Backend;
+
+    let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+    let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
+    let checkpoint = chain.backend().block_info(None).await?;
+    let context = u32::try_from(checkpoint.number)
+        .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
+    let variant = crate::device_variant(&request.device);
+    if !config.supports_attestation(variant) {
+        anyhow::bail!("runtime does not advertise {variant} enrollment");
+    }
+    let user_id =
+        pass::HashedUserId::from_exact(&hex::decode(request.user_id.trim_start_matches("0x"))?)?;
+    if profiles.find(&request.name).is_some() {
+        anyhow::bail!("profile {:?} already exists", request.name);
+    }
+    let registrar_profile =
+        crate::wallet_profile(&profiles, &request.registrar, genesis_hash)?.clone();
+    let pending = profiles
+        .pending_enrollments
+        .iter()
+        .find(|pending| {
+            pending.name == request.name
+                && pending.genesis_hash == genesis_hash
+                && pending.registrar == request.registrar
+                && crate::same_requested_device(&pending.device_profile(), &request.device)
+                && pending.user_id == user_id.0
+                && pending.valid_through >= checkpoint.number
+        })
+        .cloned();
+    let pending = if let Some(pending) = pending {
+        pending
+    } else {
+        let (draft, enrolled_device) = prepare_enrollment_device(
+            chain,
+            &config,
+            &profiles,
+            &request.registrar,
+            user_id,
+            context,
+            checkpoint.hash,
+            request.device,
+            genesis_hash,
+        )
+        .await?;
+        let legacy_device_wallet = match &enrolled_device {
+            crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => wallet.clone(),
+            _ => String::new(),
+        };
+        let pending = crate::profiles::PendingEnrollment {
+            name: request.name,
+            genesis_hash,
+            registrar: request.registrar,
+            device_wallet: legacy_device_wallet,
+            device: Some(enrolled_device),
+            user_id: user_id.0,
+            pass_account: draft.predicted_account.0,
+            device_id: draft.attestation.device_id.0,
+            pallet: draft.call.pallet,
+            call: draft.call.call,
+            call_bytes: draft.call.bytes,
+            call_hex: draft.call.hex,
+            checkpoint_number: draft.checkpoint_number,
+            checkpoint_hash: draft.checkpoint_hash,
+            valid_through: draft.valid_through,
+        };
+        profiles.upsert_pending(pending.clone());
+        profiles.save(profile_path)?;
+        pending
+    };
+    let call = sube::PreparedCall {
+        pallet: pending.pallet.clone(),
+        call: pending.call.clone(),
+        bytes: pending.call_bytes.clone(),
+        hex: pending.call_hex.clone(),
+    };
+    let registrar = crate::wallet_signer(&registrar_profile).await?;
+    let prepared = prepare_transaction(
+        chain,
+        chain_url,
+        &call,
+        &pending.registrar,
+        &registrar,
+        sube::TransactionOptions::default(),
+    )
+    .await?;
+    Ok((
+        prepared,
+        PendingEffect::Enrollment {
+            pending: pending.clone(),
+        },
+        pending.pass_account,
+        pending.valid_through,
+    ))
+}
+
+#[cfg(feature = "pass")]
+#[allow(clippy::too_many_arguments)]
+async fn prepare_enrollment_device(
+    chain: &mut sube::Sube,
+    config: &pass::PassRuntimeConfig,
+    profiles: &crate::profiles::Profiles,
+    registrar: &str,
+    user_id: pass::HashedUserId,
+    context: u32,
+    block_hash: [u8; 32],
+    device: crate::profiles::DeviceProviderProfile,
+    genesis_hash: [u8; 32],
+) -> Result<(
+    pass::EnrollmentDraft,
+    crate::profiles::DeviceProviderProfile,
+)> {
+    match device {
+        crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
+            let wallet_profile = crate::wallet_profile(profiles, &wallet, genesis_hash)?.clone();
+            let signer = crate::wallet_signer(&wallet_profile).await?;
+            let public = signer.inner().public();
+            let device = pass::wallet::WalletDevice::new(
+                signer.inner(),
+                public.as_ref(),
+                pass::wallet::SignatureType::Sr25519,
+            );
+            let draft = pass::workflow::prepare_enrollment(
+                chain.metadata(),
+                config,
+                registrar,
+                user_id,
+                context,
+                block_hash,
+                &device,
+            )
+            .await?;
+            Ok((
+                draft,
+                crate::profiles::DeviceProviderProfile::SubstrateKey { wallet },
+            ))
+        }
+        crate::profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
+            #[cfg(feature = "desktop-webauthn")]
+            {
+                let device = pass::webauthn::WebAuthnDevice::for_enrollment(
+                    pass::webauthn::DesktopWebAuthnTransport,
+                    rp_id,
+                    origin,
+                );
+                let draft = pass::workflow::prepare_enrollment(
+                    chain.metadata(),
+                    config,
+                    registrar,
+                    user_id,
+                    context,
+                    block_hash,
+                    &device,
+                )
+                .await?;
+                let profile = device.profile().ok_or_else(|| {
+                    anyhow::anyhow!("WebAuthn authenticator returned no credential id")
+                })?;
+                Ok((
+                    draft,
+                    crate::profiles::DeviceProviderProfile::WebAuthn {
+                        rp_id: profile.rp_id,
+                        origin: profile.origin,
+                        credential_id: profile.credential_id,
+                    },
+                ))
+            }
+            #[cfg(not(feature = "desktop-webauthn"))]
+            {
+                let _ = (rp_id, origin);
+                anyhow::bail!("this build has no desktop WebAuthn support")
+            }
+        }
+        crate::profiles::DeviceProviderProfile::SshAgent {
+            fingerprint,
+            namespace,
+        } => {
+            #[cfg(all(feature = "ssh-agent", unix))]
+            {
+                let transport =
+                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
+                let device = pass::ssh_agent::SshAgentDevice::new(
+                    transport,
+                    fingerprint.clone(),
+                    namespace.clone(),
+                );
+                let draft = pass::workflow::prepare_enrollment(
+                    chain.metadata(),
+                    config,
+                    registrar,
+                    user_id,
+                    context,
+                    block_hash,
+                    &device,
+                )
+                .await?;
+                Ok((
+                    draft,
+                    crate::profiles::DeviceProviderProfile::SshAgent {
+                        fingerprint,
+                        namespace,
+                    },
+                ))
+            }
+            #[cfg(not(all(feature = "ssh-agent", unix)))]
+            {
+                let _ = (fingerprint, namespace);
+                anyhow::bail!("this build has no native SSH-agent support")
+            }
+        }
+    }
 }
 
 #[cfg(feature = "pass")]
@@ -245,6 +477,25 @@ pub fn apply_finalized_effect(
                 }
                 return Err(error);
             }
+            Ok(profiles)
+        }
+        PendingEffect::Enrollment { pending } => {
+            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+            profiles.upsert(crate::profiles::Profile::Pass(
+                crate::profiles::PassProfile {
+                    name: pending.name.clone(),
+                    genesis_hash: pending.genesis_hash,
+                    pass_account: pending.pass_account,
+                    user_id: pending.user_id,
+                    device_id: pending.device_id,
+                    device_wallet: pending.device_wallet.clone(),
+                    device: Some(pending.device_profile()),
+                    additional_devices: Vec::new(),
+                    session: None,
+                },
+            ));
+            profiles.remove_pending(&pending.name);
+            profiles.save(profile_path)?;
             Ok(profiles)
         }
     }

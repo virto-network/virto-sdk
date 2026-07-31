@@ -78,6 +78,8 @@ enum Focus {
     PassSession,
     #[cfg(feature = "pass")]
     ConfirmForgetSession,
+    #[cfg(feature = "pass")]
+    PassEnrollment,
 }
 
 #[cfg(feature = "wallet")]
@@ -93,6 +95,50 @@ struct PassSessionState {
     field: u8,
     policy: String,
     duration: String,
+}
+
+#[cfg(feature = "pass")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeviceProviderKind {
+    SubstrateKey,
+    #[cfg(feature = "desktop-webauthn")]
+    WebAuthn,
+    #[cfg(all(feature = "ssh-agent", unix))]
+    SshAgent,
+}
+
+#[cfg(feature = "pass")]
+impl DeviceProviderKind {
+    fn available() -> Vec<Self> {
+        let providers = vec![Self::SubstrateKey];
+        #[cfg(any(feature = "desktop-webauthn", all(feature = "ssh-agent", unix)))]
+        let mut providers = providers;
+        #[cfg(feature = "desktop-webauthn")]
+        providers.push(Self::WebAuthn);
+        #[cfg(all(feature = "ssh-agent", unix))]
+        providers.push(Self::SshAgent);
+        providers
+    }
+
+    fn next(self) -> Self {
+        let providers = Self::available();
+        let index = providers
+            .iter()
+            .position(|provider| *provider == self)
+            .unwrap_or(0);
+        providers[(index + 1) % providers.len()]
+    }
+}
+
+#[cfg(feature = "pass")]
+struct PassEnrollmentState {
+    field: u8,
+    name: String,
+    user_id: String,
+    registrar: String,
+    provider: DeviceProviderKind,
+    provider_primary: String,
+    provider_secondary: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +181,8 @@ struct App {
     pass_session: Option<PassSessionState>,
     #[cfg(feature = "pass")]
     forget_session_profile: Option<String>,
+    #[cfg(feature = "pass")]
+    pass_enrollment: Option<PassEnrollmentState>,
 
     all_pallets: Vec<String>,
     pallets: Vec<String>,
@@ -504,6 +552,7 @@ impl App {
                 #[cfg(feature = "pass")]
                 {
                     self.pass_session = None;
+                    self.pass_enrollment = None;
                 }
             }
             #[cfg(feature = "wallet")]
@@ -631,6 +680,8 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         pass_session: None,
         #[cfg(feature = "pass")]
         forget_session_profile: None,
+        #[cfg(feature = "pass")]
+        pass_enrollment: None,
         all_pallets,
         pallets,
         pallet_idx: 0,
@@ -716,6 +767,8 @@ fn handle_key(app: &mut App, key: KeyCode) {
         Focus::PassSession => handle_pass_session(app, key),
         #[cfg(feature = "pass")]
         Focus::ConfirmForgetSession => handle_forget_session_confirmation(app, key),
+        #[cfg(feature = "pass")]
+        Focus::PassEnrollment => handle_pass_enrollment(app, key),
     }
 }
 
@@ -873,6 +926,20 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
             app.error = None;
             app.focus = Focus::ConfirmForgetSession;
         }
+        #[cfg(feature = "pass")]
+        KeyCode::Char('e') => {
+            app.pass_enrollment = Some(PassEnrollmentState {
+                field: 0,
+                name: String::new(),
+                user_id: String::new(),
+                registrar: String::new(),
+                provider: DeviceProviderKind::SubstrateKey,
+                provider_primary: String::new(),
+                provider_secondary: String::new(),
+            });
+            app.error = None;
+            app.focus = Focus::PassEnrollment;
+        }
         #[cfg(feature = "wallet")]
         KeyCode::Enter => {
             if let Some(profile) = app.profiles.profiles.get(app.profile_idx) {
@@ -881,6 +948,100 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
                     .to_chain
                     .send(ToChain::ActivateProfile(profile.name().into()));
             }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "pass")]
+fn handle_pass_enrollment(app: &mut App, key: KeyCode) {
+    let Some(enrollment) = app.pass_enrollment.as_mut() else {
+        app.focus = Focus::Profiles;
+        return;
+    };
+    match key {
+        KeyCode::Esc => {
+            app.pass_enrollment = None;
+            app.error = None;
+            app.focus = Focus::Profiles;
+        }
+        KeyCode::Tab | KeyCode::Down => enrollment.field = (enrollment.field + 1).min(5),
+        KeyCode::BackTab | KeyCode::Up => enrollment.field = enrollment.field.saturating_sub(1),
+        KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if enrollment.field == 3 => {
+            enrollment.provider = enrollment.provider.next();
+            enrollment.provider_primary.clear();
+            enrollment.provider_secondary.clear();
+            #[cfg(all(feature = "ssh-agent", unix))]
+            if matches!(enrollment.provider, DeviceProviderKind::SshAgent) {
+                enrollment.provider_secondary = "sube".into();
+            }
+        }
+        KeyCode::Backspace => match enrollment.field {
+            0 => {
+                enrollment.name.pop();
+            }
+            1 => {
+                enrollment.user_id.pop();
+            }
+            2 => {
+                enrollment.registrar.pop();
+            }
+            4 => {
+                enrollment.provider_primary.pop();
+            }
+            5 => {
+                enrollment.provider_secondary.pop();
+            }
+            _ => {}
+        },
+        KeyCode::Char(c) => match enrollment.field {
+            0 => enrollment.name.push(c),
+            1 => enrollment.user_id.push(c),
+            2 => enrollment.registrar.push(c),
+            4 => enrollment.provider_primary.push(c),
+            5 => enrollment.provider_secondary.push(c),
+            _ => {}
+        },
+        KeyCode::Enter if enrollment.field < 5 => enrollment.field += 1,
+        KeyCode::Enter => {
+            let device = match enrollment.provider {
+                DeviceProviderKind::SubstrateKey => {
+                    crate::profiles::DeviceProviderProfile::SubstrateKey {
+                        wallet: enrollment.provider_primary.trim().into(),
+                    }
+                }
+                #[cfg(feature = "desktop-webauthn")]
+                DeviceProviderKind::WebAuthn => crate::profiles::DeviceProviderProfile::WebAuthn {
+                    rp_id: enrollment.provider_primary.trim().into(),
+                    origin: enrollment.provider_secondary.trim().into(),
+                    credential_id: Vec::new(),
+                },
+                #[cfg(all(feature = "ssh-agent", unix))]
+                DeviceProviderKind::SshAgent => crate::profiles::DeviceProviderProfile::SshAgent {
+                    fingerprint: enrollment.provider_primary.trim().into(),
+                    namespace: enrollment.provider_secondary.trim().into(),
+                },
+            };
+            if enrollment.name.trim().is_empty()
+                || enrollment.user_id.trim().is_empty()
+                || enrollment.registrar.trim().is_empty()
+                || enrollment.provider_primary.trim().is_empty()
+            {
+                app.error = Some(
+                    "Name, exact user ID, registrar, and provider selection are required.".into(),
+                );
+                return;
+            }
+            app.review_returns_to_profiles = true;
+            app.error = Some("Creating device attestation and enrollment draft...".into());
+            let _ = app.to_chain.send(ToChain::PrepareEnrollment(
+                crate::workflow::EnrollmentRequest {
+                    name: enrollment.name.trim().into(),
+                    user_id: enrollment.user_id.trim().into(),
+                    registrar: enrollment.registrar.trim().into(),
+                    device,
+                },
+            ));
         }
         _ => {}
     }

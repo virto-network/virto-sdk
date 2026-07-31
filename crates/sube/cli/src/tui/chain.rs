@@ -30,6 +30,8 @@ pub enum ToChain {
     },
     #[cfg(feature = "pass")]
     ForgetPassSession(String),
+    #[cfg(feature = "pass")]
+    PrepareEnrollment(crate::workflow::EnrollmentRequest),
 }
 
 pub enum CallBody {
@@ -443,6 +445,56 @@ pub fn spawn(
                                             profiles,
                                             pass::session::FORGET_SESSION_WARNING.into(),
                                         ))
+                                        .await;
+                                }
+                                Err(error) => {
+                                    let _ = to_ui
+                                        .send(FromChain::ProfileError(error.to_string()))
+                                        .await;
+                                }
+                            }
+                        }
+                        #[cfg(feature = "pass")]
+                        ToChain::PrepareEnrollment(request) => {
+                            prepared_transaction = None;
+                            prepared_artifact = None;
+                            prepared_effect = None;
+                            match crate::workflow::prepare_enrollment(
+                                &mut chain,
+                                &chain_url,
+                                &profile_path,
+                                genesis_hash,
+                                request,
+                            )
+                            .await
+                            {
+                                Ok((prepared, effect, pass_account, valid_through)) => {
+                                    let call_hex = prepared.transaction.call.hex.clone();
+                                    let extrinsic_hex = prepared.transaction.hex.clone();
+                                    let artifact =
+                                        serde_json::to_string_pretty(&prepared.artifact())
+                                            .unwrap_or_else(|_| "{}".into());
+                                    let mut review = format!(
+                                        "Predicted pass account: 0x{}\nPending draft valid through #{}\n\n{}",
+                                        hex::encode(pass_account),
+                                        valid_through,
+                                        prepared.review_text()
+                                    );
+                                    review.push_str(
+                                        "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
+                                    );
+                                    prepared_artifact = Some(artifact.clone());
+                                    prepared_effect = Some(effect);
+                                    prepared_transaction = Some(prepared);
+                                    let _ = to_ui
+                                        .send(FromChain::CallPrepared(CallReview {
+                                            text: review,
+                                            call_hex: Some(call_hex),
+                                            extrinsic_hex: Some(extrinsic_hex),
+                                            artifact: Some(artifact),
+                                            submittable: true,
+                                            requires_finalized: true,
+                                        }))
                                         .await;
                                 }
                                 Err(error) => {

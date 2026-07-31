@@ -21,6 +21,11 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_forget_session_confirmation(f, app);
         return;
     }
+    #[cfg(feature = "pass")]
+    if matches!(app.focus, Focus::PassEnrollment) {
+        draw_pass_enrollment(f, app);
+        return;
+    }
     #[cfg(feature = "wallet")]
     if matches!(app.focus, Focus::WalletImport) {
         draw_wallet_import(f, app);
@@ -87,6 +92,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         (Focus::PassSession, _) => unreachable!(),
         #[cfg(feature = "pass")]
         (Focus::ConfirmForgetSession, _) => unreachable!(),
+        #[cfg(feature = "pass")]
+        (Focus::PassEnrollment, _) => unreachable!(),
         (Focus::BlockDetail, _) => " ↑↓ navigate  Esc back",
         (Focus::Review | Focus::ConfirmSubmit, _) => unreachable!(),
         (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  p profiles  q quit",
@@ -166,11 +173,71 @@ fn draw_profiles(f: &mut Frame, app: &App) {
     let mut state = ListState::default().with_selected(selected);
     f.render_stateful_widget(list, layout[1], &mut state);
     let message = app.error.as_deref().unwrap_or(
-        "↑↓ Select  Enter Connect  a Add wallet  s Session  f Forget session  Esc Close",
+        "↑↓ Select  Enter Connect  a Add wallet  e Enroll pass  s Session  f Forget  Esc Close",
     );
     f.render_widget(
         Paragraph::new(message).wrap(Wrap { trim: false }),
         layout[2],
+    );
+}
+
+#[cfg(feature = "pass")]
+fn draw_pass_enrollment(f: &mut Frame, app: &App) {
+    let area = centered_rect(100, 20, f.area());
+    f.render_widget(Clear, area);
+    let Some(enrollment) = app.pass_enrollment.as_ref() else {
+        return;
+    };
+    let style = |field| {
+        if enrollment.field == field {
+            Style::default().fg(Color::Yellow).bold()
+        } else {
+            Style::default()
+        }
+    };
+    let (primary_label, secondary_label) = match enrollment.provider {
+        super::DeviceProviderKind::SubstrateKey => ("Device wallet profile", "Unused"),
+        #[cfg(feature = "desktop-webauthn")]
+        super::DeviceProviderKind::WebAuthn => ("WebAuthn RP ID", "WebAuthn origin"),
+        #[cfg(all(feature = "ssh-agent", unix))]
+        super::DeviceProviderKind::SshAgent => ("SSH fingerprint", "SSHSIG namespace"),
+    };
+    let lines = vec![
+        Line::styled(format!("Pass profile name: {}", enrollment.name), style(0)),
+        Line::styled(
+            format!("Hashed user ID (exact 32-byte hex): {}", enrollment.user_id),
+            style(1),
+        ),
+        Line::styled(
+            format!("Registrar wallet profile: {}", enrollment.registrar),
+            style(2),
+        ),
+        Line::styled(format!("Provider: {:?}", enrollment.provider), style(3)),
+        Line::styled(
+            format!("{primary_label}: {}", enrollment.provider_primary),
+            style(4),
+        ),
+        Line::styled(
+            format!("{secondary_label}: {}", enrollment.provider_secondary),
+            style(5),
+        ),
+        Line::raw(""),
+        Line::raw("←→/Space provider  Tab fields  Enter continue  Esc cancel"),
+        Line::raw(
+            "The predicted pass address and complete transaction are shown before submission.",
+        ),
+        Line::styled(
+            app.error.as_deref().unwrap_or(""),
+            Style::default().fg(Color::Red),
+        ),
+    ];
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Enroll pass account"),
+        ),
+        area,
     );
 }
 
