@@ -1,8 +1,10 @@
 use dirs::home_dir;
-use libwallet::{self, vault::Pass, Language};
+use libwallet::{
+    vault::{Pass, Vault},
+    Language, Substrate, Wallet,
+};
 use std::error::Error;
 type PassVault = Pass<String>;
-type Wallet = libwallet::Wallet<PassVault>;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -11,13 +13,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut store_path = home_dir().expect("Could not find home path");
     store_path.push(".password-store");
 
-    let vault = Pass::new(store_path.to_str().unwrap(), Language::default());
-    let mut wallet = Wallet::new(vault);
-
-    wallet.unlock(None, account).await?;
+    let vault: PassVault =
+        Pass::new(store_path.to_str().unwrap(), Language::default()).account(&account);
+    let mut substrate = Substrate::new(vault);
+    let signer = substrate.unlock(None, ()).await?;
+    let mut wallet: Wallet<_, 5> = Wallet::new();
+    wallet.add(signer);
 
     let account = wallet.default_account();
-    println!("Default account: {}", account.unwrap());
+    println!("Default account: {}", account.unwrap().signer());
 
     Ok(())
 }

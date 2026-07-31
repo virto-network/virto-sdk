@@ -67,3 +67,19 @@ trezor = ["std", "dep:rusb"]
 vault_os = ["keyring", "mnemonic", "rand"]
 vault_pass = ["prs-lib", "mnemonic", "rand"]
 vault_simple = ["mnemonic", "rand"]
+
+[[example]]
+name = "account_generation"
+required-features = ["std", "substrate", "vault_simple"]
+
+[[example]]
+name = "persisted_in_keyring"
+required-features = ["std", "substrate", "vault_os"]
+
+[[example]]
+name = "persisted_in_pass"
+required-features = ["std", "substrate", "vault_pass"]
+
+[[example]]
+name = "trezor_sign"
+required-features = ["trezor"]

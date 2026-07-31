@@ -1,24 +1,22 @@
-use libwallet::{self, vault, Language};
+use libwallet::{
+    vault::{self, Vault},
+    Language, Substrate, Wallet,
+};
 
-use std::{env, error::Error};
-
-type Wallet = libwallet::Wallet<vault::OSKeyring<String>>;
+use std::error::Error;
 
 const TEST_USER: &str = "test_user";
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let pin = env::args().nth(1);
-    let pin = pin.as_ref().map(String::as_str);
-
     let vault = vault::OSKeyring::<String>::new(TEST_USER, Language::default());
-
-    let mut wallet = Wallet::new(vault);
-
-    wallet.unlock(None, pin).await?;
+    let mut substrate = Substrate::new(vault);
+    let signer = substrate.unlock(None, ()).await?;
+    let mut wallet: Wallet<_, 5> = Wallet::new();
+    wallet.add(signer);
 
     let account = wallet.default_account();
-    println!("Default account: {}", account.unwrap());
+    println!("Default account: {}", account.unwrap().signer());
 
     Ok(())
 }
