@@ -113,19 +113,30 @@ enum DeviceProviderKind {
 
 #[cfg(feature = "pass")]
 impl DeviceProviderKind {
-    fn available() -> Vec<Self> {
-        let providers = vec![Self::SubstrateKey];
-        #[cfg(any(feature = "desktop-webauthn", all(feature = "ssh-agent", unix)))]
-        let mut providers = providers;
+    fn available(metadata: &Metadata) -> Vec<Self> {
+        let Ok(config) = pass::PassRuntimeConfig::discover(metadata) else {
+            return Vec::new();
+        };
+        let mut providers = Vec::new();
+        if config.supports_attestation("SubstrateKey") {
+            providers.push(Self::SubstrateKey);
+        }
         #[cfg(feature = "desktop-webauthn")]
-        providers.push(Self::WebAuthn);
+        if config.supports_attestation("WebAuthn") {
+            providers.push(Self::WebAuthn);
+        }
         #[cfg(all(feature = "ssh-agent", unix))]
-        providers.push(Self::SshAgent);
+        if config.supports_attestation("Ssh") {
+            providers.push(Self::SshAgent);
+        }
         providers
     }
 
-    fn next(self) -> Self {
-        let providers = Self::available();
+    fn next(self, metadata: &Metadata) -> Self {
+        let providers = Self::available(metadata);
+        if providers.is_empty() {
+            return self;
+        }
         let index = providers
             .iter()
             .position(|provider| *provider == self)
@@ -965,12 +976,19 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
         }
         #[cfg(feature = "pass")]
         KeyCode::Char('e') => {
+            let Some(provider) = DeviceProviderKind::available(&app.meta).into_iter().next() else {
+                app.error = Some(
+                    "The connected runtime advertises no authenticator supported by this build."
+                        .into(),
+                );
+                return;
+            };
             app.pass_enrollment = Some(PassEnrollmentState {
                 field: 0,
                 name: String::new(),
                 user_id: String::new(),
                 registrar: String::new(),
-                provider: DeviceProviderKind::SubstrateKey,
+                provider,
                 provider_primary: String::new(),
                 provider_secondary: String::new(),
             });
@@ -986,10 +1004,17 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
                     return;
                 }
             };
+            let Some(provider) = DeviceProviderKind::available(&app.meta).into_iter().next() else {
+                app.error = Some(
+                    "The connected runtime advertises no authenticator supported by this build."
+                        .into(),
+                );
+                return;
+            };
             app.pass_device_addition = Some(PassDeviceAdditionState {
                 profile,
                 field: 0,
-                provider: DeviceProviderKind::SubstrateKey,
+                provider,
                 provider_primary: String::new(),
                 provider_secondary: String::new(),
                 filter: String::new(),
@@ -1055,6 +1080,7 @@ fn device_provider_label(device: &crate::profiles::DeviceProviderProfile) -> &'s
 
 #[cfg(feature = "pass")]
 fn handle_pass_device_addition(app: &mut App, key: KeyCode) {
+    let metadata = app.meta.clone();
     let Some(device) = app.pass_device_addition.as_mut() else {
         app.focus = Focus::Profiles;
         return;
@@ -1068,7 +1094,7 @@ fn handle_pass_device_addition(app: &mut App, key: KeyCode) {
         KeyCode::Tab | KeyCode::Down => device.field = (device.field + 1).min(4),
         KeyCode::BackTab | KeyCode::Up => device.field = device.field.saturating_sub(1),
         KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if device.field == 0 => {
-            device.provider = device.provider.next();
+            device.provider = device.provider.next(&metadata);
             device.provider_primary.clear();
             device.provider_secondary.clear();
             #[cfg(all(feature = "ssh-agent", unix))]
@@ -1208,6 +1234,7 @@ fn handle_pass_device_removal(app: &mut App, key: KeyCode) {
 
 #[cfg(feature = "pass")]
 fn handle_pass_enrollment(app: &mut App, key: KeyCode) {
+    let metadata = app.meta.clone();
     let Some(enrollment) = app.pass_enrollment.as_mut() else {
         app.focus = Focus::Profiles;
         return;
@@ -1221,7 +1248,7 @@ fn handle_pass_enrollment(app: &mut App, key: KeyCode) {
         KeyCode::Tab | KeyCode::Down => enrollment.field = (enrollment.field + 1).min(5),
         KeyCode::BackTab | KeyCode::Up => enrollment.field = enrollment.field.saturating_sub(1),
         KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if enrollment.field == 3 => {
-            enrollment.provider = enrollment.provider.next();
+            enrollment.provider = enrollment.provider.next(&metadata);
             enrollment.provider_primary.clear();
             enrollment.provider_secondary.clear();
             #[cfg(all(feature = "ssh-agent", unix))]
