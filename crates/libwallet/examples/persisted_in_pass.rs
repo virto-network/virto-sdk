@@ -9,7 +9,7 @@ type PassVault = Pass<String>;
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // first argument is used as account
-    let account = std::env::args().skip(1).next().unwrap_or("default".into());
+    let account = std::env::args().nth(1).unwrap_or("default".into());
     let mut store_path = home_dir().expect("Could not find home path");
     store_path.push(".password-store");
 

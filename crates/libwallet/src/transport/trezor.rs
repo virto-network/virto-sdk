@@ -484,7 +484,7 @@ impl UsbTransport {
             .map_err(|_| TrezorError::Transport)?
             .iter()
             .find(|d| {
-                d.device_descriptor().map_or(false, |desc| {
+                d.device_descriptor().is_ok_and(|desc| {
                     (desc.vendor_id() == VID_ONE && desc.product_id() == PID_ONE)
                         || (desc.vendor_id() == VID_T && desc.product_id() == PID_T)
                 })

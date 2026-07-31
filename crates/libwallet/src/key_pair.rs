@@ -350,7 +350,7 @@ pub mod sr25519 {
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&key_bytes[..32]);
         let rng = rand_chacha::ChaChaRng::from_seed(seed);
-        key.derived_key_simple_rng(ChainCode(j), &[], rng).0
+        key.derived_key_simple_rng(ChainCode(j), [], rng).0
     }
 
     #[cfg(test)]
@@ -642,7 +642,7 @@ mod derive {
         } else {
             let len = part.len().min(JUNCTION_LEN - 1);
             code[0] = (len as u8) << 2;
-            code[1..len + 1].copy_from_slice(part[..len].as_bytes());
+            code[1..len + 1].copy_from_slice(&part.as_bytes()[..len]);
         }
         code
     }

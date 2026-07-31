@@ -149,6 +149,15 @@ where
     }
 }
 
+impl<S, const A: usize> Default for Wallet<S, A>
+where
+    S: Signer,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Represents the blockchain network in use by an account
 #[derive(Debug, Clone)]
 #[non_exhaustive]
