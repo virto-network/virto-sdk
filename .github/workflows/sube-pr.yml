@@ -55,6 +55,7 @@ jobs:
           cargo test -p sube --features wss --doc
           cargo test -p pass --all-features
           cargo test -p sube-cli
+          cargo test -p sube-cli --all-features
           cargo test -p sube-cli --no-default-features
           RUSTDOCFLAGS="-D warnings" cargo doc -p sube --features wss --no-deps
           RUSTDOCFLAGS="-D warnings" cargo doc -p pass --all-features --no-deps
@@ -63,6 +64,7 @@ jobs:
         run: |
           cargo clippy -p sube --all-targets --features wss --no-deps -- -D warnings
           cargo clippy -p sube-cli --all-targets --no-deps -- -D warnings
+          cargo clippy -p sube-cli --all-targets --all-features --no-deps -- -D warnings
           cargo clippy -p pass --all-targets --all-features --no-deps -- -D warnings
 
       - name: Package contents

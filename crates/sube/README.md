@@ -154,5 +154,10 @@ SUBE_TEST_CHAIN=wss://kreivo.io \
   cargo test --features wss --test integration -- --ignored
 ```
 
+The CLI also has an ignored, destructive pallet-pass smoke test. It requires a
+disposable funded registrar and device mnemonic; see
+[`cli/README.md`](cli/README.md) for the exact environment variables and
+warning.
+
 The crate requires Rust 1.88 or newer. See [CHANGELOG.md](CHANGELOG.md) for the
 1.0 migration notes.

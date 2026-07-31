@@ -86,6 +86,14 @@ those reviewed bytes for finalization. `c` and `x` copy the call or full
 extrinsic via the terminal clipboard, while `e` writes a collision-safe JSON
 artifact beside the profile store.
 
+Press `p` in the TUI to manage chain-bound profiles. From the profile dialog,
+`a` imports an ordinary wallet, `e` enrolls a pass account, `s` registers or
+reuses an explicitly scoped session, and `d`/`r` add or remove devices. Pass
+enrollment, session, and device mutations always enter the same full-screen
+review and require a successful finalized receipt before changing the local
+profile. Adding an Admin device requires typing `ADMIN`; removal requires
+typing `REMOVE` after reviewing the last-device warning.
+
 Typed forms accept SS58 or hex AccountId32 values and convert decimal token
 amounts using the chain's advertised precision without floating point.
 `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:`, `hex:`, and
@@ -98,3 +106,16 @@ is supplied, and asks for confirmation unless `--yes` is also supplied.
 
 Build the generic explorer without wallet, pass, SSH-agent, or desktop
 WebAuthn support with `--no-default-features`.
+
+An ignored destructive smoke test exercises Substrate-key enrollment, exact
+session registration, a locally rejected call, an allowed finalized call, and
+receipt inspection. Use disposable credentials: enrollment and the allowed
+remark remain on the selected chain.
+
+```sh
+SUBE_E2E_URL=wss://... \
+SUBE_E2E_REGISTRAR_MNEMONIC='funded mnemonic derived at //default' \
+SUBE_E2E_DEVICE_MNEMONIC='disposable device mnemonic' \
+cargo test -p sube-cli --all-features \
+  live_pass_enrollment_session_and_submission -- --ignored --nocapture
+```

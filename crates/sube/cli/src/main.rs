@@ -1895,6 +1895,25 @@ async fn watch(chain_url: &str, path: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "pass")]
+    struct E2eCleanup {
+        profile_path: std::path::PathBuf,
+        secure_entries: Vec<String>,
+    }
+
+    #[cfg(feature = "pass")]
+    impl Drop for E2eCleanup {
+        fn drop(&mut self) {
+            use libwallet::MutableKeyStore;
+
+            for entry in &self.secure_entries {
+                let mut keys = libwallet::vault::OSKeyring::<()>::new(entry, None);
+                let _ = keys.delete();
+            }
+            let _ = std::fs::remove_file(&self.profile_path);
+        }
+    }
+
     #[test]
     fn transaction_submission_is_opt_in() {
         let cli = Cli::try_parse_from(["sube", "tx", "system/remark", "--body", "(remark:0x01)"])
@@ -2167,5 +2186,151 @@ mod tests {
             "Session { filter: Filter::Calls([(5, 1), (2, 9)]), expires: 99 }",
             &policy
         ));
+    }
+
+    /// Destructive live-chain smoke test. The registrar mnemonic must fund the
+    /// account derived at `//default`; the device mnemonic does not need funds.
+    #[cfg(feature = "pass")]
+    #[test]
+    #[ignore = "requires SUBE_E2E_URL and disposable funded live-chain credentials"]
+    fn live_pass_enrollment_session_and_submission() -> Result<()> {
+        smol::block_on(async {
+            let Ok(chain_url) = std::env::var("SUBE_E2E_URL") else {
+                eprintln!("SUBE_E2E_URL is unset; skipping live-chain pass test");
+                return Ok(());
+            };
+            let registrar_mnemonic = std::env::var("SUBE_E2E_REGISTRAR_MNEMONIC")
+                .map_err(|_| anyhow::anyhow!("SUBE_E2E_REGISTRAR_MNEMONIC is required"))?;
+            let device_mnemonic = std::env::var("SUBE_E2E_DEVICE_MNEMONIC")
+                .map_err(|_| anyhow::anyhow!("SUBE_E2E_DEVICE_MNEMONIC is required"))?;
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos();
+            let registrar_name = format!("e2e-registrar-{unique}");
+            let device_name = format!("e2e-device-{unique}");
+            let pass_name = format!("e2e-pass-{unique}");
+            let profile_path = std::env::temp_dir().join(format!(
+                "sube-live-e2e-{}-{unique}.json",
+                std::process::id()
+            ));
+            let mut cleanup = E2eCleanup {
+                profile_path: profile_path.clone(),
+                secure_entries: vec![
+                    format!("wallet-profile-v1-{registrar_name}"),
+                    format!("wallet-profile-v1-{device_name}"),
+                ],
+            };
+
+            let mut chain = sube::Sube::connect(&chain_url).await?;
+            let genesis_hash = chain_genesis(&mut chain).await?;
+            workflow::import_wallet_profile(
+                &profile_path,
+                genesis_hash,
+                registrar_name.clone(),
+                &registrar_mnemonic,
+            )?;
+            workflow::import_wallet_profile(
+                &profile_path,
+                genesis_hash,
+                device_name.clone(),
+                &device_mnemonic,
+            )?;
+
+            let mut user_id = [0u8; 32];
+            user_id[..16].copy_from_slice(&unique.to_le_bytes());
+            user_id[16..].copy_from_slice(&genesis_hash[..16]);
+            let (enrollment, enrollment_effect, pass_account, _) = workflow::prepare_enrollment(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                workflow::EnrollmentRequest {
+                    name: pass_name.clone(),
+                    user_id: hex::encode(user_id),
+                    registrar: registrar_name,
+                    device: profiles::DeviceProviderProfile::SubstrateKey {
+                        wallet: device_name,
+                    },
+                },
+            )
+            .await?;
+            let receipt =
+                workflow::submit_transaction(&mut chain, &enrollment, sube::WaitFor::Finalized)
+                    .await?;
+            assert!(matches!(
+                receipt.dispatch_outcome,
+                sube::DispatchOutcome::Success
+            ));
+            workflow::apply_finalized_effect(&profile_path, &receipt, enrollment_effect)?;
+
+            let session = workflow::prepare_pass_session(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                &pass_name,
+                "calls:System/remark",
+                None,
+            )
+            .await?;
+            let workflow::SessionPreparation::Review { prepared, effect } = session else {
+                anyhow::bail!("new pass profile unexpectedly reused a session")
+            };
+            let receipt =
+                workflow::submit_transaction(&mut chain, &prepared, sube::WaitFor::Finalized)
+                    .await?;
+            assert!(matches!(
+                receipt.dispatch_outcome,
+                sube::DispatchOutcome::Success
+            ));
+            let stored = workflow::apply_finalized_effect(&profile_path, &receipt, *effect)?;
+            let profile = pass_profile(&stored, &pass_name, genesis_hash)?.clone();
+            let session = profile
+                .session
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("finalized session was not persisted"))?;
+            cleanup.secure_entries.push(session.secure_entry.clone());
+            let signer = load_session_signer(&session.secure_entry, Some(session.account)).await?;
+            let policy = parse_session_policy(chain.metadata(), &session.policy)?;
+            let authorizer =
+                pass::SessionAuthorizer::new(pass::Account(pass_account), signer, policy);
+
+            let body = sube::Text("(remark:0x737562652d653265)");
+            let disallowed = chain.prepare_call("System/remark_with_event", &body)?;
+            let error = chain
+                .build_transaction(
+                    &disallowed,
+                    &authorizer,
+                    sube::TransactionOptions::default(),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("outside the local session policy")
+            );
+
+            let allowed = chain.prepare_call("System/remark", &body)?;
+            let prepared = workflow::prepare_transaction(
+                &mut chain,
+                &chain_url,
+                &allowed,
+                &pass_name,
+                &authorizer,
+                sube::TransactionOptions::default(),
+            )
+            .await?;
+            let receipt =
+                workflow::submit_transaction(&mut chain, &prepared, sube::WaitFor::Finalized)
+                    .await?;
+            assert!(matches!(
+                receipt.dispatch_outcome,
+                sube::DispatchOutcome::Success
+            ));
+            assert!(receipt.finalized_block_hash.is_some());
+            assert!(receipt.extrinsic_index.is_some());
+            Ok(())
+        })
     }
 }
