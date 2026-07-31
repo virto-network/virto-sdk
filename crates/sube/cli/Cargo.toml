@@ -11,9 +11,25 @@ path = "src/main.rs"
 
 [dependencies]
 sube = { path = "..", features = ["wss"] }
+libwallet = { path = "../../libwallet", default-features = false, features = [
+    "std",
+    "substrate",
+    "vault_os",
+], optional = true }
+pass = { path = "../../pass", default-features = false, features = ["wallet"], optional = true }
 clap = { version = "4", features = ["derive"] }
 smol = "2"
 ratatui = "0.30"
 crossterm = "0.29"
 anyhow = "1"
 hex = "0.4"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+rand_core = { version = "0.6", features = ["getrandom"], optional = true }
+
+[features]
+default = ["wallet", "pass", "desktop-webauthn"]
+wallet = ["dep:libwallet", "dep:rand_core", "sube/libwallet"]
+pass = ["wallet", "dep:pass"]
+ssh-agent = ["pass", "pass/ssh-agent"]
+desktop-webauthn = ["pass"]

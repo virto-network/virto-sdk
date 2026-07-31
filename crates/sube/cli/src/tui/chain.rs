@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
@@ -11,6 +12,8 @@ pub enum ToChain {
     Query(String),
     #[allow(dead_code)]
     QueryAtHash(String, String),
+    PrepareCall(String, String),
+    SubmitPrepared,
     FetchBlockDetail(String),
 }
 
@@ -19,6 +22,8 @@ pub enum FromChain {
     Finalized(Vec<String>),
     StorageResult(String),
     StorageError(String),
+    CallPrepared { text: String, submittable: bool },
+    CallError(String),
     BlockDetail(String, String),
 }
 
@@ -26,6 +31,7 @@ pub enum FromChain {
 
 pub fn spawn(
     chain_url: String,
+    profile_path: PathBuf,
     from_ui: mpsc::Receiver<ToChain>,
     to_ui: smol::channel::Sender<FromChain>,
     ready: mpsc::SyncSender<Result<Metadata, String>>,
@@ -42,6 +48,7 @@ pub fn spawn(
             if ready.send(Ok(chain.metadata().clone())).is_err() {
                 return;
             }
+            let mut prepared_transaction: Option<sube::EncodedExtrinsic> = None;
 
             loop {
                 while let Ok(cmd) = from_ui.try_recv() {
@@ -66,6 +73,106 @@ pub fn spawn(
                                 Err(e) => {
                                     let _ =
                                         to_ui.send(FromChain::StorageError(format!("{e}"))).await;
+                                }
+                            }
+                        }
+                        ToChain::PrepareCall(path, body) => {
+                            prepared_transaction = None;
+                            match chain.prepare_call(&path, &sube::Text(&body)) {
+                                Ok(call) => {
+                                    #[cfg(feature = "wallet")]
+                                    match prepare_review(
+                                        &mut chain,
+                                        &chain_url,
+                                        &profile_path,
+                                        &call,
+                                    )
+                                    .await
+                                    {
+                                        Ok(Some((transaction, review))) => {
+                                            prepared_transaction = Some(transaction);
+                                            let _ = to_ui
+                                                .send(FromChain::CallPrepared {
+                                                    text: review,
+                                                    submittable: true,
+                                                })
+                                                .await;
+                                        }
+                                        Ok(None) => {
+                                            let review = prepared_call_review(&call);
+                                            let _ = to_ui
+                                                .send(FromChain::CallPrepared {
+                                                    text: review,
+                                                    submittable: false,
+                                                })
+                                                .await;
+                                        }
+                                        Err(error) => {
+                                            let _ = to_ui.send(FromChain::CallError(error)).await;
+                                        }
+                                    }
+                                    #[cfg(not(feature = "wallet"))]
+                                    {
+                                        let _ = &profile_path;
+                                        let review = prepared_call_review(&call);
+                                        let _ = to_ui
+                                            .send(FromChain::CallPrepared {
+                                                text: review,
+                                                submittable: false,
+                                            })
+                                            .await;
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ =
+                                        to_ui.send(FromChain::CallError(error.to_string())).await;
+                                }
+                            }
+                        }
+                        ToChain::SubmitPrepared => {
+                            let Some(transaction) = prepared_transaction.take() else {
+                                let _ = to_ui
+                                    .send(FromChain::CallError(
+                                        "No reviewed signed transaction is ready".into(),
+                                    ))
+                                    .await;
+                                continue;
+                            };
+                            match chain
+                                .submit_transaction(&transaction, sube::WaitFor::Finalized)
+                                .await
+                            {
+                                Ok(receipt) => {
+                                    let text = serde_json::to_string_pretty(&serde_json::json!({
+                                        "finalizedBlockHash": receipt.finalized_block_hash,
+                                        "extrinsicIndex": receipt.extrinsic_index,
+                                        "dispatchOutcome": format!("{:?}", receipt.dispatch_outcome),
+                                        "events": receipt.events.iter().map(|event| {
+                                            serde_json::json!({
+                                                "pallet": event.pallet,
+                                                "variant": event.variant,
+                                                "decoded": event.decoded,
+                                            })
+                                        }).collect::<Vec<_>>(),
+                                    }))
+                                    .unwrap_or_else(|_| "transaction finalized".into());
+                                    let _ = to_ui
+                                        .send(FromChain::CallPrepared {
+                                            text,
+                                            submittable: false,
+                                        })
+                                        .await;
+                                }
+                                Err(error) => {
+                                    prepared_transaction = Some(transaction);
+                                    let _ = to_ui
+                                        .send(FromChain::CallPrepared {
+                                            text: format!(
+                                                "Submission failed; reviewed bytes retained: {error}\n\nPress s to retry."
+                                            ),
+                                            submittable: true,
+                                        })
+                                        .await;
                                 }
                             }
                         }
@@ -115,6 +222,76 @@ pub fn spawn(
             }
         })
     });
+}
+
+fn prepared_call_review(call: &sube::PreparedCall) -> String {
+    format!(
+        "Prepared call (not submitted)\n\n{}::{}\n{}",
+        call.pallet, call.call, call.hex
+    )
+}
+
+#[cfg(feature = "wallet")]
+async fn prepare_review(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profile_path: &std::path::Path,
+    call: &sube::PreparedCall,
+) -> Result<Option<(sube::EncodedExtrinsic, String)>, String> {
+    let profiles =
+        crate::profiles::Profiles::load(profile_path).map_err(|error| error.to_string())?;
+    let Some(profile) = profiles.active() else {
+        return Ok(None);
+    };
+    let genesis_hash = crate::chain_genesis(chain)
+        .await
+        .map_err(|error| error.to_string())?;
+    if profile.genesis_hash() != genesis_hash {
+        return Err("active profile genesis hash does not match the connected chain".into());
+    }
+
+    let (transaction, authorizer) = match profile {
+        crate::profiles::Profile::Wallet(profile) => {
+            let signer = crate::wallet_signer(profile)
+                .await
+                .map_err(|error| error.to_string())?;
+            let transaction = chain
+                .build_transaction(call, &signer, sube::TransactionOptions::default())
+                .await
+                .map_err(|error| error.to_string())?;
+            (transaction, profile.name.as_str())
+        }
+        #[cfg(feature = "pass")]
+        crate::profiles::Profile::Pass(profile) => {
+            let session = profile
+                .session
+                .as_ref()
+                .ok_or_else(|| "active pass profile has no finalized local session".to_string())?;
+            let policy = crate::parse_session_policy(chain.metadata(), &session.policy)
+                .map_err(|error| error.to_string())?;
+            let signer = crate::load_session_signer(&session.secure_entry, Some(session.account))
+                .await
+                .map_err(|error| error.to_string())?;
+            let authorizer =
+                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
+            let transaction = chain
+                .build_transaction(call, &authorizer, sube::TransactionOptions::default())
+                .await
+                .map_err(|error| error.to_string())?;
+            (transaction, profile.name.as_str())
+        }
+    };
+    let report = chain
+        .inspect_transaction(&transaction)
+        .await
+        .map_err(|error| error.to_string())?;
+    if matches!(report.validity, Some(sube::TransactionValidity::Invalid(_))) {
+        return Err("transaction validation reports known-invalid; submission blocked".into());
+    }
+    let artifact = crate::transaction_artifact(chain_url, authorizer, &transaction, &report);
+    let mut review = serde_json::to_string_pretty(&artifact).map_err(|error| error.to_string())?;
+    review.push_str("\n\nPress s to submit these reviewed bytes and wait for finalization.");
+    Ok(Some((transaction, review)))
 }
 
 #[cfg(test)]

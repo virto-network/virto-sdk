@@ -7,6 +7,8 @@ on:
       - "Cargo.lock"
       - "crates/scales/**"
       - "crates/sube/**"
+      - "crates/pass/**"
+      - "crates/libwallet/**"
       - ".github/workflows/sube-*.yml"
   push:
     branches: [main]
@@ -15,6 +17,8 @@ on:
       - "Cargo.lock"
       - "crates/scales/**"
       - "crates/sube/**"
+      - "crates/pass/**"
+      - "crates/libwallet/**"
       - ".github/workflows/sube-*.yml"
 
 permissions:
@@ -33,7 +37,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Formatting
-        run: cargo fmt -p scale-serialization -p sube -p sube-cli -- --check
+        run: cargo fmt -p scale-serialization -p sube -p sube-cli -p pass -- --check
 
       - name: Core and native transports
         run: |
@@ -41,17 +45,25 @@ jobs:
           cargo check -p sube --features wss
           cargo check -p sube --features smoldot-std
           cargo check -p sube-cli
+          cargo check -p sube-cli --no-default-features
+          cargo check -p pass --no-default-features
+          cargo check -p pass --all-features
 
       - name: Tests and documentation
         run: |
           cargo test -p sube --features wss
           cargo test -p sube --features wss --doc
+          cargo test -p pass --all-features
+          cargo test -p sube-cli
+          cargo test -p sube-cli --no-default-features
           RUSTDOCFLAGS="-D warnings" cargo doc -p sube --features wss --no-deps
+          RUSTDOCFLAGS="-D warnings" cargo doc -p pass --all-features --no-deps
 
       - name: Clippy
         run: |
           cargo clippy -p sube --all-targets --features wss --no-deps -- -D warnings
           cargo clippy -p sube-cli --all-targets --no-deps -- -D warnings
+          cargo clippy -p pass --all-targets --all-features --no-deps -- -D warnings
 
       - name: Package contents
         run: |
@@ -87,6 +99,25 @@ jobs:
             -nographic \
             -semihosting-config enable=on,target=native \
             -kernel tests/qemu/target/thumbv7em-none-eabihf/release/sube-qemu-test
+
+  desktop-providers:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Generic explorer
+        run: cargo check -p sube-cli --no-default-features
+
+      - name: SSH agent provider
+        if: runner.os != 'Windows'
+        run: cargo check -p sube-cli --no-default-features --features ssh-agent
+
+      - name: Desktop WebAuthn provider
+        run: cargo check -p sube-cli --no-default-features --features desktop-webauthn
 
   msrv:
     runs-on: ubuntu-latest

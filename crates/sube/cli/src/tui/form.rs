@@ -5,6 +5,7 @@ use sube::scales::{Registry, TypeDef, TypeId};
 use super::types;
 
 /// A form field that knows its type and can render accordingly.
+#[derive(Clone)]
 pub enum Field {
     /// Plain text input (numbers, hex, strings).
     Text {
@@ -23,6 +24,8 @@ pub enum Field {
         selected: usize,
         /// Sub-fields for the currently selected variant.
         sub_fields: Vec<Field>,
+        /// Values previously entered for each variant.
+        saved_fields: Vec<Option<Vec<Field>>>,
         /// TypeId of the enum, for resolving variant fields.
         ty_id: TypeId,
     },
@@ -140,6 +143,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             };
             Field::Enum {
                 name: name.into(),
+                saved_fields: (0..variants.len()).map(|_| None).collect(),
                 variants,
                 selected: 0,
                 sub_fields,
@@ -295,11 +299,13 @@ impl FormState {
                 if let Some(Field::Enum {
                     selected,
                     sub_fields,
+                    saved_fields,
                     ..
                 }) = self.field_at_cursor_mut()
                 {
+                    saved_fields[*selected] = Some(core::mem::take(sub_fields));
                     *selected = new_selected;
-                    *sub_fields = new_sub;
+                    *sub_fields = saved_fields[new_selected].take().unwrap_or(new_sub);
                 }
             }
             CycleAction::None => {}
@@ -607,5 +613,49 @@ fn render_field(
             }
             next_y
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enum_navigation_preserves_entered_variant_values() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let balances = metadata.pallet_by_name("Balances").unwrap();
+        let calls = match metadata
+            .registry
+            .resolve(balances.calls_ty.unwrap())
+            .unwrap()
+        {
+            TypeDef::Variant(calls) => calls,
+            _ => panic!("calls are not an enum"),
+        };
+        let transfer = calls
+            .variants()
+            .find(|variant| variant.name() == "transfer_keep_alive")
+            .unwrap();
+        let dest_ty = match transfer.fields() {
+            sube::scales::Fields::Struct(fields) => {
+                fields.iter().find(|field| field.name == "dest").unwrap().ty
+            }
+            _ => panic!("transfer fields are not named"),
+        };
+
+        let mut form = FormState::new(
+            vec![field_from_type("dest", dest_ty, &metadata.registry)],
+            sube::Rc::new(metadata.registry.clone()),
+        );
+        form.next_field();
+        form.push_char('7');
+        form.prev_field();
+        form.toggle();
+        form.toggle_back();
+        form.next_field();
+
+        assert!(form.values()[0].contains('7'));
     }
 }

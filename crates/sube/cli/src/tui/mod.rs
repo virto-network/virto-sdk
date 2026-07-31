@@ -89,6 +89,7 @@ struct App {
     call_idx: usize,
     call_form: Option<FormState>,
     call_result: Option<String>,
+    call_submittable: bool,
 
     panel: Panel,
     focus: Focus,
@@ -118,6 +119,7 @@ impl App {
         self.call_idx = 0;
         self.call_form = None;
         self.call_result = None;
+        self.call_submittable = false;
         self.error = None;
 
         let name = match self.pallets.get(self.pallet_idx) {
@@ -182,6 +184,7 @@ impl App {
     fn build_call_form(&mut self) {
         self.call_form = None;
         self.call_result = None;
+        self.call_submittable = false;
         self.error = None;
 
         let pallet = match self.current_pallet() {
@@ -249,6 +252,7 @@ impl App {
     fn execute_call(&mut self) {
         self.error = None;
         self.call_result = None;
+        self.call_submittable = false;
 
         let pallet = match self.current_pallet() {
             Some(p) => p,
@@ -279,10 +283,9 @@ impl App {
         } else {
             format!("({})", parts.join(";"))
         };
-        self.call_result = Some(format!(
-            "sube -c {} {}/{} --body '{body}'",
-            self.chain_url, pallet.name, item_name,
-        ));
+        let path = format!("{}/{}", pallet.name, item_name);
+        self.call_result = Some("validating call...".into());
+        let _ = self.to_chain.send(ToChain::PrepareCall(path, body));
     }
 
     fn process_chain_message(&mut self, msg: FromChain) {
@@ -307,6 +310,14 @@ impl App {
             FromChain::StorageError(e) => {
                 self.error = Some(e);
                 self.storage_result = None;
+            }
+            FromChain::CallPrepared { text, submittable } => {
+                self.call_result = Some(text);
+                self.call_submittable = submittable;
+            }
+            FromChain::CallError(error) => {
+                self.error = Some(error);
+                self.call_submittable = false;
             }
             FromChain::BlockDetail(hash, events) => {
                 if let Some(ref mut d) = self.block_detail
@@ -387,14 +398,20 @@ impl App {
 
 // --- Entry point ---
 
-pub async fn run(chain_url: &str) -> Result<()> {
+pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> {
     eprintln!("Connecting to {chain_url}...");
 
     let (ui_tx, chain_rx) = mpsc::channel::<ToChain>();
     let (chain_tx, ui_rx) = smol::channel::unbounded::<FromChain>();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
-    chain::spawn(chain_url.into(), chain_rx, chain_tx, ready_tx);
+    chain::spawn(
+        chain_url.into(),
+        profile_path.to_owned(),
+        chain_rx,
+        chain_tx,
+        ready_tx,
+    );
     let meta = ready_rx
         .recv()
         .map_err(|_| anyhow::anyhow!("chain worker stopped during startup"))?
@@ -424,6 +441,7 @@ pub async fn run(chain_url: &str) -> Result<()> {
         call_idx: 0,
         call_form: None,
         call_result: None,
+        call_submittable: false,
         panel: Panel::Pallets,
         focus: Focus::Navigate,
         search_query: String::new(),
@@ -547,6 +565,16 @@ fn handle_navigate(app: &mut App, key: KeyCode) {
             Panel::Blocks => app.open_block_detail(),
             _ => {}
         },
+        KeyCode::Char('s') if app.panel == Panel::Calls && app.call_submittable => {
+            app.call_submittable = false;
+            app.call_result = Some("submitting reviewed bytes...".into());
+            let _ = app.to_chain.send(ToChain::SubmitPrepared);
+        }
+        KeyCode::Esc if app.panel == Panel::Calls && app.call_result.is_some() => {
+            app.call_result = None;
+            app.call_submittable = false;
+            app.error = None;
+        }
         KeyCode::Char('/') => {
             app.search_query.clear();
             app.focus = Focus::Search;
