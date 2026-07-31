@@ -10,7 +10,7 @@ use libwallet::{
     vault::{Simple, Vault as _, utils::DerivedSigner},
 };
 use std::env;
-use sube::{SignerFn, Sube};
+use sube::{SignerFn, Sube, Text, TransactionOptions, WaitFor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     smol::block_on(async {
@@ -47,23 +47,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut chain = Sube::connect("wss://kreivo.io").await?;
 
-        // Submit using scales text format body
-        chain
-            .call("system/remark")
-            .body_text("(remark:0x68656c6c6f)")
-            .signer(&signer)
+        // Preparation and building are non-mutating. Only the final explicit
+        // submit call sends bytes to the chain.
+        let call = chain.prepare_call("system/remark", &Text("(remark:0x68656c6c6f)"))?;
+        let extrinsic = chain
+            .build_transaction(&call, &signer, TransactionOptions::default())
             .await?;
-        println!("Submitted remark");
+        println!("Call: {}", call.hex);
+        println!("Extrinsic: {}", extrinsic.hex);
+        let receipt = chain
+            .submit_transaction(&extrinsic, WaitFor::Finalized)
+            .await?;
+        println!(
+            "Submitted remark in {} at index {:?}",
+            receipt
+                .finalized_block_hash
+                .as_deref()
+                .unwrap_or("unknown block"),
+            receipt.extrinsic_index
+        );
 
         // Text format also handles complex types like enum arguments
         let dest = "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d";
         let body = format!("(dest:MultiAddress::Id({dest});value:1000000000000)");
-        chain
-            .call("balances/transfer_keep_alive")
-            .body_text(&body)
-            .signer(&signer)
+        let call = chain.prepare_call("balances/transfer_keep_alive", &Text(&body))?;
+        let extrinsic = chain
+            .build_transaction(&call, &signer, TransactionOptions::default())
             .await?;
-        println!("Submitted transfer");
+        let receipt = chain
+            .submit_transaction(&extrinsic, WaitFor::Finalized)
+            .await?;
+        println!(
+            "Submitted transfer in {}",
+            receipt
+                .finalized_block_hash
+                .as_deref()
+                .unwrap_or("unknown block")
+        );
 
         Ok(())
     })

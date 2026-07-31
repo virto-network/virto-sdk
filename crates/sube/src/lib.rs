@@ -46,10 +46,14 @@ pub use alloc::rc::Rc;
 pub use scales::{self, Registry, Value};
 pub use value::DynValue;
 
-pub use builder::{CallBuilder, OneShotCall, Sube, SubeBuilder};
+pub use builder::{CallBuilder, Sube, SubeBuilder};
 #[cfg(feature = "ws-edge")]
 pub use builder::{EdgeResources, EdgeSube, connect_edge, connect_edge_with_meta};
-pub use extrinsic::{EncodeCall, Text};
+pub use extrinsic::{
+    AuthorizationSummary, ChainProperties, DispatchOutcome, EncodeCall, EncodedExtrinsic,
+    Mortality, PreparedCall, Text, TransactionEvent, TransactionOptions, TransactionReceipt,
+    TransactionReport, TransactionValidity, TransactionWeight, WaitFor,
+};
 pub use meta::Metadata;
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 pub use rpc::chainhead::{BlockHeader, ChainEvent, ChainSession};
@@ -61,6 +65,12 @@ use prelude::*;
 use util::to_camel;
 
 mod prelude {
+    #[cfg(any(
+        feature = "ws",
+        feature = "ws-edge",
+        feature = "smoldot-std",
+        all(feature = "ws-web", target_arch = "wasm32")
+    ))]
     pub use alloc::boxed::Box;
     pub use alloc::string::{String, ToString};
     pub use alloc::vec::Vec;
@@ -71,6 +81,8 @@ pub mod backend;
 pub mod builder;
 pub mod extrinsic;
 mod hasher;
+#[cfg(feature = "libwallet")]
+pub mod libwallet;
 pub mod metadata;
 pub mod rpc;
 pub mod signer;
@@ -338,6 +350,49 @@ pub trait Backend {
     /// full finalization; otherwise returns after best-chain inclusion.
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> Result<()>;
 
+    /// Inspect an encoded extrinsic without submitting it.
+    ///
+    /// Backends that expose transaction-payment and tagged-transaction-queue
+    /// runtime APIs should override this. Diagnostics being unavailable is not
+    /// a build failure.
+    async fn inspect_transaction(&mut self, _ext: &EncodedExtrinsic) -> Result<TransactionReport> {
+        Ok(TransactionReport {
+            warnings: vec![
+                "fee, weight, and validity runtime APIs are unavailable on this backend".into(),
+            ],
+            ..TransactionReport::default()
+        })
+    }
+
+    /// Submit an already-built extrinsic and return its inclusion location.
+    ///
+    /// The default preserves compatibility with simple backends. Transaction
+    /// watch backends override it to return block hash and extrinsic index.
+    async fn submit_transaction(
+        &mut self,
+        ext: &EncodedExtrinsic,
+        wait_for: WaitFor,
+    ) -> Result<TransactionReceipt> {
+        self.submit(&ext.bytes, matches!(wait_for, WaitFor::Finalized))
+            .await?;
+        Ok(TransactionReceipt::default())
+    }
+
+    /// Populate metadata-decoded events and dispatch outcome for a receipt.
+    async fn enrich_receipt(
+        &mut self,
+        receipt: TransactionReceipt,
+        _metadata: &Metadata,
+    ) -> Result<TransactionReceipt> {
+        Ok(receipt)
+    }
+
+    /// Chain identity and denomination properties. Backends without a
+    /// `system_properties` equivalent return an empty value.
+    async fn chain_properties(&mut self) -> Result<ChainProperties> {
+        Ok(ChainProperties::default())
+    }
+
     async fn metadata(&mut self) -> Result<Metadata>;
 
     async fn block_info(&mut self, at: Option<u32>) -> Result<meta::BlockInfo>;
@@ -400,6 +455,8 @@ pub enum Error {
     SubscriptionClosed,
     OperationFailed(String),
     ConnectionTimeout,
+    RuntimeUpgrade { built_spec: u32, current_spec: u32 },
+    GenesisMismatch,
 }
 
 impl fmt::Display for Error {
@@ -424,6 +481,16 @@ impl fmt::Display for Error {
             Self::SubscriptionClosed => write!(f, "subscription closed"),
             Self::OperationFailed(e) => write!(f, "operation failed: {e}"),
             Self::ConnectionTimeout => write!(f, "connection timed out"),
+            Self::RuntimeUpgrade {
+                built_spec,
+                current_spec,
+            } => write!(
+                f,
+                "runtime upgraded from spec {built_spec} to {current_spec}; rebuild the transaction"
+            ),
+            Self::GenesisMismatch => {
+                write!(f, "transaction was built for a different chain genesis")
+            }
         }
     }
 }

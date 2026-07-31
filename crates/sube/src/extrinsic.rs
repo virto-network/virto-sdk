@@ -72,11 +72,167 @@ impl EncodeCall for Text<'_> {
     }
 }
 
-/// The body of an extrinsic to be submitted.
-pub struct ExtrinsicBody<Body> {
+/// A metadata-validated runtime call. Preparing a call never signs or submits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedCall {
+    pub pallet: String,
+    pub call: String,
+    pub bytes: Vec<u8>,
+    pub hex: String,
+}
+
+/// Transaction lifetime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mortality {
+    Immortal,
+    Mortal { period: u64 },
+}
+
+/// Options used while signing and encoding a transaction.
+#[derive(Clone, Debug)]
+pub struct TransactionOptions {
     pub nonce: Option<u64>,
-    pub body: Body,
+    pub tip: u64,
     pub extensions: Vec<(String, DynValue)>,
+    pub mortality: Mortality,
+}
+
+impl Default for TransactionOptions {
+    fn default() -> Self {
+        Self {
+            nonce: None,
+            tip: 0,
+            extensions: Vec::new(),
+            mortality: Mortality::Mortal { period: 64 },
+        }
+    }
+}
+
+impl TransactionOptions {
+    pub fn nonce(mut self, nonce: u64) -> Self {
+        self.nonce = Some(nonce);
+        self
+    }
+
+    pub fn tip(mut self, tip: u64) -> Self {
+        self.tip = tip;
+        self
+    }
+
+    pub fn immortal(mut self) -> Self {
+        self.mortality = Mortality::Immortal;
+        self
+    }
+
+    pub fn mortal(mut self, period: u64) -> Self {
+        self.mortality = Mortality::Mortal { period };
+        self
+    }
+
+    pub fn with_extension(mut self, identifier: impl Into<String>, value: DynValue) -> Self {
+        let identifier = identifier.into();
+        self.extensions.retain(|(id, _)| id != &identifier);
+        self.extensions.push((identifier, value));
+        self
+    }
+}
+
+/// Identities involved in authorizing an extrinsic.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AuthorizationSummary {
+    pub signing_account: Vec<u8>,
+    pub nonce_account: Vec<u8>,
+    pub scheme: Option<String>,
+}
+
+/// Cached identity and denomination properties reported by the chain.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChainProperties {
+    pub ss58_format: Option<u16>,
+    pub token_symbols: Vec<String>,
+    pub token_decimals: Vec<u32>,
+}
+
+/// Fully encoded, SCALE length-prefixed extrinsic. Building does not submit it.
+#[derive(Clone, Debug)]
+pub struct EncodedExtrinsic {
+    pub bytes: Vec<u8>,
+    pub hex: String,
+    pub call: PreparedCall,
+    pub checkpoint_hash: [u8; 32],
+    pub checkpoint_number: u64,
+    pub expires_at: Option<u64>,
+    pub genesis_hash: [u8; 32],
+    pub spec_version: u32,
+    pub transaction_version: u32,
+    pub nonce: u64,
+    pub authorization: AuthorizationSummary,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TransactionWeight {
+    pub ref_time: u64,
+    pub proof_size: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TransactionValidity {
+    Valid,
+    Invalid(String),
+    Unknown,
+}
+
+/// Non-mutating fee/weight/validity diagnostics.
+#[derive(Clone, Debug, Default)]
+pub struct TransactionReport {
+    pub partial_fee: Option<u128>,
+    pub weight: Option<TransactionWeight>,
+    pub validity: Option<TransactionValidity>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WaitFor {
+    BestBlock,
+    #[default]
+    Finalized,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DispatchOutcome {
+    Success,
+    Failed(String),
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransactionEvent {
+    pub pallet: String,
+    pub variant: String,
+    pub data: Vec<u8>,
+    pub decoded: Option<String>,
+}
+
+/// Inclusion/finalization information returned by transaction watch.
+#[derive(Clone, Debug)]
+pub struct TransactionReceipt {
+    pub best_block_hash: Option<String>,
+    pub finalized_block_hash: Option<String>,
+    pub extrinsic_index: Option<u32>,
+    pub dispatch_outcome: DispatchOutcome,
+    pub events: Vec<TransactionEvent>,
+}
+
+impl Default for TransactionReceipt {
+    fn default() -> Self {
+        Self {
+            best_block_hash: None,
+            finalized_block_hash: None,
+            extrinsic_index: None,
+            dispatch_outcome: DispatchOutcome::Unknown,
+            events: Vec::new(),
+        }
+    }
 }
 
 /// Chain context fetched once for extension defaults.
@@ -85,6 +241,10 @@ pub struct ChainContext {
     pub tx_version: u32,
     pub genesis_hash: [u8; 32],
     pub account_nonce: u64,
+    pub checkpoint_number: u64,
+    pub checkpoint_hash: [u8; 32],
+    pub mortality: Mortality,
+    pub tip: u64,
 }
 
 /// Look up a caller-provided extension value by identifier.
@@ -98,11 +258,20 @@ fn find_override(extensions: &[(String, DynValue)], id: &str) -> Option<DynValue
 /// Default JSON value for a well-known extension's "extra" data.
 fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
-        "CheckMortality" => Some(DynValue::obj(&[("Immortal", DynValue::Null)])),
+        "CheckMortality" => match ctx.mortality {
+            Mortality::Immortal => Some(DynValue::obj(&[("Immortal", DynValue::Null)])),
+            Mortality::Mortal { period } => Some(DynValue::obj(&[(
+                "Mortal",
+                DynValue::Seq(vec![
+                    DynValue::from(period),
+                    DynValue::from(ctx.checkpoint_number % normalize_period(period)),
+                ]),
+            )])),
+        },
         "CheckNonce" => Some(DynValue::from(ctx.account_nonce)),
-        "ChargeTransactionPayment" => Some(DynValue::from(0u32)),
+        "ChargeTransactionPayment" => Some(DynValue::from(ctx.tip)),
         "ChargeAssetTxPayment" => Some(DynValue::obj(&[
-            ("tip", DynValue::from(0u32)),
+            ("tip", DynValue::from(ctx.tip)),
             ("asset_id", DynValue::Null),
         ])),
         _ => None,
@@ -116,9 +285,56 @@ fn default_additional(identifier: &str, ctx: &ChainContext) -> Option<DynValue> 
         "CheckTxVersion" => Some(DynValue::from(ctx.tx_version)),
         // Genesis hash must be encoded as raw bytes — the target is a `[u8; 32]`
         // which scales does not accept as a hex string.
-        "CheckGenesis" | "CheckMortality" => Some(DynValue::from(ctx.genesis_hash)),
+        "CheckGenesis" => Some(DynValue::from(ctx.genesis_hash)),
+        "CheckMortality" => Some(DynValue::from(match ctx.mortality {
+            Mortality::Immortal => ctx.genesis_hash,
+            Mortality::Mortal { .. } => ctx.checkpoint_hash,
+        })),
         _ => None,
     }
+}
+
+fn option_none(ty: TypeId, registry: &scales::Registry) -> Option<DynValue> {
+    fn is_option(ty: TypeId, registry: &scales::Registry, depth: u8) -> bool {
+        if depth == 8 {
+            return false;
+        }
+        match registry.resolve(ty) {
+            Some(scales::TypeDef::Variant(def))
+                if def.variants().any(|variant| variant.name() == "None")
+                    && def.variants().any(|variant| variant.name() == "Some") =>
+            {
+                true
+            }
+            Some(scales::TypeDef::StructNewType(inner)) | Some(scales::TypeDef::Compact(inner)) => {
+                is_option(inner, registry, depth + 1)
+            }
+            Some(scales::TypeDef::Tuple(items)) | Some(scales::TypeDef::StructTuple(items))
+                if items.len() == 1 =>
+            {
+                is_option(items[0], registry, depth + 1)
+            }
+            _ => false,
+        }
+    }
+
+    is_option(ty, registry, 0).then_some(DynValue::Null)
+}
+
+fn normalize_period(period: u64) -> u64 {
+    period
+        .checked_next_power_of_two()
+        .unwrap_or(1 << 16)
+        .clamp(4, 1 << 16)
+}
+
+/// Encode `sp_runtime::generic::Era::Mortal` using its compact two-byte format.
+pub fn encode_mortal_era(period: u64, current: u64) -> [u8; 2] {
+    let period = normalize_period(period);
+    let quantize_factor = (period >> 12).max(1);
+    let phase = (current % period) / quantize_factor * quantize_factor;
+    let encoded = (period.trailing_zeros() - 1) as u16 | (((phase / quantize_factor) << 4) as u16);
+    encoded.to_le_bytes()
 }
 
 /// Encode extra and additional_signed bytes from extension metadata.
@@ -137,9 +353,18 @@ pub fn encode_extensions(
         // "extra" bytes — included in extrinsic body
         if meta::is_zero_size_type(ext.ty, registry) {
             // zero bytes, nothing to encode
+        } else if ext.identifier == "CheckMortality"
+            && find_override(overrides, &ext.identifier).is_none()
+            && matches!(ctx.mortality, Mortality::Mortal { .. })
+        {
+            let Mortality::Mortal { period } = ctx.mortality else {
+                unreachable!()
+            };
+            extra.extend_from_slice(&encode_mortal_era(period, ctx.checkpoint_number));
         } else {
             let value = find_override(overrides, &ext.identifier)
                 .or_else(|| default_extra(&ext.identifier, ctx))
+                .or_else(|| option_none(ext.ty, registry))
                 .ok_or_else(|| Error::MissingExtensionValue(ext.identifier.clone()))?;
             scales::to_bytes_with_info(&mut extra, &value, Some((registry, ext.ty)))
                 .map_err(|e| Error::Encode(e.to_string()))?;
@@ -149,9 +374,11 @@ pub fn encode_extensions(
         if meta::is_zero_size_type(ext.additional_signed, registry) {
             // zero bytes
         } else {
-            let value = default_additional(&ext.identifier, ctx).ok_or_else(|| {
-                Error::MissingExtensionValue(format!("{} (additional_signed)", ext.identifier))
-            })?;
+            let value = default_additional(&ext.identifier, ctx)
+                .or_else(|| option_none(ext.additional_signed, registry))
+                .ok_or_else(|| {
+                    Error::MissingExtensionValue(format!("{} (additional_signed)", ext.identifier))
+                })?;
             scales::to_bytes_with_info(
                 &mut additional,
                 &value,
@@ -164,56 +391,49 @@ pub fn encode_extensions(
     Ok((extra, additional))
 }
 
-/// Build and submit an extrinsic using metadata-driven extensions.
-///
-/// Delegates extrinsic assembly to the [`ExtrinsicAssembler`](crate::ExtrinsicAssembler):
-/// - [`Signer`](crate::Signer) impls get V4 signed assembly via blanket impl
-/// - Custom assemblers (e.g. pallet-pass `PassAuthenticator`) produce V5 General extrinsics
-pub async fn submit<V>(
+/// Metadata-validate and encode a call without signing it.
+pub fn prepare_call<V>(meta: &Metadata, path: &str, body: &V) -> Result<PreparedCall>
+where
+    V: EncodeCall + ?Sized,
+{
+    let (pallet_name, call_name, keys) = crate::parse_uri(path).ok_or(Error::BadInput)?;
+    if !keys.is_empty() {
+        return Err(Error::BadInput);
+    }
+    let pallet = meta
+        .pallet_by_name(&pallet_name)
+        .ok_or_else(|| Error::PalletNotFound(pallet_name.clone()))?;
+    let calls_ty = pallet.calls_ty.ok_or(Error::CallNotFound)?;
+    let mut bytes = vec![pallet.index];
+    bytes.extend(body.encode_call(&call_name.to_lowercase(), &meta.registry, calls_ty)?);
+    Ok(PreparedCall {
+        pallet: pallet.name.clone(),
+        call: call_name,
+        hex: format!("0x{}", hex::encode(&bytes)),
+        bytes,
+    })
+}
+
+/// Sign and encode a prepared call without submitting it.
+pub async fn build_transaction(
     chain: &mut (impl Backend + ?Sized),
     meta: &Rc<Metadata>,
-    path: &str,
-    tx_data: &ExtrinsicBody<V>,
+    call: &PreparedCall,
+    options: &TransactionOptions,
     assembler: &(impl crate::ExtrinsicAssembler + ?Sized),
-    wait_for_finalization: bool,
-) -> Result<Response>
-where
-    V: EncodeCall + core::fmt::Debug,
-{
-    let (pallet, item_or_call, _keys) = crate::parse_uri(path).ok_or(Error::BadInput)?;
-    let pallet = meta
-        .pallet_by_name(&pallet)
-        .ok_or(Error::PalletNotFound(pallet))?;
-    let calls_ty = pallet.calls_ty.ok_or(Error::CallNotFound)?;
-
-    // Encode call data
-    let mut encoded_call = vec![pallet.index];
-    let call_data =
-        tx_data
-            .body
-            .encode_call(&item_or_call.to_lowercase(), &meta.registry, calls_ty)?;
-    encoded_call.extend(&call_data);
-
-    let from_account = assembler.account();
-
+) -> Result<EncodedExtrinsic> {
+    let from_account = assembler.nonce_account();
     // Build chain context
-    let ctx = build_context(
-        chain,
-        meta,
-        tx_data.nonce,
-        &tx_data.extensions,
-        from_account.as_ref(),
-    )
-    .await?;
+    let ctx = build_context(chain, meta, options, from_account.as_ref()).await?;
 
     // Delegate assembly to the assembler
     let encoded_inner = assembler
         .assemble(
-            &encoded_call,
+            &call.bytes,
             &meta.extrinsic,
             &meta.registry,
             &ctx,
-            &tx_data.extensions,
+            &options.extensions,
         )
         .await?;
 
@@ -223,11 +443,27 @@ where
     )
     .encode();
 
-    chain
-        .submit(&[len, encoded_inner].concat(), wait_for_finalization)
-        .await?;
-
-    Ok(Response::Void)
+    let bytes = [len, encoded_inner].concat();
+    let expires_at = match ctx.mortality {
+        Mortality::Immortal => None,
+        Mortality::Mortal { period } => {
+            let period = normalize_period(period);
+            Some(ctx.checkpoint_number - (ctx.checkpoint_number % period) + period)
+        }
+    };
+    Ok(EncodedExtrinsic {
+        hex: format!("0x{}", hex::encode(&bytes)),
+        bytes,
+        call: call.clone(),
+        checkpoint_hash: ctx.checkpoint_hash,
+        checkpoint_number: ctx.checkpoint_number,
+        expires_at,
+        genesis_hash: ctx.genesis_hash,
+        spec_version: ctx.spec_version,
+        transaction_version: ctx.tx_version,
+        nonce: ctx.account_nonce,
+        authorization: assembler.authorization(),
+    })
 }
 
 /// Assemble a V4 signed extrinsic from a [`Signer`](crate::Signer).
@@ -256,29 +492,53 @@ pub async fn assemble_signed_v4(
     };
     let signature = signer.sign(payload).await?;
 
-    // Assemble extrinsic
-    let version = meta.version;
+    // Assemble the metadata-declared address and signature types. This supports
+    // AccountId/newtype addresses as well as MultiAddress, and any signature
+    // enum variant selected by the signer.
     let from_account = signer.account();
+    let address_ty = meta.address_ty.ok_or(Error::BadMetadata)?;
+    let signature_ty = meta.signature_ty.ok_or(Error::BadMetadata)?;
 
-    // MultiAddress::Id → variant 0 + 32-byte account
-    let address_bytes = [vec![0x00], from_account.as_ref().to_vec()].concat();
-
-    // Find Sr25519 variant index from signature type
-    let sig_prefix = meta
-        .signature_ty
-        .and_then(|ty| match registry.resolve(ty) {
-            Some(scales::TypeDef::Variant(vdef)) => vdef
+    let address_value = match registry.resolve(address_ty) {
+        Some(scales::TypeDef::Variant(def)) => {
+            let id = def
                 .variants()
-                .find(|v| v.name().contains("Sr25519"))
-                .map(|v| v.index()),
-            _ => None,
-        })
-        .unwrap_or(0x01);
+                .find(|variant| variant.name().eq_ignore_ascii_case("Id"))
+                .ok_or_else(|| {
+                    Error::Encode("address enum has no metadata-declared Id variant".into())
+                })?;
+            DynValue::obj(&[(id.name(), DynValue::from(from_account.as_ref()))])
+        }
+        _ => DynValue::from(from_account.as_ref()),
+    };
+    let address_bytes = scales::to_vec_with_info(&address_value, Some((registry, address_ty)))
+        .map_err(|error| Error::Encode(format!("address: {error}")))?;
+
+    let signature_value = match registry.resolve(signature_ty) {
+        Some(scales::TypeDef::Variant(def)) => {
+            let requested = signer
+                .signature_variant()
+                .ok_or_else(|| Error::Encode("signer did not select a signature variant".into()))?;
+            let variant = def
+                .variants()
+                .find(|variant| variant.name().eq_ignore_ascii_case(requested))
+                .ok_or_else(|| {
+                    Error::Encode(format!(
+                        "signature variant {requested} is absent from runtime metadata"
+                    ))
+                })?;
+            DynValue::obj(&[(variant.name(), DynValue::from(signature.as_ref()))])
+        }
+        _ => DynValue::from(signature.as_ref()),
+    };
+    let signature_bytes =
+        scales::to_vec_with_info(&signature_value, Some((registry, signature_ty)))
+            .map_err(|error| Error::Encode(format!("signature: {error}")))?;
 
     Ok([
-        vec![0b10000000 | version],
+        vec![0b10000000 | meta.version],
         address_bytes,
-        [vec![sig_prefix], signature.as_ref().to_vec()].concat(),
+        signature_bytes,
         extra_bytes,
         encoded_call.to_vec(),
     ]
@@ -296,6 +556,10 @@ mod tests {
             tx_version: 2,
             genesis_hash: [0xab; 32],
             account_nonce: 42,
+            checkpoint_number: 128,
+            checkpoint_hash: [0xcd; 32],
+            mortality: Mortality::Mortal { period: 64 },
+            tip: 0,
         }
     }
 
@@ -304,8 +568,18 @@ mod tests {
         let ctx = test_ctx();
         assert_eq!(
             default_extra("CheckMortality", &ctx),
-            Some(DynValue::obj(&[("Immortal", DynValue::Null)]))
+            Some(DynValue::obj(&[(
+                "Mortal",
+                DynValue::Seq(vec![DynValue::from(64u64), DynValue::from(0u64)])
+            )]))
         );
+    }
+
+    #[test]
+    fn mortal_era_uses_period_and_checkpoint_phase() {
+        assert_eq!(encode_mortal_era(64, 0), [0x05, 0x00]);
+        assert_eq!(encode_mortal_era(64, 42), [0xa5, 0x02]);
+        assert_eq!(encode_mortal_era(3, 5), encode_mortal_era(4, 5));
     }
 
     #[test]
@@ -322,7 +596,7 @@ mod tests {
         let ctx = test_ctx();
         assert_eq!(
             default_extra("ChargeTransactionPayment", &ctx),
-            Some(DynValue::from(0u32))
+            Some(DynValue::from(0u64))
         );
     }
 
@@ -379,17 +653,59 @@ mod tests {
         let overrides: Vec<(String, DynValue)> = vec![];
         assert_eq!(find_override(&overrides, "CheckNonce"), None);
     }
+
+    #[test]
+    fn metadata_typed_option_defaults_to_none() {
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+        let extension = meta
+            .extrinsic
+            .extensions
+            .iter()
+            .find(|extension| option_none(extension.ty, &meta.registry).is_some())
+            .unwrap();
+        assert_eq!(
+            option_none(extension.ty, &meta.registry),
+            Some(DynValue::Null)
+        );
+    }
 }
 
 /// Fetch spec/tx version, genesis hash, and account nonce.
 pub async fn build_context(
     chain: &mut (impl Backend + ?Sized),
     meta: &Rc<Metadata>,
-    nonce: Option<u64>,
-    extensions: &[(String, DynValue)],
+    options: &TransactionOptions,
     account: &[u8],
 ) -> Result<ChainContext> {
-    // System::Version constant
+    let (spec_version, tx_version) = runtime_versions(meta)?;
+
+    // Genesis hash
+    let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
+    let genesis_hash: [u8; 32] = genesis_block
+        .try_into()
+        .map_err(|_| Error::Decode("genesis block hash is not 32 bytes".into()))?;
+
+    // Mortal transactions are anchored at the actual finalized header.
+    let checkpoint = chain.block_info(None).await?;
+
+    // Nonce
+    let account_nonce =
+        resolve_nonce(chain, meta, options.nonce, &options.extensions, account).await?;
+
+    Ok(ChainContext {
+        spec_version,
+        tx_version,
+        genesis_hash,
+        account_nonce,
+        checkpoint_number: checkpoint.number,
+        checkpoint_hash: checkpoint.hash,
+        mortality: options.mortality,
+        tip: options.tip,
+    })
+}
+
+/// Decode the runtime versions captured by the current metadata.
+pub fn runtime_versions(meta: &Metadata) -> Result<(u32, u32)> {
     let system = meta
         .pallet_by_name("System")
         .ok_or(Error::PalletNotFound("System".into()))?;
@@ -400,13 +716,13 @@ pub async fn build_context(
         .ok_or(Error::ConstantNotFound("System_Version".into()))?;
     let version = Value::new(&version_const.value, version_const.ty, &meta.registry);
     // Try direct field access first, fall back to DynValue conversion
-    let (spec_version, tx_version) = if let (Some(sv), Some(tv)) = (
+    if let (Some(sv), Some(tv)) = (
         version.field("spec_version").and_then(|v| v.as_u32()),
         version
             .field("transaction_version")
             .and_then(|v| v.as_u32()),
     ) {
-        (sv, tv)
+        Ok((sv, tv))
     } else {
         let dyn_val: DynValue = version
             .try_into()
@@ -419,24 +735,8 @@ pub async fn build_context(
             .get("transaction_version")
             .and_then(|v| v.as_u64())
             .ok_or(Error::Mapping("transaction_version not found".into()))? as u32;
-        (sv, tv)
-    };
-
-    // Genesis hash
-    let genesis_block: Vec<u8> = chain.block_info(Some(0u32)).await?.into();
-    let genesis_hash: [u8; 32] = genesis_block
-        .try_into()
-        .map_err(|_| Error::Decode("genesis block hash is not 32 bytes".into()))?;
-
-    // Nonce
-    let account_nonce = resolve_nonce(chain, meta, nonce, extensions, account).await?;
-
-    Ok(ChainContext {
-        spec_version,
-        tx_version,
-        genesis_hash,
-        account_nonce,
-    })
+        Ok((sv, tv))
+    }
 }
 
 /// Resolve nonce from: explicit field, extension override, or on-chain query.

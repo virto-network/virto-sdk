@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::extrinsic::{self, ChainContext};
+use crate::extrinsic::{self, AuthorizationSummary, ChainContext};
 use crate::metadata::ExtrinsicMeta;
 use crate::prelude::*;
 use crate::value::DynValue;
@@ -20,6 +20,15 @@ pub trait Signer {
     async fn sign(&self, data: impl AsRef<[u8]>) -> Result<Self::Signature>;
 
     fn account(&self) -> Self::Account;
+
+    /// Name of the signature variant expected by the runtime's metadata.
+    ///
+    /// Ordinary Substrate signers default to `Sr25519`. Ed25519 and ECDSA
+    /// adapters should override this instead of relying on a hard-coded
+    /// discriminant in the extrinsic encoder.
+    fn signature_variant(&self) -> Option<&str> {
+        Some("Sr25519")
+    }
 }
 
 /// Strategy for assembling a complete extrinsic from an encoded call.
@@ -28,13 +37,38 @@ pub trait Signer {
 /// - **V4 Signed**: traditional account + cryptographic signature (via [`Signer`] blanket impl)
 /// - **V5 General**: extension-based authentication (e.g. pallet-pass `PassAuthenticate`)
 ///
-/// The builder accepts any `ExtrinsicAssembler` where `.signer(s)` is called.
+/// [`Sube::build_transaction`](crate::Sube::build_transaction) accepts any
+/// `ExtrinsicAssembler`.
 #[allow(async_fn_in_trait)]
 pub trait ExtrinsicAssembler {
     type Account: AsRef<[u8]>;
 
     /// Account identifier used for nonce lookup.
-    fn account(&self) -> Self::Account;
+    fn nonce_account(&self) -> Self::Account {
+        #[allow(deprecated)]
+        self.account()
+    }
+
+    /// Compatibility alias for assemblers written before the nonce/signing
+    /// identities were separated. New implementations should override
+    /// [`nonce_account`](Self::nonce_account).
+    #[deprecated(note = "use nonce_account; signing identity may be different")]
+    fn account(&self) -> Self::Account {
+        self.nonce_account()
+    }
+
+    /// Human-readable authorization identities used by transaction review.
+    ///
+    /// A session assembler can override this so `signing_account` is the
+    /// session key while `nonce_account` remains the pass account.
+    fn authorization(&self) -> AuthorizationSummary {
+        let nonce_account = self.nonce_account().as_ref().to_vec();
+        AuthorizationSummary {
+            signing_account: nonce_account.clone(),
+            nonce_account,
+            scheme: None,
+        }
+    }
 
     /// Assemble the extrinsic inner bytes (before the SCALE compact length prefix).
     ///
@@ -55,8 +89,22 @@ pub trait ExtrinsicAssembler {
 impl<T: Signer> ExtrinsicAssembler for T {
     type Account = T::Account;
 
+    fn nonce_account(&self) -> Self::Account {
+        Signer::account(self)
+    }
+
+    #[allow(deprecated)]
     fn account(&self) -> Self::Account {
         Signer::account(self)
+    }
+
+    fn authorization(&self) -> AuthorizationSummary {
+        let account = Signer::account(self).as_ref().to_vec();
+        AuthorizationSummary {
+            signing_account: account.clone(),
+            nonce_account: account,
+            scheme: self.signature_variant().map(Into::into),
+        }
     }
 
     async fn assemble(
@@ -106,6 +154,10 @@ impl<T: Signer> Signer for &T {
 
     fn account(&self) -> Self::Account {
         (*self).account()
+    }
+
+    fn signature_variant(&self) -> Option<&str> {
+        (*self).signature_variant()
     }
 }
 

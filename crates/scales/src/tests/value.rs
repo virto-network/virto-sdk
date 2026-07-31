@@ -670,6 +670,14 @@ fn test_variant_with_tuple_fields() -> Result<(), Error> {
     assert_eq!(v.variant_name(), Some("B"));
     // tuple variant data is not accessible via variant_data (only NewType)
     assert!(v.variant_data().is_none());
+    assert_eq!(
+        v.variant_field_at(0).and_then(|field| field.as_u32()),
+        Some(7)
+    );
+    assert_eq!(
+        v.variant_field_at(1).and_then(|field| field.as_str()),
+        Some("hi")
+    );
     // but full serialization should still work
     assert_eq!(to_value(v)?, to_value(&input)?);
     Ok(())
@@ -695,6 +703,14 @@ fn test_variant_with_struct_fields() -> Result<(), Error> {
     let v = Value::new(&data, id, &reg);
 
     assert_eq!(v.variant_name(), Some("B"));
+    assert_eq!(
+        v.variant_field_at(0).and_then(|field| field.as_u32()),
+        Some(99)
+    );
+    assert_eq!(
+        v.variant_field_at(1).and_then(|field| field.as_str()),
+        Some("hello")
+    );
     assert_eq!(to_value(v)?, to_value(&input)?);
     Ok(())
 }

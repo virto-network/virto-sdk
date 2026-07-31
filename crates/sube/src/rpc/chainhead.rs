@@ -330,13 +330,19 @@ fn parse_archive_storage_event(json: &str) -> Result<ArchiveStorageEvent<'_>, cr
 
 // --- Transaction watch event types ---
 
+#[derive(Debug, Clone)]
+struct TxBlock {
+    hash: String,
+    index: u32,
+}
+
 #[derive(Debug)]
 #[allow(dead_code)]
 enum TxEvent<'a> {
     Validated,
     Broadcasted,
-    BestChainBlockIncluded { has_block: bool },
-    Finalized,
+    BestChainBlockIncluded { block: Option<TxBlock> },
+    Finalized { block: TxBlock },
     Invalid { error: &'a str },
     Dropped { error: &'a str },
     Error { error: &'a str },
@@ -349,9 +355,12 @@ fn parse_tx_event(json: &str) -> Result<TxEvent<'_>, crate::Error> {
         "validated" => Ok(TxEvent::Validated),
         "broadcasted" => Ok(TxEvent::Broadcasted),
         "bestChainBlockIncluded" => Ok(TxEvent::BestChainBlockIncluded {
-            has_block: json.contains("\"block\":{"),
+            block: parse_tx_block(json),
         }),
-        "finalized" => Ok(TxEvent::Finalized),
+        "finalized" => Ok(TxEvent::Finalized {
+            block: parse_tx_block(json)
+                .ok_or_else(|| crate::Error::Decode("finalized event has no block".into()))?,
+        }),
         "invalid" => Ok(TxEvent::Invalid {
             error: extract_json_str(json, "\"error\":\"").unwrap_or("unknown"),
         }),
@@ -363,6 +372,16 @@ fn parse_tx_event(json: &str) -> Result<TxEvent<'_>, crate::Error> {
         }),
         other => Err(crate::Error::Decode(format!("unknown tx event: {other}"))),
     }
+}
+
+fn parse_tx_block(json: &str) -> Option<TxBlock> {
+    let block = extract_json_object(json, "\"block\":")?;
+    if block == "null" {
+        return None;
+    }
+    let hash = extract_json_str(&block, "\"hash\":\"")?.to_string();
+    let index = extract_json_object(&block, "\"index\":")?.parse().ok()?;
+    Some(TxBlock { hash, index })
 }
 
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
@@ -1046,6 +1065,77 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         let items = self.storage_at_hash(block_hash, &hex_keys).await?;
         decode_storage_items(&keys, &items)
     }
+
+    async fn watch_transaction(
+        &mut self,
+        ext: &[u8],
+        wait_for: crate::WaitFor,
+    ) -> crate::Result<crate::TransactionReceipt> {
+        let hex = to_hex(ext);
+        let sub_id = self
+            .rpc
+            .subscribe(
+                "transactionWatch_v1_submitAndWatch",
+                &format!(r#"["{}"]"#, hex),
+            )
+            .await
+            .map_err(|e| crate::Error::Node(format!("tx watch: {e}")))?;
+
+        let mut receipt = crate::TransactionReceipt::default();
+
+        loop {
+            let (event_sub_id, event_json) = self
+                .rpc
+                .next_event()
+                .await
+                .ok_or(crate::Error::SubscriptionClosed)?;
+
+            if event_sub_id == sub_id {
+                let event = parse_tx_event(&event_json)
+                    .map_err(|e| crate::Error::Decode(format!("tx event: {e}")))?;
+                match event {
+                    TxEvent::BestChainBlockIncluded { block: Some(block) } => {
+                        receipt.best_block_hash = Some(block.hash);
+                        receipt.extrinsic_index = Some(block.index);
+                        if matches!(wait_for, crate::WaitFor::BestBlock) {
+                            return Ok(receipt);
+                        }
+                    }
+                    TxEvent::BestChainBlockIncluded { block: None } => {
+                        // A previous best-chain inclusion was retracted.
+                        receipt.best_block_hash = None;
+                        receipt.extrinsic_index = None;
+                    }
+                    TxEvent::Finalized { block } => {
+                        receipt.finalized_block_hash = Some(block.hash);
+                        receipt.extrinsic_index = Some(block.index);
+                        return Ok(receipt);
+                    }
+                    TxEvent::Invalid { error } => {
+                        return Err(crate::Error::OperationFailed(format!(
+                            "tx invalid: {error}"
+                        )));
+                    }
+                    TxEvent::Dropped { error } => {
+                        return Err(crate::Error::OperationFailed(format!(
+                            "tx dropped: {error}"
+                        )));
+                    }
+                    TxEvent::Error { error } => {
+                        return Err(crate::Error::OperationFailed(format!("tx error: {error}")));
+                    }
+                    TxEvent::Validated | TxEvent::Broadcasted => {}
+                }
+            } else if event_sub_id == self.follow_sub_id
+                && let Ok(event) = parse_follow_event(&event_json)
+            {
+                match event {
+                    FollowEvent::Stop => self.needs_refollow = true,
+                    other => self.record_lifecycle_event(other),
+                }
+            }
+        }
+    }
 }
 
 fn decode_storage_items(
@@ -1109,69 +1199,219 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     }
 
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> crate::Result<()> {
-        let hex = to_hex(ext);
+        self.watch_transaction(
+            ext,
+            if wait_for_finalization {
+                crate::WaitFor::Finalized
+            } else {
+                crate::WaitFor::BestBlock
+            },
+        )
+        .await
+        .map(|_| ())
+    }
 
-        let sub_id = self
-            .rpc
-            .subscribe(
-                "transactionWatch_v1_submitAndWatch",
-                &format!(r#"["{}"]"#, hex),
+    async fn submit_transaction(
+        &mut self,
+        ext: &crate::EncodedExtrinsic,
+        wait_for: crate::WaitFor,
+    ) -> crate::Result<crate::TransactionReceipt> {
+        self.watch_transaction(&ext.bytes, wait_for).await
+    }
+
+    async fn inspect_transaction(
+        &mut self,
+        ext: &crate::EncodedExtrinsic,
+    ) -> crate::Result<crate::TransactionReport> {
+        let mut report = crate::TransactionReport::default();
+
+        // TransactionPaymentApi::query_info(Extrinsic, u32).
+        let mut payment_input = ext.bytes.clone();
+        let encoded_len = u32::try_from(ext.bytes.len())
+            .map_err(|_| crate::Error::Encode("extrinsic too large".into()))?;
+        payment_input.extend_from_slice(&encoded_len.to_le_bytes());
+        match self
+            .runtime_call("TransactionPaymentApi_query_info", &to_hex(&payment_input))
+            .await
+        {
+            Ok(output) if output.len() >= 33 => {
+                let ref_time = u64::from_le_bytes(
+                    output[0..8]
+                        .try_into()
+                        .map_err(|_| crate::Error::Decode("weight ref_time".into()))?,
+                );
+                let proof_size = u64::from_le_bytes(
+                    output[8..16]
+                        .try_into()
+                        .map_err(|_| crate::Error::Decode("weight proof_size".into()))?,
+                );
+                let fee_offset = output.len() - 16;
+                let partial_fee = u128::from_le_bytes(
+                    output[fee_offset..]
+                        .try_into()
+                        .map_err(|_| crate::Error::Decode("partial fee".into()))?,
+                );
+                report.weight = Some(crate::TransactionWeight {
+                    ref_time,
+                    proof_size,
+                });
+                report.partial_fee = Some(partial_fee);
+            }
+            Ok(_) => report
+                .warnings
+                .push("transaction-payment API returned an unknown result shape".into()),
+            Err(error) => report
+                .warnings
+                .push(format!("transaction-payment API unavailable: {error}")),
+        }
+
+        // TaggedTransactionQueue::validate_transaction(
+        //   TransactionSource::External, Extrinsic, checkpoint_hash
+        // ).
+        let mut validity_input = vec![2u8];
+        validity_input.extend_from_slice(&ext.bytes);
+        validity_input.extend_from_slice(&ext.checkpoint_hash);
+        match self
+            .runtime_call(
+                "TaggedTransactionQueue_validate_transaction",
+                &to_hex(&validity_input),
             )
             .await
-            .map_err(|e| crate::Error::Node(format!("tx watch: {e}")))?;
-
-        let mut included = false;
-
-        // Wait for inclusion or finalization
-        loop {
-            let (event_sub_id, event_json) = self
-                .rpc
-                .next_event()
-                .await
-                .ok_or(crate::Error::SubscriptionClosed)?;
-
-            if event_sub_id == sub_id {
-                let event = parse_tx_event(&event_json)
-                    .map_err(|e| crate::Error::Decode(format!("tx event: {e}")))?;
-
-                match event {
-                    TxEvent::BestChainBlockIncluded { has_block: true } => {
-                        if !wait_for_finalization {
-                            return Ok(());
-                        }
-                        included = true;
-                    }
-                    TxEvent::Finalized => return Ok(()),
-                    TxEvent::Invalid { error } => {
-                        return Err(crate::Error::OperationFailed(format!(
-                            "tx invalid: {error}"
-                        )));
-                    }
-                    TxEvent::Dropped { error } => {
-                        // If already included in best chain, a drop during
-                        // finalization wait is not fatal
-                        if included {
-                            return Ok(());
-                        }
-                        return Err(crate::Error::OperationFailed(format!(
-                            "tx dropped: {error}"
-                        )));
-                    }
-                    TxEvent::Error { error } => {
-                        return Err(crate::Error::OperationFailed(format!("tx error: {error}")));
-                    }
-                    // Validated, Broadcasted, BestChainBlockIncluded(false) — keep waiting
-                    _ => {}
-                }
-            } else if event_sub_id == self.follow_sub_id
-                && let Ok(event) = parse_follow_event(&event_json)
-            {
-                match event {
-                    FollowEvent::Stop => self.needs_refollow = true,
-                    other => self.record_lifecycle_event(other),
-                }
+        {
+            Ok(output) if output.first() == Some(&0) => {
+                report.validity = Some(crate::TransactionValidity::Valid)
+            }
+            Ok(output) if output.first() == Some(&1) => {
+                report.validity = Some(crate::TransactionValidity::Invalid(format!(
+                    "0x{}",
+                    hex::encode(&output[1..])
+                )))
+            }
+            Ok(_) => {
+                report.validity = Some(crate::TransactionValidity::Unknown);
+                report
+                    .warnings
+                    .push("validation API returned an unknown result shape".into());
+            }
+            Err(error) => {
+                report.validity = None;
+                report
+                    .warnings
+                    .push(format!("validation API unavailable: {error}"));
             }
         }
+
+        Ok(report)
+    }
+
+    async fn enrich_receipt(
+        &mut self,
+        mut receipt: crate::TransactionReceipt,
+        metadata: &Metadata,
+    ) -> crate::Result<crate::TransactionReceipt> {
+        let Some(block_hash) = receipt
+            .finalized_block_hash
+            .as_deref()
+            .or(receipt.best_block_hash.as_deref())
+        else {
+            return Ok(receipt);
+        };
+        let Some(extrinsic_index) = receipt.extrinsic_index else {
+            return Ok(receipt);
+        };
+
+        // Transaction-watch blocks are not guaranteed to be pinned by the
+        // chainHead subscription, so fetch events through archive storage.
+        let key = match crate::resolve_query(metadata, "system/events") {
+            Ok(crate::ResolvedQuery::Storage(key)) => key,
+            _ => return Ok(receipt),
+        };
+        let key_bytes = key.key();
+        let items = match self
+            .archive_storage(block_hash, &[to_hex(&key_bytes)])
+            .await
+        {
+            Ok(items) => items,
+            Err(_) => return Ok(receipt),
+        };
+        let Some(raw) = items
+            .iter()
+            .find(|item| item.key.trim_start_matches("0x") == hex::encode(&key_bytes))
+            .and_then(|item| item.value.as_deref())
+            .and_then(|value| hex::decode(value.trim_start_matches("0x")).ok())
+        else {
+            return Ok(receipt);
+        };
+
+        let records = scales::Value::new(&raw, key.ty, &metadata.registry);
+        let Some(records) = records.sequence_iter() else {
+            return Ok(receipt);
+        };
+        for record in records {
+            let Some(phase) = record.field("phase") else {
+                continue;
+            };
+            if phase.variant_name() != Some("ApplyExtrinsic")
+                || phase.variant_data().and_then(|value| value.as_u32()) != Some(extrinsic_index)
+            {
+                continue;
+            }
+
+            let Some(event) = record.field("event") else {
+                continue;
+            };
+            let Some(pallet) = event.variant_name() else {
+                continue;
+            };
+            let Some(pallet_event) = event.variant_data() else {
+                continue;
+            };
+            let Some(variant) = pallet_event.variant_name() else {
+                continue;
+            };
+
+            if pallet.eq_ignore_ascii_case("System") && variant == "ExtrinsicSuccess" {
+                receipt.dispatch_outcome = crate::DispatchOutcome::Success;
+            } else if pallet.eq_ignore_ascii_case("System") && variant == "ExtrinsicFailed" {
+                let error = resolve_dispatch_error(&pallet_event, metadata).unwrap_or_else(|| {
+                    scales::to_text(&pallet_event)
+                        .ok()
+                        .unwrap_or_else(|| "runtime dispatch error".into())
+                });
+                receipt.dispatch_outcome = crate::DispatchOutcome::Failed(error);
+            }
+
+            receipt.events.push(crate::TransactionEvent {
+                pallet: pallet.into(),
+                variant: variant.into(),
+                data: Vec::new(),
+                decoded: scales::to_text(&pallet_event).ok(),
+            });
+        }
+
+        Ok(receipt)
+    }
+
+    async fn chain_properties(&mut self) -> crate::Result<crate::ChainProperties> {
+        let raw = self
+            .rpc
+            .rpc("system_properties", "[]")
+            .await
+            .map_err(|error| crate::Error::Node(error.to_string()))?;
+        let ss58_format = property_value(&raw, "ss58Format")
+            .and_then(|value| parse_unsigned_values(&value).into_iter().next())
+            .and_then(|value| u16::try_from(value).ok());
+        let token_symbols = property_value(&raw, "tokenSymbol")
+            .map(|value| parse_string_values(&value))
+            .unwrap_or_default();
+        let token_decimals = property_value(&raw, "tokenDecimals")
+            .map(|value| parse_unsigned_values(&value))
+            .unwrap_or_default();
+        Ok(crate::ChainProperties {
+            ss58_format,
+            token_symbols,
+            token_decimals,
+        })
     }
 
     async fn metadata(&mut self) -> crate::Result<Metadata> {
@@ -1187,13 +1427,18 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 parent: self.genesis_hash,
             }),
             None => {
+                let finalized_hash = self.finalized_hash.clone();
+                let header = self.header(&finalized_hash).await?;
                 let mut h = [0u8; 32];
-                hex::decode_to_slice(self.finalized_hash.trim_start_matches("0x"), &mut h)
+                hex::decode_to_slice(finalized_hash.trim_start_matches("0x"), &mut h)
                     .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
+                let mut parent = [0u8; 32];
+                hex::decode_to_slice(header.parent_hash.trim_start_matches("0x"), &mut parent)
+                    .map_err(|_| crate::Error::Decode("parent hash hex decode failed".into()))?;
                 Ok(meta::BlockInfo {
-                    number: 0,
+                    number: header.number,
                     hash: h,
-                    parent: h,
+                    parent,
                 })
             }
             Some(n) => {
@@ -1209,6 +1454,61 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             }
         }
     }
+}
+
+fn property_value(json: &str, name: &str) -> Option<String> {
+    extract_json_object(json, &format!("\"{name}\":"))
+}
+
+fn parse_unsigned_values(raw: &str) -> Vec<u32> {
+    raw.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .filter_map(|value| value.trim().parse().ok())
+        .collect()
+}
+
+fn parse_string_values(raw: &str) -> Vec<String> {
+    raw.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .filter_map(|value| super::parse_json_string(value.trim()))
+        .collect()
+}
+
+fn resolve_dispatch_error(failed_event: &scales::Value<'_>, metadata: &Metadata) -> Option<String> {
+    let error = failed_event.variant_field_at(0)?;
+    let variant = error.variant_name()?;
+    if variant != "Module" {
+        return Some(variant.into());
+    }
+
+    let module = error.variant_field_at(0)?;
+    let pallet_index = module
+        .field("index")
+        .or_else(|| module.field_at(0))?
+        .as_u8()?;
+    let encoded_error = module.field("error").or_else(|| module.field_at(1))?;
+    let error_index = encoded_error
+        .array_get(0)
+        .and_then(|value| value.as_u8())
+        .or_else(|| encoded_error.as_u8())?;
+    resolve_module_error(metadata, pallet_index, error_index)
+}
+
+fn resolve_module_error(metadata: &Metadata, pallet_index: u8, error_index: u8) -> Option<String> {
+    let pallet = metadata
+        .pallets
+        .iter()
+        .find(|pallet| pallet.index == pallet_index)?;
+    let errors_ty = pallet.errors_ty?;
+    let scales::TypeDef::Variant(errors) = metadata.registry.resolve(errors_ty)? else {
+        return None;
+    };
+    let error = errors.variant(error_index).ok()?;
+    Some(format!("{}::{}", pallet.name, error.name()))
 }
 
 // --- Two-request metadata fetch helpers ---
@@ -1462,5 +1762,78 @@ impl<R: Rpc + RpcSubscription> ChainSession for ChainHead<R> {
         keys: Vec<crate::RawKey>,
     ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
         self.get_storage_at_hash(block_hash, keys).await
+    }
+}
+
+#[cfg(test)]
+mod transaction_watch_tests {
+    use super::*;
+
+    #[test]
+    fn parses_best_inclusion_and_retraction() {
+        let included = r#"{"event":"bestChainBlockIncluded","block":{"hash":"0xabc","index":3}}"#;
+        match parse_tx_event(included).unwrap() {
+            TxEvent::BestChainBlockIncluded { block: Some(block) } => {
+                assert_eq!(block.hash, "0xabc");
+                assert_eq!(block.index, 3);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let retracted = r#"{"event":"bestChainBlockIncluded","block":null}"#;
+        assert!(matches!(
+            parse_tx_event(retracted).unwrap(),
+            TxEvent::BestChainBlockIncluded { block: None }
+        ));
+    }
+
+    #[test]
+    fn finalized_requires_and_preserves_location() {
+        let event = r#"{"event":"finalized","block":{"hash":"0xdef","index":7}}"#;
+        match parse_tx_event(event).unwrap() {
+            TxEvent::Finalized { block } => {
+                assert_eq!(block.hash, "0xdef");
+                assert_eq!(block.index, 7);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert!(parse_tx_event(r#"{"event":"finalized"}"#).is_err());
+    }
+
+    #[test]
+    fn module_errors_resolve_through_pallet_metadata() {
+        let metadata =
+            Metadata::from_bytes(include_bytes!("../../tests/fixtures/kreivo.scale")).unwrap();
+        let pallet = metadata
+            .pallet_by_name("Balances")
+            .expect("Balances pallet");
+        let errors_ty = pallet.errors_ty.expect("Balances errors");
+        let scales::TypeDef::Variant(errors) =
+            metadata.registry.resolve(errors_ty).expect("error type")
+        else {
+            panic!("pallet errors are not an enum");
+        };
+        let first = errors.variants().next().expect("at least one error");
+        assert_eq!(
+            resolve_module_error(&metadata, pallet.index, first.index()),
+            Some(format!("Balances::{}", first.name()))
+        );
+    }
+
+    #[test]
+    fn parses_scalar_and_multi_token_chain_properties() {
+        let properties = r#"{"ss58Format":2,"tokenSymbol":["KSM","USDT"],"tokenDecimals":[12,6]}"#;
+        assert_eq!(
+            property_value(properties, "ss58Format").map(|value| parse_unsigned_values(&value)),
+            Some(vec![2])
+        );
+        assert_eq!(
+            property_value(properties, "tokenSymbol").map(|value| parse_string_values(&value)),
+            Some(vec!["KSM".into(), "USDT".into()])
+        );
+        assert_eq!(
+            property_value(properties, "tokenDecimals").map(|value| parse_unsigned_values(&value)),
+            Some(vec![12, 6])
+        );
     }
 }

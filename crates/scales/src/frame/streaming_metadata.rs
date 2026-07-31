@@ -480,9 +480,11 @@ async fn decode_pallet_async<R: Read>(
         });
     }
 
-    if c.read_byte().await? != 0 {
-        c.read_compact_u32().await?;
-    } // error
+    let errors_ty = if c.read_byte().await? != 0 {
+        Some(c.read_compact_u32().await?)
+    } else {
+        None
+    };
     let index = c.read_byte().await?;
     if version >= 15 {
         c.skip_vec_string().await?;
@@ -492,6 +494,7 @@ async fn decode_pallet_async<R: Read>(
         name,
         index,
         calls_ty,
+        errors_ty,
         storage,
         constants,
     })

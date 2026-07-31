@@ -18,6 +18,7 @@ pub struct RawPallet {
     pub name: String,
     pub index: u8,
     pub calls_ty: Option<u32>,
+    pub errors_ty: Option<u32>,
     pub storage: Option<RawStorage>,
     pub constants: Vec<RawConstant>,
 }
@@ -365,6 +366,9 @@ pub fn collect_pallet_type_ids(pallets: &[RawPallet], extrinsic: &RawExtrinsic) 
         if let Some(ty) = p.calls_ty {
             ids.push(ty);
         }
+        if let Some(ty) = p.errors_ty {
+            ids.push(ty);
+        }
         if let Some(ref s) = p.storage {
             for e in &s.entries {
                 match &e.ty {
@@ -398,6 +402,7 @@ pub fn remap_pallet_ids(pallets: Vec<RawPallet>, remap: &dyn Fn(u32) -> u32) -> 
         .into_iter()
         .map(|mut p| {
             p.calls_ty = p.calls_ty.map(remap);
+            p.errors_ty = p.errors_ty.map(remap);
             if let Some(ref mut s) = p.storage {
                 for e in &mut s.entries {
                     match &mut e.ty {
@@ -794,9 +799,11 @@ fn decode_pallet(c: &mut Cursor, version: u8) -> Result<RawPallet, Error> {
         constants.push(RawConstant { name, ty, value });
     }
 
-    if c.read_byte()? != 0 {
-        c.read_compact_u32()?;
-    } // error
+    let errors_ty = if c.read_byte()? != 0 {
+        Some(c.read_compact_u32()?)
+    } else {
+        None
+    };
     let index = c.read_byte()?;
     if version >= 15 {
         c.skip_vec_string()?; // docs (V15+ only)
@@ -806,6 +813,7 @@ fn decode_pallet(c: &mut Cursor, version: u8) -> Result<RawPallet, Error> {
         name,
         index,
         calls_ty,
+        errors_ty,
         storage,
         constants,
     })
@@ -929,6 +937,14 @@ mod tests {
                 assert!(
                     registry.resolve(ty).is_some(),
                     "calls_ty {} resolves for {}",
+                    ty,
+                    p.name
+                );
+            }
+            if let Some(ty) = p.errors_ty {
+                assert!(
+                    registry.resolve(ty).is_some(),
+                    "errors_ty {} resolves for {}",
                     ty,
                     p.name
                 );

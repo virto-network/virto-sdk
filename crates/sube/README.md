@@ -53,6 +53,7 @@ assert!(response.to_text()?.is_some());
 | `ws-web` | browser | Browser WebSocket for `wasm32-unknown-unknown` |
 | `smoldot` | custom `no_std` platform | Smoldot light-client backend |
 | `smoldot-std` | native `std` | Smoldot default platform with Wasmtime |
+| `libwallet` | any | Adapter for ordinary libwallet-backed V4 signing |
 
 Text-format encoding and decoding are always available; there is no separate
 `text` feature.
@@ -97,16 +98,48 @@ The filtered pallet list is fetched during connection; `System` is retained
 automatically. A `wss://` connection requires a trusted DER-encoded CA
 certificate; plain `ws://` remains available for local development.
 
+## Transactions
+
+Preparing, building, inspecting, and submitting are deliberately separate.
+Neither building nor inspecting can submit:
+
+```rust,ignore
+use sube::{Text, TransactionOptions, WaitFor};
+
+let call = chain.prepare_call(
+    "system/remark",
+    &Text("(remark:0x68656c6c6f)"),
+)?;
+let extrinsic = chain
+    .build_transaction(&call, &signer, TransactionOptions::default())
+    .await?;
+let report = chain.inspect_transaction(&extrinsic).await?;
+
+// The only mutating operation:
+let receipt = chain
+    .submit_transaction(&extrinsic, WaitFor::Finalized)
+    .await?;
+```
+
+Transactions are 64-block mortal by default and use the finalized header as
+their checkpoint. `TransactionOptions::default().immortal()` opts out.
+Metadata-typed optional extensions default to `None`; unknown required
+extensions must be supplied explicitly.
+
 ## CLI
 
 The workspace includes an unpublished explorer:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io system/number
+cargo run -p sube-cli -- --chain wss://kreivo.io query system/number
+cargo run -p sube-cli -- --chain wss://kreivo.io tx system/remark \
+  --body '(remark:0x68656c6c6f)'
 cargo run -p sube-cli -- --chain wss://kreivo.io
 ```
 
-The second form opens the terminal UI.
+`tx` validates and prints call hex without submitting. The final form opens
+the terminal UI.
 
 ## Verification
 

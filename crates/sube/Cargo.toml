@@ -45,6 +45,10 @@ gloo-net = { version = "0.6", default-features = false, features = ["websocket"]
 smoldot-light = { version = "1.3", optional = true, default-features = false }
 
 rand_core = { version = "0.10", optional = true }
+libwallet = { path = "../libwallet", version = "0.3", optional = true, default-features = false, features = [
+	"substrate",
+	"sr25519",
+] }
 
 
 [dev-dependencies]
@@ -75,6 +79,7 @@ ws-edge = ["dep:edge-ws", "dep:embedded-io-async", "dep:embassy-net", "dep:embas
 ws-web = ["std", "dep:gloo-net", "dep:futures-util"]
 smoldot = ["dep:smoldot-light"]
 smoldot-std = ["smoldot", "std", "dep:smol", "dep:futures-util", "smoldot-light/std", "smoldot-light/wasmtime"]
+libwallet = ["dep:libwallet"]
 
 [[test]]
 name = "integration"

@@ -110,6 +110,7 @@ pub struct PalletMeta {
     pub name: String,
     pub index: u8,
     pub calls_ty: Option<TypeId>,
+    pub errors_ty: Option<TypeId>,
     pub storage: Option<StorageMeta>,
     pub constants: Vec<ConstantMeta>,
 }
@@ -171,6 +172,7 @@ fn convert_raw_pallet(raw: lean::RawPallet) -> PalletMeta {
         name: raw.name,
         index: raw.index,
         calls_ty: raw.calls_ty,
+        errors_ty: raw.errors_ty,
         storage: raw.storage.map(|s| StorageMeta {
             prefix: s.prefix,
             entries: s

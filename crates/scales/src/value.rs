@@ -416,6 +416,33 @@ impl<'a> Value<'a> {
         };
         Some(Value::new(&self.data[1..], ty_id, self.registry))
     }
+
+    /// Return one field from the selected enum variant, regardless of whether
+    /// its payload is represented as a newtype, tuple, or named struct.
+    pub fn variant_field_at(&self, index: usize) -> Option<Value<'a>> {
+        let TypeDef::Variant(vdef) = self.ty()? else {
+            return None;
+        };
+        let variant = vdef.variant(*self.data.first()?).ok()?;
+        let data = self.data.get(1..)?;
+        let types: alloc::vec::Vec<TypeId> = match variant.fields() {
+            Fields::Unit => return None,
+            Fields::NewType(ty) => alloc::vec![ty],
+            Fields::Tuple(types) => types.to_vec(),
+            Fields::Struct(fields) => fields.iter().map(|field| field.ty).collect(),
+        };
+        let ty = *types.get(index)?;
+        let mut offset = 0usize;
+        for field_ty in types.iter().take(index) {
+            offset += ty_size(self.registry, data.get(offset..)?, *field_ty).ok()?;
+        }
+        let size = ty_size(self.registry, data.get(offset..)?, ty).ok()?;
+        Some(Value::new(
+            data.get(offset..offset + size)?,
+            ty,
+            self.registry,
+        ))
+    }
 }
 
 /// A zero-copy cursor over SCALE-encoded bytes that yields [`Value`]s

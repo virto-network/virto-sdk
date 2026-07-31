@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- Awaiting a call builder no longer submits. Transactions now use explicit
+  `prepare_call`, `build_transaction`, `inspect_transaction`, and
+  `submit_transaction` stages.
+- `ExtrinsicAssembler::nonce_account` separates nonce identity from signing
+  identity. The old `account` method remains as a deprecated compatibility
+  alias.
+
+### Added
+
+- Metadata-driven V4 address/signature encoding, 64-block mortal checkpoints,
+  optional-extension `None` defaults, transaction diagnostics and receipts.
+- Optional `libwallet` adapter for ordinary wallet signers.
+- Non-mutating `sube query` and `sube tx` CLI commands.
+
 ## 1.0.0
 
 First stable release.

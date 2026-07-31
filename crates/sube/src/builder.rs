@@ -1,79 +1,36 @@
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 use core::future::{Future, IntoFuture};
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 use core::pin::Pin;
 
 use alloc::rc::Rc;
 
-use crate::extrinsic::{EncodeCall, ExtrinsicBody};
+use crate::extrinsic::{
+    EncodeCall, EncodedExtrinsic, PreparedCall, TransactionOptions, TransactionReceipt,
+    TransactionReport, WaitFor,
+};
 use crate::prelude::*;
-use crate::{Backend, DynValue, ExtrinsicAssembler, Metadata, Response, Result as SubeResult};
+use crate::{Backend, ExtrinsicAssembler, Metadata, Response, Result as SubeResult};
 
 #[cfg(any(feature = "ws", feature = "smoldot-std"))]
 use crate::backend::{AnyBackend, chain_string_to_url, connect, get_metadata};
 
+#[cfg(any(feature = "ws", feature = "smoldot-std"))]
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-// --- TxBuilder: shared call configuration ---
+// --- Call configuration ---
 
-/// Extrinsic call configuration — body, signer, nonce, extensions.
-///
-/// Shared by both [`CallBuilder`] (reusable handle) and [`OneShotCall`] (one-liner).
-struct TxBuilder<Body, Sign> {
+struct CallData<Body> {
     path: String,
     body: Body,
-    signer: Sign,
-    nonce: Option<u64>,
-    extensions: Vec<(String, DynValue)>,
-    wait_for_finalization: bool,
 }
 
-impl<S> TxBuilder<(), S> {
-    fn body<B>(self, body: B) -> TxBuilder<B, S> {
-        TxBuilder {
+impl CallData<()> {
+    fn body<B>(self, body: B) -> CallData<B> {
+        CallData {
             body,
             path: self.path,
-            signer: self.signer,
-            nonce: self.nonce,
-            extensions: self.extensions,
-            wait_for_finalization: self.wait_for_finalization,
         }
-    }
-}
-
-impl<B> TxBuilder<B, ()> {
-    fn signer<S>(self, signer: S) -> TxBuilder<B, S> {
-        TxBuilder {
-            signer,
-            path: self.path,
-            body: self.body,
-            nonce: self.nonce,
-            extensions: self.extensions,
-            wait_for_finalization: self.wait_for_finalization,
-        }
-    }
-}
-
-impl<B, S> TxBuilder<B, S> {
-    fn nonce(mut self, nonce: u64) -> Self {
-        self.nonce = Some(nonce);
-        self.extensions.retain(|(id, _)| id != "CheckNonce");
-        self.extensions
-            .push(("CheckNonce".into(), DynValue::from(nonce)));
-        self
-    }
-
-    fn with_extension(mut self, identifier: &str, value: DynValue) -> Self {
-        self.extensions.retain(|(id, _)| id != identifier);
-        self.extensions.push((identifier.into(), value));
-        self
-    }
-
-    fn into_parts(self) -> (String, ExtrinsicBody<B>, S, bool) {
-        let body = ExtrinsicBody {
-            nonce: self.nonce,
-            body: self.body,
-            extensions: self.extensions,
-        };
-        (self.path, body, self.signer, self.wait_for_finalization)
     }
 }
 
@@ -85,17 +42,12 @@ impl<B, S> TxBuilder<B, S> {
 /// // One-liner query (URL includes path)
 /// let r = sube("wss://kreivo.io/system/account/0x1234").await?;
 ///
-/// // One-liner submit
-/// sube("wss://kreivo.io/balances/transfer")
-///     .body(json!({ "dest": {"Id": dest}, "value": 1000 }))
-///     .signer(my_signer)
-///     .await?;
-///
 /// // Reusable handle
 /// let chain = Sube::connect("wss://kreivo.io").await?;
 /// let r = chain.query("system/account/0x1234").await?;
 /// ```
 pub struct SubeBuilder {
+    #[allow(dead_code)]
     url: String,
     metadata: Option<Metadata>,
     timeout: core::time::Duration,
@@ -120,28 +72,6 @@ impl SubeBuilder {
     pub fn with_timeout(mut self, timeout: core::time::Duration) -> Self {
         self.timeout = timeout;
         self
-    }
-
-    /// Set the extrinsic body (one-liner shorthand for submit).
-    pub fn body<B>(self, body: B) -> OneShotCall<B, ()> {
-        OneShotCall {
-            url: self.url,
-            preloaded_meta: self.metadata,
-            timeout: self.timeout,
-            tx: TxBuilder {
-                path: String::new(),
-                body,
-                signer: (),
-                nonce: None,
-                extensions: Vec::new(),
-                wait_for_finalization: false,
-            },
-        }
-    }
-
-    /// Set the call body using scales text format (one-liner shorthand).
-    pub fn body_text<'a>(self, text: &'a str) -> OneShotCall<crate::Text<'a>, ()> {
-        self.body(crate::Text(text))
     }
 }
 
@@ -199,6 +129,7 @@ impl IntoFuture for SubeBuilder {
 pub struct Sube<B = AnyBackend> {
     backend: B,
     metadata: Rc<Metadata>,
+    chain_properties: Option<crate::ChainProperties>,
     url: String,
     timeout: core::time::Duration,
 }
@@ -207,6 +138,7 @@ pub struct Sube<B = AnyBackend> {
 pub struct Sube<B> {
     backend: B,
     metadata: Rc<Metadata>,
+    chain_properties: Option<crate::ChainProperties>,
 }
 
 // --- Generic methods (any Backend) ---
@@ -227,6 +159,7 @@ impl<B: Backend> Sube<B> {
         Sube {
             backend,
             metadata,
+            chain_properties: None,
             #[cfg(any(feature = "ws", feature = "smoldot-std"))]
             url: String::new(),
             #[cfg(any(feature = "ws", feature = "smoldot-std"))]
@@ -263,16 +196,12 @@ impl<B: Backend> Sube<B> {
     }
 
     /// Build an extrinsic call for the given pallet/method path.
-    pub fn call(&mut self, path: &str) -> CallBuilder<'_, B, (), ()> {
+    pub fn call(&mut self, path: &str) -> CallBuilder<'_, B, ()> {
         CallBuilder {
             sube: self,
-            tx: TxBuilder {
+            call: CallData {
                 path: path.trim_matches('/').into(),
                 body: (),
-                signer: (),
-                nonce: None,
-                extensions: Vec::new(),
-                wait_for_finalization: false,
             },
         }
     }
@@ -292,9 +221,84 @@ impl<B: Backend> Sube<B> {
         &self.metadata.registry
     }
 
+    /// Fetch chain properties once and return the cached value thereafter.
+    pub async fn chain_properties(&mut self) -> SubeResult<&crate::ChainProperties> {
+        if self.chain_properties.is_none() {
+            self.chain_properties = Some(self.backend.chain_properties().await?);
+        }
+        Ok(self
+            .chain_properties
+            .as_ref()
+            .expect("chain properties were initialized"))
+    }
+
+    /// Return chain properties when they have already been fetched.
+    pub fn cached_chain_properties(&self) -> Option<&crate::ChainProperties> {
+        self.chain_properties.as_ref()
+    }
+
     /// Access the underlying backend.
     pub fn backend(&mut self) -> &mut B {
         &mut self.backend
+    }
+
+    /// Metadata-validate and encode a runtime call. This operation is local:
+    /// it does not sign, access the backend, or submit anything.
+    pub fn prepare_call<V: EncodeCall + ?Sized>(
+        &self,
+        path: &str,
+        body: &V,
+    ) -> SubeResult<PreparedCall> {
+        crate::extrinsic::prepare_call(&self.metadata, path.trim_matches('/'), body)
+    }
+
+    /// Sign and fully encode a prepared call. This may read chain context and
+    /// the nonce, but never submits the transaction.
+    pub async fn build_transaction(
+        &mut self,
+        call: &PreparedCall,
+        assembler: &(impl ExtrinsicAssembler + ?Sized),
+        options: TransactionOptions,
+    ) -> SubeResult<EncodedExtrinsic> {
+        crate::extrinsic::build_transaction(
+            &mut self.backend,
+            &self.metadata,
+            call,
+            &options,
+            assembler,
+        )
+        .await
+    }
+
+    /// Obtain fee, weight, and validity diagnostics without submitting.
+    pub async fn inspect_transaction(
+        &mut self,
+        extrinsic: &EncodedExtrinsic,
+    ) -> SubeResult<TransactionReport> {
+        self.backend.inspect_transaction(extrinsic).await
+    }
+
+    /// Submit bytes that were explicitly built and reviewed.
+    pub async fn submit_transaction(
+        &mut self,
+        extrinsic: &EncodedExtrinsic,
+        wait_for: WaitFor,
+    ) -> SubeResult<TransactionReceipt> {
+        // Never silently re-sign stale bytes after a runtime upgrade.
+        let live_metadata = self.backend.metadata().await?;
+        let current = crate::extrinsic::runtime_versions(&live_metadata)?;
+        if current != (extrinsic.spec_version, extrinsic.transaction_version) {
+            return Err(crate::Error::RuntimeUpgrade {
+                built_spec: extrinsic.spec_version,
+                current_spec: current.0,
+            });
+        }
+        let genesis = self.backend.block_info(Some(0)).await?.hash;
+        if genesis != extrinsic.genesis_hash {
+            return Err(crate::Error::GenesisMismatch);
+        }
+        let receipt = self.backend.submit_transaction(extrinsic, wait_for).await?;
+        self.backend.enrich_receipt(receipt, &self.metadata).await
     }
 }
 
@@ -527,6 +531,7 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata: Rc::new(metadata),
+            chain_properties: None,
             url: url.into(),
             timeout: crate::DEFAULT_TIMEOUT,
         })
@@ -543,6 +548,7 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata,
+            chain_properties: None,
             url: url_str.into(),
             timeout,
         })
@@ -565,6 +571,7 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata,
+            chain_properties: None,
             url: String::new(),
             timeout: crate::DEFAULT_TIMEOUT,
         })
@@ -580,6 +587,7 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata,
+            chain_properties: None,
             url: String::new(),
             timeout: crate::DEFAULT_TIMEOUT,
         })
@@ -593,6 +601,7 @@ impl Sube {
         log::info!("reconnecting to {}", self.url);
         let url = chain_string_to_url(&self.url)?;
         self.backend = connect(&url, self.timeout).await?;
+        self.chain_properties = None;
         Ok(())
     }
 }
@@ -600,140 +609,137 @@ impl Sube {
 // --- CallBuilder (for reusable handle) ---
 
 /// Builder for an extrinsic submission via a reusable [`Sube`] handle.
-pub struct CallBuilder<'a, Bk: Backend, Body = (), Sign = ()> {
+pub struct CallBuilder<'a, Bk: Backend, Body = ()> {
     sube: &'a mut Sube<Bk>,
-    tx: TxBuilder<Body, Sign>,
+    call: CallData<Body>,
 }
 
-impl<'a, Bk: Backend, S> CallBuilder<'a, Bk, (), S> {
-    pub fn body<B>(self, body: B) -> CallBuilder<'a, Bk, B, S> {
+impl<'a, Bk: Backend> CallBuilder<'a, Bk, ()> {
+    pub fn body<B>(self, body: B) -> CallBuilder<'a, Bk, B> {
         CallBuilder {
             sube: self.sube,
-            tx: self.tx.body(body),
+            call: self.call.body(body),
         }
     }
 
     /// Set the call body using scales text format.
     ///
     /// ```rust,ignore
-    /// chain.call("balances/transfer_keep_alive")
+    /// let call = chain.call("balances/transfer_keep_alive")
     ///     .body_text("(dest:MultiAddress::Id(0xd435...);value:1000000)")
-    ///     .signer(signer)
-    ///     .await?;
+    ///     .prepare()?;
     /// ```
-    pub fn body_text(self, text: &'a str) -> CallBuilder<'a, Bk, crate::Text<'a>, S> {
+    pub fn body_text(self, text: &'a str) -> CallBuilder<'a, Bk, crate::Text<'a>> {
         self.body(crate::Text(text))
     }
 }
 
-impl<'a, Bk: Backend, B> CallBuilder<'a, Bk, B, ()> {
-    pub fn signer<S>(self, signer: S) -> CallBuilder<'a, Bk, B, S> {
-        CallBuilder {
-            sube: self.sube,
-            tx: self.tx.signer(signer),
+impl<'a, Bk: Backend, B> CallBuilder<'a, Bk, B>
+where
+    B: EncodeCall,
+{
+    /// Prepare the call without signing or submitting it.
+    pub fn prepare(self) -> SubeResult<PreparedCall> {
+        self.sube.prepare_call(&self.call.path, &self.call.body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::cell::Cell;
+
+    struct MockBackend {
+        submissions: Rc<Cell<usize>>,
+        property_reads: Rc<Cell<usize>>,
+        metadata: Metadata,
+    }
+
+    impl Backend for MockBackend {
+        async fn get_storage_items(
+            &mut self,
+            _keys: Vec<crate::RawKey>,
+            _block: Option<u32>,
+        ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+            Ok(Vec::new())
+        }
+
+        async fn get_keys_paged(
+            &mut self,
+            _from: crate::RawKey,
+            _size: u16,
+            _to: Option<crate::RawKey>,
+        ) -> SubeResult<Vec<crate::RawKey>> {
+            Ok(Vec::new())
+        }
+
+        async fn submit(&mut self, _ext: &[u8], _wait_for_finalization: bool) -> SubeResult<()> {
+            self.submissions.set(self.submissions.get() + 1);
+            Ok(())
+        }
+
+        async fn metadata(&mut self) -> SubeResult<Metadata> {
+            Ok(self.metadata.clone())
+        }
+
+        async fn chain_properties(&mut self) -> SubeResult<crate::ChainProperties> {
+            self.property_reads.set(self.property_reads.get() + 1);
+            Ok(crate::ChainProperties {
+                ss58_format: Some(2),
+                token_symbols: vec!["UNIT".into()],
+                token_decimals: vec![12],
+            })
+        }
+
+        async fn block_info(&mut self, at: Option<u32>) -> SubeResult<crate::metadata::BlockInfo> {
+            let number = if at == Some(0) { 0 } else { 128 };
+            Ok(crate::metadata::BlockInfo {
+                number,
+                hash: if number == 0 { [1; 32] } else { [2; 32] },
+                parent: if number == 0 { [1; 32] } else { [3; 32] },
+            })
         }
     }
-}
 
-impl<'a, Bk: Backend, B, S> CallBuilder<'a, Bk, B, S> {
-    /// Wait for full finalization instead of just best-chain inclusion.
-    pub fn finalize(mut self) -> Self {
-        self.tx.wait_for_finalization = true;
-        self
-    }
+    #[test]
+    fn building_and_inspecting_never_submit() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let submissions = Rc::new(Cell::new(0));
+            let property_reads = Rc::new(Cell::new(0));
+            let backend = MockBackend {
+                submissions: Rc::clone(&submissions),
+                property_reads: Rc::clone(&property_reads),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+            let signer = crate::SignerFn::new([7; 32], |_payload: &[u8]| async { Ok([9; 64]) });
 
-    pub fn nonce(mut self, nonce: u64) -> Self {
-        self.tx = self.tx.nonce(nonce);
-        self
-    }
+            let call = chain
+                .prepare_call("system/remark", &crate::Text("(remark:0x0102)"))
+                .unwrap();
+            let encoded = chain
+                .build_transaction(&call, &signer, TransactionOptions::default().nonce(0))
+                .await
+                .unwrap();
+            assert_eq!(submissions.get(), 0);
+            assert_eq!(encoded.checkpoint_number, 128);
+            assert_eq!(encoded.expires_at, Some(192));
 
-    pub fn with_extension(mut self, identifier: &str, value: DynValue) -> Self {
-        self.tx = self.tx.with_extension(identifier, value);
-        self
-    }
-}
+            let report = chain.inspect_transaction(&encoded).await.unwrap();
+            assert_eq!(submissions.get(), 0);
+            assert!(report.partial_fee.is_none());
 
-impl<'a, Bk: Backend, B, S> IntoFuture for CallBuilder<'a, Bk, B, S>
-where
-    B: EncodeCall + core::fmt::Debug + 'a,
-    S: ExtrinsicAssembler + 'a,
-{
-    type Output = SubeResult<Response>;
-    type IntoFuture = BoxFuture<'a, SubeResult<Response>>;
+            assert_eq!(chain.chain_properties().await.unwrap().ss58_format, Some(2));
+            assert_eq!(chain.chain_properties().await.unwrap().ss58_format, Some(2));
+            assert_eq!(property_reads.get(), 1);
 
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let (path, body, assembler, finalize) = self.tx.into_parts();
-            crate::extrinsic::submit(
-                &mut self.sube.backend,
-                &self.sube.metadata,
-                &path,
-                &body,
-                &assembler,
-                finalize,
-            )
-            .await
-        })
-    }
-}
-
-// --- OneShotCall (for one-liner submits) ---
-
-/// Builder for a one-liner extrinsic submit via [`sube()`](crate::sube).
-pub struct OneShotCall<Body = (), Sign = ()> {
-    url: String,
-    preloaded_meta: Option<Metadata>,
-    timeout: core::time::Duration,
-    tx: TxBuilder<Body, Sign>,
-}
-
-impl<B> OneShotCall<B, ()> {
-    pub fn signer<S>(self, signer: S) -> OneShotCall<B, S> {
-        OneShotCall {
-            url: self.url,
-            preloaded_meta: self.preloaded_meta,
-            timeout: self.timeout,
-            tx: self.tx.signer(signer),
-        }
-    }
-}
-
-impl<B, S> OneShotCall<B, S> {
-    /// Wait for full finalization instead of just best-chain inclusion.
-    pub fn finalize(mut self) -> Self {
-        self.tx.wait_for_finalization = true;
-        self
-    }
-
-    pub fn nonce(mut self, nonce: u64) -> Self {
-        self.tx = self.tx.nonce(nonce);
-        self
-    }
-
-    pub fn with_extension(mut self, identifier: &str, value: DynValue) -> Self {
-        self.tx = self.tx.with_extension(identifier, value);
-        self
-    }
-}
-
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
-impl<B, S> IntoFuture for OneShotCall<B, S>
-where
-    B: EncodeCall + core::fmt::Debug + 'static,
-    S: ExtrinsicAssembler + 'static,
-{
-    type Output = SubeResult<Response>;
-    type IntoFuture = BoxFuture<'static, SubeResult<Response>>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let url = chain_string_to_url(&self.url)?;
-            let path = url.path();
-            let mut backend = connect(&url, self.timeout).await?;
-            let meta = get_metadata(&mut backend, self.preloaded_meta).await?;
-
-            let (_, body, assembler, finalize) = self.tx.into_parts();
-            crate::extrinsic::submit(&mut backend, &meta, path, &body, &assembler, finalize).await
-        })
+            chain
+                .submit_transaction(&encoded, WaitFor::BestBlock)
+                .await
+                .unwrap();
+            assert_eq!(submissions.get(), 1);
+        });
     }
 }

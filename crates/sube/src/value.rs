@@ -14,13 +14,17 @@ use serde::ser::{SerializeMap, SerializeSeq, Serializer};
 pub enum DynValue {
     Null,
     Bool(bool),
+    U8(u8),
+    U16(u16),
     U32(u32),
     U64(u64),
+    U128(u128),
     Str(String),
     /// Raw bytes. Serializes via `serialize_seq` so scales can write them
     /// into either a fixed-size `[u8; N]` target (no length prefix) or a
     /// `Vec<u8>` / `Bytes` target (SCALE compact length prefix).
     Bytes(Vec<u8>),
+    Seq(Vec<DynValue>),
     Map(Vec<(String, DynValue)>),
 }
 
@@ -29,13 +33,23 @@ impl Serialize for DynValue {
         match self {
             DynValue::Null => serializer.serialize_none(),
             DynValue::Bool(b) => serializer.serialize_bool(*b),
+            DynValue::U8(n) => serializer.serialize_u8(*n),
+            DynValue::U16(n) => serializer.serialize_u16(*n),
             DynValue::U32(n) => serializer.serialize_u32(*n),
             DynValue::U64(n) => serializer.serialize_u64(*n),
+            DynValue::U128(n) => serializer.serialize_u128(*n),
             DynValue::Str(s) => serializer.serialize_str(s),
             DynValue::Bytes(bs) => {
                 let mut seq = serializer.serialize_seq(Some(bs.len()))?;
                 for b in bs {
                     seq.serialize_element(b)?;
+                }
+                seq.end()
+            }
+            DynValue::Seq(values) => {
+                let mut seq = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    seq.serialize_element(value)?;
                 }
                 seq.end()
             }
@@ -68,9 +82,27 @@ impl From<u32> for DynValue {
     }
 }
 
+impl From<u8> for DynValue {
+    fn from(n: u8) -> Self {
+        DynValue::U8(n)
+    }
+}
+
+impl From<u16> for DynValue {
+    fn from(n: u16) -> Self {
+        DynValue::U16(n)
+    }
+}
+
 impl From<u64> for DynValue {
     fn from(n: u64) -> Self {
         DynValue::U64(n)
+    }
+}
+
+impl From<u128> for DynValue {
+    fn from(n: u128) -> Self {
+        DynValue::U128(n)
     }
 }
 
@@ -89,6 +121,12 @@ impl From<String> for DynValue {
 impl From<Vec<u8>> for DynValue {
     fn from(bs: Vec<u8>) -> Self {
         DynValue::Bytes(bs)
+    }
+}
+
+impl From<Vec<DynValue>> for DynValue {
+    fn from(values: Vec<DynValue>) -> Self {
+        DynValue::Seq(values)
     }
 }
 
@@ -120,8 +158,11 @@ impl DynValue {
 
     pub fn as_u64(&self) -> Option<u64> {
         match self {
+            DynValue::U8(n) => Some(u64::from(*n)),
+            DynValue::U16(n) => Some(u64::from(*n)),
             DynValue::U32(n) => Some(*n as u64),
             DynValue::U64(n) => Some(*n),
+            DynValue::U128(n) => u64::try_from(*n).ok(),
             _ => None,
         }
     }
@@ -142,11 +183,20 @@ impl<'a> TryFrom<scales::Value<'a>> for DynValue {
     type Error = &'static str;
 
     fn try_from(v: scales::Value<'a>) -> Result<Self, Self::Error> {
+        if let Some(n) = v.as_u8() {
+            return Ok(DynValue::U8(n));
+        }
+        if let Some(n) = v.as_u16() {
+            return Ok(DynValue::U16(n));
+        }
         if let Some(n) = v.as_u64() {
             return Ok(DynValue::U64(n));
         }
         if let Some(n) = v.as_u32() {
             return Ok(DynValue::U32(n));
+        }
+        if let Some(n) = v.as_u128() {
+            return Ok(DynValue::U128(n));
         }
         if let Some(s) = v.as_str() {
             return Ok(DynValue::Str(s.into()));
