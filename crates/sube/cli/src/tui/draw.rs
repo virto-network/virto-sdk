@@ -11,6 +11,16 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_profiles(f, app);
         return;
     }
+    #[cfg(feature = "pass")]
+    if matches!(app.focus, Focus::PassSession) {
+        draw_pass_session(f, app);
+        return;
+    }
+    #[cfg(feature = "pass")]
+    if matches!(app.focus, Focus::ConfirmForgetSession) {
+        draw_forget_session_confirmation(f, app);
+        return;
+    }
     #[cfg(feature = "wallet")]
     if matches!(app.focus, Focus::WalletImport) {
         draw_wallet_import(f, app);
@@ -73,6 +83,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         (Focus::Profiles, _) => unreachable!(),
         #[cfg(feature = "wallet")]
         (Focus::WalletImport, _) => unreachable!(),
+        #[cfg(feature = "pass")]
+        (Focus::PassSession, _) => unreachable!(),
+        #[cfg(feature = "pass")]
+        (Focus::ConfirmForgetSession, _) => unreachable!(),
         (Focus::BlockDetail, _) => " ↑↓ navigate  Esc back",
         (Focus::Review | Focus::ConfirmSubmit, _) => unreachable!(),
         (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  p profiles  q quit",
@@ -151,13 +165,80 @@ fn draw_profiles(f: &mut Frame, app: &App) {
     let selected = (!app.profiles.profiles.is_empty()).then_some(app.profile_idx);
     let mut state = ListState::default().with_selected(selected);
     f.render_stateful_widget(list, layout[1], &mut state);
-    let message = app
-        .error
-        .as_deref()
-        .unwrap_or("↑↓ Select  Enter Connect  a Add wallet  Esc Close");
+    let message = app.error.as_deref().unwrap_or(
+        "↑↓ Select  Enter Connect  a Add wallet  s Session  f Forget session  Esc Close",
+    );
     f.render_widget(
         Paragraph::new(message).wrap(Wrap { trim: false }),
         layout[2],
+    );
+}
+
+#[cfg(feature = "pass")]
+fn draw_forget_session_confirmation(f: &mut Frame, app: &App) {
+    let area = centered_rect(86, 10, f.area());
+    f.render_widget(Clear, area);
+    let profile = app.forget_session_profile.as_deref().unwrap_or("pass");
+    f.render_widget(
+        Paragraph::new(format!(
+            "Forget the local session for {profile}?\n\n{}\n\nEnter/y Confirm   Esc/n Cancel",
+            pass::session::FORGET_SESSION_WARNING
+        ))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Forget local session")
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        area,
+    );
+}
+
+#[cfg(feature = "pass")]
+fn draw_pass_session(f: &mut Frame, app: &App) {
+    let area = centered_rect(94, 14, f.area());
+    f.render_widget(Clear, area);
+    let Some(session) = app.pass_session.as_ref() else {
+        return;
+    };
+    let policy_style = if session.field == 0 {
+        Style::default().fg(Color::Yellow).bold()
+    } else {
+        Style::default()
+    };
+    let duration_style = if session.field == 1 {
+        Style::default().fg(Color::Yellow).bold()
+    } else {
+        Style::default()
+    };
+    let duration = if session.duration.is_empty() {
+        "runtime maximum"
+    } else {
+        &session.duration
+    };
+    let lines = vec![
+        Line::raw(format!("Pass profile: {}", session.profile)),
+        Line::styled(format!("Policy: {}", session.policy), policy_style),
+        Line::styled(format!("Duration: {duration}"), duration_style),
+        Line::raw(""),
+        Line::raw(
+            "Policy: calls:pallet/call,... | pallets:pallet,... | spend:pallet:limit:call,...",
+        ),
+        Line::raw("t This call  l This pallet  Tab fields  Enter continue  Esc cancel"),
+        Line::raw("Exact on-chain sessions are reused; updates always open transaction review."),
+        Line::styled(
+            app.error.as_deref().unwrap_or(""),
+            Style::default().fg(Color::Red),
+        ),
+    ];
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Connect pass session"),
+        ),
+        area,
     );
 }
 
@@ -224,7 +305,11 @@ fn draw_review(f: &mut Frame, app: &App) {
         layout[1],
     );
     let help = if app.call_submittable {
-        " Esc Back  ↑↓ Scroll  c Call  x Extrinsic  e Export  w Best/Finalized  s Submit"
+        if app.review_requires_finalized {
+            " Esc Back  ↑↓ Scroll  c Call  x Extrinsic  e Export  s Submit finalized"
+        } else {
+            " Esc Back  ↑↓ Scroll  c Call  x Extrinsic  e Export  w Best/Finalized  s Submit"
+        }
     } else {
         " Esc Back  ↑↓ Scroll  c Copy call"
     };

@@ -74,6 +74,10 @@ enum Focus {
     Profiles,
     #[cfg(feature = "wallet")]
     WalletImport,
+    #[cfg(feature = "pass")]
+    PassSession,
+    #[cfg(feature = "pass")]
+    ConfirmForgetSession,
 }
 
 #[cfg(feature = "wallet")]
@@ -81,6 +85,14 @@ struct WalletImportState {
     field: u8,
     name: String,
     mnemonic: zeroize::Zeroizing<String>,
+}
+
+#[cfg(feature = "pass")]
+struct PassSessionState {
+    profile: String,
+    field: u8,
+    policy: String,
+    duration: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +131,10 @@ struct App {
     profile_idx: usize,
     #[cfg(feature = "wallet")]
     wallet_import: Option<WalletImportState>,
+    #[cfg(feature = "pass")]
+    pass_session: Option<PassSessionState>,
+    #[cfg(feature = "pass")]
+    forget_session_profile: Option<String>,
 
     all_pallets: Vec<String>,
     pallets: Vec<String>,
@@ -143,6 +159,8 @@ struct App {
     artifact_dir: std::path::PathBuf,
     review_scroll: u16,
     wait_for: sube::WaitFor,
+    review_returns_to_profiles: bool,
+    review_requires_finalized: bool,
 
     panel: Panel,
     focus: Focus,
@@ -334,6 +352,7 @@ impl App {
 
     fn execute_call(&mut self) {
         self.error = None;
+        self.review_returns_to_profiles = false;
         self.call_result = None;
         self.call_submittable = false;
         self.call_hex = None;
@@ -380,6 +399,7 @@ impl App {
 
     fn execute_call_body(&mut self) {
         self.error = None;
+        self.review_returns_to_profiles = false;
         let pallet = match self.current_pallet() {
             Some(pallet) => pallet.name.clone(),
             None => return,
@@ -447,6 +467,10 @@ impl App {
                 self.call_hex = review.call_hex;
                 self.extrinsic_hex = review.extrinsic_hex;
                 self.artifact = review.artifact;
+                self.review_requires_finalized = review.requires_finalized;
+                if review.requires_finalized {
+                    self.wait_for = sube::WaitFor::Finalized;
+                }
                 self.review_scroll = 0;
                 self.focus = Focus::Review;
             }
@@ -476,6 +500,10 @@ impl App {
                 #[cfg(feature = "wallet")]
                 {
                     self.wallet_import = None;
+                }
+                #[cfg(feature = "pass")]
+                {
+                    self.pass_session = None;
                 }
             }
             #[cfg(feature = "wallet")]
@@ -599,6 +627,10 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         profile_idx: 0,
         #[cfg(feature = "wallet")]
         wallet_import: None,
+        #[cfg(feature = "pass")]
+        pass_session: None,
+        #[cfg(feature = "pass")]
+        forget_session_profile: None,
         all_pallets,
         pallets,
         pallet_idx: 0,
@@ -620,6 +652,8 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         artifact_dir,
         review_scroll: 0,
         wait_for: sube::WaitFor::Finalized,
+        review_returns_to_profiles: false,
+        review_requires_finalized: false,
         panel: Panel::Pallets,
         focus: Focus::Navigate,
         search_query: String::new(),
@@ -678,6 +712,10 @@ fn handle_key(app: &mut App, key: KeyCode) {
         Focus::Profiles => handle_profiles(app, key),
         #[cfg(feature = "wallet")]
         Focus::WalletImport => handle_wallet_import(app, key),
+        #[cfg(feature = "pass")]
+        Focus::PassSession => handle_pass_session(app, key),
+        #[cfg(feature = "pass")]
+        Focus::ConfirmForgetSession => handle_forget_session_confirmation(app, key),
     }
 }
 
@@ -793,6 +831,48 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
             app.error = None;
             app.focus = Focus::WalletImport;
         }
+        #[cfg(feature = "pass")]
+        KeyCode::Char('s') => {
+            let profile = match app.profiles.profiles.get(app.profile_idx).cloned() {
+                Some(crate::profiles::Profile::Pass(profile)) => profile,
+                _ => {
+                    app.error = Some("Select a pass profile to manage its session.".into());
+                    return;
+                }
+            };
+            let selected_call = app.current_pallet().and_then(|pallet| {
+                app.call_items
+                    .get(app.call_idx)
+                    .map(|call| format!("calls:{}/{}", pallet.name, call))
+            });
+            app.pass_session = Some(PassSessionState {
+                profile: profile.name,
+                field: 0,
+                policy: profile
+                    .session
+                    .map(|session| session.policy)
+                    .or(selected_call)
+                    .unwrap_or_default(),
+                duration: String::new(),
+            });
+            app.error = None;
+            app.focus = Focus::PassSession;
+        }
+        #[cfg(feature = "pass")]
+        KeyCode::Char('f') => {
+            let profile = match app.profiles.profiles.get(app.profile_idx) {
+                Some(crate::profiles::Profile::Pass(profile)) if profile.session.is_some() => {
+                    profile.name.clone()
+                }
+                _ => {
+                    app.error = Some("Select a pass profile with a local session.".into());
+                    return;
+                }
+            };
+            app.forget_session_profile = Some(profile);
+            app.error = None;
+            app.focus = Focus::ConfirmForgetSession;
+        }
         #[cfg(feature = "wallet")]
         KeyCode::Enter => {
             if let Some(profile) = app.profiles.profiles.get(app.profile_idx) {
@@ -801,6 +881,94 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
                     .to_chain
                     .send(ToChain::ActivateProfile(profile.name().into()));
             }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "pass")]
+fn handle_forget_session_confirmation(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            if let Some(profile) = app.forget_session_profile.take() {
+                app.error = Some("Deleting the local session secret...".into());
+                let _ = app.to_chain.send(ToChain::ForgetPassSession(profile));
+                app.focus = Focus::Profiles;
+            }
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            app.forget_session_profile = None;
+            app.focus = Focus::Profiles;
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "pass")]
+fn handle_pass_session(app: &mut App, key: KeyCode) {
+    let selected_call = app.current_pallet().and_then(|pallet| {
+        app.call_items
+            .get(app.call_idx)
+            .map(|call| (pallet.name.clone(), call.clone()))
+    });
+    let Some(session) = app.pass_session.as_mut() else {
+        app.focus = Focus::Profiles;
+        return;
+    };
+    match key {
+        KeyCode::Esc => {
+            app.pass_session = None;
+            app.error = None;
+            app.focus = Focus::Profiles;
+        }
+        KeyCode::Tab | KeyCode::Down => session.field = (session.field + 1).min(1),
+        KeyCode::BackTab | KeyCode::Up => session.field = session.field.saturating_sub(1),
+        KeyCode::Char('t') if session.field == 0 => {
+            if let Some((pallet, call)) = &selected_call {
+                session.policy = format!("calls:{pallet}/{call}");
+            } else {
+                app.error = Some("Select a call before using the this-call preset.".into());
+            }
+        }
+        KeyCode::Char('l') if session.field == 0 => {
+            if let Some((pallet, _)) = &selected_call {
+                session.policy = format!("pallets:{pallet}");
+            } else {
+                app.error = Some("Select a pallet before using the this-pallet preset.".into());
+            }
+        }
+        KeyCode::Backspace if session.field == 0 => {
+            session.policy.pop();
+        }
+        KeyCode::Backspace => {
+            session.duration.pop();
+        }
+        KeyCode::Char(c) if session.field == 0 => session.policy.push(c),
+        KeyCode::Char(c) if c.is_ascii_digit() => session.duration.push(c),
+        KeyCode::Enter if session.field == 0 => session.field = 1,
+        KeyCode::Enter => {
+            if session.policy.trim().is_empty() {
+                app.error = Some("An explicit Calls, Pallets, or Spend policy is required.".into());
+                return;
+            }
+            let duration = if session.duration.trim().is_empty() {
+                None
+            } else {
+                match session.duration.parse::<u32>() {
+                    Ok(duration) => Some(duration),
+                    Err(_) => {
+                        app.error = Some("Session duration must be a u32 block count.".into());
+                        return;
+                    }
+                }
+            };
+            app.review_returns_to_profiles = true;
+            app.error = Some("Checking session and preparing registration...".into());
+            let _ = app.to_chain.send(ToChain::PreparePassSession {
+                profile: session.profile.clone(),
+                policy: session.policy.trim().into(),
+                duration,
+            });
         }
         _ => {}
     }
@@ -854,7 +1022,9 @@ fn handle_review(app: &mut App, key: KeyCode) {
             app.artifact = None;
             app.error = None;
             app.review_scroll = 0;
-            app.focus = if app.call_input_mode.is_typed() && app.call_form.is_some() {
+            app.focus = if app.review_returns_to_profiles {
+                Focus::Profiles
+            } else if app.call_input_mode.is_typed() && app.call_form.is_some() {
                 Focus::Form
             } else if !app.call_input_mode.is_typed() {
                 Focus::BodyInput
@@ -870,7 +1040,7 @@ fn handle_review(app: &mut App, key: KeyCode) {
         }
         KeyCode::PageUp => app.review_scroll = app.review_scroll.saturating_sub(10),
         KeyCode::PageDown => app.review_scroll = app.review_scroll.saturating_add(10),
-        KeyCode::Char('w') if app.call_submittable => {
+        KeyCode::Char('w') if app.call_submittable && !app.review_requires_finalized => {
             app.wait_for = match app.wait_for {
                 sube::WaitFor::BestBlock => sube::WaitFor::Finalized,
                 sube::WaitFor::Finalized => sube::WaitFor::BestBlock,

@@ -90,6 +90,315 @@ pub async fn activate_existing_profile(
     Ok(profiles)
 }
 
+#[cfg(feature = "pass")]
+pub enum SessionPreparation {
+    Reused(crate::profiles::Profiles),
+    Review {
+        prepared: Box<PreparedTransaction>,
+        effect: Box<PendingEffect>,
+    },
+}
+
+#[cfg(feature = "pass")]
+pub enum PendingEffect {
+    Session {
+        profile: crate::profiles::PassProfile,
+        session_account: [u8; 32],
+        secure_entry: String,
+        policy: String,
+        expires_at: u64,
+        pending_seed: Option<zeroize::Zeroizing<[u8; 32]>>,
+    },
+}
+
+#[cfg(feature = "pass")]
+pub async fn prepare_pass_session(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profile_path: &std::path::Path,
+    genesis_hash: [u8; 32],
+    name: &str,
+    policy_text: &str,
+    requested_duration: Option<u32>,
+) -> Result<SessionPreparation> {
+    use sube::{Backend, Signer};
+
+    let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+    let profile = match profiles.find(name).cloned() {
+        Some(crate::profiles::Profile::Pass(profile)) => profile,
+        _ => anyhow::bail!("pass profile {name:?} not found"),
+    };
+    if profile.genesis_hash != genesis_hash {
+        anyhow::bail!("profile genesis hash does not match the connected chain");
+    }
+    let policy = crate::parse_session_policy(chain.metadata(), policy_text)?;
+    let checkpoint = chain.backend().block_info(None).await?;
+
+    if let Some(session) = &profile.session {
+        let local_policy = crate::parse_session_policy(chain.metadata(), &session.policy)?;
+        if local_policy == policy
+            && session.expires_at > checkpoint.number
+            && crate::on_chain_session_matches(chain, &profile, session, &policy).await
+            && crate::load_session_signer(&session.secure_entry, Some(session.account))
+                .await
+                .is_ok()
+        {
+            profiles.activate(name, genesis_hash)?;
+            profiles.save(profile_path)?;
+            return Ok(SessionPreparation::Reused(profiles));
+        }
+    }
+
+    let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
+    let duration = pass::session::session_duration(&config, requested_duration)?;
+    let secure_entry =
+        libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account);
+    let existing_account = profile.session.as_ref().map(|session| session.account);
+    let (session_signer, pending_seed) = if let Some(expected) = existing_account {
+        match crate::load_session_signer(&secure_entry, Some(expected)).await {
+            Ok(signer) => (signer, None),
+            Err(_) => {
+                let (signer, seed) = crate::generate_session_signer().await?;
+                (signer, Some(zeroize::Zeroizing::new(seed)))
+            }
+        }
+    } else {
+        let (signer, seed) = crate::generate_session_signer().await?;
+        (signer, Some(zeroize::Zeroizing::new(seed)))
+    };
+    let session_account = session_signer.account();
+    let call = pass::session::prepare_add_session_key(
+        chain.metadata(),
+        &config,
+        session_account,
+        &policy,
+        Some(duration),
+    )?;
+    let context = u32::try_from(checkpoint.number)
+        .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
+    let prepared = prepare_profile_device_transaction(
+        chain,
+        chain_url,
+        &profiles,
+        &profile,
+        &config,
+        context,
+        checkpoint.hash,
+        &call,
+    )
+    .await?;
+    let effect = PendingEffect::Session {
+        profile,
+        session_account,
+        secure_entry,
+        policy: policy_text.into(),
+        expires_at: checkpoint.number.saturating_add(u64::from(duration)),
+        pending_seed,
+    };
+    Ok(SessionPreparation::Review {
+        prepared: Box::new(prepared),
+        effect: Box::new(effect),
+    })
+}
+
+#[cfg(feature = "pass")]
+pub fn apply_finalized_effect(
+    profile_path: &std::path::Path,
+    receipt: &sube::TransactionReceipt,
+    effect: PendingEffect,
+) -> Result<crate::profiles::Profiles> {
+    use libwallet::MutableKeyStore;
+
+    if receipt.finalized_block_hash.is_none()
+        || !matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
+    {
+        anyhow::bail!("operation did not finalize successfully; local profile remains unchanged");
+    }
+    match effect {
+        PendingEffect::Session {
+            mut profile,
+            session_account,
+            secure_entry,
+            policy,
+            expires_at,
+            mut pending_seed,
+        } => {
+            if let Some(seed) = pending_seed.as_deref_mut() {
+                let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
+                keys.upsert(seed)?;
+            }
+            profile.session = Some(crate::profiles::SessionProfile {
+                account: session_account,
+                secure_entry: secure_entry.clone(),
+                policy,
+                expires_at,
+            });
+            let name = profile.name.clone();
+            let genesis_hash = profile.genesis_hash;
+            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+            profiles.upsert(crate::profiles::Profile::Pass(profile));
+            profiles.activate(&name, genesis_hash)?;
+            if let Err(error) = profiles.save(profile_path) {
+                if pending_seed.is_some() {
+                    let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
+                    let _ = keys.delete();
+                }
+                return Err(error);
+            }
+            Ok(profiles)
+        }
+    }
+}
+
+#[cfg(feature = "pass")]
+pub fn forget_pass_session(
+    profile_path: &std::path::Path,
+    genesis_hash: [u8; 32],
+    name: &str,
+) -> Result<crate::profiles::Profiles> {
+    use libwallet::MutableKeyStore;
+
+    let mut profiles = crate::profiles::Profiles::load(profile_path)?;
+    let mut profile = match profiles.find(name).cloned() {
+        Some(crate::profiles::Profile::Pass(profile)) => profile,
+        _ => anyhow::bail!("pass profile {name:?} not found"),
+    };
+    if profile.genesis_hash != genesis_hash {
+        anyhow::bail!("profile genesis hash does not match the connected chain");
+    }
+    let secure_entry = profile
+        .session
+        .as_ref()
+        .map(|session| session.secure_entry.clone())
+        .unwrap_or_else(|| {
+            libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account)
+        });
+    let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
+    keys.delete()?;
+    profile.session = None;
+    profiles.upsert(crate::profiles::Profile::Pass(profile));
+    profiles.save(profile_path)?;
+    Ok(profiles)
+}
+
+#[cfg(feature = "pass")]
+#[allow(clippy::too_many_arguments)]
+async fn prepare_device_authenticated<A: pass::DeviceAuthenticator>(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profile: &crate::profiles::PassProfile,
+    config: &pass::PassRuntimeConfig,
+    context: u32,
+    block_hash: [u8; 32],
+    call: &sube::PreparedCall,
+    device: &A,
+) -> Result<PreparedTransaction> {
+    let provider = pass::PassAuthorizer::new(
+        device,
+        pass::HashedUserId(profile.user_id),
+        config.authority_id,
+        context,
+        block_hash,
+    )
+    .with_challenger(config.challenger);
+    let authorizer = pass::PassAuthenticator::new(
+        pass::Account(profile.pass_account),
+        pass::DeviceId(profile.device_id),
+        provider,
+    );
+    prepare_transaction(
+        chain,
+        chain_url,
+        call,
+        &profile.name,
+        &authorizer,
+        sube::TransactionOptions::default(),
+    )
+    .await
+}
+
+#[cfg(feature = "pass")]
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_profile_device_transaction(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profiles: &crate::profiles::Profiles,
+    profile: &crate::profiles::PassProfile,
+    config: &pass::PassRuntimeConfig,
+    context: u32,
+    block_hash: [u8; 32],
+    call: &sube::PreparedCall,
+) -> Result<PreparedTransaction> {
+    let primary_device = profile.primary_device();
+    let variant = crate::device_variant(&primary_device);
+    if !config.supports_credential(variant) {
+        anyhow::bail!("runtime does not advertise {variant} authentication");
+    }
+    match primary_device {
+        crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
+            let wallet = crate::wallet_profile(profiles, &wallet, profile.genesis_hash)?.clone();
+            let signer = crate::wallet_signer(&wallet).await?;
+            let public = signer.inner().public();
+            let device = pass::wallet::WalletDevice::new(
+                signer.inner(),
+                public.as_ref(),
+                pass::wallet::SignatureType::Sr25519,
+            );
+            prepare_device_authenticated(
+                chain, chain_url, profile, config, context, block_hash, call, &device,
+            )
+            .await
+        }
+        crate::profiles::DeviceProviderProfile::WebAuthn {
+            rp_id,
+            origin,
+            credential_id,
+        } => {
+            #[cfg(feature = "desktop-webauthn")]
+            {
+                let device = pass::webauthn::WebAuthnDevice::from_profile(
+                    pass::webauthn::DesktopWebAuthnTransport,
+                    pass::webauthn::WebAuthnProfile {
+                        rp_id,
+                        origin,
+                        credential_id,
+                    },
+                );
+                prepare_device_authenticated(
+                    chain, chain_url, profile, config, context, block_hash, call, &device,
+                )
+                .await
+            }
+            #[cfg(not(feature = "desktop-webauthn"))]
+            {
+                let _ = (rp_id, origin, credential_id);
+                anyhow::bail!("this build has no desktop WebAuthn support")
+            }
+        }
+        crate::profiles::DeviceProviderProfile::SshAgent {
+            fingerprint,
+            namespace,
+        } => {
+            #[cfg(all(feature = "ssh-agent", unix))]
+            {
+                let transport =
+                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
+                let device =
+                    pass::ssh_agent::SshAgentDevice::new(transport, fingerprint, namespace);
+                prepare_device_authenticated(
+                    chain, chain_url, profile, config, context, block_hash, call, &device,
+                )
+                .await
+            }
+            #[cfg(not(all(feature = "ssh-agent", unix)))]
+            {
+                let _ = (fingerprint, namespace);
+                anyhow::bail!("this build has no native SSH-agent support")
+            }
+        }
+    }
+}
+
 /// One signed transaction together with the non-mutating diagnostics shown
 /// before submission.
 pub struct PreparedTransaction {
