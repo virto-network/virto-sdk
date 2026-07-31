@@ -7,6 +7,13 @@ use super::types;
 use super::{App, BlockDetail, Focus, Panel};
 
 pub fn draw(f: &mut Frame, app: &App) {
+    if matches!(app.focus, Focus::Review | Focus::ConfirmSubmit) {
+        draw_review(f, app);
+        if matches!(app.focus, Focus::ConfirmSubmit) {
+            draw_submit_confirmation(f, app);
+        }
+        return;
+    }
     if let Some(ref detail) = app.block_detail {
         draw_block_detail(f, app, detail);
         return;
@@ -53,10 +60,12 @@ pub fn draw(f: &mut Frame, app: &App) {
         (Focus::Form, _) => {
             " ↑↓ fields  ←→ enum  Space toggle  +/- list  Enter next/submit  Esc cancel"
         }
+        (Focus::BodyInput, _) => " Enter review  Esc cancel  Type JSON/text or a file path",
         (Focus::BlockDetail, _) => " ↑↓ navigate  Esc back",
+        (Focus::Review | Focus::ConfirmSubmit, _) => unreachable!(),
         (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  q quit",
         (_, Panel::Storage) => " ↑↓ navigate  Tab panel  Enter query  q quit",
-        (_, Panel::Calls) => " ↑↓ navigate  Tab panel  Enter select  q quit",
+        (_, Panel::Calls) => " ↑↓ navigate  Tab panel  m input mode  Enter select  q quit",
         (_, Panel::Blocks) => " Tab panel  Enter details  q quit",
     };
     if let Some(ref err) = app.error {
@@ -67,6 +76,67 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else {
         f.render_widget(Paragraph::new(help).fg(Color::DarkGray), outer[3]);
     }
+}
+
+fn draw_review(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(4),
+            Constraint::Length(2),
+        ])
+        .split(area);
+    f.render_widget(
+        Paragraph::new(format!(" Transaction review · wait for {:?}", app.wait_for))
+            .bold()
+            .fg(Color::Cyan),
+        layout[0],
+    );
+    f.render_widget(
+        Paragraph::new(app.call_result.as_deref().unwrap_or("Preparing review..."))
+            .wrap(Wrap { trim: false })
+            .scroll((app.review_scroll, 0))
+            .block(Block::default().borders(Borders::ALL).title("Review")),
+        layout[1],
+    );
+    let help = if app.call_submittable {
+        " Esc Back  ↑↓ Scroll  c Call  x Extrinsic  e Export  w Best/Finalized  s Submit"
+    } else {
+        " Esc Back  ↑↓ Scroll  c Copy call"
+    };
+    f.render_widget(Paragraph::new(help).fg(Color::DarkGray), layout[2]);
+}
+
+fn draw_submit_confirmation(f: &mut Frame, app: &App) {
+    let area = centered_rect(58, 7, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(format!(
+            "Submit the exact reviewed bytes and wait for {:?}?\n\nEnter/y Confirm   Esc/n Cancel",
+            app.wait_for
+        ))
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Confirm submission")
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        area,
+    );
+}
+
+fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width.saturating_sub(2));
+    let height = height.min(area.height.saturating_sub(2));
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
 }
 
 fn border(app: &App, panel: Panel) -> Style {
@@ -169,6 +239,27 @@ fn draw_storage(f: &mut Frame, app: &App, area: Rect) {
         let inner = block.inner(result_area);
         f.render_widget(block, result_area);
         form.render(f, inner);
+        return;
+    }
+    if matches!(app.focus, Focus::BodyInput) && app.panel == Panel::Calls {
+        let prompt = match app.call_input_mode {
+            super::CallInputMode::Json => "Whole-body JSON",
+            super::CallInputMode::ScaleText => "Whole-body SCALE text",
+            super::CallInputMode::JsonFile => "JSON file path",
+            super::CallInputMode::ScaleTextFile => "SCALE-text file path",
+            super::CallInputMode::Typed => "Typed parameters",
+        };
+        f.render_widget(
+            Paragraph::new(format!("{}█", app.call_body_input))
+                .wrap(Wrap { trim: false })
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(prompt)
+                        .border_style(Style::default().fg(Color::Yellow)),
+                ),
+            result_area,
+        );
         return;
     }
     f.render_widget(

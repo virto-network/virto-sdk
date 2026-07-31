@@ -16,7 +16,7 @@ mod form;
 mod format;
 mod types;
 
-use chain::{FromChain, ToChain};
+use chain::{CallBody, FromChain, ToChain};
 use form::{FormContext, FormState, field_from_type};
 use format::fuzzy_match;
 
@@ -68,6 +68,34 @@ enum Focus {
     Form,
     Search,
     BlockDetail,
+    Review,
+    ConfirmSubmit,
+    BodyInput,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CallInputMode {
+    Typed,
+    Json,
+    ScaleText,
+    JsonFile,
+    ScaleTextFile,
+}
+
+impl CallInputMode {
+    fn next(self) -> Self {
+        match self {
+            Self::Typed => Self::Json,
+            Self::Json => Self::ScaleText,
+            Self::ScaleText => Self::JsonFile,
+            Self::JsonFile => Self::ScaleTextFile,
+            Self::ScaleTextFile => Self::Typed,
+        }
+    }
+
+    fn is_typed(self) -> bool {
+        matches!(self, Self::Typed)
+    }
 }
 
 // --- App state ---
@@ -89,12 +117,17 @@ struct App {
     call_items: Vec<String>,
     call_idx: usize,
     call_form: Option<FormState>,
+    call_form_key: Option<(String, String)>,
+    call_input_mode: CallInputMode,
+    call_body_input: String,
     call_result: Option<String>,
     call_submittable: bool,
     call_hex: Option<String>,
     extrinsic_hex: Option<String>,
     artifact: Option<String>,
     artifact_dir: std::path::PathBuf,
+    review_scroll: u16,
+    wait_for: sube::WaitFor,
 
     panel: Panel,
     focus: Focus,
@@ -123,6 +156,8 @@ impl App {
         self.call_items.clear();
         self.call_idx = 0;
         self.call_form = None;
+        self.call_form_key = None;
+        self.call_body_input.clear();
         self.call_result = None;
         self.call_submittable = false;
         self.call_hex = None;
@@ -190,7 +225,25 @@ impl App {
     }
 
     fn build_call_form(&mut self) {
+        let key = self.current_pallet().and_then(|pallet| {
+            self.call_items
+                .get(self.call_idx)
+                .map(|call| (pallet.name.clone(), call.clone()))
+        });
+        if self.call_form.is_some() && self.call_form_key == key {
+            self.call_result = None;
+            self.call_submittable = false;
+            self.call_hex = None;
+            self.extrinsic_hex = None;
+            self.artifact = None;
+            self.error = None;
+            return;
+        }
+        if self.call_form_key != key {
+            self.call_body_input.clear();
+        }
         self.call_form = None;
+        self.call_form_key = key;
         self.call_result = None;
         self.call_submittable = false;
         self.call_hex = None;
@@ -305,7 +358,49 @@ impl App {
         };
         let path = format!("{}/{}", pallet.name, item_name);
         self.call_result = Some("validating call...".into());
-        let _ = self.to_chain.send(ToChain::PrepareCall(path, body));
+        let _ = self
+            .to_chain
+            .send(ToChain::PrepareCall(path, CallBody::Text(body)));
+    }
+
+    fn execute_call_body(&mut self) {
+        self.error = None;
+        let pallet = match self.current_pallet() {
+            Some(pallet) => pallet.name.clone(),
+            None => return,
+        };
+        let call = match self.call_items.get(self.call_idx) {
+            Some(call) => call.clone(),
+            None => return,
+        };
+        let body = match self.call_input_mode {
+            CallInputMode::Json | CallInputMode::ScaleText => self.call_body_input.clone(),
+            CallInputMode::JsonFile | CallInputMode::ScaleTextFile => {
+                match std::fs::read_to_string(&self.call_body_input) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        self.error = Some(format!(
+                            "Could not read body file {:?}: {error}",
+                            self.call_body_input
+                        ));
+                        return;
+                    }
+                }
+            }
+            CallInputMode::Typed => return self.execute_call(),
+        };
+        let body = if matches!(
+            self.call_input_mode,
+            CallInputMode::Json | CallInputMode::JsonFile
+        ) {
+            CallBody::Json(body)
+        } else {
+            CallBody::Text(body)
+        };
+        self.call_result = Some("validating call...".into());
+        let _ = self
+            .to_chain
+            .send(ToChain::PrepareCall(format!("{pallet}/{call}"), body));
     }
 
     fn process_chain_message(&mut self, msg: FromChain) {
@@ -337,6 +432,8 @@ impl App {
                 self.call_hex = review.call_hex;
                 self.extrinsic_hex = review.extrinsic_hex;
                 self.artifact = review.artifact;
+                self.review_scroll = 0;
+                self.focus = Focus::Review;
             }
             FromChain::CallError(error) => {
                 self.error = Some(error);
@@ -476,12 +573,17 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         call_items: vec![],
         call_idx: 0,
         call_form: None,
+        call_form_key: None,
+        call_input_mode: CallInputMode::Typed,
+        call_body_input: String::new(),
         call_result: None,
         call_submittable: false,
         call_hex: None,
         extrinsic_hex: None,
         artifact: None,
         artifact_dir,
+        review_scroll: 0,
+        wait_for: sube::WaitFor::Finalized,
         panel: Panel::Pallets,
         focus: Focus::Navigate,
         search_query: String::new(),
@@ -534,6 +636,9 @@ fn handle_key(app: &mut App, key: KeyCode) {
         Focus::Form => handle_form(app, key),
         Focus::Search => handle_search(app, key),
         Focus::BlockDetail => handle_block_detail(app, key),
+        Focus::Review => handle_review(app, key),
+        Focus::ConfirmSubmit => handle_submit_confirmation(app, key),
+        Focus::BodyInput => handle_body_input(app, key),
     }
 }
 
@@ -593,38 +698,84 @@ fn handle_navigate(app: &mut App, key: KeyCode) {
                 }
             }
             Panel::Calls => {
-                app.build_call_form();
-                if let Some(ref f) = app.call_form {
-                    if f.is_empty() {
-                        app.execute_call();
-                    } else {
-                        app.focus = Focus::Form;
+                if app.call_input_mode.is_typed() {
+                    app.build_call_form();
+                    if let Some(ref f) = app.call_form {
+                        if f.is_empty() {
+                            app.execute_call();
+                        } else {
+                            app.focus = Focus::Form;
+                        }
                     }
+                } else {
+                    app.focus = Focus::BodyInput;
                 }
             }
             Panel::Blocks => app.open_block_detail(),
             _ => {}
         },
-        KeyCode::Char('s') if app.panel == Panel::Calls && app.call_submittable => {
-            app.call_submittable = false;
-            app.call_result = Some("submitting reviewed bytes...".into());
-            let _ = app.to_chain.send(ToChain::SubmitPrepared);
+        KeyCode::Char('m') if app.panel == Panel::Calls => {
+            app.call_input_mode = app.call_input_mode.next();
+            app.error = Some(format!("Call input mode: {:?}", app.call_input_mode));
         }
-        KeyCode::Char('c') if app.panel == Panel::Calls && app.call_hex.is_some() => {
+        KeyCode::Char('/') => {
+            app.search_query.clear();
+            app.focus = Focus::Search;
+        }
+        _ => {}
+    }
+}
+
+fn handle_review(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc => {
+            app.call_result = None;
+            app.call_submittable = false;
+            app.call_hex = None;
+            app.extrinsic_hex = None;
+            app.artifact = None;
+            app.error = None;
+            app.review_scroll = 0;
+            app.focus = if app.call_input_mode.is_typed() && app.call_form.is_some() {
+                Focus::Form
+            } else if !app.call_input_mode.is_typed() {
+                Focus::BodyInput
+            } else {
+                Focus::Navigate
+            };
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.review_scroll = app.review_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.review_scroll = app.review_scroll.saturating_add(1);
+        }
+        KeyCode::PageUp => app.review_scroll = app.review_scroll.saturating_sub(10),
+        KeyCode::PageDown => app.review_scroll = app.review_scroll.saturating_add(10),
+        KeyCode::Char('w') if app.call_submittable => {
+            app.wait_for = match app.wait_for {
+                sube::WaitFor::BestBlock => sube::WaitFor::Finalized,
+                sube::WaitFor::Finalized => sube::WaitFor::BestBlock,
+            };
+        }
+        KeyCode::Char('s') if app.call_submittable => {
+            app.focus = Focus::ConfirmSubmit;
+        }
+        KeyCode::Char('c') if app.call_hex.is_some() => {
             let result = copy_terminal_clipboard(app.call_hex.as_deref().unwrap_or_default());
             app.error = Some(match result {
                 Ok(()) => "Copied call hex through the terminal clipboard.".into(),
                 Err(error) => format!("Could not copy call hex: {error}"),
             });
         }
-        KeyCode::Char('x') if app.panel == Panel::Calls && app.extrinsic_hex.is_some() => {
+        KeyCode::Char('x') if app.extrinsic_hex.is_some() => {
             let result = copy_terminal_clipboard(app.extrinsic_hex.as_deref().unwrap_or_default());
             app.error = Some(match result {
                 Ok(()) => "Copied full extrinsic hex through the terminal clipboard.".into(),
                 Err(error) => format!("Could not copy extrinsic hex: {error}"),
             });
         }
-        KeyCode::Char('e') if app.panel == Panel::Calls && app.artifact.is_some() => {
+        KeyCode::Char('e') if app.artifact.is_some() => {
             let result = export_artifact(
                 &app.artifact_dir,
                 app.artifact.as_deref().unwrap_or_default(),
@@ -634,17 +785,35 @@ fn handle_navigate(app: &mut App, key: KeyCode) {
                 Err(error) => format!("Could not export artifact: {error}"),
             });
         }
-        KeyCode::Esc if app.panel == Panel::Calls && app.call_result.is_some() => {
-            app.call_result = None;
-            app.call_submittable = false;
-            app.call_hex = None;
-            app.extrinsic_hex = None;
-            app.artifact = None;
-            app.error = None;
+        _ => {}
+    }
+}
+
+fn handle_body_input(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Esc => app.focus = Focus::Navigate,
+        KeyCode::Enter => {
+            app.execute_call_body();
+            app.focus = Focus::Navigate;
         }
-        KeyCode::Char('/') => {
-            app.search_query.clear();
-            app.focus = Focus::Search;
+        KeyCode::Backspace => {
+            app.call_body_input.pop();
+        }
+        KeyCode::Char(c) => app.call_body_input.push(c),
+        _ => {}
+    }
+}
+
+fn handle_submit_confirmation(app: &mut App, key: KeyCode) {
+    match key {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            app.call_submittable = false;
+            app.call_result = Some(format!("submitting reviewed bytes ({:?})...", app.wait_for));
+            let _ = app.to_chain.send(ToChain::SubmitPrepared(app.wait_for));
+            app.focus = Focus::Review;
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            app.focus = Focus::Review;
         }
         _ => {}
     }
@@ -797,7 +966,18 @@ fn handle_block_detail(app: &mut App, key: KeyCode) {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_no_pad, export_artifact};
+    use super::{CallInputMode, base64_no_pad, export_artifact};
+
+    #[test]
+    fn call_input_modes_cycle_without_losing_the_selected_mode() {
+        let mut mode = CallInputMode::Typed;
+        mode = mode.next();
+        assert_eq!(mode, CallInputMode::Json);
+        mode = mode.next();
+        assert_eq!(mode, CallInputMode::ScaleText);
+        mode = mode.next().next().next();
+        assert_eq!(mode, CallInputMode::Typed);
+    }
 
     #[test]
     fn osc52_payload_uses_unpadded_base64() {
