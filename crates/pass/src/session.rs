@@ -248,7 +248,7 @@ impl<S: Signer> ExtrinsicAssembler for SessionAuthorizer<S> {
         registry: &Registry,
         ctx: &ChainContext,
         overrides: &[(String, DynValue)],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<sube::extrinsic::AssembledExtrinsic> {
         if !self.policy.allows_encoded_call(encoded_call) {
             return Err(Error::OperationFailed(
                 "call is outside the local session policy".into(),

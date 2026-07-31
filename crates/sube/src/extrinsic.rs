@@ -145,6 +145,21 @@ pub struct AuthorizationSummary {
     pub scheme: Option<String>,
 }
 
+/// Exact metadata-ordered bytes contributed by one transaction extension.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedExtension {
+    pub identifier: String,
+    pub extra_hex: String,
+    pub additional_signed_hex: String,
+}
+
+/// Inner extrinsic bytes and the extension bytes used to assemble them.
+#[derive(Clone, Debug)]
+pub struct AssembledExtrinsic {
+    pub bytes: Vec<u8>,
+    pub extensions: Vec<EncodedExtension>,
+}
+
 /// Cached identity and denomination properties reported by the chain.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChainProperties {
@@ -167,6 +182,7 @@ pub struct EncodedExtrinsic {
     pub transaction_version: u32,
     pub nonce: u64,
     pub authorization: AuthorizationSummary,
+    pub extensions: Vec<EncodedExtension>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -346,10 +362,24 @@ pub fn encode_extensions(
     ctx: &ChainContext,
     overrides: &[(String, DynValue)],
 ) -> Result<(Vec<u8>, Vec<u8>)> {
+    let (extra, additional, _) = encode_extensions_detailed(extensions, registry, ctx, overrides)?;
+    Ok((extra, additional))
+}
+
+/// Encode extensions and retain the exact bytes contributed by each entry.
+pub fn encode_extensions_detailed(
+    extensions: &[SignedExtensionMeta],
+    registry: &scales::Registry,
+    ctx: &ChainContext,
+    overrides: &[(String, DynValue)],
+) -> Result<(Vec<u8>, Vec<u8>, Vec<EncodedExtension>)> {
     let mut extra = Vec::new();
     let mut additional = Vec::new();
+    let mut summaries = Vec::with_capacity(extensions.len());
 
     for ext in extensions {
+        let mut extension_extra = Vec::new();
+        let mut extension_additional = Vec::new();
         // "extra" bytes — included in extrinsic body
         if meta::is_zero_size_type(ext.ty, registry) {
             // zero bytes, nothing to encode
@@ -360,13 +390,13 @@ pub fn encode_extensions(
             let Mortality::Mortal { period } = ctx.mortality else {
                 unreachable!()
             };
-            extra.extend_from_slice(&encode_mortal_era(period, ctx.checkpoint_number));
+            extension_extra.extend_from_slice(&encode_mortal_era(period, ctx.checkpoint_number));
         } else {
             let value = find_override(overrides, &ext.identifier)
                 .or_else(|| default_extra(&ext.identifier, ctx))
                 .or_else(|| option_none(ext.ty, registry))
                 .ok_or_else(|| Error::MissingExtensionValue(ext.identifier.clone()))?;
-            scales::to_bytes_with_info(&mut extra, &value, Some((registry, ext.ty)))
+            scales::to_bytes_with_info(&mut extension_extra, &value, Some((registry, ext.ty)))
                 .map_err(|e| Error::Encode(e.to_string()))?;
         }
 
@@ -380,15 +410,23 @@ pub fn encode_extensions(
                     Error::MissingExtensionValue(format!("{} (additional_signed)", ext.identifier))
                 })?;
             scales::to_bytes_with_info(
-                &mut additional,
+                &mut extension_additional,
                 &value,
                 Some((registry, ext.additional_signed)),
             )
             .map_err(|e| Error::Encode(e.to_string()))?;
         }
+
+        summaries.push(EncodedExtension {
+            identifier: ext.identifier.clone(),
+            extra_hex: format!("0x{}", hex::encode(&extension_extra)),
+            additional_signed_hex: format!("0x{}", hex::encode(&extension_additional)),
+        });
+        extra.extend_from_slice(&extension_extra);
+        additional.extend_from_slice(&extension_additional);
     }
 
-    Ok((extra, additional))
+    Ok((extra, additional, summaries))
 }
 
 /// Metadata-validate and encode a call without signing it.
@@ -427,7 +465,7 @@ pub async fn build_transaction(
     let ctx = build_context(chain, meta, options, from_account.as_ref()).await?;
 
     // Delegate assembly to the assembler
-    let encoded_inner = assembler
+    let assembled = assembler
         .assemble(
             &call.bytes,
             &meta.extrinsic,
@@ -438,12 +476,12 @@ pub async fn build_transaction(
         .await?;
 
     let len = Compact(
-        u32::try_from(encoded_inner.len())
+        u32::try_from(assembled.bytes.len())
             .map_err(|_| Error::Encode("extrinsic too large".into()))?,
     )
     .encode();
 
-    let bytes = [len, encoded_inner].concat();
+    let bytes = [len, assembled.bytes].concat();
     let expires_at = match ctx.mortality {
         Mortality::Immortal => None,
         Mortality::Mortal { period } => {
@@ -463,6 +501,7 @@ pub async fn build_transaction(
         transaction_version: ctx.tx_version,
         nonce: ctx.account_nonce,
         authorization: assembler.authorization(),
+        extensions: assembled.extensions,
     })
 }
 
@@ -477,10 +516,10 @@ pub async fn assemble_signed_v4(
     registry: &scales::Registry,
     ctx: &ChainContext,
     overrides: &[(String, DynValue)],
-) -> Result<Vec<u8>> {
+) -> Result<AssembledExtrinsic> {
     // Encode extensions
-    let (extra_bytes, additional_signed) =
-        encode_extensions(&meta.extensions, registry, ctx, overrides)?;
+    let (extra_bytes, additional_signed, extensions) =
+        encode_extensions_detailed(&meta.extensions, registry, ctx, overrides)?;
 
     // Sign
     let signature_payload = [encoded_call, &extra_bytes, &additional_signed].concat();
@@ -535,14 +574,15 @@ pub async fn assemble_signed_v4(
         scales::to_vec_with_info(&signature_value, Some((registry, signature_ty)))
             .map_err(|error| Error::Encode(format!("signature: {error}")))?;
 
-    Ok([
+    let bytes = [
         vec![0b10000000 | meta.version],
         address_bytes,
         signature_bytes,
         extra_bytes,
         encoded_call.to_vec(),
     ]
-    .concat())
+    .concat();
+    Ok(AssembledExtrinsic { bytes, extensions })
 }
 
 #[cfg(test)]
@@ -666,6 +706,42 @@ mod tests {
         assert_eq!(
             option_none(extension.ty, &meta.registry),
             Some(DynValue::Null)
+        );
+    }
+
+    #[test]
+    fn detailed_extension_summary_uses_exact_encoded_bytes() {
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+        let (extra, additional, summaries) = encode_extensions_detailed(
+            &meta.extrinsic.extensions,
+            &meta.registry,
+            &test_ctx(),
+            &[],
+        )
+        .unwrap();
+
+        let summarized_extra = summaries
+            .iter()
+            .flat_map(|summary| hex::decode(summary.extra_hex.trim_start_matches("0x")).unwrap())
+            .collect::<Vec<_>>();
+        let summarized_additional = summaries
+            .iter()
+            .flat_map(|summary| {
+                hex::decode(summary.additional_signed_hex.trim_start_matches("0x")).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(summarized_extra, extra);
+        assert_eq!(summarized_additional, additional);
+        assert_eq!(
+            summaries
+                .iter()
+                .map(|summary| summary.identifier.as_str())
+                .collect::<Vec<_>>(),
+            meta.extrinsic
+                .extensions
+                .iter()
+                .map(|extension| extension.identifier.as_str())
+                .collect::<Vec<_>>()
         );
     }
 }

@@ -69,7 +69,7 @@ pub fn spawn(
             {
                 return;
             }
-            let mut prepared_transaction: Option<sube::EncodedExtrinsic> = None;
+            let mut prepared_transaction: Option<crate::workflow::PreparedTransaction> = None;
             let mut prepared_artifact: Option<String> = None;
 
             loop {
@@ -112,10 +112,10 @@ pub fn spawn(
                                     )
                                     .await
                                     {
-                                        Ok(Some((transaction, review, artifact))) => {
-                                            let call_hex = transaction.call.hex.clone();
-                                            let extrinsic_hex = transaction.hex.clone();
-                                            prepared_transaction = Some(transaction);
+                                        Ok(Some((prepared, review, artifact))) => {
+                                            let call_hex = prepared.transaction.call.hex.clone();
+                                            let extrinsic_hex = prepared.transaction.hex.clone();
+                                            prepared_transaction = Some(prepared);
                                             prepared_artifact = Some(artifact.clone());
                                             let _ = to_ui
                                                 .send(FromChain::CallPrepared(CallReview {
@@ -173,9 +173,12 @@ pub fn spawn(
                                     .await;
                                 continue;
                             };
-                            match chain
-                                .submit_transaction(&transaction, sube::WaitFor::Finalized)
-                                .await
+                            match crate::workflow::submit_transaction(
+                                &mut chain,
+                                &transaction,
+                                sube::WaitFor::Finalized,
+                            )
+                            .await
                             {
                                 Ok(receipt) => {
                                     prepared_artifact = None;
@@ -211,10 +214,10 @@ pub fn spawn(
                                             ),
                                             call_hex: prepared_transaction
                                                 .as_ref()
-                                                .map(|transaction| transaction.call.hex.clone()),
+                                                .map(|prepared| prepared.transaction.call.hex.clone()),
                                             extrinsic_hex: prepared_transaction
                                                 .as_ref()
-                                                .map(|transaction| transaction.hex.clone()),
+                                                .map(|prepared| prepared.transaction.hex.clone()),
                                             artifact: prepared_artifact.clone(),
                                             submittable: true,
                                         }))
@@ -283,7 +286,7 @@ async fn prepare_review(
     chain_url: &str,
     profile_path: &std::path::Path,
     call: &sube::PreparedCall,
-) -> Result<Option<(sube::EncodedExtrinsic, String, String)>, String> {
+) -> Result<Option<(crate::workflow::PreparedTransaction, String, String)>, String> {
     let profiles =
         crate::profiles::Profiles::load(profile_path).map_err(|error| error.to_string())?;
     let Some(profile) = profiles.active() else {
@@ -296,16 +299,22 @@ async fn prepare_review(
         return Err("active profile genesis hash does not match the connected chain".into());
     }
 
-    let (transaction, authorizer) = match profile {
+    let (prepared, authorizer) = match profile {
         crate::profiles::Profile::Wallet(profile) => {
             let signer = crate::wallet_signer(profile)
                 .await
                 .map_err(|error| error.to_string())?;
-            let transaction = chain
-                .build_transaction(call, &signer, sube::TransactionOptions::default())
-                .await
-                .map_err(|error| error.to_string())?;
-            (transaction, profile.name.as_str())
+            let prepared = crate::workflow::prepare_transaction(
+                chain,
+                chain_url,
+                call,
+                &profile.name,
+                &signer,
+                sube::TransactionOptions::default(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            (prepared, profile.name.as_str())
         }
         #[cfg(feature = "pass")]
         crate::profiles::Profile::Pass(profile) => {
@@ -320,27 +329,27 @@ async fn prepare_review(
                 .map_err(|error| error.to_string())?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
-            let transaction = chain
-                .build_transaction(call, &authorizer, sube::TransactionOptions::default())
-                .await
-                .map_err(|error| error.to_string())?;
-            (transaction, profile.name.as_str())
+            let prepared = crate::workflow::prepare_transaction(
+                chain,
+                chain_url,
+                call,
+                &profile.name,
+                &authorizer,
+                sube::TransactionOptions::default(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            (prepared, profile.name.as_str())
         }
     };
-    let report = chain
-        .inspect_transaction(&transaction)
-        .await
-        .map_err(|error| error.to_string())?;
-    if matches!(report.validity, Some(sube::TransactionValidity::Invalid(_))) {
-        return Err("transaction validation reports known-invalid; submission blocked".into());
-    }
-    let artifact = crate::transaction_artifact(chain_url, authorizer, &transaction, &report);
-    let artifact = serde_json::to_string_pretty(&artifact).map_err(|error| error.to_string())?;
-    let mut review = artifact.clone();
+    let _ = authorizer;
+    let artifact =
+        serde_json::to_string_pretty(&prepared.artifact()).map_err(|error| error.to_string())?;
+    let mut review = prepared.review_text();
     review.push_str(
         "\n\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit finalized",
     );
-    Ok(Some((transaction, review, artifact)))
+    Ok(Some((prepared, review, artifact)))
 }
 
 #[cfg(test)]

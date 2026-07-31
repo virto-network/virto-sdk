@@ -55,7 +55,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use codec::Encode;
 
-use sube::extrinsic::{ChainContext, encode_extensions};
+use sube::extrinsic::{
+    AssembledExtrinsic, ChainContext, encode_extensions, encode_extensions_detailed,
+};
 use sube::metadata::{ExtrinsicMeta, SignedExtensionMeta};
 use sube::{DynValue, Error, ExtrinsicAssembler, Registry, Result};
 
@@ -154,7 +156,7 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         registry: &Registry,
         ctx: &ChainContext,
         overrides: &[(String, DynValue)],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<AssembledExtrinsic> {
         let (_before, _pass_ext, after) = locate_pass_authenticate(&meta.extensions)?;
 
         // Encode extensions AFTER PassAuthenticate to compute the inherited implication.
@@ -179,7 +181,8 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         // Re-encode ALL extensions with the PassAuthenticate override in place.
         let mut all_overrides = Vec::from(overrides);
         all_overrides.push((PASS_AUTHENTICATE.into(), pass_value));
-        let (all_extra, _) = encode_extensions(&meta.extensions, registry, ctx, &all_overrides)?;
+        let (all_extra, _, extensions) =
+            encode_extensions_detailed(&meta.extensions, registry, ctx, &all_overrides)?;
 
         // Assemble the V5 General extrinsic: [ver, ext_ver, extras, call]
         let mut inner = Vec::with_capacity(2 + all_extra.len() + encoded_call.len());
@@ -188,7 +191,10 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         inner.extend_from_slice(&all_extra);
         inner.extend_from_slice(encoded_call);
 
-        Ok(inner)
+        Ok(AssembledExtrinsic {
+            bytes: inner,
+            extensions,
+        })
     }
 }
 

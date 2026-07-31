@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::extrinsic::{self, AuthorizationSummary, ChainContext};
+use crate::extrinsic::{self, AssembledExtrinsic, AuthorizationSummary, ChainContext};
 use crate::metadata::ExtrinsicMeta;
 use crate::prelude::*;
 use crate::value::DynValue;
@@ -82,7 +82,7 @@ pub trait ExtrinsicAssembler {
         registry: &scales::Registry,
         ctx: &ChainContext,
         overrides: &[(String, DynValue)],
-    ) -> Result<Vec<u8>>;
+    ) -> Result<AssembledExtrinsic>;
 }
 
 // Every `Signer` is an `ExtrinsicAssembler` that produces V4 signed extrinsics.
@@ -114,7 +114,7 @@ impl<T: Signer> ExtrinsicAssembler for T {
         registry: &scales::Registry,
         ctx: &ChainContext,
         overrides: &[(String, DynValue)],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<AssembledExtrinsic> {
         extrinsic::assemble_signed_v4(self, encoded_call, meta, registry, ctx, overrides).await
     }
 }

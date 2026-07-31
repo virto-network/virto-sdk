@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 mod profiles;
 mod tui;
+#[cfg_attr(not(feature = "wallet"), allow(dead_code))]
+mod workflow;
 
 /// Sube — query and explore Substrate chains
 #[derive(Parser)]
@@ -561,21 +563,20 @@ async fn tx_with_assembler(
     authorizer: &(impl sube::ExtrinsicAssembler + ?Sized),
     behavior: TxBehavior,
 ) -> Result<()> {
-    let extrinsic = chain
-        .build_transaction(call, authorizer, sube::TransactionOptions::default())
-        .await?;
-    let report = chain.inspect_transaction(&extrinsic).await?;
-    if matches!(report.validity, Some(sube::TransactionValidity::Invalid(_))) {
-        anyhow::bail!("transaction validation reports known-invalid; submission blocked");
-    }
+    let prepared = workflow::prepare_transaction(
+        chain,
+        chain_url,
+        call,
+        authorizer_name,
+        authorizer,
+        sube::TransactionOptions::default(),
+    )
+    .await?;
 
     if behavior.json {
-        println!(
-            "{}",
-            transaction_artifact(chain_url, authorizer_name, &extrinsic, &report)
-        );
+        println!("{}", prepared.artifact());
     } else {
-        print_review(chain_url, authorizer_name, &extrinsic, &report);
+        print!("{}", prepared.review_text());
     }
 
     if !behavior.submit {
@@ -584,106 +585,18 @@ async fn tx_with_assembler(
     if !behavior.yes && !confirm_submission()? {
         anyhow::bail!("submission canceled; no transaction was submitted");
     }
-    let receipt = chain
-        .submit_transaction(
-            &extrinsic,
-            if behavior.best {
-                sube::WaitFor::BestBlock
-            } else {
-                sube::WaitFor::Finalized
-            },
-        )
-        .await?;
-    println!(
-        "{}",
-        serde_json::json!({
-            "bestBlockHash": receipt.best_block_hash,
-            "finalizedBlockHash": receipt.finalized_block_hash,
-            "extrinsicIndex": receipt.extrinsic_index,
-            "dispatchOutcome": format!("{:?}", receipt.dispatch_outcome),
-            "events": receipt.events.iter().map(|event| serde_json::json!({
-                "pallet": event.pallet,
-                "variant": event.variant,
-                "decoded": event.decoded,
-            })).collect::<Vec<_>>(),
-        })
-    );
+    let receipt = workflow::submit_transaction(
+        chain,
+        &prepared,
+        if behavior.best {
+            sube::WaitFor::BestBlock
+        } else {
+            sube::WaitFor::Finalized
+        },
+    )
+    .await?;
+    println!("{}", workflow::receipt_json(&receipt));
     Ok(())
-}
-
-#[cfg(feature = "wallet")]
-fn transaction_artifact(
-    chain_url: &str,
-    authorizer: &str,
-    extrinsic: &sube::EncodedExtrinsic,
-    report: &sube::TransactionReport,
-) -> serde_json::Value {
-    serde_json::json!({
-        "version": 1,
-        "chain": chain_url,
-        "genesisHash": format!("0x{}", hex::encode(extrinsic.genesis_hash)),
-        "specVersion": extrinsic.spec_version,
-        "transactionVersion": extrinsic.transaction_version,
-        "checkpoint": {
-            "number": extrinsic.checkpoint_number,
-            "hash": format!("0x{}", hex::encode(extrinsic.checkpoint_hash)),
-            "expiresAt": extrinsic.expires_at,
-        },
-        "authorizer": authorizer,
-        "signingAccount": format!("0x{}", hex::encode(&extrinsic.authorization.signing_account)),
-        "nonceAccount": format!("0x{}", hex::encode(&extrinsic.authorization.nonce_account)),
-        "nonce": extrinsic.nonce,
-        "call": {
-            "pallet": extrinsic.call.pallet,
-            "name": extrinsic.call.call,
-            "hex": extrinsic.call.hex,
-        },
-        "extrinsicHex": extrinsic.hex,
-        "fee": report.partial_fee.map(|fee| fee.to_string()),
-        "weight": report.weight.as_ref().map(|weight| serde_json::json!({
-            "refTime": weight.ref_time,
-            "proofSize": weight.proof_size,
-        })),
-        "validity": report.validity.as_ref().map(|validity| format!("{validity:?}")),
-        "warnings": report.warnings,
-        "submitted": false,
-    })
-}
-
-#[cfg(feature = "wallet")]
-fn print_review(
-    chain_url: &str,
-    authorizer: &str,
-    extrinsic: &sube::EncodedExtrinsic,
-    report: &sube::TransactionReport,
-) {
-    println!("Chain: {chain_url}");
-    println!("Genesis: 0x{}", hex::encode(extrinsic.genesis_hash));
-    println!("Authorizer: {authorizer}");
-    println!(
-        "Signing account: 0x{}",
-        hex::encode(&extrinsic.authorization.signing_account)
-    );
-    println!(
-        "Nonce account: 0x{} (nonce {})",
-        hex::encode(&extrinsic.authorization.nonce_account),
-        extrinsic.nonce
-    );
-    println!("Call: {}::{}", extrinsic.call.pallet, extrinsic.call.call);
-    println!(
-        "Checkpoint: #{} 0x{}",
-        extrinsic.checkpoint_number,
-        hex::encode(extrinsic.checkpoint_hash)
-    );
-    println!("Expires: {:?}", extrinsic.expires_at);
-    println!("Fee: {:?}", report.partial_fee);
-    println!("Weight: {:?}", report.weight);
-    println!("Validity: {:?}", report.validity);
-    println!("Call hex: {}", extrinsic.call.hex);
-    println!("Extrinsic hex: {}", extrinsic.hex);
-    for warning in &report.warnings {
-        println!("Warning: {warning}");
-    }
 }
 
 #[cfg(feature = "wallet")]
@@ -1886,25 +1799,25 @@ async fn review_pass_transaction(
     submit: bool,
     yes: bool,
 ) -> Result<Option<sube::TransactionReceipt>> {
-    let extrinsic = chain
-        .build_transaction(call, authorizer, sube::TransactionOptions::default())
-        .await?;
-    let report = chain.inspect_transaction(&extrinsic).await?;
-    if matches!(report.validity, Some(sube::TransactionValidity::Invalid(_))) {
-        anyhow::bail!("transaction validation reports known-invalid; submission blocked");
-    }
-    print_review(chain_url, authorizer_name, &extrinsic, &report);
+    let prepared = workflow::prepare_transaction(
+        chain,
+        chain_url,
+        call,
+        authorizer_name,
+        authorizer,
+        sube::TransactionOptions::default(),
+    )
+    .await?;
+    print!("{}", prepared.review_text());
     if !submit {
         return Ok(None);
     }
     if !yes && !confirm_submission()? {
         anyhow::bail!("submission canceled; no transaction was submitted");
     }
-    chain
-        .submit_transaction(&extrinsic, sube::WaitFor::Finalized)
+    workflow::submit_transaction(chain, &prepared, sube::WaitFor::Finalized)
         .await
         .map(Some)
-        .map_err(Into::into)
 }
 
 fn print_response(response: &sube::Response) -> Result<()> {
@@ -2065,8 +1978,9 @@ mod tests {
                 nonce_account: vec![9; 32],
                 scheme: Some("Sr25519".into()),
             },
+            extensions: vec![],
         };
-        let artifact = transaction_artifact(
+        let artifact = workflow::transaction_artifact(
             "wss://example.invalid",
             "alice",
             &extrinsic,
