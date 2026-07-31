@@ -169,47 +169,83 @@ enum DeviceCommand {
     },
 }
 
-#[cfg(all(feature = "pass", feature = "desktop-webauthn"))]
-#[derive(clap::Args)]
-struct DeviceProviderArgs {
-    /// Substrate-key wallet profile used as the device.
-    #[arg(
-        long,
-        conflicts_with = "webauthn_rp_id",
-        required_unless_present = "webauthn_rp_id"
-    )]
-    device_wallet: Option<String>,
-    /// WebAuthn relying-party domain used by the desktop authenticator.
-    #[arg(long, requires = "webauthn_origin", conflicts_with = "device_wallet")]
-    webauthn_rp_id: Option<String>,
-    /// HTTPS WebAuthn origin whose host is or contains the RP ID.
-    #[arg(long, requires = "webauthn_rp_id", conflicts_with = "device_wallet")]
-    webauthn_origin: Option<String>,
-}
-
-#[cfg(all(feature = "pass", not(feature = "desktop-webauthn")))]
+#[cfg(feature = "pass")]
 #[derive(clap::Args)]
 struct DeviceProviderArgs {
     /// Substrate-key wallet profile used as the device.
     #[arg(long)]
-    device_wallet: String,
+    #[cfg_attr(feature = "desktop-webauthn", arg(conflicts_with = "webauthn_rp_id"))]
+    #[cfg_attr(feature = "ssh-agent", arg(conflicts_with = "ssh_fingerprint"))]
+    #[cfg_attr(
+        all(not(feature = "desktop-webauthn"), not(feature = "ssh-agent")),
+        arg(required = true)
+    )]
+    #[cfg_attr(
+        all(feature = "desktop-webauthn", not(feature = "ssh-agent")),
+        arg(required_unless_present = "webauthn_rp_id")
+    )]
+    #[cfg_attr(
+        all(not(feature = "desktop-webauthn"), feature = "ssh-agent"),
+        arg(required_unless_present = "ssh_fingerprint")
+    )]
+    #[cfg_attr(
+        all(feature = "desktop-webauthn", feature = "ssh-agent"),
+        arg(required_unless_present_any = ["webauthn_rp_id", "ssh_fingerprint"])
+    )]
+    device_wallet: Option<String>,
+    /// WebAuthn relying-party domain used by the desktop authenticator.
+    #[cfg(feature = "desktop-webauthn")]
+    #[arg(long, requires = "webauthn_origin", conflicts_with = "device_wallet")]
+    #[cfg_attr(feature = "ssh-agent", arg(conflicts_with = "ssh_fingerprint"))]
+    webauthn_rp_id: Option<String>,
+    /// HTTPS WebAuthn origin whose host is or contains the RP ID.
+    #[cfg(feature = "desktop-webauthn")]
+    #[arg(long, requires = "webauthn_rp_id", conflicts_with = "device_wallet")]
+    #[cfg_attr(feature = "ssh-agent", arg(conflicts_with = "ssh_fingerprint"))]
+    webauthn_origin: Option<String>,
+    /// Exact OpenSSH SHA256 fingerprint selected from SSH_AUTH_SOCK.
+    #[cfg(feature = "ssh-agent")]
+    #[arg(long, conflicts_with = "device_wallet")]
+    #[cfg_attr(feature = "desktop-webauthn", arg(conflicts_with = "webauthn_rp_id"))]
+    ssh_fingerprint: Option<String>,
+    /// SSHSIG namespace. It must remain stable for this pass device.
+    #[cfg(feature = "ssh-agent")]
+    #[arg(long, requires = "ssh_fingerprint", default_value = "sube")]
+    ssh_namespace: String,
 }
 
-#[cfg(all(feature = "pass", feature = "desktop-webauthn"))]
+#[cfg(feature = "pass")]
 fn requested_device(args: DeviceProviderArgs) -> Result<profiles::DeviceProviderProfile> {
-    match (
-        args.device_wallet,
-        args.webauthn_rp_id,
-        args.webauthn_origin,
-    ) {
-        (Some(wallet), None, None) => Ok(profiles::DeviceProviderProfile::SubstrateKey { wallet }),
-        (None, Some(rp_id), Some(origin)) => Ok(profiles::DeviceProviderProfile::WebAuthn {
+    let selected = args
+        .device_wallet
+        .map(|wallet| profiles::DeviceProviderProfile::SubstrateKey { wallet });
+    #[cfg(any(feature = "desktop-webauthn", feature = "ssh-agent"))]
+    let mut selected = selected;
+
+    #[cfg(feature = "desktop-webauthn")]
+    if let (Some(rp_id), Some(origin)) = (args.webauthn_rp_id, args.webauthn_origin) {
+        if selected.is_some() {
+            anyhow::bail!("select exactly one device provider");
+        }
+        selected = Some(profiles::DeviceProviderProfile::WebAuthn {
             rp_id,
             origin,
             credential_id: Vec::new(),
-        }),
-        _ => anyhow::bail!("select exactly one complete device provider"),
+        });
     }
+
+    #[cfg(feature = "ssh-agent")]
+    if let Some(fingerprint) = args.ssh_fingerprint {
+        if selected.is_some() {
+            anyhow::bail!("select exactly one device provider");
+        }
+        selected = Some(profiles::DeviceProviderProfile::SshAgent {
+            fingerprint,
+            namespace: args.ssh_namespace,
+        });
+    }
+
+    selected.ok_or_else(|| anyhow::anyhow!("select a device provider"))
 }
 
 #[cfg(feature = "pass")]
@@ -234,15 +270,27 @@ fn same_requested_device(
                 ..
             },
         ) => stored_rp == requested_rp && stored_origin == requested_origin,
+        (
+            profiles::DeviceProviderProfile::SshAgent {
+                fingerprint: stored_fingerprint,
+                namespace: stored_namespace,
+            },
+            profiles::DeviceProviderProfile::SshAgent {
+                fingerprint: requested_fingerprint,
+                namespace: requested_namespace,
+            },
+        ) => stored_fingerprint == requested_fingerprint && stored_namespace == requested_namespace,
         _ => false,
     }
 }
 
-#[cfg(all(feature = "pass", not(feature = "desktop-webauthn")))]
-fn requested_device(args: DeviceProviderArgs) -> Result<profiles::DeviceProviderProfile> {
-    Ok(profiles::DeviceProviderProfile::SubstrateKey {
-        wallet: args.device_wallet,
-    })
+#[cfg(feature = "pass")]
+fn device_variant(device: &profiles::DeviceProviderProfile) -> &'static str {
+    match device {
+        profiles::DeviceProviderProfile::SubstrateKey { .. } => "SubstrateKey",
+        profiles::DeviceProviderProfile::WebAuthn { .. } => "WebAuthn",
+        profiles::DeviceProviderProfile::SshAgent { .. } => "Ssh",
+    }
 }
 
 #[cfg(feature = "pass")]
@@ -1126,6 +1174,10 @@ async fn pass_command(
             yes,
         } => {
             let requested_device = requested_device(device)?;
+            let variant = device_variant(&requested_device);
+            if !config.supports_attestation(variant) {
+                anyhow::bail!("runtime does not advertise {variant} enrollment");
+            }
             let user_id =
                 pass::HashedUserId::from_exact(&hex::decode(user_id.trim_start_matches("0x"))?)?;
             if store.find(&name).is_some() {
@@ -1212,10 +1264,48 @@ async fn pass_command(
                             anyhow::bail!("this build has no desktop WebAuthn support")
                         }
                     }
+                    profiles::DeviceProviderProfile::SshAgent {
+                        fingerprint,
+                        namespace,
+                    } => {
+                        #[cfg(all(feature = "ssh-agent", unix))]
+                        {
+                            let transport = pass::ssh_agent::UnixSshAgent::from_env()
+                                .map_err(anyhow::Error::msg)?;
+                            let device = pass::ssh_agent::SshAgentDevice::new(
+                                transport,
+                                fingerprint.clone(),
+                                namespace.clone(),
+                            );
+                            let draft = pass::workflow::prepare_enrollment(
+                                chain.metadata(),
+                                &config,
+                                registrar.clone(),
+                                user_id,
+                                context,
+                                checkpoint.hash,
+                                &device,
+                            )
+                            .await?;
+                            (
+                                draft,
+                                profiles::DeviceProviderProfile::SshAgent {
+                                    fingerprint,
+                                    namespace,
+                                },
+                            )
+                        }
+                        #[cfg(not(all(feature = "ssh-agent", unix)))]
+                        {
+                            let _ = (fingerprint, namespace);
+                            anyhow::bail!("this build has no native SSH-agent support")
+                        }
+                    }
                 };
                 let legacy_device_wallet = match &enrolled_device {
                     profiles::DeviceProviderProfile::SubstrateKey { wallet } => wallet.clone(),
-                    profiles::DeviceProviderProfile::WebAuthn { .. } => String::new(),
+                    profiles::DeviceProviderProfile::WebAuthn { .. }
+                    | profiles::DeviceProviderProfile::SshAgent { .. } => String::new(),
                 };
                 let pending = profiles::PendingEnrollment {
                     name: name.clone(),
@@ -1300,6 +1390,10 @@ async fn pass_command(
             } => {
                 let mut pass_profile = pass_profile(&store, &profile, genesis_hash)?.clone();
                 let requested_device = requested_device(device)?;
+                let variant = device_variant(&requested_device);
+                if !config.supports_attestation(variant) {
+                    anyhow::bail!("runtime does not advertise {variant} device registration");
+                }
                 let pending = store
                     .pending_devices
                     .iter()
@@ -1371,6 +1465,33 @@ async fn pass_command(
                             {
                                 let _ = (rp_id, origin);
                                 anyhow::bail!("this build has no desktop WebAuthn support")
+                            }
+                        }
+                        profiles::DeviceProviderProfile::SshAgent {
+                            fingerprint,
+                            namespace,
+                        } => {
+                            #[cfg(all(feature = "ssh-agent", unix))]
+                            {
+                                let transport = pass::ssh_agent::UnixSshAgent::from_env()
+                                    .map_err(anyhow::Error::msg)?;
+                                let device = pass::ssh_agent::SshAgentDevice::new(
+                                    transport,
+                                    fingerprint.clone(),
+                                    namespace.clone(),
+                                );
+                                (
+                                    device.attest(&request).await?,
+                                    profiles::DeviceProviderProfile::SshAgent {
+                                        fingerprint,
+                                        namespace,
+                                    },
+                                )
+                            }
+                            #[cfg(not(all(feature = "ssh-agent", unix)))]
+                            {
+                                let _ = (fingerprint, namespace);
+                                anyhow::bail!("this build has no native SSH-agent support")
                             }
                         }
                     };
@@ -1655,7 +1776,12 @@ async fn review_profile_device_transaction(
     submit: bool,
     yes: bool,
 ) -> Result<Option<sube::TransactionReceipt>> {
-    match profile.primary_device() {
+    let primary_device = profile.primary_device();
+    let variant = device_variant(&primary_device);
+    if !config.supports_credential(variant) {
+        anyhow::bail!("runtime does not advertise {variant} authentication");
+    }
+    match primary_device {
         profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
             let wallet = wallet_profile(store, &wallet, profile.genesis_hash)?.clone();
             let signer = wallet_signer(&wallet).await?;
@@ -1714,6 +1840,37 @@ async fn review_profile_device_transaction(
             {
                 let _ = (rp_id, origin, credential_id);
                 anyhow::bail!("this build has no desktop WebAuthn support")
+            }
+        }
+        profiles::DeviceProviderProfile::SshAgent {
+            fingerprint,
+            namespace,
+        } => {
+            #[cfg(all(feature = "ssh-agent", unix))]
+            {
+                let transport =
+                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
+                let device =
+                    pass::ssh_agent::SshAgentDevice::new(transport, fingerprint, namespace);
+                review_device_authenticated_transaction(
+                    chain,
+                    chain_url,
+                    &profile.name,
+                    call,
+                    profile,
+                    config,
+                    context,
+                    block_hash,
+                    &device,
+                    submit,
+                    yes,
+                )
+                .await
+            }
+            #[cfg(not(all(feature = "ssh-agent", unix)))]
+            {
+                let _ = (fingerprint, namespace);
+                anyhow::bail!("this build has no native SSH-agent support")
             }
         }
     }
@@ -2026,6 +2183,54 @@ mod tests {
                 "example.com",
                 "--webauthn-origin",
                 "https://example.com",
+                "--name",
+                "my-pass",
+            ])
+            .is_err()
+        );
+    }
+
+    #[cfg(all(feature = "pass", feature = "ssh-agent"))]
+    #[test]
+    fn ssh_agent_enrollment_selects_one_fingerprint_and_namespace() {
+        let cli = Cli::try_parse_from([
+            "sube",
+            "pass",
+            "enroll",
+            "--user-id",
+            &"11".repeat(32),
+            "--registrar",
+            "sponsor",
+            "--ssh-fingerprint",
+            "SHA256:example",
+            "--ssh-namespace",
+            "virto-pass",
+            "--name",
+            "my-pass",
+        ])
+        .unwrap();
+        let Some(Command::Pass {
+            command: PassCommand::Enroll { device, .. },
+        }) = cli.command
+        else {
+            panic!("expected pass enrollment");
+        };
+        assert_eq!(device.ssh_fingerprint.as_deref(), Some("SHA256:example"));
+        assert_eq!(device.ssh_namespace, "virto-pass");
+
+        assert!(
+            Cli::try_parse_from([
+                "sube",
+                "pass",
+                "enroll",
+                "--user-id",
+                &"11".repeat(32),
+                "--registrar",
+                "sponsor",
+                "--device-wallet",
+                "device",
+                "--ssh-fingerprint",
+                "SHA256:example",
                 "--name",
                 "my-pass",
             ])

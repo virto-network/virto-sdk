@@ -83,6 +83,10 @@ pub enum DeviceProviderProfile {
         origin: String,
         credential_id: Vec<u8>,
     },
+    SshAgent {
+        fingerprint: String,
+        namespace: String,
+    },
 }
 
 #[cfg(feature = "pass")]
@@ -404,6 +408,20 @@ mod tests {
         };
         let encoded = serde_json::to_string(&profile).unwrap();
         assert!(encoded.contains("credential_id"));
+        assert!(!encoded.contains("private"));
+        assert!(!encoded.contains("secret"));
+    }
+
+    #[test]
+    #[cfg(feature = "pass")]
+    fn ssh_agent_profiles_store_only_selection_metadata() {
+        let device = DeviceProviderProfile::SshAgent {
+            fingerprint: "SHA256:example".into(),
+            namespace: "virto-pass".into(),
+        };
+        let encoded = serde_json::to_string(&device).unwrap();
+        assert!(encoded.contains("SHA256:example"));
+        assert!(encoded.contains("virto-pass"));
         assert!(!encoded.contains("private"));
         assert!(!encoded.contains("secret"));
     }
