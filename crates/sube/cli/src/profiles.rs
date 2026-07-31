@@ -9,6 +9,7 @@ pub const PROFILE_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Profile {
     Wallet(WalletProfile),
     #[cfg(feature = "pass")]
@@ -50,8 +51,45 @@ pub struct PassProfile {
     pub pass_account: [u8; 32],
     pub user_id: [u8; 32],
     pub device_id: [u8; 32],
+    /// Legacy Substrate-key provider field retained for profile compatibility.
+    #[serde(default)]
     pub device_wallet: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<DeviceProviderProfile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_devices: Vec<DeviceRecord>,
     pub session: Option<SessionProfile>,
+}
+
+#[cfg(feature = "pass")]
+impl PassProfile {
+    pub fn primary_device(&self) -> DeviceProviderProfile {
+        self.device
+            .clone()
+            .unwrap_or_else(|| DeviceProviderProfile::SubstrateKey {
+                wallet: self.device_wallet.clone(),
+            })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "provider", rename_all = "kebab-case")]
+pub enum DeviceProviderProfile {
+    SubstrateKey {
+        wallet: String,
+    },
+    WebAuthn {
+        rp_id: String,
+        origin: String,
+        credential_id: Vec<u8>,
+    },
+}
+
+#[cfg(feature = "pass")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeviceRecord {
+    pub device_id: [u8; 32],
+    pub device: DeviceProviderProfile,
 }
 
 #[cfg(feature = "pass")]
@@ -70,7 +108,11 @@ pub struct PendingEnrollment {
     pub name: String,
     pub genesis_hash: [u8; 32],
     pub registrar: String,
+    /// Legacy Substrate-key provider field retained for retry compatibility.
+    #[serde(default)]
     pub device_wallet: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<DeviceProviderProfile>,
     pub user_id: [u8; 32],
     pub pass_account: [u8; 32],
     pub device_id: [u8; 32],
@@ -84,12 +126,42 @@ pub struct PendingEnrollment {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingDeviceAddition {
+    pub profile: String,
+    pub genesis_hash: [u8; 32],
+    pub device_id: [u8; 32],
+    pub device: DeviceProviderProfile,
+    pub filter: String,
+    pub admin_confirm: bool,
+    pub pallet: String,
+    pub call: String,
+    pub call_bytes: Vec<u8>,
+    pub call_hex: String,
+    pub checkpoint_number: u64,
+    pub checkpoint_hash: [u8; 32],
+    pub valid_through: u64,
+}
+
+#[cfg(feature = "pass")]
+impl PendingEnrollment {
+    pub fn device_profile(&self) -> DeviceProviderProfile {
+        self.device
+            .clone()
+            .unwrap_or_else(|| DeviceProviderProfile::SubstrateKey {
+                wallet: self.device_wallet.clone(),
+            })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Profiles {
     pub version: u32,
     pub active: Option<String>,
     pub profiles: Vec<Profile>,
     #[serde(default)]
     pub pending_enrollments: Vec<PendingEnrollment>,
+    #[serde(default)]
+    pub pending_devices: Vec<PendingDeviceAddition>,
 }
 
 impl Default for Profiles {
@@ -99,6 +171,7 @@ impl Default for Profiles {
             active: None,
             profiles: Vec::new(),
             pending_enrollments: Vec::new(),
+            pending_devices: Vec::new(),
         }
     }
 }
@@ -167,6 +240,25 @@ impl Profiles {
     pub fn remove_pending(&mut self, name: &str) {
         self.pending_enrollments
             .retain(|pending| pending.name != name);
+    }
+
+    #[cfg(feature = "pass")]
+    pub fn upsert_pending_device(&mut self, pending: PendingDeviceAddition) {
+        if let Some(existing) = self
+            .pending_devices
+            .iter_mut()
+            .find(|existing| existing.profile == pending.profile)
+        {
+            *existing = pending;
+        } else {
+            self.pending_devices.push(pending);
+        }
+    }
+
+    #[cfg(feature = "pass")]
+    pub fn remove_pending_device(&mut self, profile: &str) {
+        self.pending_devices
+            .retain(|pending| pending.profile != profile);
     }
 
     pub fn activate(&mut self, name: &str, genesis_hash: [u8; 32]) -> Result<()> {
@@ -247,6 +339,7 @@ mod tests {
             genesis_hash: [1; 32],
             registrar: "alice".into(),
             device_wallet: "device".into(),
+            device: None,
             user_id: [2; 32],
             pass_account: [3; 32],
             device_id: [4; 32],
@@ -268,5 +361,50 @@ mod tests {
 
         profiles.remove_pending("pass");
         assert!(profiles.pending_enrollments.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "pass")]
+    fn legacy_pass_profiles_resolve_their_device_wallet() {
+        let profile: PassProfile = serde_json::from_value(serde_json::json!({
+            "name": "legacy",
+            "genesis_hash": (vec![1; 32]),
+            "pass_account": (vec![2; 32]),
+            "user_id": (vec![3; 32]),
+            "device_id": (vec![4; 32]),
+            "device_wallet": "device",
+            "session": null
+        }))
+        .unwrap();
+        assert_eq!(
+            profile.primary_device(),
+            DeviceProviderProfile::SubstrateKey {
+                wallet: "device".into()
+            }
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "pass")]
+    fn webauthn_profiles_store_only_public_identifiers() {
+        let profile = PassProfile {
+            name: "passkey".into(),
+            genesis_hash: [1; 32],
+            pass_account: [2; 32],
+            user_id: [3; 32],
+            device_id: [4; 32],
+            device_wallet: String::new(),
+            device: Some(DeviceProviderProfile::WebAuthn {
+                rp_id: "example.com".into(),
+                origin: "https://example.com".into(),
+                credential_id: vec![5, 6, 7],
+            }),
+            additional_devices: Vec::new(),
+            session: None,
+        };
+        let encoded = serde_json::to_string(&profile).unwrap();
+        assert!(encoded.contains("credential_id"));
+        assert!(!encoded.contains("private"));
+        assert!(!encoded.contains("secret"));
     }
 }

@@ -122,9 +122,8 @@ enum PassCommand {
         /// Ordinary wallet profile paying for registration.
         #[arg(long)]
         registrar: String,
-        /// Substrate-key wallet profile used as the first device.
-        #[arg(long)]
-        device_wallet: String,
+        #[command(flatten)]
+        device: DeviceProviderArgs,
         #[arg(long)]
         name: String,
         #[arg(long)]
@@ -147,8 +146,8 @@ enum PassCommand {
 enum DeviceCommand {
     Add {
         profile: String,
-        #[arg(long)]
-        device_wallet: String,
+        #[command(flatten)]
+        device: DeviceProviderArgs,
         /// Explicit filter: calls:pallet/call,... or pallets:pallet,...
         #[arg(long)]
         filter: String,
@@ -168,6 +167,82 @@ enum DeviceCommand {
         #[arg(long, requires = "submit")]
         yes: bool,
     },
+}
+
+#[cfg(all(feature = "pass", feature = "desktop-webauthn"))]
+#[derive(clap::Args)]
+struct DeviceProviderArgs {
+    /// Substrate-key wallet profile used as the device.
+    #[arg(
+        long,
+        conflicts_with = "webauthn_rp_id",
+        required_unless_present = "webauthn_rp_id"
+    )]
+    device_wallet: Option<String>,
+    /// WebAuthn relying-party domain used by the desktop authenticator.
+    #[arg(long, requires = "webauthn_origin", conflicts_with = "device_wallet")]
+    webauthn_rp_id: Option<String>,
+    /// HTTPS WebAuthn origin whose host is or contains the RP ID.
+    #[arg(long, requires = "webauthn_rp_id", conflicts_with = "device_wallet")]
+    webauthn_origin: Option<String>,
+}
+
+#[cfg(all(feature = "pass", not(feature = "desktop-webauthn")))]
+#[derive(clap::Args)]
+struct DeviceProviderArgs {
+    /// Substrate-key wallet profile used as the device.
+    #[arg(long)]
+    device_wallet: String,
+}
+
+#[cfg(all(feature = "pass", feature = "desktop-webauthn"))]
+fn requested_device(args: DeviceProviderArgs) -> Result<profiles::DeviceProviderProfile> {
+    match (
+        args.device_wallet,
+        args.webauthn_rp_id,
+        args.webauthn_origin,
+    ) {
+        (Some(wallet), None, None) => Ok(profiles::DeviceProviderProfile::SubstrateKey { wallet }),
+        (None, Some(rp_id), Some(origin)) => Ok(profiles::DeviceProviderProfile::WebAuthn {
+            rp_id,
+            origin,
+            credential_id: Vec::new(),
+        }),
+        _ => anyhow::bail!("select exactly one complete device provider"),
+    }
+}
+
+#[cfg(feature = "pass")]
+fn same_requested_device(
+    stored: &profiles::DeviceProviderProfile,
+    requested: &profiles::DeviceProviderProfile,
+) -> bool {
+    match (stored, requested) {
+        (
+            profiles::DeviceProviderProfile::SubstrateKey { wallet: stored },
+            profiles::DeviceProviderProfile::SubstrateKey { wallet: requested },
+        ) => stored == requested,
+        (
+            profiles::DeviceProviderProfile::WebAuthn {
+                rp_id: stored_rp,
+                origin: stored_origin,
+                ..
+            },
+            profiles::DeviceProviderProfile::WebAuthn {
+                rp_id: requested_rp,
+                origin: requested_origin,
+                ..
+            },
+        ) => stored_rp == requested_rp && stored_origin == requested_origin,
+        _ => false,
+    }
+}
+
+#[cfg(all(feature = "pass", not(feature = "desktop-webauthn")))]
+fn requested_device(args: DeviceProviderArgs) -> Result<profiles::DeviceProviderProfile> {
+    Ok(profiles::DeviceProviderProfile::SubstrateKey {
+        wallet: args.device_wallet,
+    })
 }
 
 #[cfg(feature = "pass")]
@@ -604,6 +679,14 @@ fn profile_command(path: &std::path::Path, command: Option<ProfileCommand>) -> R
                     hex::encode(pending.genesis_hash)
                 );
             }
+            for pending in &store.pending_devices {
+                println!(
+                    "~ {} pending device 0x{} through #{}",
+                    pending.profile,
+                    hex::encode(pending.device_id),
+                    pending.valid_through
+                );
+            }
             Ok(())
         }
         ProfileCommand::AddWallet {
@@ -764,34 +847,15 @@ async fn connect_pass_session(
 
     let context = u32::try_from(checkpoint.number)
         .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-    let device_wallet =
-        wallet_profile(store, &profile.device_wallet, profile.genesis_hash)?.clone();
-    let device_signer = wallet_signer(&device_wallet).await?;
-    let device_public = device_signer.inner().public();
-    let device = pass::wallet::WalletDevice::new(
-        device_signer.inner(),
-        device_public.as_ref(),
-        pass::wallet::SignatureType::Sr25519,
-    );
-    let provider = pass::PassAuthorizer::new(
-        &device,
-        pass::HashedUserId(profile.user_id),
-        config.authority_id,
-        context,
-        checkpoint.hash,
-    )
-    .with_challenger(config.challenger);
-    let authorizer = pass::PassAuthenticator::new(
-        pass::Account(profile.pass_account),
-        pass::DeviceId(profile.device_id),
-        provider,
-    );
-    let receipt = review_pass_transaction(
+    let receipt = review_profile_device_transaction(
         chain,
         chain_url,
-        &profile.name,
+        store,
+        &profile,
+        &config,
+        context,
+        checkpoint.hash,
         &call,
-        &authorizer,
         true,
         true,
     )
@@ -1056,11 +1120,12 @@ async fn pass_command(
         PassCommand::Enroll {
             user_id,
             registrar,
-            device_wallet,
+            device,
             name,
             submit,
             yes,
         } => {
+            let requested_device = requested_device(device)?;
             let user_id =
                 pass::HashedUserId::from_exact(&hex::decode(user_id.trim_start_matches("0x"))?)?;
             if store.find(&name).is_some() {
@@ -1074,7 +1139,7 @@ async fn pass_command(
                     pending.name == name
                         && pending.genesis_hash == genesis_hash
                         && pending.registrar == registrar
-                        && pending.device_wallet == device_wallet
+                        && same_requested_device(&pending.device_profile(), &requested_device)
                         && pending.user_id == user_id.0
                         && pending.valid_through >= checkpoint.number
                 })
@@ -1086,29 +1151,78 @@ async fn pass_command(
                 );
                 pending
             } else {
-                let device_profile = wallet_profile(&store, &device_wallet, genesis_hash)?.clone();
-                let device_signer = wallet_signer(&device_profile).await?;
-                let public = device_signer.inner().public();
-                let device = pass::wallet::WalletDevice::new(
-                    device_signer.inner(),
-                    public.as_ref(),
-                    pass::wallet::SignatureType::Sr25519,
-                );
-                let draft = pass::workflow::prepare_enrollment(
-                    chain.metadata(),
-                    &config,
-                    registrar.clone(),
-                    user_id,
-                    context,
-                    checkpoint.hash,
-                    &device,
-                )
-                .await?;
+                let (draft, enrolled_device) = match requested_device.clone() {
+                    profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
+                        let wallet_profile = wallet_profile(&store, &wallet, genesis_hash)?.clone();
+                        let signer = wallet_signer(&wallet_profile).await?;
+                        let public = signer.inner().public();
+                        let device = pass::wallet::WalletDevice::new(
+                            signer.inner(),
+                            public.as_ref(),
+                            pass::wallet::SignatureType::Sr25519,
+                        );
+                        let draft = pass::workflow::prepare_enrollment(
+                            chain.metadata(),
+                            &config,
+                            registrar.clone(),
+                            user_id,
+                            context,
+                            checkpoint.hash,
+                            &device,
+                        )
+                        .await?;
+                        (
+                            draft,
+                            profiles::DeviceProviderProfile::SubstrateKey { wallet },
+                        )
+                    }
+                    profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
+                        #[cfg(feature = "desktop-webauthn")]
+                        {
+                            let device = pass::webauthn::WebAuthnDevice::for_enrollment(
+                                pass::webauthn::DesktopWebAuthnTransport,
+                                rp_id,
+                                origin,
+                            );
+                            let draft = pass::workflow::prepare_enrollment(
+                                chain.metadata(),
+                                &config,
+                                registrar.clone(),
+                                user_id,
+                                context,
+                                checkpoint.hash,
+                                &device,
+                            )
+                            .await?;
+                            let profile = device.profile().ok_or_else(|| {
+                                anyhow::anyhow!("WebAuthn authenticator returned no credential id")
+                            })?;
+                            (
+                                draft,
+                                profiles::DeviceProviderProfile::WebAuthn {
+                                    rp_id: profile.rp_id,
+                                    origin: profile.origin,
+                                    credential_id: profile.credential_id,
+                                },
+                            )
+                        }
+                        #[cfg(not(feature = "desktop-webauthn"))]
+                        {
+                            let _ = (rp_id, origin);
+                            anyhow::bail!("this build has no desktop WebAuthn support")
+                        }
+                    }
+                };
+                let legacy_device_wallet = match &enrolled_device {
+                    profiles::DeviceProviderProfile::SubstrateKey { wallet } => wallet.clone(),
+                    profiles::DeviceProviderProfile::WebAuthn { .. } => String::new(),
+                };
                 let pending = profiles::PendingEnrollment {
                     name: name.clone(),
                     genesis_hash,
                     registrar: registrar.clone(),
-                    device_wallet: device_wallet.clone(),
+                    device_wallet: legacy_device_wallet,
+                    device: Some(enrolled_device),
                     user_id: user_id.0,
                     pass_account: draft.predicted_account.0,
                     device_id: draft.attestation.device_id.0,
@@ -1165,7 +1279,9 @@ async fn pass_command(
                 pass_account: pending.pass_account,
                 user_id: user_id.0,
                 device_id: pending.device_id,
-                device_wallet,
+                device_wallet: pending.device_wallet.clone(),
+                device: Some(pending.device_profile()),
+                additional_devices: Vec::new(),
                 session: None,
             }));
             store.remove_pending(&name);
@@ -1176,69 +1292,132 @@ async fn pass_command(
         PassCommand::Device { command } => match command {
             DeviceCommand::Add {
                 profile,
-                device_wallet,
+                device,
                 filter,
                 admin_confirm,
                 submit,
                 yes,
             } => {
-                let pass_profile = pass_profile(&store, &profile, genesis_hash)?.clone();
-                let current_wallet =
-                    wallet_profile(&store, &pass_profile.device_wallet, genesis_hash)?.clone();
-                let new_wallet = wallet_profile(&store, &device_wallet, genesis_hash)?.clone();
-                let new_signer = wallet_signer(&new_wallet).await?;
-                let new_public = new_signer.inner().public();
-                let new_device = pass::wallet::WalletDevice::new(
-                    new_signer.inner(),
-                    new_public.as_ref(),
-                    pass::wallet::SignatureType::Sr25519,
-                );
-                let pass_account = pass::Account(pass_profile.pass_account);
-                let request = pass::workflow::AttestationRequest {
-                    user_id: pass::HashedUserId(pass_profile.user_id),
-                    pass_account,
-                    authority_id: config.authority_id,
-                    context,
-                    block_hash: checkpoint.hash,
-                    challenge: pass::enrollment_challenge(&checkpoint.hash, pass_account),
+                let mut pass_profile = pass_profile(&store, &profile, genesis_hash)?.clone();
+                let requested_device = requested_device(device)?;
+                let pending = store
+                    .pending_devices
+                    .iter()
+                    .find(|pending| {
+                        pending.profile == profile
+                            && pending.genesis_hash == genesis_hash
+                            && pending.filter == filter
+                            && pending.admin_confirm == admin_confirm
+                            && pending.valid_through >= checkpoint.number
+                            && same_requested_device(&pending.device, &requested_device)
+                    })
+                    .cloned();
+                let pending = if let Some(pending) = pending {
+                    println!(
+                        "Reusing pending device addition prepared at checkpoint #{}",
+                        pending.checkpoint_number
+                    );
+                    pending
+                } else {
+                    let pass_account = pass::Account(pass_profile.pass_account);
+                    let request = pass::workflow::AttestationRequest {
+                        user_id: pass::HashedUserId(pass_profile.user_id),
+                        pass_account,
+                        authority_id: config.authority_id,
+                        context,
+                        block_hash: checkpoint.hash,
+                        challenge: pass::enrollment_challenge(&checkpoint.hash, pass_account),
+                    };
+                    let (attestation, enrolled_device) = match requested_device {
+                        profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
+                            let wallet_profile =
+                                wallet_profile(&store, &wallet, genesis_hash)?.clone();
+                            let signer = wallet_signer(&wallet_profile).await?;
+                            let public = signer.inner().public();
+                            let device = pass::wallet::WalletDevice::new(
+                                signer.inner(),
+                                public.as_ref(),
+                                pass::wallet::SignatureType::Sr25519,
+                            );
+                            (
+                                device.attest(&request).await?,
+                                profiles::DeviceProviderProfile::SubstrateKey { wallet },
+                            )
+                        }
+                        profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
+                            #[cfg(feature = "desktop-webauthn")]
+                            {
+                                let device = pass::webauthn::WebAuthnDevice::for_enrollment(
+                                    pass::webauthn::DesktopWebAuthnTransport,
+                                    rp_id,
+                                    origin,
+                                );
+                                let attestation = device.attest(&request).await?;
+                                let profile = device.profile().ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "WebAuthn authenticator returned no credential id"
+                                    )
+                                })?;
+                                (
+                                    attestation,
+                                    profiles::DeviceProviderProfile::WebAuthn {
+                                        rp_id: profile.rp_id,
+                                        origin: profile.origin,
+                                        credential_id: profile.credential_id,
+                                    },
+                                )
+                            }
+                            #[cfg(not(feature = "desktop-webauthn"))]
+                            {
+                                let _ = (rp_id, origin);
+                                anyhow::bail!("this build has no desktop WebAuthn support")
+                            }
+                        }
+                    };
+                    let resolved_filter = parse_device_filter(chain.metadata(), &filter)?;
+                    let call = pass::workflow::prepare_add_device(
+                        chain.metadata(),
+                        &config,
+                        &attestation,
+                        &resolved_filter,
+                        true,
+                        admin_confirm,
+                    )?;
+                    let pending = profiles::PendingDeviceAddition {
+                        profile: profile.clone(),
+                        genesis_hash,
+                        device_id: attestation.device_id.0,
+                        device: enrolled_device,
+                        filter: filter.clone(),
+                        admin_confirm,
+                        pallet: call.pallet,
+                        call: call.call,
+                        call_bytes: call.bytes,
+                        call_hex: call.hex,
+                        checkpoint_number: checkpoint.number,
+                        checkpoint_hash: checkpoint.hash,
+                        valid_through: checkpoint.number.saturating_add(2),
+                    };
+                    store.upsert_pending_device(pending.clone());
+                    store.save(profile_path)?;
+                    pending
                 };
-                let attestation = new_device.attest(&request).await?;
-                let filter = parse_device_filter(chain.metadata(), &filter)?;
-                let call = pass::workflow::prepare_add_device(
-                    chain.metadata(),
-                    &config,
-                    &attestation,
-                    &filter,
-                    true,
-                    admin_confirm,
-                )?;
+                let call = sube::PreparedCall {
+                    pallet: pending.pallet.clone(),
+                    call: pending.call.clone(),
+                    bytes: pending.call_bytes.clone(),
+                    hex: pending.call_hex.clone(),
+                };
 
-                let current_signer = wallet_signer(&current_wallet).await?;
-                let current_public = current_signer.inner().public();
-                let current_device = pass::wallet::WalletDevice::new(
-                    current_signer.inner(),
-                    current_public.as_ref(),
-                    pass::wallet::SignatureType::Sr25519,
-                );
-                let provider = pass::PassAuthorizer::new(
-                    &current_device,
-                    pass::HashedUserId(pass_profile.user_id),
-                    config.authority_id,
-                    context,
-                    checkpoint.hash,
-                )
-                .with_challenger(config.challenger);
-                let authorizer = pass::PassAuthenticator::new(
-                    pass_account,
-                    pass::DeviceId(pass_profile.device_id),
-                    provider,
-                );
-                let receipt = review_pass_transaction(
+                let receipt = review_profile_device_transaction(
                     &mut chain,
                     chain_url,
-                    &profile,
+                    &store,
+                    &pass_profile,
+                    &config,
+                    context,
+                    checkpoint.hash,
                     &call,
-                    &authorizer,
                     submit,
                     yes,
                 )
@@ -1247,7 +1426,16 @@ async fn pass_command(
                     && receipt.finalized_block_hash.is_some()
                     && matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
                 {
-                    println!("Added device 0x{}", hex::encode(attestation.device_id.0));
+                    pass_profile
+                        .additional_devices
+                        .push(profiles::DeviceRecord {
+                            device_id: pending.device_id,
+                            device: pending.device,
+                        });
+                    store.remove_pending_device(&profile);
+                    store.upsert(profiles::Profile::Pass(pass_profile));
+                    store.save(profile_path)?;
+                    println!("Added device 0x{}", hex::encode(pending.device_id));
                 }
                 Ok(())
             }
@@ -1257,7 +1445,7 @@ async fn pass_command(
                 submit,
                 yes,
             } => {
-                let pass_profile = pass_profile(&store, &profile, genesis_hash)?.clone();
+                let mut pass_profile = pass_profile(&store, &profile, genesis_hash)?.clone();
                 let device_id = pass::DeviceId(profiles::parse_hash(&device_id, "device id")?);
                 if device_id.0 == pass_profile.device_id {
                     eprintln!(
@@ -1266,38 +1454,29 @@ async fn pass_command(
                 }
                 let call =
                     pass::workflow::prepare_remove_device(chain.metadata(), &config, device_id)?;
-                let current_wallet =
-                    wallet_profile(&store, &pass_profile.device_wallet, genesis_hash)?.clone();
-                let current_signer = wallet_signer(&current_wallet).await?;
-                let current_public = current_signer.inner().public();
-                let current_device = pass::wallet::WalletDevice::new(
-                    current_signer.inner(),
-                    current_public.as_ref(),
-                    pass::wallet::SignatureType::Sr25519,
-                );
-                let provider = pass::PassAuthorizer::new(
-                    &current_device,
-                    pass::HashedUserId(pass_profile.user_id),
-                    config.authority_id,
-                    context,
-                    checkpoint.hash,
-                )
-                .with_challenger(config.challenger);
-                let authorizer = pass::PassAuthenticator::new(
-                    pass::Account(pass_profile.pass_account),
-                    pass::DeviceId(pass_profile.device_id),
-                    provider,
-                );
-                review_pass_transaction(
+                let receipt = review_profile_device_transaction(
                     &mut chain,
                     chain_url,
-                    &profile,
+                    &store,
+                    &pass_profile,
+                    &config,
+                    context,
+                    checkpoint.hash,
                     &call,
-                    &authorizer,
                     submit,
                     yes,
                 )
                 .await?;
+                if let Some(receipt) = receipt
+                    && receipt.finalized_block_hash.is_some()
+                    && matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
+                {
+                    pass_profile
+                        .additional_devices
+                        .retain(|device| device.device_id != device_id.0);
+                    store.upsert(profiles::Profile::Pass(pass_profile));
+                    store.save(profile_path)?;
+                }
                 Ok(())
             }
         },
@@ -1420,6 +1599,124 @@ fn parse_session_policy(metadata: &sube::Metadata, value: &str) -> Result<pass::
     anyhow::bail!(
         "session policy must be calls:pallet/call,..., pallets:pallet,..., or spend:pallet:limit:call,..."
     )
+}
+
+#[cfg(feature = "pass")]
+#[allow(clippy::too_many_arguments)]
+async fn review_device_authenticated_transaction<A: pass::DeviceAuthenticator>(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    authorizer_name: &str,
+    call: &sube::PreparedCall,
+    profile: &profiles::PassProfile,
+    config: &pass::PassRuntimeConfig,
+    context: u32,
+    block_hash: [u8; 32],
+    device: &A,
+    submit: bool,
+    yes: bool,
+) -> Result<Option<sube::TransactionReceipt>> {
+    let provider = pass::PassAuthorizer::new(
+        device,
+        pass::HashedUserId(profile.user_id),
+        config.authority_id,
+        context,
+        block_hash,
+    )
+    .with_challenger(config.challenger);
+    let authorizer = pass::PassAuthenticator::new(
+        pass::Account(profile.pass_account),
+        pass::DeviceId(profile.device_id),
+        provider,
+    );
+    review_pass_transaction(
+        chain,
+        chain_url,
+        authorizer_name,
+        call,
+        &authorizer,
+        submit,
+        yes,
+    )
+    .await
+}
+
+#[cfg(feature = "pass")]
+#[allow(clippy::too_many_arguments)]
+async fn review_profile_device_transaction(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    store: &profiles::Profiles,
+    profile: &profiles::PassProfile,
+    config: &pass::PassRuntimeConfig,
+    context: u32,
+    block_hash: [u8; 32],
+    call: &sube::PreparedCall,
+    submit: bool,
+    yes: bool,
+) -> Result<Option<sube::TransactionReceipt>> {
+    match profile.primary_device() {
+        profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
+            let wallet = wallet_profile(store, &wallet, profile.genesis_hash)?.clone();
+            let signer = wallet_signer(&wallet).await?;
+            let public = signer.inner().public();
+            let device = pass::wallet::WalletDevice::new(
+                signer.inner(),
+                public.as_ref(),
+                pass::wallet::SignatureType::Sr25519,
+            );
+            review_device_authenticated_transaction(
+                chain,
+                chain_url,
+                &profile.name,
+                call,
+                profile,
+                config,
+                context,
+                block_hash,
+                &device,
+                submit,
+                yes,
+            )
+            .await
+        }
+        profiles::DeviceProviderProfile::WebAuthn {
+            rp_id,
+            origin,
+            credential_id,
+        } => {
+            #[cfg(feature = "desktop-webauthn")]
+            {
+                let device = pass::webauthn::WebAuthnDevice::from_profile(
+                    pass::webauthn::DesktopWebAuthnTransport,
+                    pass::webauthn::WebAuthnProfile {
+                        rp_id,
+                        origin,
+                        credential_id,
+                    },
+                );
+                review_device_authenticated_transaction(
+                    chain,
+                    chain_url,
+                    &profile.name,
+                    call,
+                    profile,
+                    config,
+                    context,
+                    block_hash,
+                    &device,
+                    submit,
+                    yes,
+                )
+                .await
+            }
+            #[cfg(not(feature = "desktop-webauthn"))]
+            {
+                let _ = (rp_id, origin, credential_id);
+                anyhow::bail!("this build has no desktop WebAuthn support")
+            }
+        }
+    }
 }
 
 #[cfg(feature = "pass")]
@@ -1654,6 +1951,86 @@ mod tests {
                 command: PassCommand::Enroll { submit: false, .. }
             })
         ));
+    }
+
+    #[cfg(all(feature = "pass", feature = "desktop-webauthn"))]
+    #[test]
+    fn webauthn_enrollment_requires_a_complete_exclusive_profile() {
+        let base = [
+            "sube",
+            "pass",
+            "enroll",
+            "--user-id",
+            "1111111111111111111111111111111111111111111111111111111111111111",
+            "--registrar",
+            "sponsor",
+            "--name",
+            "my-pass",
+        ];
+        let cli = Cli::try_parse_from(
+            base.into_iter()
+                .chain([
+                    "--webauthn-rp-id",
+                    "example.com",
+                    "--webauthn-origin",
+                    "https://example.com",
+                ])
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Pass {
+                command: PassCommand::Enroll { .. }
+            })
+        ));
+
+        assert!(
+            Cli::try_parse_from(
+                base.into_iter()
+                    .chain(["--webauthn-rp-id", "example.com"])
+                    .collect::<Vec<_>>()
+            )
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(
+                base.into_iter()
+                    .chain([
+                        "--device-wallet",
+                        "device",
+                        "--webauthn-rp-id",
+                        "example.com",
+                        "--webauthn-origin",
+                        "https://example.com",
+                    ])
+                    .collect::<Vec<_>>()
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(all(feature = "pass", not(feature = "desktop-webauthn")))]
+    #[test]
+    fn webauthn_flags_are_hidden_without_the_provider_feature() {
+        assert!(
+            Cli::try_parse_from([
+                "sube",
+                "pass",
+                "enroll",
+                "--user-id",
+                &"11".repeat(32),
+                "--registrar",
+                "sponsor",
+                "--webauthn-rp-id",
+                "example.com",
+                "--webauthn-origin",
+                "https://example.com",
+                "--name",
+                "my-pass",
+            ])
+            .is_err()
+        );
     }
 
     #[cfg(feature = "pass")]
