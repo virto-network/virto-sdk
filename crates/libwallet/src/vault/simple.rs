@@ -48,7 +48,7 @@ impl<S, const N: usize> Simple<S, N> {
 
     /// Unlock the key store, making the raw entropy available.
     pub fn unlock(&mut self) -> Result<&[u8; N], Error> {
-        self.unlocked = self.locked.clone();
+        self.unlocked = self.locked;
         self.unlocked.as_ref().ok_or(Error)
     }
 
@@ -57,6 +57,24 @@ impl<S, const N: usize> Simple<S, N> {
             data.zeroize();
         }
         self.unlocked = None;
+    }
+
+    pub(crate) fn replace(&mut self, secret: &[u8]) -> Result<(), Error> {
+        let replacement: [u8; N] = secret.try_into().map_err(|_| Error)?;
+        if let Some(ref mut locked) = self.locked {
+            locked.zeroize();
+        }
+        self.lock();
+        self.locked = Some(replacement);
+        Ok(())
+    }
+
+    pub(crate) fn clear(&mut self) {
+        if let Some(ref mut locked) = self.locked {
+            locked.zeroize();
+        }
+        self.locked = None;
+        self.lock();
     }
 
     /// Access the raw entropy (must be unlocked).
@@ -85,3 +103,35 @@ impl core::fmt::Display for Error {
 }
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{KeyStore, MutableKeyStore};
+
+    #[test]
+    fn repeated_upsert_replaces_one_secret_and_delete_forgets_it() {
+        let mut store = Simple::<(), 32> {
+            locked: Some([1; 32]),
+            unlocked: None,
+            _phantom: PhantomData,
+        };
+        MutableKeyStore::upsert(&mut store, &[2; 32]).unwrap();
+        MutableKeyStore::upsert(&mut store, &[3; 32]).unwrap();
+        assert_eq!(KeyStore::unlock(&mut store).unwrap(), &[3; 32]);
+
+        MutableKeyStore::delete(&mut store).unwrap();
+        assert!(KeyStore::unlock(&mut store).is_err());
+    }
+
+    #[test]
+    fn failed_rotation_preserves_existing_secret() {
+        let mut store = Simple::<(), 32> {
+            locked: Some([1; 32]),
+            unlocked: None,
+            _phantom: PhantomData,
+        };
+        assert!(MutableKeyStore::upsert(&mut store, &[9; 31]).is_err());
+        assert_eq!(KeyStore::unlock(&mut store).unwrap(), &[1; 32]);
+    }
+}

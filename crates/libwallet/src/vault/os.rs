@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
-use crate::mnemonic::{Language, Mnemonic};
 use keyring;
+use mnemonic::{Language, Mnemonic};
 
 const SERVICE: &str = "libwallet_account";
 
@@ -20,7 +20,7 @@ impl<S> OSKeyring<S> {
             entry: keyring::Entry::new(SERVICE, uname),
             entropy: None,
             auto_generate: lang.into(),
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         }
     }
 
@@ -32,21 +32,23 @@ impl<S> OSKeyring<S> {
         self.entry
             .get_password()
             .map(zeroize::Zeroizing::new)
-            .map_err(|_| Error::Keyring)
+            .map_err(|error| match error {
+                keyring::Error::NoEntry => Error::NotFound,
+                _ => Error::Keyring,
+            })
     }
 
     fn load_entropy(&mut self) -> Result<(), Error> {
-        let phrase = self
+        let stored = self
             .get()
-            .or_else(|err| {
-                self.auto_generate
-                    .ok_or(err)
-                    .and_then(|l| self.generate(l))
-            })?;
+            .or_else(|err| self.auto_generate.ok_or(err).and_then(|l| self.generate(l)))?;
 
-        let mnemonic = phrase
-            .parse::<Mnemonic>()
-            .map_err(|_| Error::BadPhrase)?;
+        if let Some(raw) = crate::chain::decode_raw_secret(&stored) {
+            self.entropy = Some(zeroize::Zeroizing::new(raw));
+            return Ok(());
+        }
+
+        let mnemonic = stored.parse::<Mnemonic>().map_err(|_| Error::BadPhrase)?;
 
         self.entropy = Some(zeroize::Zeroizing::new(mnemonic.entropy().to_vec()));
         Ok(())
@@ -87,6 +89,31 @@ impl<S> crate::chain::KeyStore for OSKeyring<S> {
         if self.entropy.is_none() {
             self.load_entropy()?;
         }
-        self.entropy.as_deref().ok_or(Error::NotFound)
+        self.entropy
+            .as_deref()
+            .map(Vec::as_slice)
+            .ok_or(Error::NotFound)
+    }
+}
+
+impl<S> crate::chain::MutableKeyStore for OSKeyring<S> {
+    type Error = Error;
+
+    fn upsert(&mut self, secret: &[u8]) -> Result<(), Self::Error> {
+        let encoded = crate::chain::encode_raw_secret(secret);
+        self.entry
+            .set_password(&encoded)
+            .map_err(|_| Error::Keyring)?;
+        self.entropy = None;
+        Ok(())
+    }
+
+    fn delete(&mut self) -> Result<(), Self::Error> {
+        match self.entry.delete_password() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(_) => return Err(Error::Keyring),
+        }
+        self.entropy = None;
+        Ok(())
     }
 }

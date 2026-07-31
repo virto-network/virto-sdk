@@ -43,14 +43,18 @@ impl<Id> Pass<Id> {
     fn load_entropy(&mut self) -> Result<(), Error> {
         let account = self.account.as_deref().unwrap_or("default");
 
-        let phrase = self.get_phrase(account)
-            .or_else(|err| {
-                self.auto_generate
-                    .ok_or(err)
-                    .and_then(|l| self.generate_phrase(account, l))
-            })?;
+        let stored = self.get_phrase(account).or_else(|err| {
+            self.auto_generate
+                .ok_or(err)
+                .and_then(|l| self.generate_phrase(account, l))
+        })?;
 
-        let mnemonic = phrase
+        if let Some(raw) = crate::chain::decode_raw_secret(&stored) {
+            self.entropy = Some(zeroize::Zeroizing::new(raw));
+            return Ok(());
+        }
+
+        let mnemonic = stored
             .parse::<mnemonic::Mnemonic>()
             .map_err(|_| Error::Plaintext)?;
 
@@ -74,9 +78,40 @@ impl<Id> Pass<Id> {
             .decrypt_file(&secret.path)
             .map_err(|_e| Error::Decrypt)?;
 
-        plaintext.unsecure_to_str()
+        plaintext
+            .unsecure_to_str()
             .map(|s| s.to_string())
             .map_err(|_e| Error::Plaintext)
+    }
+
+    fn secret_path(&self, account: &str, create_dirs: bool) -> Result<std::path::PathBuf, Error> {
+        let mut secret_path = String::from(DEFAULT_DIR);
+        secret_path.push_str(account);
+        self.store
+            .normalize_secret_path(secret_path, None, create_dirs)
+            .map_err(|_| Error::SecretPath)
+    }
+
+    fn atomic_upsert(&self, account: &str, value: String) -> Result<(), Error> {
+        let target = self.secret_path(account, true)?;
+        let temporary = target.with_extension("gpg.libwallet-tmp");
+        let plaintext = Plaintext::from(value);
+        let result = crypto::context(Proto::Gpg)
+            .map_err(|_| Error::Encrypt)?
+            .encrypt_file(
+                &self.store.recipients().map_err(|_| Error::Encrypt)?,
+                plaintext,
+                &temporary,
+            )
+            .map_err(|_| Error::Encrypt);
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            return result;
+        }
+        std::fs::rename(&temporary, &target).map_err(|_| {
+            let _ = std::fs::remove_file(&temporary);
+            Error::Store
+        })
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
@@ -139,6 +174,36 @@ impl<Id> crate::chain::KeyStore for Pass<Id> {
         if self.entropy.is_none() {
             self.load_entropy()?;
         }
-        self.entropy.as_deref().ok_or(Error::NotFound)
+        self.entropy
+            .as_deref()
+            .map(Vec::as_slice)
+            .ok_or(Error::NotFound)
+    }
+}
+
+impl<Id> crate::chain::MutableKeyStore for Pass<Id> {
+    type Error = Error;
+
+    fn upsert(&mut self, secret: &[u8]) -> Result<(), Self::Error> {
+        let account = self.account.as_deref().unwrap_or("default");
+        self.atomic_upsert(account, crate::chain::encode_raw_secret(secret))?;
+        self.entropy = None;
+        Ok(())
+    }
+
+    fn delete(&mut self) -> Result<(), Self::Error> {
+        let account = self.account.as_deref().unwrap_or("default");
+        let path = self.secret_path(account, false)?;
+        match std::fs::remove_file(path) {
+            Ok(()) => {
+                self.entropy = None;
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.entropy = None;
+                Ok(())
+            }
+            Err(_) => Err(Error::Store),
+        }
     }
 }

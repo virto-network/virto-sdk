@@ -33,6 +33,13 @@ impl<E: core::fmt::Display> core::fmt::Display for VaultError<E> {
     }
 }
 
+#[cfg(feature = "std")]
+impl<E> std::error::Error for VaultError<E>
+where
+    E: core::fmt::Debug + core::fmt::Display,
+{
+}
+
 /// A vault produces signers from stored key material.
 pub trait Vault {
     type Credentials;

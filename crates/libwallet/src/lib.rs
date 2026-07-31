@@ -8,6 +8,8 @@
 #[cfg(not(any(feature = "sr25519", feature = "secp256k1", feature = "ed25519")))]
 compile_error!("Enable at least one signature algorithm: sr25519, secp256k1, ed25519");
 
+extern crate alloc;
+
 mod account;
 mod key_pair;
 pub mod util;
@@ -16,7 +18,7 @@ pub mod util;
 pub mod bip32;
 
 pub mod chain;
-pub use chain::KeyStore;
+pub use chain::{KeyStore, MutableKeyStore, pass_session_entry_id};
 #[cfg(all(feature = "pbkdf2", feature = "hmac", feature = "sha2"))]
 pub use chain::seed_from_entropy;
 #[cfg(feature = "substrate")]
