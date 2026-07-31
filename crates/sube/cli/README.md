@@ -33,7 +33,9 @@ Only an owned metadata snapshot and formatted results cross into the UI thread.
 Completing a call form prepares and validates the typed call and shows its hex;
 it does not generate or execute a shell command. With an active signing
 profile, the result panel shows the signed transaction review and `s` submits
-those reviewed bytes for finalization.
+those reviewed bytes for finalization. `c` and `x` copy the call or full
+extrinsic via the terminal clipboard, while `e` writes a collision-safe JSON
+artifact beside the profile store.
 
 Profiles contain no secrets and are bound to a genesis hash. Wallet and session
 keys stay in the platform secure store. `tx` is non-mutating unless `--submit`

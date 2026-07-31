@@ -22,9 +22,17 @@ pub enum FromChain {
     Finalized(Vec<String>),
     StorageResult(String),
     StorageError(String),
-    CallPrepared { text: String, submittable: bool },
+    CallPrepared(CallReview),
     CallError(String),
     BlockDetail(String, String),
+}
+
+pub struct CallReview {
+    pub text: String,
+    pub call_hex: Option<String>,
+    pub extrinsic_hex: Option<String>,
+    pub artifact: Option<String>,
+    pub submittable: bool,
 }
 
 // --- Chain task ---
@@ -49,6 +57,7 @@ pub fn spawn(
                 return;
             }
             let mut prepared_transaction: Option<sube::EncodedExtrinsic> = None;
+            let mut prepared_artifact: Option<String> = None;
 
             loop {
                 while let Ok(cmd) = from_ui.try_recv() {
@@ -78,6 +87,7 @@ pub fn spawn(
                         }
                         ToChain::PrepareCall(path, body) => {
                             prepared_transaction = None;
+                            prepared_artifact = None;
                             match chain.prepare_call(&path, &sube::Text(&body)) {
                                 Ok(call) => {
                                     #[cfg(feature = "wallet")]
@@ -89,22 +99,31 @@ pub fn spawn(
                                     )
                                     .await
                                     {
-                                        Ok(Some((transaction, review))) => {
+                                        Ok(Some((transaction, review, artifact))) => {
+                                            let call_hex = transaction.call.hex.clone();
+                                            let extrinsic_hex = transaction.hex.clone();
                                             prepared_transaction = Some(transaction);
+                                            prepared_artifact = Some(artifact.clone());
                                             let _ = to_ui
-                                                .send(FromChain::CallPrepared {
+                                                .send(FromChain::CallPrepared(CallReview {
                                                     text: review,
+                                                    call_hex: Some(call_hex),
+                                                    extrinsic_hex: Some(extrinsic_hex),
+                                                    artifact: Some(artifact),
                                                     submittable: true,
-                                                })
+                                                }))
                                                 .await;
                                         }
                                         Ok(None) => {
                                             let review = prepared_call_review(&call);
                                             let _ = to_ui
-                                                .send(FromChain::CallPrepared {
+                                                .send(FromChain::CallPrepared(CallReview {
                                                     text: review,
+                                                    call_hex: Some(call.hex.clone()),
+                                                    extrinsic_hex: None,
+                                                    artifact: None,
                                                     submittable: false,
-                                                })
+                                                }))
                                                 .await;
                                         }
                                         Err(error) => {
@@ -116,10 +135,13 @@ pub fn spawn(
                                         let _ = &profile_path;
                                         let review = prepared_call_review(&call);
                                         let _ = to_ui
-                                            .send(FromChain::CallPrepared {
+                                            .send(FromChain::CallPrepared(CallReview {
                                                 text: review,
+                                                call_hex: Some(call.hex.clone()),
+                                                extrinsic_hex: None,
+                                                artifact: None,
                                                 submittable: false,
-                                            })
+                                            }))
                                             .await;
                                     }
                                 }
@@ -143,6 +165,7 @@ pub fn spawn(
                                 .await
                             {
                                 Ok(receipt) => {
+                                    prepared_artifact = None;
                                     let text = serde_json::to_string_pretty(&serde_json::json!({
                                         "finalizedBlockHash": receipt.finalized_block_hash,
                                         "extrinsicIndex": receipt.extrinsic_index,
@@ -157,21 +180,31 @@ pub fn spawn(
                                     }))
                                     .unwrap_or_else(|_| "transaction finalized".into());
                                     let _ = to_ui
-                                        .send(FromChain::CallPrepared {
+                                        .send(FromChain::CallPrepared(CallReview {
                                             text,
+                                            call_hex: None,
+                                            extrinsic_hex: None,
+                                            artifact: None,
                                             submittable: false,
-                                        })
+                                        }))
                                         .await;
                                 }
                                 Err(error) => {
                                     prepared_transaction = Some(transaction);
                                     let _ = to_ui
-                                        .send(FromChain::CallPrepared {
+                                        .send(FromChain::CallPrepared(CallReview {
                                             text: format!(
                                                 "Submission failed; reviewed bytes retained: {error}\n\nPress s to retry."
                                             ),
+                                            call_hex: prepared_transaction
+                                                .as_ref()
+                                                .map(|transaction| transaction.call.hex.clone()),
+                                            extrinsic_hex: prepared_transaction
+                                                .as_ref()
+                                                .map(|transaction| transaction.hex.clone()),
+                                            artifact: prepared_artifact.clone(),
                                             submittable: true,
-                                        })
+                                        }))
                                         .await;
                                 }
                             }
@@ -237,7 +270,7 @@ async fn prepare_review(
     chain_url: &str,
     profile_path: &std::path::Path,
     call: &sube::PreparedCall,
-) -> Result<Option<(sube::EncodedExtrinsic, String)>, String> {
+) -> Result<Option<(sube::EncodedExtrinsic, String, String)>, String> {
     let profiles =
         crate::profiles::Profiles::load(profile_path).map_err(|error| error.to_string())?;
     let Some(profile) = profiles.active() else {
@@ -289,9 +322,12 @@ async fn prepare_review(
         return Err("transaction validation reports known-invalid; submission blocked".into());
     }
     let artifact = crate::transaction_artifact(chain_url, authorizer, &transaction, &report);
-    let mut review = serde_json::to_string_pretty(&artifact).map_err(|error| error.to_string())?;
-    review.push_str("\n\nPress s to submit these reviewed bytes and wait for finalization.");
-    Ok(Some((transaction, review)))
+    let artifact = serde_json::to_string_pretty(&artifact).map_err(|error| error.to_string())?;
+    let mut review = artifact.clone();
+    review.push_str(
+        "\n\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit finalized",
+    );
+    Ok(Some((transaction, review, artifact)))
 }
 
 #[cfg(test)]

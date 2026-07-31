@@ -90,6 +90,10 @@ struct App {
     call_form: Option<FormState>,
     call_result: Option<String>,
     call_submittable: bool,
+    call_hex: Option<String>,
+    extrinsic_hex: Option<String>,
+    artifact: Option<String>,
+    artifact_dir: std::path::PathBuf,
 
     panel: Panel,
     focus: Focus,
@@ -120,6 +124,9 @@ impl App {
         self.call_form = None;
         self.call_result = None;
         self.call_submittable = false;
+        self.call_hex = None;
+        self.extrinsic_hex = None;
+        self.artifact = None;
         self.error = None;
 
         let name = match self.pallets.get(self.pallet_idx) {
@@ -185,6 +192,9 @@ impl App {
         self.call_form = None;
         self.call_result = None;
         self.call_submittable = false;
+        self.call_hex = None;
+        self.extrinsic_hex = None;
+        self.artifact = None;
         self.error = None;
 
         let pallet = match self.current_pallet() {
@@ -253,6 +263,9 @@ impl App {
         self.error = None;
         self.call_result = None;
         self.call_submittable = false;
+        self.call_hex = None;
+        self.extrinsic_hex = None;
+        self.artifact = None;
 
         let pallet = match self.current_pallet() {
             Some(p) => p,
@@ -311,13 +324,19 @@ impl App {
                 self.error = Some(e);
                 self.storage_result = None;
             }
-            FromChain::CallPrepared { text, submittable } => {
-                self.call_result = Some(text);
-                self.call_submittable = submittable;
+            FromChain::CallPrepared(review) => {
+                self.call_result = Some(review.text);
+                self.call_submittable = review.submittable;
+                self.call_hex = review.call_hex;
+                self.extrinsic_hex = review.extrinsic_hex;
+                self.artifact = review.artifact;
             }
             FromChain::CallError(error) => {
                 self.error = Some(error);
                 self.call_submittable = false;
+                self.call_hex = None;
+                self.extrinsic_hex = None;
+                self.artifact = None;
             }
             FromChain::BlockDetail(hash, events) => {
                 if let Some(ref mut d) = self.block_detail
@@ -426,6 +445,11 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
     let mut all_pallets: Vec<String> = meta.pallets.iter().map(|p| p.name.clone()).collect();
     all_pallets.sort();
     let pallets = all_pallets.clone();
+    let artifact_dir = profile_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("artifacts");
 
     let mut app = App {
         chain_url: chain_url.into(),
@@ -442,6 +466,10 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         call_form: None,
         call_result: None,
         call_submittable: false,
+        call_hex: None,
+        extrinsic_hex: None,
+        artifact: None,
+        artifact_dir,
         panel: Panel::Pallets,
         focus: Focus::Navigate,
         search_query: String::new(),
@@ -570,9 +598,36 @@ fn handle_navigate(app: &mut App, key: KeyCode) {
             app.call_result = Some("submitting reviewed bytes...".into());
             let _ = app.to_chain.send(ToChain::SubmitPrepared);
         }
+        KeyCode::Char('c') if app.panel == Panel::Calls && app.call_hex.is_some() => {
+            let result = copy_terminal_clipboard(app.call_hex.as_deref().unwrap_or_default());
+            app.error = Some(match result {
+                Ok(()) => "Copied call hex through the terminal clipboard.".into(),
+                Err(error) => format!("Could not copy call hex: {error}"),
+            });
+        }
+        KeyCode::Char('x') if app.panel == Panel::Calls && app.extrinsic_hex.is_some() => {
+            let result = copy_terminal_clipboard(app.extrinsic_hex.as_deref().unwrap_or_default());
+            app.error = Some(match result {
+                Ok(()) => "Copied full extrinsic hex through the terminal clipboard.".into(),
+                Err(error) => format!("Could not copy extrinsic hex: {error}"),
+            });
+        }
+        KeyCode::Char('e') if app.panel == Panel::Calls && app.artifact.is_some() => {
+            let result = export_artifact(
+                &app.artifact_dir,
+                app.artifact.as_deref().unwrap_or_default(),
+            );
+            app.error = Some(match result {
+                Ok(path) => format!("Exported {}", path.display()),
+                Err(error) => format!("Could not export artifact: {error}"),
+            });
+        }
         KeyCode::Esc if app.panel == Panel::Calls && app.call_result.is_some() => {
             app.call_result = None;
             app.call_submittable = false;
+            app.call_hex = None;
+            app.extrinsic_hex = None;
+            app.artifact = None;
             app.error = None;
         }
         KeyCode::Char('/') => {
@@ -581,6 +636,72 @@ fn handle_navigate(app: &mut App, key: KeyCode) {
         }
         _ => {}
     }
+}
+
+fn copy_terminal_clipboard(value: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let encoded = base64_no_pad(value.as_bytes());
+    let mut stdout = std::io::stdout().lock();
+    write!(stdout, "\x1b]52;c;{encoded}\x07")?;
+    stdout.flush()
+}
+
+fn base64_no_pad(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(ALPHABET[(first >> 2) as usize] as char);
+        output.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(third & 0x3f) as usize] as char);
+        }
+    }
+    output
+}
+
+fn export_artifact(
+    directory: &std::path::Path,
+    artifact: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+
+    std::fs::create_dir_all(directory)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    for suffix in 0..100u8 {
+        let filename = if suffix == 0 {
+            format!("sube-transaction-{timestamp}.json")
+        } else {
+            format!("sube-transaction-{timestamp}-{suffix}.json")
+        };
+        let path = directory.join(filename);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(artifact.as_bytes())?;
+                file.sync_all()?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique artifact filename",
+    ))
 }
 
 fn handle_form(app: &mut App, key: KeyCode) {
@@ -659,5 +780,39 @@ fn handle_block_detail(app: &mut App, key: KeyCode) {
         KeyCode::Up | KeyCode::Char('k') => app.navigate_block_detail(1),
         KeyCode::Down | KeyCode::Char('j') => app.navigate_block_detail(-1),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64_no_pad, export_artifact};
+
+    #[test]
+    fn osc52_payload_uses_unpadded_base64() {
+        assert_eq!(base64_no_pad(b"call hex"), "Y2FsbCBoZXg");
+    }
+
+    #[test]
+    fn artifact_export_never_overwrites_an_existing_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "sube-artifact-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let first = export_artifact(&directory, r#"{"version":1}"#).unwrap();
+        let second = export_artifact(&directory, r#"{"version":2}"#).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), r#"{"version":1}"#);
+        assert_eq!(
+            std::fs::read_to_string(&second).unwrap(),
+            r#"{"version":2}"#
+        );
+
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 }
