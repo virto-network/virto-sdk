@@ -23,6 +23,35 @@ pub struct DeviceId(pub [u8; 32]);
 #[repr(transparent)]
 pub struct HashedUserId(pub [u8; 32]);
 
+impl HashedUserId {
+    /// Accept an already-hashed user id.
+    ///
+    /// Enrollment deliberately does not hash labels or arbitrary input: the
+    /// caller must supply exactly 32 bytes.
+    pub fn from_exact(bytes: &[u8]) -> Result<Self, InvalidHashedUserId> {
+        bytes.try_into().map(Self).map_err(|_| InvalidHashedUserId {
+            actual: bytes.len(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidHashedUserId {
+    pub actual: usize,
+}
+
+impl core::fmt::Display for InvalidHashedUserId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "hashed user id must be exactly 32 bytes, got {}",
+            self.actual
+        )
+    }
+}
+
+impl core::error::Error for InvalidHashedUserId {}
+
 /// An authority identifier — 32 bytes.
 /// Matches the runtime's `fc_traits_authn::AuthorityId`, typically derived
 /// from a `PalletId`.

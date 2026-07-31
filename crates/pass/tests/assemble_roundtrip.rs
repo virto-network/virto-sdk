@@ -11,8 +11,8 @@
 //! extension SCALE-encodes successfully against the actual on-chain type
 //! registry.
 
-use sube::extrinsic::{encode_extensions, ChainContext};
-use sube::{DynValue, Metadata};
+use sube::extrinsic::{ChainContext, encode_extensions};
+use sube::{DynValue, Metadata, Mortality};
 
 const KREIVO_META: &[u8] = include_bytes!("../../sube/tests/fixtures/kreivo.scale");
 
@@ -22,6 +22,10 @@ fn ctx() -> ChainContext {
         tx_version: 2,
         genesis_hash: [0xab; 32],
         account_nonce: 0,
+        checkpoint_number: 128,
+        checkpoint_hash: [0xcd; 32],
+        mortality: Mortality::Mortal { period: 64 },
+        tip: 0,
     }
 }
 
@@ -67,37 +71,49 @@ fn encode_pass_credential_against_kreivo_metadata() {
     }
 
     let overrides = [("PassAuthenticate".to_string(), mock_pass_authenticate())];
-    let result = encode_extensions(&meta.extrinsic.extensions, &meta.registry, &ctx(), &overrides);
-
-    let (extra, additional) = result.expect("encode_extensions should succeed");
-
-    // Sanity: both outputs are non-empty when the pipeline has PassAuthenticate.
-    assert!(!extra.is_empty(), "extra bytes should be populated");
-    assert!(
-        !additional.is_empty() || true,
-        "additional_signed may be empty depending on other extensions"
+    let result = encode_extensions(
+        &meta.extrinsic.extensions,
+        &meta.registry,
+        &ctx(),
+        &overrides,
     );
+
+    let (extra, _additional) = result.expect("encode_extensions should succeed");
+
+    // Sanity: the body contains the PassAuthenticate extension value.
+    assert!(!extra.is_empty(), "extra bytes should be populated");
 }
 
 #[test]
-fn dyn_value_bytes_encodes_into_fixed_byte_array() {
-    // Regression test for the critical fix: `DynValue::Bytes([u8; N])` must
-    // serialize to exactly N raw bytes when the target type is `[u8; N]` —
-    // no compact length prefix.
+fn kreivo_v5_inherited_implication_golden_vector() {
     let meta = Metadata::from_bytes(KREIVO_META).expect("decode");
-
-    // Look for a 32-byte fixed-array field in the PassAuthenticate type chain.
-    // If we can find one, we can directly test the byte-level encoding.
-    let has_pass = meta
+    let pass_index = meta
         .extrinsic
         .extensions
         .iter()
-        .any(|e| e.identifier == "PassAuthenticate");
-    if !has_pass {
-        return;
-    }
+        .position(|extension| extension.identifier == "PassAuthenticate")
+        .expect("PassAuthenticate");
+    let call = pass::config::PassRuntimeConfig::discover(&meta)
+        .and_then(|config| {
+            pass::workflow::prepare_remove_device(&meta, &config, pass::DeviceId([0x11; 32]))
+        })
+        .expect("remove_device call");
+    let (after_extra, after_additional) = encode_extensions(
+        &meta.extrinsic.extensions[pass_index + 1..],
+        &meta.registry,
+        &ctx(),
+        &[],
+    )
+    .expect("extensions after PassAuthenticate");
+    let implication = pass::inherited_implication(
+        0x40 | meta.extrinsic.version,
+        &call.bytes,
+        &after_extra,
+        &after_additional,
+    );
 
-    // The main regression test is `encode_pass_credential_against_kreivo_metadata`
-    // above — if that succeeds, the [u8; 32] encoding path works end-to-end.
-    // This test is a placeholder for a more granular check if/when we need one.
+    assert_eq!(
+        hex::encode(implication),
+        "58f30f4f6ba5ebebdaad7dcddfc4275d3e051c00ea5088b122b7f570202123ef"
+    );
 }

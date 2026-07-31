@@ -15,6 +15,9 @@ pub struct CredentialMeta<Cx> {
     pub user_id: HashedUserId,
     pub authority_id: AuthorityId,
     pub context: Cx,
+    /// Hash of `context` fetched from the chain. The runtime challenger uses
+    /// this hash directly; it is not the hash of the encoded block number.
+    pub block_hash: [u8; 32],
     /// Variant name in the runtime's composite credential enum.
     pub variant: &'static str,
 }
@@ -28,12 +31,14 @@ where
         user_id: HashedUserId,
         authority_id: AuthorityId,
         context: Cx,
+        block_hash: [u8; 32],
         variant: &'static str,
     ) -> Self {
         Self {
             user_id,
             authority_id,
             context,
+            block_hash,
             variant,
         }
     }

@@ -10,8 +10,12 @@ blake2 = { version = "0.10", default-features = false }
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }
 libwallet = { path = "../libwallet", default-features = false, optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
+
+[dev-dependencies]
+futures-lite = "2"
 
 [features]
 default = ["wallet"]
 wallet = ["dep:libwallet", "libwallet/sr25519"]
-
+ssh-agent = ["dep:sha2"]

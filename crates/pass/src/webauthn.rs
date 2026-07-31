@@ -1,9 +1,8 @@
 //! WebAuthn credential provider for pallet-pass.
 //!
-//! The core of this module is the [`Authenticator`] trait, which abstracts
-//! over the platform that actually performs the FIDO2 assertion. Concrete
-//! backends (browser passkeys via `web-sys`, CTAP-HID via USB, software
-//! authenticators via `passkey-authenticator`) live behind feature flags.
+//! [`WebAuthnTransport`] abstracts platform create/get operations so desktop
+//! USB, Windows WebAuthn, and deterministic virtual authenticators share the
+//! same provider-neutral workflow.
 //!
 //! The [`WebAuthnCredential`] struct wraps any [`Authenticator`] and
 //! implements [`CredentialProvider`] for pallet-pass.
@@ -19,6 +18,7 @@
 //!         HashedUserId(user_hash),
 //!         AuthorityId(authority),
 //!         current_block,
+//!         current_block_hash,
 //!         "WebAuthn",
 //!     ),
 //!     my_authenticator,
@@ -27,10 +27,14 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
 use codec::Encode;
 
-use crate::{block_challenge, CredentialMeta, CredentialProvider};
+use crate::workflow::{
+    AssertionRequest, AttestationRequest, DeviceAttestation, DeviceAuthenticator,
+};
+use crate::{CredentialMeta, CredentialProvider, DeviceId, blake2b_256, block_challenge};
 use sube::{DynValue, Result};
 
 /// Errors a WebAuthn [`Authenticator`] backend may report.
@@ -70,6 +74,184 @@ pub struct AssertionResponse {
     pub signature: Vec<u8>,
 }
 
+/// Raw registration response. Private key material never leaves the
+/// authenticator; profiles retain only RP/origin and credential id.
+#[derive(Debug, Clone)]
+pub struct AttestationResponse {
+    pub credential_id: Vec<u8>,
+    pub authenticator_data: Vec<u8>,
+    pub client_data: Vec<u8>,
+    pub public_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebAuthnProfile {
+    pub rp_id: String,
+    pub origin: String,
+    pub credential_id: Vec<u8>,
+}
+
+pub struct CreateRequest<'a> {
+    pub rp_id: &'a str,
+    pub origin: &'a str,
+    pub user_id: &'a [u8; 32],
+    pub challenge: &'a [u8; 32],
+}
+
+pub struct GetRequest<'a> {
+    pub rp_id: &'a str,
+    pub origin: &'a str,
+    pub credential_id: &'a [u8],
+    pub challenge: &'a [u8; 32],
+}
+
+/// Internal transport boundary implemented by USB CTAP, Windows WebAuthn, or
+/// deterministic virtual authenticators in tests.
+pub trait WebAuthnTransport {
+    async fn create(
+        &self,
+        request: &CreateRequest<'_>,
+    ) -> core::result::Result<AttestationResponse, AuthenticatorError>;
+
+    async fn get(
+        &self,
+        request: &GetRequest<'_>,
+    ) -> core::result::Result<AssertionResponse, AuthenticatorError>;
+}
+
+/// Desktop WebAuthn provider independent of the concrete platform transport.
+pub struct WebAuthnDevice<T> {
+    transport: T,
+    rp_id: String,
+    origin: String,
+    credential_id: RefCell<Option<Vec<u8>>>,
+    attestation_variant: &'static str,
+    credential_variant: &'static str,
+}
+
+impl<T> WebAuthnDevice<T> {
+    pub fn for_enrollment(
+        transport: T,
+        rp_id: impl Into<String>,
+        origin: impl Into<String>,
+    ) -> Self {
+        Self {
+            transport,
+            rp_id: rp_id.into(),
+            origin: origin.into(),
+            credential_id: RefCell::new(None),
+            attestation_variant: "WebAuthn",
+            credential_variant: "WebAuthn",
+        }
+    }
+
+    pub fn from_profile(transport: T, profile: WebAuthnProfile) -> Self {
+        Self {
+            transport,
+            rp_id: profile.rp_id,
+            origin: profile.origin,
+            credential_id: RefCell::new(Some(profile.credential_id)),
+            attestation_variant: "WebAuthn",
+            credential_variant: "WebAuthn",
+        }
+    }
+
+    pub fn with_variants(
+        mut self,
+        attestation_variant: &'static str,
+        credential_variant: &'static str,
+    ) -> Self {
+        self.attestation_variant = attestation_variant;
+        self.credential_variant = credential_variant;
+        self
+    }
+
+    pub fn profile(&self) -> Option<WebAuthnProfile> {
+        Some(WebAuthnProfile {
+            rp_id: self.rp_id.clone(),
+            origin: self.origin.clone(),
+            credential_id: self.credential_id.borrow().clone()?,
+        })
+    }
+}
+
+impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
+    async fn attest(&self, request: &AttestationRequest) -> Result<DeviceAttestation> {
+        let response = self
+            .transport
+            .create(&CreateRequest {
+                rp_id: &self.rp_id,
+                origin: &self.origin,
+                user_id: &request.user_id.0,
+                challenge: &request.challenge,
+            })
+            .await
+            .map_err(authenticator_error)?;
+        *self.credential_id.borrow_mut() = Some(response.credential_id.clone());
+        let device_id = DeviceId(blake2b_256(&response.credential_id));
+        Ok(DeviceAttestation {
+            device_id,
+            variant: self.attestation_variant.into(),
+            payload: DynValue::obj(&[
+                (
+                    "meta",
+                    DynValue::obj(&[
+                        ("authority_id", DynValue::from(request.authority_id.0)),
+                        ("device_id", DynValue::from(device_id.0)),
+                        ("context", DynValue::from(request.context)),
+                    ]),
+                ),
+                (
+                    "authenticator_data",
+                    DynValue::from(response.authenticator_data),
+                ),
+                ("client_data", DynValue::from(response.client_data)),
+                ("public_key", DynValue::from(response.public_key)),
+            ]),
+        })
+    }
+
+    async fn assert(&self, request: &AssertionRequest) -> Result<DynValue> {
+        let credential_id =
+            self.credential_id.borrow().clone().ok_or_else(|| {
+                sube::Error::Signing("WebAuthn profile has no credential id".into())
+            })?;
+        let response = self
+            .transport
+            .get(&GetRequest {
+                rp_id: &self.rp_id,
+                origin: &self.origin,
+                credential_id: &credential_id,
+                challenge: &request.challenge,
+            })
+            .await
+            .map_err(authenticator_error)?;
+        Ok(DynValue::obj(&[(
+            self.credential_variant,
+            DynValue::obj(&[
+                (
+                    "meta",
+                    DynValue::obj(&[
+                        ("authority_id", DynValue::from(request.authority_id.0)),
+                        ("user_id", DynValue::from(request.user_id.0)),
+                        ("context", DynValue::from(request.context)),
+                    ]),
+                ),
+                (
+                    "authenticator_data",
+                    DynValue::from(response.authenticator_data),
+                ),
+                ("client_data", DynValue::from(response.client_data)),
+                ("signature", DynValue::from(response.signature)),
+            ]),
+        )]))
+    }
+}
+
+fn authenticator_error(error: AuthenticatorError) -> sube::Error {
+    sube::Error::Signing(alloc::format!("{error}"))
+}
+
 /// Abstraction over a WebAuthn authenticator.
 ///
 /// Backends implement this to perform a FIDO2 assertion (authentication).
@@ -103,7 +285,10 @@ where
     Cx: Encode + Into<DynValue> + Clone,
 {
     pub fn new(meta: CredentialMeta<Cx>, authenticator: A) -> Self {
-        Self { meta, authenticator }
+        Self {
+            meta,
+            authenticator,
+        }
     }
 
     /// Shortcut constructor without an explicit [`CredentialMeta`]. Uses
@@ -112,10 +297,11 @@ where
         user_id: crate::HashedUserId,
         authority_id: crate::AuthorityId,
         context: Cx,
+        block_hash: [u8; 32],
         authenticator: A,
     ) -> Self {
         Self::new(
-            CredentialMeta::new(user_id, authority_id, context, "WebAuthn"),
+            CredentialMeta::new(user_id, authority_id, context, block_hash, "WebAuthn"),
             authenticator,
         )
     }
@@ -127,7 +313,7 @@ where
     A: Authenticator,
 {
     async fn credential(&self, extrinsic_context: &[u8; 32]) -> Result<DynValue> {
-        let challenge = block_challenge(&self.meta.context, extrinsic_context);
+        let challenge = block_challenge(&self.meta.block_hash, extrinsic_context);
 
         let resp = self
             .authenticator
@@ -137,11 +323,104 @@ where
 
         let assertion = DynValue::obj(&[
             ("meta", self.meta.to_assertion_meta()),
-            ("authenticator_data", DynValue::from(resp.authenticator_data)),
+            (
+                "authenticator_data",
+                DynValue::from(resp.authenticator_data),
+            ),
             ("client_data", DynValue::from(resp.client_data)),
             ("signature", DynValue::from(resp.signature)),
         ]);
 
         Ok(DynValue::obj(&[(self.meta.variant, assertion)]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::{AssertionRequest, AttestationRequest};
+    use crate::{Account, AuthorityId, HashedUserId};
+    use alloc::{string::ToString, vec};
+
+    struct VirtualAuthenticator {
+        canceled: bool,
+    }
+
+    impl WebAuthnTransport for VirtualAuthenticator {
+        async fn create(
+            &self,
+            _: &CreateRequest<'_>,
+        ) -> core::result::Result<AttestationResponse, AuthenticatorError> {
+            if self.canceled {
+                return Err(AuthenticatorError::Canceled);
+            }
+            Ok(AttestationResponse {
+                credential_id: vec![1, 2, 3],
+                authenticator_data: vec![4; 37],
+                client_data: br#"{"type":"webauthn.create"}"#.to_vec(),
+                public_key: vec![5; 91],
+            })
+        }
+
+        async fn get(
+            &self,
+            _: &GetRequest<'_>,
+        ) -> core::result::Result<AssertionResponse, AuthenticatorError> {
+            if self.canceled {
+                return Err(AuthenticatorError::Canceled);
+            }
+            Ok(AssertionResponse {
+                authenticator_data: vec![6; 37],
+                client_data: br#"{"type":"webauthn.get"}"#.to_vec(),
+                signature: vec![7; 64],
+            })
+        }
+    }
+
+    fn attestation_request() -> AttestationRequest {
+        AttestationRequest {
+            user_id: HashedUserId([1; 32]),
+            pass_account: Account([2; 32]),
+            authority_id: AuthorityId([3; 32]),
+            context: 4,
+            block_hash: [5; 32],
+            challenge: [6; 32],
+        }
+    }
+
+    #[test]
+    fn virtual_create_and_get_keep_only_profile_identifiers() {
+        let device = WebAuthnDevice::for_enrollment(
+            VirtualAuthenticator { canceled: false },
+            "example.com",
+            "https://example.com",
+        );
+        let attestation =
+            futures_lite::future::block_on(device.attest(&attestation_request())).unwrap();
+        assert_eq!(attestation.variant, "WebAuthn");
+        let profile = device.profile().unwrap();
+        assert_eq!(profile.credential_id, vec![1, 2, 3]);
+
+        let request = AssertionRequest {
+            user_id: HashedUserId([1; 32]),
+            authority_id: AuthorityId([3; 32]),
+            context: 4,
+            block_hash: [5; 32],
+            binding: [8; 32],
+            challenge: [9; 32],
+        };
+        assert!(futures_lite::future::block_on(device.assert(&request)).is_ok());
+    }
+
+    #[test]
+    fn canceled_prompt_is_reported_without_fallback() {
+        let device = WebAuthnDevice::for_enrollment(
+            VirtualAuthenticator { canceled: true },
+            "example.com",
+            "https://example.com",
+        );
+        let error =
+            futures_lite::future::block_on(device.attest(&attestation_request())).unwrap_err();
+        assert!(error.to_string().contains("user canceled"));
     }
 }
