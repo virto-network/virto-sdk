@@ -22,6 +22,8 @@ smol = "2"
 ratatui = "0.30"
 crossterm = "0.29"
 anyhow = "1"
+blake2 = "0.10"
+bs58 = "0.5"
 hex = "0.4"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }

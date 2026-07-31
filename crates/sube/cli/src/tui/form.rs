@@ -1,3 +1,4 @@
+use blake2::{Blake2b512, Digest};
 use ratatui::prelude::*;
 use ratatui::widgets::*;
 use sube::scales::{Registry, TypeDef, TypeId};
@@ -12,7 +13,7 @@ pub enum Field {
         name: String,
         type_desc: String,
         input: String,
-        /// If true, plain text is auto-encoded to hex bytes on output.
+        /// If true, the input supports `utf8:`, `hex:`, and `file:` byte modes.
         is_bytes: bool,
     },
     /// Boolean toggle.
@@ -49,25 +50,39 @@ impl Field {
 
     /// Produce the text-format value for sube submission.
     #[allow(clippy::only_used_in_recursion)]
-    fn to_value(&self, registry: &Registry) -> String {
+    fn to_value(&self, registry: &Registry, context: FormContext) -> Result<String, String> {
         match self {
             Field::Text {
-                input, is_bytes, ..
+                name,
+                input,
+                is_bytes,
+                ..
             } => {
-                if *is_bytes && !input.starts_with("0x") {
-                    // Auto-encode plain string to hex bytes
-                    format!("0x{}", hex::encode(input.as_bytes()))
-                } else {
-                    input.clone()
+                if *is_bytes {
+                    return encode_bytes(input).map_err(|error| format!("{name}: {error}"));
                 }
-            }
-            Field::Bool { value, .. } => {
-                if *value {
-                    "true".into()
-                } else {
-                    "false".into()
+
+                if input.contains('.')
+                    && is_amount_name(name)
+                    && let Some(decimals) = context.token_decimals
+                {
+                    return decimal_to_integer(input, decimals)
+                        .map_err(|error| format!("{name}: {error}"));
                 }
+
+                if looks_like_ss58(input) {
+                    return decode_ss58_account(input, context.ss58_format)
+                        .map(|account| format!("0x{}", hex::encode(account)))
+                        .map_err(|error| format!("{name}: {error}"));
+                }
+
+                Ok(input.clone())
             }
+            Field::Bool { value, .. } => Ok(if *value {
+                "true".into()
+            } else {
+                "false".into()
+            }),
             Field::Enum {
                 variants,
                 selected,
@@ -76,37 +91,170 @@ impl Field {
             } => {
                 let variant = &variants[*selected];
                 if sub_fields.is_empty() {
-                    variant.clone()
+                    Ok(variant.clone())
                 } else if sub_fields.len() == 1 {
-                    format!("{}({})", variant, sub_fields[0].to_value(registry))
+                    Ok(format!(
+                        "{}({})",
+                        variant,
+                        sub_fields[0].to_value(registry, context)?
+                    ))
                 } else {
-                    let parts: Vec<String> = sub_fields
+                    let parts = sub_fields
                         .iter()
-                        .map(|f| format!("{}:{}", f.name(), f.to_value(registry)))
-                        .collect();
-                    format!("{}({})", variant, parts.join(";"))
+                        .map(|field| {
+                            Ok(format!(
+                                "{}:{}",
+                                field.name(),
+                                field.to_value(registry, context)?
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    Ok(format!("{}({})", variant, parts.join(";")))
                 }
             }
             Field::List { items, .. } => {
-                let parts: Vec<String> = items
+                let parts = items
                     .iter()
                     .map(|item_fields| {
                         if item_fields.len() == 1 {
-                            item_fields[0].to_value(registry)
+                            item_fields[0].to_value(registry, context)
                         } else {
-                            let inner: Vec<String> = item_fields
+                            let inner = item_fields
                                 .iter()
-                                .map(|f| format!("{}:{}", f.name(), f.to_value(registry)))
-                                .collect();
-                            format!("({})", inner.join(";"))
+                                .map(|field| {
+                                    Ok(format!(
+                                        "{}:{}",
+                                        field.name(),
+                                        field.to_value(registry, context)?
+                                    ))
+                                })
+                                .collect::<Result<Vec<_>, String>>()?;
+                            Ok(format!("({})", inner.join(";")))
                         }
                     })
-                    .collect();
-                format!("..({})", parts.join(";"))
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(format!("..({})", parts.join(";")))
             }
         }
     }
+}
 
+#[derive(Clone, Copy, Default)]
+pub struct FormContext {
+    pub ss58_format: Option<u16>,
+    pub token_decimals: Option<u32>,
+}
+
+fn encode_bytes(input: &str) -> Result<String, String> {
+    if let Some(value) = input.strip_prefix("file:") {
+        let bytes =
+            std::fs::read(value).map_err(|error| format!("cannot read {value:?}: {error}"))?;
+        return Ok(format!("0x{}", hex::encode(bytes)));
+    }
+
+    if let Some(value) = input
+        .strip_prefix("hex:")
+        .or_else(|| input.strip_prefix("0x"))
+    {
+        hex::decode(value).map_err(|error| format!("invalid hex bytes: {error}"))?;
+        return Ok(format!("0x{}", value.to_ascii_lowercase()));
+    }
+
+    let value = input.strip_prefix("utf8:").unwrap_or(input);
+    Ok(format!("0x{}", hex::encode(value.as_bytes())))
+}
+
+fn is_amount_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    ["amount", "balance", "value", "tip", "fee", "deposit"]
+        .iter()
+        .any(|candidate| name == *candidate || name.ends_with(&format!("_{candidate}")))
+}
+
+fn decimal_to_integer(input: &str, decimals: u32) -> Result<String, String> {
+    let (whole, fractional) = input
+        .split_once('.')
+        .ok_or_else(|| "expected a decimal amount".to_string())?;
+    if whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err("amount must contain only decimal digits".into());
+    }
+    if fractional.len() > decimals as usize {
+        return Err(format!(
+            "amount has {} fractional digits, but the chain supports {decimals}",
+            fractional.len()
+        ));
+    }
+
+    let mut value = String::with_capacity(whole.len() + decimals as usize);
+    value.push_str(whole);
+    value.push_str(fractional);
+    value.extend(std::iter::repeat_n(
+        '0',
+        decimals as usize - fractional.len(),
+    ));
+    let value = value.trim_start_matches('0');
+    Ok(if value.is_empty() { "0" } else { value }.into())
+}
+
+fn looks_like_ss58(input: &str) -> bool {
+    (47..=50).contains(&input.len())
+        && input.bytes().all(|byte| {
+            b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".contains(&byte)
+        })
+}
+
+fn decode_ss58_account(input: &str, expected_format: Option<u16>) -> Result<[u8; 32], String> {
+    let decoded = bs58::decode(input)
+        .into_vec()
+        .map_err(|_| "invalid SS58 base58 encoding".to_string())?;
+    let Some(first) = decoded.first().copied() else {
+        return Err("empty SS58 address".into());
+    };
+    let (format, prefix_len) = match first {
+        0..=63 => (u16::from(first), 1),
+        64..=127 if decoded.len() >= 2 => {
+            let second = decoded[1];
+            (
+                (u16::from(first & 0x3f) << 2)
+                    | u16::from(second >> 6)
+                    | (u16::from(second & 0x3f) << 8),
+                2,
+            )
+        }
+        _ => return Err("unsupported SS58 address format".into()),
+    };
+    if matches!(format, 46 | 47) {
+        return Err("reserved SS58 address format".into());
+    }
+    if let Some(expected) = expected_format
+        && format != expected
+    {
+        return Err(format!(
+            "SS58 network prefix {format} does not match chain prefix {expected}"
+        ));
+    }
+    if decoded.len() != prefix_len + 32 + 2 {
+        return Err("expected an SS58 AccountId32 address".into());
+    }
+
+    let payload_len = prefix_len + 32;
+    let mut hasher = Blake2b512::new();
+    hasher.update(b"SS58PRE");
+    hasher.update(&decoded[..payload_len]);
+    let checksum = hasher.finalize();
+    if decoded[payload_len..] != checksum[..2] {
+        return Err("invalid SS58 checksum".into());
+    }
+
+    let mut account = [0u8; 32];
+    account.copy_from_slice(&decoded[prefix_len..payload_len]);
+    Ok(account)
+}
+
+impl Field {
     /// Count total visible rows for layout.
     fn row_count(&self) -> usize {
         match self {
@@ -152,7 +300,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
         }
         Some(TypeDef::Bytes) => Field::Text {
             name: name.into(),
-            type_desc: "Vec<u8> (text auto-encodes to hex)".into(),
+            type_desc: "Vec<u8> (utf8:, hex:, or file:)".into(),
             input: String::new(),
             is_bytes: true,
         },
@@ -161,7 +309,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             if matches!(registry.resolve(inner), Some(TypeDef::U8)) {
                 Field::Text {
                     name: name.into(),
-                    type_desc: "Vec<u8> (text auto-encodes to hex)".into(),
+                    type_desc: "Vec<u8> (utf8:, hex:, or file:)".into(),
                     input: String::new(),
                     is_bytes: true,
                 }
@@ -206,14 +354,20 @@ pub struct FormState {
     /// Flat cursor into the visible field list.
     pub cursor: usize,
     registry: sube::Rc<sube::Registry>,
+    context: FormContext,
 }
 
 impl FormState {
-    pub fn new(fields: Vec<Field>, registry: sube::Rc<sube::Registry>) -> Self {
+    pub fn new(
+        fields: Vec<Field>,
+        registry: sube::Rc<sube::Registry>,
+        context: FormContext,
+    ) -> Self {
         FormState {
             fields,
             cursor: 0,
             registry,
+            context,
         }
     }
 
@@ -342,10 +496,10 @@ impl FormState {
     }
 
     /// Produce (field_name, text_value) pairs for submission.
-    pub fn values(&self) -> Vec<String> {
+    pub fn values(&self) -> Result<Vec<String>, String> {
         self.fields
             .iter()
-            .map(|f| f.to_value(&self.registry))
+            .map(|f| f.to_value(&self.registry, self.context))
             .collect()
     }
 
@@ -648,6 +802,7 @@ mod tests {
         let mut form = FormState::new(
             vec![field_from_type("dest", dest_ty, &metadata.registry)],
             sube::Rc::new(metadata.registry.clone()),
+            FormContext::default(),
         );
         form.next_field();
         form.push_char('7');
@@ -656,6 +811,71 @@ mod tests {
         form.toggle_back();
         form.next_field();
 
-        assert!(form.values()[0].contains('7'));
+        assert!(form.values().unwrap()[0].contains('7'));
+    }
+
+    #[test]
+    fn decimal_amounts_convert_without_floating_point() {
+        assert_eq!(decimal_to_integer("1.230000", 6).unwrap(), "1230000");
+        assert_eq!(decimal_to_integer("0.000001", 6).unwrap(), "1");
+        assert_eq!(decimal_to_integer("000.000000", 6).unwrap(), "0");
+        assert!(decimal_to_integer("0.0000001", 6).is_err());
+        assert!(decimal_to_integer("1e3.0", 6).is_err());
+    }
+
+    #[test]
+    fn ss58_account_decoding_checks_network_and_checksum() {
+        let alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+        assert_eq!(
+            hex::encode(decode_ss58_account(alice, Some(42)).unwrap()),
+            "d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d"
+        );
+        assert!(decode_ss58_account(alice, Some(2)).is_err());
+
+        let mut invalid = alice.to_string();
+        invalid.replace_range(invalid.len() - 1.., "x");
+        assert!(decode_ss58_account(&invalid, Some(42)).is_err());
+    }
+
+    #[test]
+    fn byte_inputs_support_utf8_hex_and_file_modes() {
+        assert_eq!(encode_bytes("hello").unwrap(), "0x68656c6c6f");
+        assert_eq!(encode_bytes("utf8:hello").unwrap(), "0x68656c6c6f");
+        assert_eq!(encode_bytes("hex:CAFE").unwrap(), "0xcafe");
+        assert!(encode_bytes("hex:xyz").is_err());
+
+        let path = std::env::temp_dir().join(format!(
+            "sube-form-bytes-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, [0, 1, 255]).unwrap();
+        assert_eq!(
+            encode_bytes(&format!("file:{}", path.display())).unwrap(),
+            "0x0001ff"
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn form_values_report_conversion_errors_inline() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let form = FormState::new(
+            vec![Field::Text {
+                name: "amount".into(),
+                type_desc: "u128".into(),
+                input: "1.0000001".into(),
+                is_bytes: false,
+            }],
+            sube::Rc::new(metadata.registry.clone()),
+            FormContext {
+                token_decimals: Some(6),
+                ss58_format: Some(2),
+            },
+        );
+
+        assert!(form.values().unwrap_err().contains("fractional digits"));
     }
 }

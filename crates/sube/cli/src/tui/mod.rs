@@ -17,7 +17,7 @@ mod format;
 mod types;
 
 use chain::{FromChain, ToChain};
-use form::{FormState, field_from_type};
+use form::{FormContext, FormState, field_from_type};
 use format::fuzzy_match;
 
 // --- Types ---
@@ -75,6 +75,7 @@ enum Focus {
 struct App {
     chain_url: String,
     meta: sube::Rc<Metadata>,
+    form_context: FormContext,
 
     all_pallets: Vec<String>,
     pallets: Vec<String>,
@@ -170,7 +171,7 @@ impl App {
             let reg = sube::Rc::new(self.meta.registry.clone());
             match &entry.ty {
                 StorageEntryType::Plain(_) => {
-                    self.storage_form = Some(FormState::new(vec![], reg));
+                    self.storage_form = Some(FormState::new(vec![], reg, self.form_context));
                 }
                 StorageEntryType::Map { hashers, key, .. } => {
                     let key_types =
@@ -182,7 +183,7 @@ impl App {
                             field_from_type(&format!("key{i}"), *ty_id, &self.meta.registry)
                         })
                         .collect();
-                    self.storage_form = Some(FormState::new(fields, reg));
+                    self.storage_form = Some(FormState::new(fields, reg, self.form_context));
                 }
             }
         }
@@ -228,6 +229,7 @@ impl App {
             self.call_form = Some(FormState::new(
                 fields,
                 sube::Rc::new(self.meta.registry.clone()),
+                self.form_context,
             ));
         }
     }
@@ -245,11 +247,14 @@ impl App {
             None => return,
         };
 
-        let values: Vec<String> = self
-            .storage_form
-            .as_ref()
-            .map(|f| f.values())
-            .unwrap_or_default();
+        let values = match self.storage_form.as_ref().map(|f| f.values()).transpose() {
+            Ok(values) => values.unwrap_or_default(),
+            Err(error) => {
+                self.error = Some(error);
+                self.storage_result = None;
+                return;
+            }
+        };
         let keys_part = if values.is_empty() || values.iter().all(|v| v.is_empty()) {
             String::new()
         } else {
@@ -276,11 +281,13 @@ impl App {
             None => return,
         };
 
-        let values: Vec<String> = self
-            .call_form
-            .as_ref()
-            .map(|f| f.values())
-            .unwrap_or_default();
+        let values = match self.call_form.as_ref().map(|f| f.values()).transpose() {
+            Ok(values) => values.unwrap_or_default(),
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
         let field_names: Vec<String> = self
             .call_form
             .as_ref()
@@ -431,11 +438,15 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         chain_tx,
         ready_tx,
     );
-    let meta = ready_rx
+    let ready = ready_rx
         .recv()
         .map_err(|_| anyhow::anyhow!("chain worker stopped during startup"))?
         .map_err(anyhow::Error::msg)?;
-    let meta = sube::Rc::new(meta);
+    let form_context = FormContext {
+        ss58_format: ready.properties.ss58_format,
+        token_decimals: ready.properties.token_decimals.first().copied(),
+    };
+    let meta = sube::Rc::new(ready.metadata);
     eprintln!("Connected, metadata loaded.");
 
     enable_raw_mode()?;
@@ -454,6 +465,7 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
     let mut app = App {
         chain_url: chain_url.into(),
         meta,
+        form_context,
         all_pallets,
         pallets,
         pallet_idx: 0,

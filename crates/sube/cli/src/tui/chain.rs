@@ -4,7 +4,7 @@ use std::thread;
 
 use super::BlockInfo;
 use super::format::format_response;
-use sube::Metadata;
+use sube::{ChainProperties, Metadata};
 
 // --- Messages ---
 
@@ -35,6 +35,11 @@ pub struct CallReview {
     pub submittable: bool,
 }
 
+pub struct ChainReady {
+    pub metadata: Metadata,
+    pub properties: ChainProperties,
+}
+
 // --- Chain task ---
 
 pub fn spawn(
@@ -42,7 +47,7 @@ pub fn spawn(
     profile_path: PathBuf,
     from_ui: mpsc::Receiver<ToChain>,
     to_ui: smol::channel::Sender<FromChain>,
-    ready: mpsc::SyncSender<Result<Metadata, String>>,
+    ready: mpsc::SyncSender<Result<ChainReady, String>>,
 ) {
     thread::spawn(move || {
         smol::block_on(async {
@@ -53,7 +58,15 @@ pub fn spawn(
                     return;
                 }
             };
-            if ready.send(Ok(chain.metadata().clone())).is_err() {
+            let metadata = chain.metadata().clone();
+            let properties = chain.chain_properties().await.cloned().unwrap_or_default();
+            if ready
+                .send(Ok(ChainReady {
+                    metadata,
+                    properties,
+                }))
+                .is_err()
+            {
                 return;
             }
             let mut prepared_transaction: Option<sube::EncodedExtrinsic> = None;
