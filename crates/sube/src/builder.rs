@@ -6,11 +6,14 @@ use core::pin::Pin;
 use alloc::rc::Rc;
 
 use crate::extrinsic::{
-    EncodeCall, EncodedExtrinsic, PreparedCall, TransactionOptions, TransactionReceipt,
-    TransactionReport, WaitFor,
+    EncodeCall, EncodedExtrinsic, ExternalSigningRequest, PreparedCall, TransactionOptions,
+    TransactionReceipt, TransactionReport, WaitFor,
 };
 use crate::prelude::*;
-use crate::{Backend, ExtrinsicAssembler, Metadata, Response, Result as SubeResult};
+use crate::{
+    Backend, ExtrinsicAssembler, Metadata, Response, Result as SubeResult, SignatureScheme,
+    StoragePage,
+};
 
 #[cfg(any(feature = "ws", feature = "smoldot-std"))]
 use crate::backend::{AnyBackend, chain_string_to_url, connect, get_metadata};
@@ -195,6 +198,28 @@ impl<B: Backend> Sube<B> {
         crate::query(&mut self.backend, &self.metadata, path, Some(block)).await
     }
 
+    /// Query a bounded page of a partially-keyed map at one finalized snapshot.
+    ///
+    /// Feed `StoragePage::next_key` back as `start_key` and the returned
+    /// `StoragePage::at.number` back as `block` to continue the same scan.
+    pub async fn query_page(
+        &mut self,
+        path: &str,
+        limit: u16,
+        start_key: Option<crate::RawKey>,
+        block: Option<u32>,
+    ) -> SubeResult<StoragePage> {
+        crate::query_page(
+            &mut self.backend,
+            &self.metadata,
+            path.trim_matches('/'),
+            limit,
+            start_key,
+            block,
+        )
+        .await
+    }
+
     /// Build an extrinsic call for the given pallet/method path.
     pub fn call(&mut self, path: &str) -> CallBuilder<'_, B, ()> {
         CallBuilder {
@@ -268,6 +293,37 @@ impl<B: Backend> Sube<B> {
             assembler,
         )
         .await
+    }
+
+    /// Freeze a V4 signing payload for an external wallet, hardware device, or
+    /// separate actor. `nonce_account` may differ from `signing_account`.
+    pub async fn prepare_external_signing(
+        &mut self,
+        call: &PreparedCall,
+        signing_account: &[u8],
+        nonce_account: &[u8],
+        scheme: SignatureScheme,
+        options: TransactionOptions,
+    ) -> SubeResult<ExternalSigningRequest> {
+        crate::extrinsic::prepare_external_signing(
+            &mut self.backend,
+            &self.metadata,
+            call,
+            signing_account,
+            nonce_account,
+            scheme,
+            &options,
+        )
+        .await
+    }
+
+    /// Finish an external V4 signing request locally without submitting it.
+    pub fn finish_external_signing(
+        &self,
+        request: &ExternalSigningRequest,
+        signature: &[u8],
+    ) -> SubeResult<EncodedExtrinsic> {
+        crate::extrinsic::finish_external_signing(&self.metadata, request, signature)
     }
 
     /// Obtain fee, weight, and validity diagnostics without submitting.
@@ -740,6 +796,91 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(submissions.get(), 1);
+        });
+    }
+
+    #[test]
+    fn external_v4_signing_matches_the_signer_path_byte_for_byte() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+            let account = [7; 32];
+            let signature = [9; 64];
+            let signer =
+                crate::SignerFn::new(account, move |_payload: &[u8]| async move { Ok(signature) });
+            let call = chain
+                .prepare_call("system/remark", &crate::Text("(remark:0x0102)"))
+                .unwrap();
+            let options = TransactionOptions::default().nonce(5);
+
+            let ordinary = chain
+                .build_transaction(&call, &signer, options.clone())
+                .await
+                .unwrap();
+            let request = chain
+                .prepare_external_signing(
+                    &call,
+                    &account,
+                    &account,
+                    crate::SignatureScheme::Sr25519,
+                    options,
+                )
+                .await
+                .unwrap();
+            let external = chain.finish_external_signing(&request, &signature).unwrap();
+
+            assert_eq!(external.bytes, ordinary.bytes);
+            assert_eq!(external.extensions, ordinary.extensions);
+            assert_eq!(external.authorization, ordinary.authorization);
+            assert_eq!(request.context.account_nonce, 5);
+        });
+    }
+
+    #[test]
+    fn external_signing_hashes_large_payloads_and_separates_identities() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+            let body = format!("(remark:0x{})", hex::encode(vec![0x55; 300]));
+            let call = chain
+                .prepare_call("system/remark", &crate::Text(&body))
+                .unwrap();
+            let signing_account = [3; 32];
+            let nonce_account = [4; 32];
+            let request = chain
+                .prepare_external_signing(
+                    &call,
+                    &signing_account,
+                    &nonce_account,
+                    crate::SignatureScheme::Ed25519,
+                    TransactionOptions::default().nonce(11),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(request.signing_payload.len(), 32);
+            assert_eq!(request.signing_account, signing_account);
+            assert_eq!(request.nonce_account, nonce_account);
+            let encoded = chain.finish_external_signing(&request, &[8; 64]).unwrap();
+            assert_eq!(encoded.authorization.signing_account, signing_account);
+            assert_eq!(encoded.authorization.nonce_account, nonce_account);
+            assert_eq!(encoded.authorization.scheme.as_deref(), Some("Ed25519"));
+            assert!(matches!(
+                chain.finish_external_signing(&request, &[8; 63]),
+                Err(crate::Error::Signing(_))
+            ));
         });
     }
 }

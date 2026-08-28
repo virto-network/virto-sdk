@@ -3,6 +3,7 @@ use alloc::rc::Rc;
 use crate::hasher::hash;
 use crate::metadata::{self as meta, Hasher, SignedExtensionMeta, TypeId};
 use crate::prelude::*;
+use crate::signer::SignatureScheme;
 use crate::{Backend, Error, Metadata, Response, Result};
 
 use crate::value::DynValue;
@@ -185,6 +186,25 @@ pub struct EncodedExtrinsic {
     pub extensions: Vec<EncodedExtension>,
 }
 
+/// Frozen inputs for an externally-signed V4 transaction.
+///
+/// `signing_payload` is the exact byte string the external signer must sign.
+/// It is already Blake2-256 hashed when the ordinary Substrate payload exceeds
+/// 256 bytes. Finishing the request re-encodes and verifies all metadata-driven
+/// extension bytes before accepting the signature.
+#[derive(Clone, Debug)]
+pub struct ExternalSigningRequest {
+    pub call: PreparedCall,
+    pub signing_payload: Vec<u8>,
+    pub signing_payload_hex: String,
+    pub context: ChainContext,
+    pub signing_account: Vec<u8>,
+    pub nonce_account: Vec<u8>,
+    pub scheme: SignatureScheme,
+    pub extensions: Vec<EncodedExtension>,
+    extension_overrides: Vec<(String, DynValue)>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TransactionWeight {
     pub ref_time: u64,
@@ -252,6 +272,7 @@ impl Default for TransactionReceipt {
 }
 
 /// Chain context fetched once for extension defaults.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainContext {
     pub spec_version: u32,
     pub tx_version: u32,
@@ -475,12 +496,133 @@ pub async fn build_transaction(
         )
         .await?;
 
+    encode_transaction(call, &ctx, assembler.authorization(), assembled)
+}
+
+/// Capture chain context and construct the exact bytes an external V4 signer
+/// must authorize. This function performs no signing and never submits.
+pub async fn prepare_external_signing(
+    chain: &mut (impl Backend + ?Sized),
+    meta: &Rc<Metadata>,
+    call: &PreparedCall,
+    signing_account: &[u8],
+    nonce_account: &[u8],
+    scheme: SignatureScheme,
+    options: &TransactionOptions,
+) -> Result<ExternalSigningRequest> {
+    ensure_v4(meta)?;
+    let context = build_context(chain, meta, options, nonce_account).await?;
+    let (extra, additional_signed, extensions) = encode_extensions_detailed(
+        &meta.extrinsic.extensions,
+        &meta.registry,
+        &context,
+        &options.extensions,
+    )?;
+    let signing_payload = signing_payload(&call.bytes, &extra, &additional_signed);
+
+    Ok(ExternalSigningRequest {
+        call: call.clone(),
+        signing_payload_hex: format!("0x{}", hex::encode(&signing_payload)),
+        signing_payload,
+        context,
+        signing_account: signing_account.to_vec(),
+        nonce_account: nonce_account.to_vec(),
+        scheme,
+        extensions,
+        extension_overrides: options.extensions.clone(),
+    })
+}
+
+/// Validate an external signature and finish a previously frozen V4 request.
+/// This operation is local and never submits the resulting extrinsic.
+pub fn finish_external_signing(
+    meta: &Rc<Metadata>,
+    request: &ExternalSigningRequest,
+    signature: &[u8],
+) -> Result<EncodedExtrinsic> {
+    ensure_v4(meta)?;
+    if signature.len() != request.scheme.signature_len() {
+        return Err(Error::Signing(format!(
+            "{} signature must be {} bytes, got {}",
+            request.scheme.metadata_name(),
+            request.scheme.signature_len(),
+            signature.len()
+        )));
+    }
+
+    let current_versions = runtime_versions(meta)?;
+    if current_versions != (request.context.spec_version, request.context.tx_version) {
+        return Err(Error::RuntimeUpgrade {
+            built_spec: request.context.spec_version,
+            current_spec: current_versions.0,
+        });
+    }
+
+    let (extra, additional_signed, extensions) = encode_extensions_detailed(
+        &meta.extrinsic.extensions,
+        &meta.registry,
+        &request.context,
+        &request.extension_overrides,
+    )?;
+    let signing_payload = signing_payload(&request.call.bytes, &extra, &additional_signed);
+    if signing_payload != request.signing_payload || extensions != request.extensions {
+        return Err(Error::OperationFailed(
+            "external signing request no longer matches runtime metadata".into(),
+        ));
+    }
+
+    let assembled = assemble_signed_v4_parts(
+        &request.signing_account,
+        signature,
+        Some(request.scheme.metadata_name()),
+        &request.call.bytes,
+        &meta.extrinsic,
+        &meta.registry,
+        extra,
+        extensions,
+    )?;
+    encode_transaction(
+        &request.call,
+        &request.context,
+        AuthorizationSummary {
+            signing_account: request.signing_account.clone(),
+            nonce_account: request.nonce_account.clone(),
+            scheme: Some(request.scheme.metadata_name().into()),
+        },
+        assembled,
+    )
+}
+
+fn ensure_v4(meta: &Metadata) -> Result<()> {
+    if meta.extrinsic.version != 4 {
+        return Err(Error::OperationFailed(format!(
+            "external signing only supports V4 extrinsics; runtime declares V{}",
+            meta.extrinsic.version
+        )));
+    }
+    Ok(())
+}
+
+fn signing_payload(encoded_call: &[u8], extra: &[u8], additional_signed: &[u8]) -> Vec<u8> {
+    let payload = [encoded_call, extra, additional_signed].concat();
+    if payload.len() > 256 {
+        hash(&Hasher::Blake2_256, &payload)
+    } else {
+        payload
+    }
+}
+
+fn encode_transaction(
+    call: &PreparedCall,
+    ctx: &ChainContext,
+    authorization: AuthorizationSummary,
+    assembled: AssembledExtrinsic,
+) -> Result<EncodedExtrinsic> {
     let len = Compact(
         u32::try_from(assembled.bytes.len())
             .map_err(|_| Error::Encode("extrinsic too large".into()))?,
     )
     .encode();
-
     let bytes = [len, assembled.bytes].concat();
     let expires_at = match ctx.mortality {
         Mortality::Immortal => None,
@@ -500,7 +642,7 @@ pub async fn build_transaction(
         spec_version: ctx.spec_version,
         transaction_version: ctx.tx_version,
         nonce: ctx.account_nonce,
-        authorization: assembler.authorization(),
+        authorization,
         extensions: assembled.extensions,
     })
 }
@@ -522,19 +664,34 @@ pub async fn assemble_signed_v4(
         encode_extensions_detailed(&meta.extensions, registry, ctx, overrides)?;
 
     // Sign
-    let signature_payload = [encoded_call, &extra_bytes, &additional_signed].concat();
-
-    let payload = if signature_payload.len() > 256 {
-        hash(&Hasher::Blake2_256, &signature_payload)
-    } else {
-        signature_payload
-    };
+    let payload = signing_payload(encoded_call, &extra_bytes, &additional_signed);
     let signature = signer.sign(payload).await?;
 
+    assemble_signed_v4_parts(
+        signer.account().as_ref(),
+        signature.as_ref(),
+        signer.signature_variant(),
+        encoded_call,
+        meta,
+        registry,
+        extra_bytes,
+        extensions,
+    )
+}
+
+fn assemble_signed_v4_parts(
+    account: &[u8],
+    signature: &[u8],
+    signature_variant: Option<&str>,
+    encoded_call: &[u8],
+    meta: &meta::ExtrinsicMeta,
+    registry: &scales::Registry,
+    extra_bytes: Vec<u8>,
+    extensions: Vec<EncodedExtension>,
+) -> Result<AssembledExtrinsic> {
     // Assemble the metadata-declared address and signature types. This supports
     // AccountId/newtype addresses as well as MultiAddress, and any signature
     // enum variant selected by the signer.
-    let from_account = signer.account();
     let address_ty = meta.address_ty.ok_or(Error::BadMetadata)?;
     let signature_ty = meta.signature_ty.ok_or(Error::BadMetadata)?;
 
@@ -546,17 +703,16 @@ pub async fn assemble_signed_v4(
                 .ok_or_else(|| {
                     Error::Encode("address enum has no metadata-declared Id variant".into())
                 })?;
-            DynValue::obj(&[(id.name(), DynValue::from(from_account.as_ref()))])
+            DynValue::obj(&[(id.name(), DynValue::from(account))])
         }
-        _ => DynValue::from(from_account.as_ref()),
+        _ => DynValue::from(account),
     };
     let address_bytes = scales::to_vec_with_info(&address_value, Some((registry, address_ty)))
         .map_err(|error| Error::Encode(format!("address: {error}")))?;
 
     let signature_value = match registry.resolve(signature_ty) {
         Some(scales::TypeDef::Variant(def)) => {
-            let requested = signer
-                .signature_variant()
+            let requested = signature_variant
                 .ok_or_else(|| Error::Encode("signer did not select a signature variant".into()))?;
             let variant = def
                 .variants()
@@ -566,9 +722,9 @@ pub async fn assemble_signed_v4(
                         "signature variant {requested} is absent from runtime metadata"
                     ))
                 })?;
-            DynValue::obj(&[(variant.name(), DynValue::from(signature.as_ref()))])
+            DynValue::obj(&[(variant.name(), DynValue::from(signature))])
         }
-        _ => DynValue::from(signature.as_ref()),
+        _ => DynValue::from(signature),
     };
     let signature_bytes =
         scales::to_vec_with_info(&signature_value, Some((registry, signature_ty)))

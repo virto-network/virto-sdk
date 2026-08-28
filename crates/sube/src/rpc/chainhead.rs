@@ -845,6 +845,39 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         }
     }
 
+    /// Legacy state RPC used for genuinely bounded, cursor-based key scans.
+    /// Values are still read through chainHead/archive at the same explicit
+    /// finalized block; this call only discovers the raw keys.
+    async fn keys_paged_at_hash(
+        &mut self,
+        prefix: &[u8],
+        size: u16,
+        start_key: Option<&[u8]>,
+        block_hash: &[u8; 32],
+    ) -> crate::Result<Vec<crate::RawKey>> {
+        let prefix = to_hex(prefix);
+        let start = start_key
+            .map(|key| format!(r#""{}""#, to_hex(key)))
+            .unwrap_or_else(|| "null".into());
+        let hash = to_hex(block_hash);
+        let raw = self
+            .rpc
+            .rpc(
+                "state_getKeysPaged",
+                &format!(r#"["{prefix}",{size},{start},"{hash}"]"#),
+            )
+            .await
+            .map_err(|error| crate::Error::Node(format!("paged keys: {error}")))?;
+
+        parse_string_values(&raw)
+            .into_iter()
+            .map(|key| {
+                hex::decode(key.trim_start_matches("0x"))
+                    .map_err(|_| crate::Error::Decode("paged key hex decode failed".into()))
+            })
+            .collect()
+    }
+
     /// Execute a runtime call at a specific pinned block hash.
     pub async fn runtime_call_at(
         &mut self,
@@ -1182,20 +1215,22 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     async fn get_keys_paged(
         &mut self,
         from: crate::RawKey,
-        _size: u16,
-        _to: Option<crate::RawKey>,
+        size: u16,
+        to: Option<crate::RawKey>,
     ) -> crate::Result<Vec<crate::RawKey>> {
-        let prefix = to_hex(&from);
+        self.get_keys_paged_at(from, size, to, None).await
+    }
 
-        let items = self.storage_descendants(&prefix).await?;
-
-        items
-            .into_iter()
-            .map(|item| {
-                hex::decode(item.key.trim_start_matches("0x"))
-                    .map_err(|_| crate::Error::Decode("hex decode failed".into()))
-            })
-            .collect()
+    async fn get_keys_paged_at(
+        &mut self,
+        prefix: crate::RawKey,
+        size: u16,
+        start_key: Option<crate::RawKey>,
+        block: Option<u32>,
+    ) -> crate::Result<Vec<crate::RawKey>> {
+        let block = self.block_info(block).await?;
+        self.keys_paged_at_hash(&prefix, size, start_key.as_deref(), &block.hash)
+            .await
     }
 
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> crate::Result<()> {

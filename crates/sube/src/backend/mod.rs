@@ -10,7 +10,7 @@ mod url;
 use url::Url;
 
 #[cfg(all(feature = "smoldot", feature = "std"))]
-type SmoldotPlatform = alloc::sync::Arc<smoldot_light::platform::DefaultPlatform>;
+type SmoldotPlatform = crate::rpc::managed_platform::ManagedPlatform;
 
 // --- Internal backend enum + dispatch ---
 
@@ -55,6 +55,16 @@ impl Backend for AnyBackend {
         to: Option<crate::RawKey>,
     ) -> SubeResult<Vec<crate::RawKey>> {
         dispatch!(self, get_keys_paged(from, size, to))
+    }
+
+    async fn get_keys_paged_at(
+        &mut self,
+        prefix: crate::RawKey,
+        size: u16,
+        start_key: Option<crate::RawKey>,
+        block: Option<u32>,
+    ) -> SubeResult<Vec<crate::RawKey>> {
+        dispatch!(self, get_keys_paged_at(prefix, size, start_key, block))
     }
 
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> SubeResult<()> {

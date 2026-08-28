@@ -275,6 +275,7 @@ pub fn is_zero_size_type(ty: TypeId, registry: &scales::Registry) -> bool {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockInfo {
     pub number: u64,
     pub hash: [u8; 32],

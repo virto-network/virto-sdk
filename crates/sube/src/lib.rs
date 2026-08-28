@@ -8,7 +8,7 @@ and human-readable formats (JSON, text) without hardcoded type information.
 
 # Usage
 
-```no_run
+```rust,ignore
 # async fn example() -> sube::Result<()> {
 let mut chain = sube::Sube::connect("wss://kreivo.io").await?;
 let response = chain.query("system/number").await?;
@@ -51,14 +51,14 @@ pub use builder::{CallBuilder, Sube, SubeBuilder};
 pub use builder::{EdgeResources, EdgeSube, connect_edge, connect_edge_with_meta};
 pub use extrinsic::{
     AssembledExtrinsic, AuthorizationSummary, ChainProperties, DispatchOutcome, EncodeCall,
-    EncodedExtension, EncodedExtrinsic, Mortality, PreparedCall, Text, TransactionEvent,
-    TransactionOptions, TransactionReceipt, TransactionReport, TransactionValidity,
-    TransactionWeight, WaitFor,
+    EncodedExtension, EncodedExtrinsic, ExternalSigningRequest, Mortality, PreparedCall, Text,
+    TransactionEvent, TransactionOptions, TransactionReceipt, TransactionReport,
+    TransactionValidity, TransactionWeight, WaitFor,
 };
-pub use meta::Metadata;
+pub use meta::{BlockInfo, Metadata};
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 pub use rpc::chainhead::{BlockHeader, ChainEvent, ChainSession};
-pub use signer::{Bytes, ExtrinsicAssembler, Signer, SignerFn};
+pub use signer::{Bytes, ExtrinsicAssembler, SignatureScheme, Signer, SignerFn};
 
 use core::fmt;
 use metadata::{self as meta, KeyValue, StorageKey};
@@ -94,7 +94,7 @@ pub mod value;
 ///
 /// Returns a [`SubeBuilder`] — `.await` it to get a connected [`Sube`] handle.
 ///
-/// ```no_run
+/// ```rust,ignore
 /// # async fn example() -> sube::Result<()> {
 /// let response = sube::sube("wss://kreivo.io/system/number").await?;
 /// assert!(response.to_text()?.is_some());
@@ -128,6 +128,49 @@ pub(crate) async fn query(
             partial_storage_response(values, &key, meta)
         }
     }
+}
+
+/// Query one bounded page of a partially-keyed storage map.
+///
+/// `start_key` is an exclusive raw storage-key cursor. `block` selects the
+/// finalized snapshot; when omitted, the backend captures its current
+/// finalized block and returns it in [`StoragePage::at`].
+pub async fn query_page(
+    chain: &mut (impl Backend + ?Sized),
+    meta: &Rc<Metadata>,
+    path: &str,
+    limit: u16,
+    start_key: Option<RawKey>,
+    block: Option<u32>,
+) -> Result<StoragePage> {
+    if limit == 0 {
+        return Err(Error::BadInput);
+    }
+    let ResolvedQuery::Storage(storage_key) = resolve_query(meta, path)? else {
+        return Err(Error::BadInput);
+    };
+    if !storage_key.is_partial() {
+        return Err(Error::BadInput);
+    }
+
+    let at = chain.block_info(block).await?;
+    let block_number = u32::try_from(at.number).map_err(|_| Error::BadBlockNumber)?;
+    let requested = limit.checked_add(1).ok_or(Error::BadInput)?;
+    let mut keys = chain
+        .get_keys_paged_at(storage_key.key(), requested, start_key, Some(block_number))
+        .await?;
+    let has_more = keys.len() > usize::from(limit);
+    keys.truncate(usize::from(limit));
+    let next_key = has_more.then(|| keys.last().cloned()).flatten();
+    let values = chain.get_storage_items(keys, Some(block_number)).await?;
+    let entries = partial_storage_entries(values, &storage_key, meta)?;
+
+    Ok(StoragePage {
+        at,
+        entries,
+        next_key,
+        metadata: Rc::clone(meta),
+    })
 }
 
 pub(crate) enum ResolvedQuery {
@@ -174,6 +217,18 @@ fn partial_storage_response(
     storage_key: &StorageKey,
     meta: &Rc<Metadata>,
 ) -> Result<Response> {
+    let entries = partial_storage_entries(values, storage_key, meta)?
+        .into_iter()
+        .map(|entry| (entry.keys, entry.value))
+        .collect();
+    Ok(Response::ValueSet(entries, Rc::clone(meta)))
+}
+
+fn partial_storage_entries(
+    values: Vec<(RawKey, Option<RawValue>)>,
+    storage_key: &StorageKey,
+    meta: &Rc<Metadata>,
+) -> Result<Vec<StoragePageEntry>> {
     let prefix_len = storage_key.pallet.len() + storage_key.call.len();
     let mut decoded = Vec::with_capacity(values.len());
 
@@ -213,13 +268,14 @@ fn partial_storage_response(
             offset = end;
         }
 
-        decoded.push((
-            parts,
-            value.map(|data| StorageEntry::new(data, storage_key.ty)),
-        ));
+        decoded.push(StoragePageEntry {
+            raw_key,
+            keys: parts,
+            value: value.map(|data| StorageEntry::new(data, storage_key.ty)),
+        });
     }
 
-    Ok(Response::ValueSet(decoded, Rc::clone(meta)))
+    Ok(decoded)
 }
 
 pub(crate) fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
@@ -238,6 +294,29 @@ pub(crate) fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
 pub struct StorageEntry {
     pub data: Vec<u8>,
     pub ty: scales::TypeId,
+}
+
+/// One decoded entry in a paged storage-map response.
+#[derive(Clone, Debug)]
+pub struct StoragePageEntry {
+    /// Complete raw storage key, suitable for use as the next exclusive cursor.
+    pub raw_key: RawKey,
+    /// Metadata-decoded map-key components, in declaration order.
+    pub keys: Vec<StorageEntry>,
+    /// Raw SCALE-encoded value, or `None` when the key disappeared before the
+    /// snapshot value read completed.
+    pub value: Option<StorageEntry>,
+}
+
+/// A bounded page from one finalized storage snapshot.
+#[derive(Debug)]
+pub struct StoragePage {
+    pub at: BlockInfo,
+    pub entries: Vec<StoragePageEntry>,
+    /// Exclusive raw key for the next page. `None` means the scan is complete.
+    pub next_key: Option<RawKey>,
+    /// Metadata used to decode `keys` and `value`.
+    pub metadata: Rc<Metadata>,
 }
 
 impl StorageEntry {
@@ -346,6 +425,25 @@ pub trait Backend {
         size: u16,
         to: Option<RawKey>,
     ) -> crate::Result<Vec<RawValue>>;
+
+    /// Return raw storage keys at a selected finalized block.
+    ///
+    /// Backends that cannot address historical state retain source
+    /// compatibility through this default and reject an explicit block.
+    async fn get_keys_paged_at(
+        &mut self,
+        prefix: RawKey,
+        size: u16,
+        start_key: Option<RawKey>,
+        block: Option<u32>,
+    ) -> crate::Result<Vec<RawKey>> {
+        if block.is_some() {
+            return Err(Error::OperationFailed(
+                "block-pinned key pagination is unsupported by this backend".into(),
+            ));
+        }
+        self.get_keys_paged(prefix, size, start_key).await
+    }
 
     /// Submit an extrinsic. If `wait_for_finalization` is true, waits for
     /// full finalization; otherwise returns after best-chain inclusion.
@@ -537,10 +635,31 @@ mod tests {
         async fn get_keys_paged(
             &mut self,
             _from: RawKey,
-            _size: u16,
-            _to: Option<RawKey>,
+            size: u16,
+            start_key: Option<RawKey>,
         ) -> Result<Vec<RawKey>> {
-            Ok(self.keys.clone())
+            let mut keys = self.keys.clone();
+            keys.sort();
+            Ok(keys
+                .into_iter()
+                .filter(|key| {
+                    start_key
+                        .as_ref()
+                        .is_none_or(|start| key.as_slice() > start.as_slice())
+                })
+                .take(usize::from(size))
+                .collect())
+        }
+
+        async fn get_keys_paged_at(
+            &mut self,
+            prefix: RawKey,
+            size: u16,
+            start_key: Option<RawKey>,
+            block: Option<u32>,
+        ) -> Result<Vec<RawKey>> {
+            self.last_block = block;
+            self.get_keys_paged(prefix, size, start_key).await
         }
 
         async fn submit(&mut self, _ext: &[u8], _wait_for_finalization: bool) -> Result<()> {
@@ -551,8 +670,13 @@ mod tests {
             Err(Error::ChainUnavailable)
         }
 
-        async fn block_info(&mut self, _at: Option<u32>) -> Result<meta::BlockInfo> {
-            Err(Error::ChainUnavailable)
+        async fn block_info(&mut self, at: Option<u32>) -> Result<meta::BlockInfo> {
+            let number = u64::from(at.unwrap_or(77));
+            Ok(meta::BlockInfo {
+                number,
+                hash: [number as u8; 32],
+                parent: [number.saturating_sub(1) as u8; 32],
+            })
         }
     }
 
@@ -701,6 +825,88 @@ mod tests {
                 }
                 other => panic!("expected value set, got {other:?}"),
             }
+        });
+    }
+
+    #[test]
+    fn paged_map_query_keeps_an_exclusive_cursor_on_one_snapshot() {
+        smol::block_on(async {
+            let metadata = fixture_metadata();
+            let mut keys = (1u8..=3)
+                .map(|byte| {
+                    let address = format!("0x{}", hex::encode([byte; 32]));
+                    match resolve_query(&metadata, &format!("system/account/{address}")).unwrap() {
+                        ResolvedQuery::Storage(key) => key.key(),
+                        ResolvedQuery::Constant(_) => panic!("expected storage"),
+                    }
+                })
+                .collect::<Vec<_>>();
+            keys.sort();
+            let storage = keys
+                .iter()
+                .cloned()
+                .map(|key| (key, Some(vec![0])))
+                .collect();
+            let mut backend = MockBackend {
+                storage,
+                keys: keys.clone(),
+                last_block: None,
+                storage_calls: 0,
+            };
+
+            let first = query_page(&mut backend, &metadata, "system/account", 2, None, None)
+                .await
+                .unwrap();
+            assert_eq!(first.at.number, 77);
+            assert_eq!(first.entries.len(), 2);
+            assert_eq!(first.entries[0].keys[0].data.len(), 32);
+            assert_eq!(first.next_key, Some(keys[1].clone()));
+            assert_eq!(backend.last_block, Some(77));
+
+            let second = query_page(
+                &mut backend,
+                &metadata,
+                "system/account",
+                2,
+                first.next_key,
+                Some(first.at.number as u32),
+            )
+            .await
+            .unwrap();
+            assert_eq!(second.entries.len(), 1);
+            assert_eq!(second.entries[0].raw_key, keys[2]);
+            assert!(second.next_key.is_none());
+            assert_eq!(second.at.number, 77);
+        });
+    }
+
+    #[test]
+    fn paged_query_rejects_zero_limit_and_fully_keyed_storage() {
+        smol::block_on(async {
+            let metadata = fixture_metadata();
+            let mut backend = MockBackend {
+                storage: Vec::new(),
+                keys: Vec::new(),
+                last_block: None,
+                storage_calls: 0,
+            };
+            assert!(matches!(
+                query_page(&mut backend, &metadata, "system/account", 0, None, None).await,
+                Err(Error::BadInput)
+            ));
+            let address = format!("0x{}", hex::encode([1u8; 32]));
+            assert!(matches!(
+                query_page(
+                    &mut backend,
+                    &metadata,
+                    &format!("system/account/{address}"),
+                    1,
+                    None,
+                    None,
+                )
+                .await,
+                Err(Error::BadInput)
+            ));
         });
     }
 

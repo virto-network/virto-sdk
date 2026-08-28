@@ -7,6 +7,36 @@ use core::{future::Future, marker::PhantomData};
 
 pub type Bytes<const N: usize> = [u8; N];
 
+/// Cryptographic signature variant used by a V4 Substrate extrinsic.
+///
+/// The variant name is resolved through runtime metadata; no enum
+/// discriminant is hard-coded by Sube.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignatureScheme {
+    Sr25519,
+    Ed25519,
+    Ecdsa,
+}
+
+impl SignatureScheme {
+    /// Variant name conventionally exposed by Substrate's `MultiSignature`.
+    pub const fn metadata_name(self) -> &'static str {
+        match self {
+            Self::Sr25519 => "Sr25519",
+            Self::Ed25519 => "Ed25519",
+            Self::Ecdsa => "Ecdsa",
+        }
+    }
+
+    /// Exact encoded signature length expected for this scheme.
+    pub const fn signature_len(self) -> usize {
+        match self {
+            Self::Sr25519 | Self::Ed25519 => 64,
+            Self::Ecdsa => 65,
+        }
+    }
+}
+
 /// Signed extrinsics need to be signed by a `Signer` before submission.
 ///
 /// Implementors provide a cryptographic signature over raw bytes (V4 signed extrinsics).

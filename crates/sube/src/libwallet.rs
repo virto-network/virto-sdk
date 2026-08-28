@@ -2,25 +2,8 @@
 //!
 //! This optional module intentionally contains no pallet-pass knowledge.
 
-use crate::{Error, Result, Signer};
+use crate::{Error, Result, SignatureScheme, Signer};
 use libwallet::Signer as WalletSigner;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SignatureScheme {
-    Sr25519,
-    Ed25519,
-    Ecdsa,
-}
-
-impl SignatureScheme {
-    fn metadata_name(self) -> &'static str {
-        match self {
-            Self::Sr25519 => "Sr25519",
-            Self::Ed25519 => "Ed25519",
-            Self::Ecdsa => "Ecdsa",
-        }
-    }
-}
 
 /// Associates a libwallet signer with its on-chain AccountId32.
 ///

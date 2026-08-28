@@ -14,8 +14,6 @@
 //! `ws-web` backend against a public RPC endpoint today.
 
 use alloc::collections::VecDeque;
-#[cfg(feature = "std")]
-use alloc::sync::Arc;
 use alloc::{format, string::String, vec::Vec};
 
 use smoldot_light::platform::PlatformRef;
@@ -26,11 +24,16 @@ use crate::Error;
 
 /// Light client backend powered by smoldot.
 pub struct Backend<P: PlatformRef> {
+    // Keep the client before the managed runtime guard: Rust drops struct
+    // fields in declaration order, so every smoldot task is cancelled before
+    // the guard stops and joins its executor threads.
     client: Client<P, ()>,
     chain_id: smoldot_light::ChainId,
     responses: smoldot_light::JsonRpcResponses<P>,
     event_buffer: VecDeque<(String, String)>,
     next_id: u32,
+    #[cfg(feature = "std")]
+    managed_runtime: Option<super::managed_platform::RuntimeGuard>,
 }
 
 impl<P: PlatformRef> Backend<P> {
@@ -79,6 +82,8 @@ impl<P: PlatformRef> Backend<P> {
             responses,
             event_buffer: VecDeque::new(),
             next_id: 1,
+            #[cfg(feature = "std")]
+            managed_runtime: None,
         })
     }
 }
@@ -169,16 +174,20 @@ impl<P: PlatformRef> super::RpcSubscription for Backend<P> {
 
 /// Convenience constructors when std is available.
 #[cfg(feature = "std")]
-impl Backend<Arc<smoldot_light::platform::DefaultPlatform>> {
+impl Backend<super::managed_platform::ManagedPlatform> {
     pub fn new_std(chain_spec: &str) -> Result<Self, Error> {
         Self::new_std_with_relay(chain_spec, None)
     }
 
     pub fn new_std_with_relay(chain_spec: &str, relay_spec: Option<&str>) -> Result<Self, Error> {
-        let platform = smoldot_light::platform::DefaultPlatform::new(
-            env!("CARGO_PKG_NAME").into(),
-            env!("CARGO_PKG_VERSION").into(),
-        );
-        Self::new(platform, chain_spec, relay_spec)
+        let (platform, runtime) = super::managed_platform::RuntimeGuard::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+            1,
+        )
+        .map_err(|error| Error::Node(format!("managed smoldot runtime: {error}")))?;
+        let mut backend = Self::new(platform, chain_spec, relay_spec)?;
+        backend.managed_runtime = Some(runtime);
+        Ok(backend)
     }
 }

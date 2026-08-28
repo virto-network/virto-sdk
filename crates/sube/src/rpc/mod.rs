@@ -469,6 +469,8 @@ pub mod ws_web;
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 pub mod chainhead;
+#[cfg(all(feature = "smoldot", feature = "std"))]
+pub mod managed_platform;
 
 #[cfg(test)]
 mod tests {
