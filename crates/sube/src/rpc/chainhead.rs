@@ -1053,7 +1053,15 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                                 .await;
                         }
                     }
-                    other => self.record_lifecycle_event(other),
+                    other => {
+                        self.record_lifecycle_event(other);
+                        // A cold light client can finalize many blocks while a
+                        // chain-head operation is in flight. Release those
+                        // lifecycle pins immediately instead of waiting for
+                        // the operation to finish, or smoldot can exhaust the
+                        // follow subscription's bounded pin budget and stop it.
+                        self.flush_unpins().await;
+                    }
                 }
             }
         }
@@ -1300,7 +1308,14 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                         self.active_operation = None;
                         return Err(crate::Error::SubscriptionClosed);
                     }
-                    other => self.record_lifecycle_event(other),
+                    other => {
+                        self.record_lifecycle_event(other);
+                        // Keep up with a fast cold sync while the descendant
+                        // proof is running. Deferring these unpins until the
+                        // operation completes can exhaust smoldot's bounded
+                        // follow-subscription pin budget.
+                        self.flush_unpins().await;
+                    }
                 }
             }
         }
@@ -3287,6 +3302,101 @@ mod transaction_watch_tests {
                 .unwrap();
             assert_eq!(second.keys, [vec![0xaa, 0x30]]);
             assert!(second.next_cursor.is_none());
+        });
+    }
+
+    struct ColdSyncKeysRpc {
+        incoming: VecDeque<(String, String)>,
+        unpins: Vec<String>,
+    }
+
+    impl Rpc for ColdSyncKeysRpc {
+        async fn rpc(&mut self, method: &str, params: &str) -> super::super::RpcResult<String> {
+            match method {
+                "chainHead_v1_storage" => {
+                    let intermediate = format!("0x{}", "66".repeat(32));
+                    let finalized = format!("0x{}", "77".repeat(32));
+                    self.incoming.push_back((
+                        "follow".into(),
+                        format!(
+                            r#"{{"event":"finalized","finalizedBlockHashes":["{intermediate}","{finalized}"],"prunedBlockHashes":[]}}"#,
+                        ),
+                    ));
+                    self.incoming.push_back((
+                        "follow".into(),
+                        r#"{"event":"operationStorageDone","operationId":"op"}"#.into(),
+                    ));
+                    Ok(r#"{"result":"started","operationId":"op","discardedItems":0}"#.into())
+                }
+                "chainHead_v1_unpin" => {
+                    self.unpins.push(params.into());
+                    Ok("null".into())
+                }
+                other => panic!("unexpected RPC method: {other}"),
+            }
+        }
+    }
+
+    impl RpcSubscription for ColdSyncKeysRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            unreachable!()
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            self.incoming.pop_front()
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(
+            &mut self,
+            _method: &str,
+            _sub_id: &str,
+        ) -> super::super::RpcResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn map_proof_flushes_finalized_pins_before_the_operation_finishes() {
+        smol::block_on(async {
+            let retained = format!("0x{}", "55".repeat(32));
+            let intermediate = format!("0x{}", "66".repeat(32));
+            let mut retained_hashes = BTreeMap::new();
+            retained_hashes.insert(retained.clone(), 1);
+            let mut chain = ChainHead {
+                rpc: ColdSyncKeysRpc {
+                    incoming: VecDeque::new(),
+                    unpins: Vec::new(),
+                },
+                follow_sub_id: "follow".into(),
+                finalized_hash: retained.clone(),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes,
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+                active_archive_storage: None,
+            };
+
+            let result = chain
+                .key_item_operation_at_hash(&retained, &[0xaa], "descendantsHashes", None, 1)
+                .await
+                .unwrap();
+            assert!(matches!(result, KeyItemOperation::Complete(keys) if keys.is_empty()));
+            assert_eq!(chain.rpc.unpins.len(), 1);
+            assert!(chain.rpc.unpins[0].contains(&intermediate));
+            assert!(!chain.rpc.unpins[0].contains(&retained));
+            assert!(chain.pending_unpin.is_empty());
         });
     }
 
