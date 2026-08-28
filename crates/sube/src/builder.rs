@@ -198,6 +198,21 @@ impl<B: Backend> Sube<B> {
         crate::query(&mut self.backend, &self.metadata, path, Some(block)).await
     }
 
+    /// Query a constant or fully-keyed storage item at a known finalized hash.
+    pub async fn query_at_finalized_hash(
+        &mut self,
+        path: &str,
+        block_hash: [u8; 32],
+    ) -> SubeResult<Response> {
+        crate::query_at_hash(
+            &mut self.backend,
+            &self.metadata,
+            path.trim_matches('/'),
+            block_hash,
+        )
+        .await
+    }
+
     /// Query a bounded page of a partially-keyed map at one finalized snapshot.
     ///
     /// Feed `StoragePage::next_key` back as `start_key` and the returned
@@ -216,6 +231,27 @@ impl<B: Backend> Sube<B> {
             limit,
             start_key,
             block,
+        )
+        .await
+    }
+
+    /// Query a bounded map page at a known finalized hash. Feed
+    /// `StoragePage::next_key` and the same `at` value into the next call to
+    /// continue the exact snapshot without requiring an archive node.
+    pub async fn query_page_at_hash(
+        &mut self,
+        path: &str,
+        limit: u16,
+        start_key: Option<crate::RawKey>,
+        at: crate::BlockInfo,
+    ) -> SubeResult<StoragePage> {
+        crate::query_page_at_hash(
+            &mut self.backend,
+            &self.metadata,
+            path.trim_matches('/'),
+            limit,
+            start_key,
+            at,
         )
         .await
     }

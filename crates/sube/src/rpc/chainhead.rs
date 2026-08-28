@@ -886,6 +886,41 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .collect()
     }
 
+    /// Read storage through the legacy proof-backed method at an explicit
+    /// hash. Smoldot can verify these requests without an archive height
+    /// lookup and without keeping the block pinned by `chainHead`.
+    async fn legacy_storage_items_at_hash(
+        &mut self,
+        keys: Vec<crate::RawKey>,
+        block_hash: &[u8; 32],
+    ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        let hash = to_hex(block_hash);
+        let mut values = Vec::with_capacity(keys.len());
+        for key in keys {
+            let raw = self
+                .rpc
+                .rpc(
+                    "state_getStorage",
+                    &format!(r#"["{}","{}"]"#, to_hex(&key), hash),
+                )
+                .await
+                .map_err(|error| crate::Error::Node(format!("storage at hash: {error}")))?;
+            let value =
+                if raw.trim() == "null" {
+                    None
+                } else {
+                    let encoded = result_as_str(&raw).ok_or_else(|| {
+                        crate::Error::Decode("storage response is neither hex nor null".into())
+                    })?;
+                    Some(hex::decode(encoded.trim_start_matches("0x")).map_err(|_| {
+                        crate::Error::Decode("storage value hex decode failed".into())
+                    })?)
+                };
+            values.push((key, value));
+        }
+        Ok(values)
+    }
+
     /// Execute a runtime call at a specific pinned block hash.
     pub async fn runtime_call_at(
         &mut self,
@@ -1220,6 +1255,14 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         decode_storage_items(&keys, &items)
     }
 
+    async fn get_storage_items_at_hash(
+        &mut self,
+        keys: Vec<crate::RawKey>,
+        block_hash: [u8; 32],
+    ) -> crate::Result<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        self.legacy_storage_items_at_hash(keys, &block_hash).await
+    }
+
     async fn get_keys_paged(
         &mut self,
         from: crate::RawKey,
@@ -1238,6 +1281,17 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
     ) -> crate::Result<Vec<crate::RawKey>> {
         let block = self.block_info(block).await?;
         self.keys_paged_at_hash(&prefix, size, start_key.as_deref(), &block.hash)
+            .await
+    }
+
+    async fn get_keys_paged_at_hash(
+        &mut self,
+        prefix: crate::RawKey,
+        size: u16,
+        start_key: Option<crate::RawKey>,
+        block_hash: [u8; 32],
+    ) -> crate::Result<Vec<crate::RawKey>> {
+        self.keys_paged_at_hash(&prefix, size, start_key.as_deref(), &block_hash)
             .await
     }
 

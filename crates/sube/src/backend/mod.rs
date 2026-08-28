@@ -48,6 +48,14 @@ impl Backend for AnyBackend {
         dispatch!(self, get_storage_items(keys, block))
     }
 
+    async fn get_storage_items_at_hash(
+        &mut self,
+        keys: Vec<crate::RawKey>,
+        block_hash: [u8; 32],
+    ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+        dispatch!(self, get_storage_items_at_hash(keys, block_hash))
+    }
+
     async fn get_keys_paged(
         &mut self,
         from: crate::RawKey,
@@ -65,6 +73,19 @@ impl Backend for AnyBackend {
         block: Option<u32>,
     ) -> SubeResult<Vec<crate::RawKey>> {
         dispatch!(self, get_keys_paged_at(prefix, size, start_key, block))
+    }
+
+    async fn get_keys_paged_at_hash(
+        &mut self,
+        prefix: crate::RawKey,
+        size: u16,
+        start_key: Option<crate::RawKey>,
+        block_hash: [u8; 32],
+    ) -> SubeResult<Vec<crate::RawKey>> {
+        dispatch!(
+            self,
+            get_keys_paged_at_hash(prefix, size, start_key, block_hash)
+        )
     }
 
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> SubeResult<()> {

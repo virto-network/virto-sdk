@@ -130,6 +130,29 @@ pub(crate) async fn query(
     }
 }
 
+/// Query a constant or fully-keyed storage item at a known block hash.
+///
+/// This is the verifiable historical primitive for light clients: callers
+/// obtain the hash from finalized chain state, then reuse it without asking an
+/// untrusted peer to map a block height to a hash.
+pub async fn query_at_hash(
+    chain: &mut (impl Backend + ?Sized),
+    meta: &Rc<Metadata>,
+    path: &str,
+    block_hash: [u8; 32],
+) -> Result<Response> {
+    match resolve_query(meta, path)? {
+        ResolvedQuery::Constant(entry) => Ok(Response::Value(entry, Rc::clone(meta))),
+        ResolvedQuery::Storage(key) if !key.is_partial() => {
+            let value = chain
+                .get_storage_item_at_hash(key.key(), block_hash)
+                .await?;
+            Ok(storage_response(value, key.ty, meta))
+        }
+        ResolvedQuery::Storage(_) => Err(Error::BadInput),
+    }
+}
+
 /// Query one bounded page of a partially-keyed storage map.
 ///
 /// `start_key` is an exclusive raw storage-key cursor. `block` selects the
@@ -163,6 +186,45 @@ pub async fn query_page(
     keys.truncate(usize::from(limit));
     let next_key = has_more.then(|| keys.last().cloned()).flatten();
     let values = chain.get_storage_items(keys, Some(block_number)).await?;
+    let entries = partial_storage_entries(values, &storage_key, meta)?;
+
+    Ok(StoragePage {
+        at,
+        entries,
+        next_key,
+        metadata: Rc::clone(meta),
+    })
+}
+
+/// Query one bounded map page at a finalized block hash already known to the
+/// caller. Unlike the height-based archive path, this works with a light
+/// client and preserves the exact snapshot across cursor continuations.
+pub async fn query_page_at_hash(
+    chain: &mut (impl Backend + ?Sized),
+    meta: &Rc<Metadata>,
+    path: &str,
+    limit: u16,
+    start_key: Option<RawKey>,
+    at: BlockInfo,
+) -> Result<StoragePage> {
+    if limit == 0 {
+        return Err(Error::BadInput);
+    }
+    let ResolvedQuery::Storage(storage_key) = resolve_query(meta, path)? else {
+        return Err(Error::BadInput);
+    };
+    if !storage_key.is_partial() {
+        return Err(Error::BadInput);
+    }
+
+    let requested = limit.checked_add(1).ok_or(Error::BadInput)?;
+    let mut keys = chain
+        .get_keys_paged_at_hash(storage_key.key(), requested, start_key, at.hash)
+        .await?;
+    let has_more = keys.len() > usize::from(limit);
+    keys.truncate(usize::from(limit));
+    let next_key = has_more.then(|| keys.last().cloned()).flatten();
+    let values = chain.get_storage_items_at_hash(keys, at.hash).await?;
     let entries = partial_storage_entries(values, &storage_key, meta)?;
 
     Ok(StoragePage {
@@ -419,6 +481,34 @@ pub trait Backend {
             .ok_or(Error::StorageKeyNotFound)
     }
 
+    /// Return storage values at an already-authenticated block hash.
+    ///
+    /// Light clients cannot securely resolve arbitrary heights to hashes, but
+    /// they can verify state proofs for a finalized hash they already know.
+    async fn get_storage_items_at_hash(
+        &mut self,
+        _keys: Vec<RawKey>,
+        _block_hash: [u8; 32],
+    ) -> crate::Result<Vec<(RawKey, Option<RawValue>)>> {
+        Err(Error::OperationFailed(
+            "hash-pinned storage is unsupported by this backend".into(),
+        ))
+    }
+
+    async fn get_storage_item_at_hash(
+        &mut self,
+        key: RawKey,
+        block_hash: [u8; 32],
+    ) -> crate::Result<Option<RawValue>> {
+        let res = self
+            .get_storage_items_at_hash(vec![key], block_hash)
+            .await?;
+        res.into_iter()
+            .next()
+            .map(|(_, value)| value)
+            .ok_or(Error::StorageKeyNotFound)
+    }
+
     async fn get_keys_paged(
         &mut self,
         from: RawKey,
@@ -443,6 +533,19 @@ pub trait Backend {
             ));
         }
         self.get_keys_paged(prefix, size, start_key).await
+    }
+
+    /// Return raw storage keys at an already-authenticated block hash.
+    async fn get_keys_paged_at_hash(
+        &mut self,
+        _prefix: RawKey,
+        _size: u16,
+        _start_key: Option<RawKey>,
+        _block_hash: [u8; 32],
+    ) -> crate::Result<Vec<RawKey>> {
+        Err(Error::OperationFailed(
+            "hash-pinned key pagination is unsupported by this backend".into(),
+        ))
     }
 
     /// Submit an extrinsic. If `wait_for_finalization` is true, waits for
@@ -632,6 +735,14 @@ mod tests {
                 .collect())
         }
 
+        async fn get_storage_items_at_hash(
+            &mut self,
+            keys: Vec<RawKey>,
+            _block_hash: [u8; 32],
+        ) -> Result<Vec<(RawKey, Option<RawValue>)>> {
+            self.get_storage_items(keys, None).await
+        }
+
         async fn get_keys_paged(
             &mut self,
             _from: RawKey,
@@ -659,6 +770,16 @@ mod tests {
             block: Option<u32>,
         ) -> Result<Vec<RawKey>> {
             self.last_block = block;
+            self.get_keys_paged(prefix, size, start_key).await
+        }
+
+        async fn get_keys_paged_at_hash(
+            &mut self,
+            prefix: RawKey,
+            size: u16,
+            start_key: Option<RawKey>,
+            _block_hash: [u8; 32],
+        ) -> Result<Vec<RawKey>> {
             self.get_keys_paged(prefix, size, start_key).await
         }
 
@@ -779,6 +900,30 @@ mod tests {
     }
 
     #[test]
+    fn query_at_hash_decodes_without_a_height_lookup() {
+        smol::block_on(async {
+            let metadata = fixture_metadata();
+            let storage_key = match resolve_query(&metadata, "system/number").unwrap() {
+                ResolvedQuery::Storage(key) => key.key(),
+                ResolvedQuery::Constant(_) => panic!("expected storage"),
+            };
+            let mut backend = MockBackend {
+                storage: vec![(storage_key, Some(42u32.to_le_bytes().to_vec()))],
+                keys: Vec::new(),
+                last_block: None,
+                storage_calls: 0,
+            };
+
+            let response = query_at_hash(&mut backend, &metadata, "system/number", [9; 32])
+                .await
+                .unwrap();
+            let (entry, _) = response.into_value().unwrap();
+            assert_eq!(entry.as_u32(), Some(42));
+            assert_eq!(backend.last_block, None);
+        });
+    }
+
+    #[test]
     fn constants_do_not_touch_the_backend() {
         smol::block_on(async {
             let metadata = fixture_metadata();
@@ -877,6 +1022,53 @@ mod tests {
             assert_eq!(second.entries[0].raw_key, keys[2]);
             assert!(second.next_key.is_none());
             assert_eq!(second.at.number, 77);
+        });
+    }
+
+    #[test]
+    fn hash_paged_query_preserves_the_supplied_snapshot() {
+        smol::block_on(async {
+            let metadata = fixture_metadata();
+            let mut keys = (1u8..=2)
+                .map(|byte| {
+                    let address = format!("0x{}", hex::encode([byte; 32]));
+                    match resolve_query(&metadata, &format!("system/account/{address}")).unwrap() {
+                        ResolvedQuery::Storage(key) => key.key(),
+                        ResolvedQuery::Constant(_) => panic!("expected storage"),
+                    }
+                })
+                .collect::<Vec<_>>();
+            keys.sort();
+            let mut backend = MockBackend {
+                storage: keys
+                    .iter()
+                    .cloned()
+                    .map(|key| (key, Some(vec![0])))
+                    .collect(),
+                keys: keys.clone(),
+                last_block: None,
+                storage_calls: 0,
+            };
+            let at = BlockInfo {
+                number: 91,
+                hash: [7; 32],
+                parent: [6; 32],
+            };
+
+            let page = query_page_at_hash(
+                &mut backend,
+                &metadata,
+                "system/account",
+                1,
+                None,
+                at.clone(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(page.at, at);
+            assert_eq!(page.entries.len(), 1);
+            assert_eq!(page.next_key, Some(keys[0].clone()));
+            assert_eq!(backend.last_block, None);
         });
     }
 
