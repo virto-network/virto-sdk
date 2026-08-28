@@ -153,6 +153,24 @@ pub struct Sube<B> {
     chain_properties: Option<crate::ChainProperties>,
 }
 
+/// A finalized block captured and authenticated by a [`Sube`] backend.
+///
+/// The inner [`BlockInfo`](crate::BlockInfo) is deliberately not publicly
+/// constructible. Light clients cannot securely map an arbitrary historical
+/// height back to a hash, but they can keep using a finalized hash that they
+/// observed themselves and verify state proofs against it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FinalizedBlock {
+    info: crate::BlockInfo,
+}
+
+impl FinalizedBlock {
+    /// Header information authenticated when this token was captured.
+    pub fn info(&self) -> &crate::BlockInfo {
+        &self.info
+    }
+}
+
 // --- Generic methods (any Backend) ---
 
 impl<B: Backend> Sube<B> {
@@ -217,7 +235,9 @@ impl<B: Backend> Sube<B> {
     /// Header lookup by hash alone is insufficient: legacy RPC servers may
     /// return a recent best-chain or fork header. We additionally compare the
     /// candidate height with the finalized head and resolve the canonical hash
-    /// at that finalized height.
+    /// at that finalized height. Light clients that cannot authenticate an
+    /// arbitrary historical height should use [`Self::finalized_block`] and
+    /// retain its opaque token instead.
     pub async fn finalized_block_info_at_hash(
         &mut self,
         block_hash: [u8; 32],
@@ -243,6 +263,15 @@ impl<B: Backend> Sube<B> {
             )));
         }
         Ok(candidate)
+    }
+
+    /// Capture the backend's current finalized block as an opaque reusable
+    /// token. Unlike a height lookup, this is available on light clients.
+    pub async fn finalized_block(&mut self) -> SubeResult<FinalizedBlock> {
+        self.backend
+            .block_info(None)
+            .await
+            .map(|info| FinalizedBlock { info })
     }
 
     /// Cancel chain work whose owning future was dropped by an outer deadline.
@@ -307,6 +336,40 @@ impl<B: Backend> Sube<B> {
         )
         .await?;
         Ok((block, response))
+    }
+
+    /// Capture the current finalized block and query at that exact hash.
+    ///
+    /// The returned token can be retained by a caller and passed to
+    /// [`Self::query_at_finalized_block`] without an unverifiable historical
+    /// height lookup.
+    pub async fn query_finalized_with_info(
+        &mut self,
+        path: &str,
+    ) -> SubeResult<(FinalizedBlock, Response)> {
+        let block = self.finalized_block().await?;
+        let response = self.query_at_finalized_block(path, &block).await?;
+        Ok((block, response))
+    }
+
+    /// Query at a finalized block previously captured by this client.
+    ///
+    /// Only opaque [`FinalizedBlock`] values created by [`Self::finalized_block`]
+    /// or [`Self::query_finalized_with_info`] are accepted, so light-client
+    /// users never have to trust a peer-provided height-to-hash mapping.
+    pub async fn query_at_finalized_block(
+        &mut self,
+        path: &str,
+        block: &FinalizedBlock,
+    ) -> SubeResult<Response> {
+        let metadata = self.metadata_for_hash(block.info.hash).await?;
+        crate::query_at_hash(
+            &mut self.backend,
+            &metadata,
+            path.trim_matches('/'),
+            block.info.hash,
+        )
+        .await
     }
 
     /// Query a bounded page of a partially-keyed map at one finalized snapshot.
@@ -1162,6 +1225,45 @@ mod tests {
             assert!(matches!(response, Response::Value(_, _)));
             assert_eq!(metadata_hash_byte.get(), 0x7b);
             assert_eq!(chain.backend().historical_read.get(), Some(0x7b));
+        });
+    }
+
+    #[test]
+    fn captured_finalized_query_reuses_the_authenticated_hash_without_a_height_lookup() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let metadata_hash_byte = Rc::new(Cell::new(0));
+            let storage_hash_byte = Rc::new(Cell::new(0));
+            let historical_read = Rc::new(Cell::new(None));
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::clone(&metadata_hash_byte),
+                storage_hash_byte: Rc::clone(&storage_hash_byte),
+                head_number: 128,
+                historical_read: Rc::clone(&historical_read),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+
+            let (block, response) = chain
+                .query_finalized_with_info("system/number")
+                .await
+                .unwrap();
+            assert!(matches!(response, Response::None));
+            assert_eq!(block.info().number, 128);
+            assert_eq!(block.info().hash, [2; 32]);
+            assert_eq!(metadata_hash_byte.get(), 2);
+            assert_eq!(storage_hash_byte.get(), 2);
+            assert_eq!(historical_read.get(), None);
+
+            let response = chain
+                .query_at_finalized_block("system/number", &block)
+                .await
+                .unwrap();
+            assert!(matches!(response, Response::None));
+            assert_eq!(historical_read.get(), None);
         });
     }
 

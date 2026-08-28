@@ -2322,10 +2322,18 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             None => {
                 // A follow subscription can be stopped while the caller is
                 // decoding a large metadata response. Drain lifecycle events
-                // and, if the stop races this header request, re-follow once
-                // and use the newly pinned finalized block.
-                for _ in 0..2 {
-                    let finalized_hash = self.prepare_operation().await?;
+                // and retry a bounded number of complete re-follow attempts;
+                // either initialization or the subsequent header request can
+                // race another stop while a cold light client catches up.
+                for _ in 0..4 {
+                    let finalized_hash = match self.prepare_operation().await {
+                        Ok(hash) => hash,
+                        Err(crate::Error::SubscriptionClosed) => {
+                            self.needs_refollow = true;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
                     match self.header(&finalized_hash).await {
                         Ok(header) => {
                             let mut h = [0u8; 32];
@@ -3361,6 +3369,91 @@ mod transaction_watch_tests {
         assert_eq!(info.hash, [0x22; 32]);
         assert_eq!(info.parent, [0x11; 32]);
         assert_eq!(chain.rpc.subscribe_calls, 1);
+    }
+
+    struct RepeatedStopRecoveryRpc {
+        buffered: VecDeque<(String, String)>,
+        incoming: VecDeque<(String, String)>,
+        subscribe_calls: usize,
+        unfollows: Vec<String>,
+    }
+
+    impl Rpc for RepeatedStopRecoveryRpc {
+        async fn rpc(&mut self, method: &str, params: &str) -> super::super::RpcResult<String> {
+            assert_eq!(method, "chainHead_v1_header");
+            assert!(params.contains("new-follow-2"));
+            let header = format!(
+                "\"0x{}a8{}{}\"",
+                "11".repeat(32),
+                "33".repeat(32),
+                "44".repeat(32)
+            );
+            Ok(header)
+        }
+    }
+
+    impl RpcSubscription for RepeatedStopRecoveryRpc {
+        async fn subscribe(
+            &mut self,
+            method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            assert_eq!(method, "chainHead_v1_follow");
+            self.subscribe_calls += 1;
+            Ok(format!("new-follow-{}", self.subscribe_calls))
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            self.incoming.pop_front()
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            self.buffered.pop_front()
+        }
+
+        async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> super::super::RpcResult<()> {
+            assert_eq!(method, "chainHead_v1_unfollow");
+            self.unfollows.push(sub_id.into());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn finalized_block_retries_when_replacement_follow_stops_during_initialization() {
+        let new_hash = format!("0x{}", "22".repeat(32));
+        let rpc = RepeatedStopRecoveryRpc {
+            buffered: [("stopped-follow".into(), r#"{"event":"stop"}"#.into())].into(),
+            incoming: [
+                ("new-follow-1".into(), r#"{"event":"stop"}"#.into()),
+                (
+                    "new-follow-2".into(),
+                    format!(r#"{{"event":"initialized","finalizedBlockHashes":["{new_hash}"]}}"#),
+                ),
+            ]
+            .into(),
+            subscribe_calls: 0,
+            unfollows: Vec::new(),
+        };
+        let mut chain = ChainHead {
+            rpc,
+            follow_sub_id: "stopped-follow".into(),
+            finalized_hash: format!("0x{}", "aa".repeat(32)),
+            genesis_hash: [0; 32],
+            storage_accum: BTreeMap::new(),
+            pending_unpin: Vec::new(),
+            needs_refollow: false,
+            retained_hashes: BTreeMap::new(),
+            event_queue: VecDeque::new(),
+            active_operation: None,
+            active_tx_watch: None,
+            active_archive_storage: None,
+        };
+
+        let info = smol::block_on(crate::Backend::block_info(&mut chain, None)).unwrap();
+        assert_eq!(info.number, 42);
+        assert_eq!(info.hash, [0x22; 32]);
+        assert_eq!(chain.rpc.subscribe_calls, 2);
+        assert_eq!(chain.rpc.unfollows, ["stopped-follow", "new-follow-1"]);
     }
 
     #[cfg(feature = "std")]
