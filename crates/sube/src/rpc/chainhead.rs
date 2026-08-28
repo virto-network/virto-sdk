@@ -828,6 +828,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Drain queued events, flush all pending unpins, ensure we have a pinned
     /// finalized block. If the subscription was stopped, re-subscribe.
     async fn prepare_operation(&mut self) -> crate::Result<String> {
+        self.reconcile_active_operations().await?;
         let mut stopped = false;
 
         while let Some((sub_id, event_json)) = self.rpc.try_next_event() {
@@ -933,6 +934,16 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             Some(error) => Err(error),
             None => Ok(()),
         }
+    }
+
+    /// Never overwrite an identifier retained after failed server-side
+    /// cleanup. Retry that cleanup before starting unrelated work and fail
+    /// closed if the server still cannot confirm it.
+    async fn reconcile_active_operations(&mut self) -> crate::Result<()> {
+        if self.active_operation.is_some() || self.active_tx_watch.is_some() {
+            self.cancel_active_operation().await?;
+        }
+        Ok(())
     }
 
     /// Poll the subscription until we get a result for the given operation,
@@ -1783,6 +1794,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         wait_for: crate::WaitFor,
         timeout: Option<core::time::Duration>,
     ) -> crate::Result<crate::TransactionReceipt> {
+        self.reconcile_active_operations().await?;
         let hex = to_hex(ext);
         #[cfg(feature = "std")]
         let deadline = timeout.and_then(|duration| std::time::Instant::now().checked_add(duration));
@@ -1877,9 +1889,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     }
                     TxEvent::Invalid { error } => {
                         self.active_tx_watch = None;
-                        return Err(crate::Error::OperationFailed(format!(
-                            "tx invalid: {error}"
-                        )));
+                        return Err(crate::Error::TransactionInvalid(error.into()));
                     }
                     TxEvent::Dropped { error } => {
                         self.active_tx_watch = None;
@@ -2918,6 +2928,39 @@ mod transaction_watch_tests {
 
     #[cfg(feature = "std")]
     #[test]
+    fn retained_operation_must_be_cleaned_before_new_work() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: PendingKeyRpc {
+                    stopped: 0,
+                    fail_stop: true,
+                    close_events: false,
+                },
+                follow_sub_id: "follow".into(),
+                finalized_hash: to_hex(&[0x11; 32]),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: Some("retryable".into()),
+                active_tx_watch: None,
+            };
+
+            assert!(
+                chain
+                    .storage_at_hash("0x11", &["0xaabb".into()])
+                    .await
+                    .is_err()
+            );
+            assert_eq!(chain.active_operation.as_deref(), Some("retryable"));
+            assert_eq!(chain.rpc.stopped, 0);
+        });
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
     fn failed_error_cleanup_keeps_operation_id_retryable() {
         smol::block_on(async {
             let mut chain = ChainHead {
@@ -3282,6 +3325,43 @@ mod transaction_watch_tests {
         });
     }
 
+    #[test]
+    fn invalid_transaction_has_a_typed_terminal_error() {
+        smol::block_on(async {
+            let rpc = BestBlockWatchRpc {
+                incoming: [(
+                    "tx-watch".into(),
+                    r#"{"event":"invalid","error":"bad proof"}"#.into(),
+                )]
+                .into(),
+                unwatched: 0,
+            };
+            let mut chain = ChainHead {
+                rpc,
+                follow_sub_id: "follow".into(),
+                finalized_hash: format!("0x{}", "55".repeat(32)),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+
+            let error = chain
+                .watch_transaction(&[1, 2, 3], crate::WaitFor::Finalized, None)
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                crate::Error::TransactionInvalid(message) if message == "bad proof"
+            ));
+            assert!(chain.active_tx_watch.is_none());
+        });
+    }
+
     #[cfg(feature = "std")]
     struct TimeoutWatchRpc {
         unwatched: usize,
@@ -3473,6 +3553,75 @@ mod transaction_watch_tests {
             chain.cancel_active_operation().await.unwrap();
             assert_eq!(chain.rpc.unwatched, 1);
             assert!(chain.active_tx_watch.is_none());
+        });
+    }
+
+    #[cfg(feature = "std")]
+    struct FailedUnwatchRpc {
+        subscribe_calls: usize,
+    }
+
+    #[cfg(feature = "std")]
+    impl Rpc for FailedUnwatchRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            panic!("unexpected RPC call: {method}")
+        }
+    }
+
+    #[cfg(feature = "std")]
+    impl RpcSubscription for FailedUnwatchRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            self.subscribe_calls += 1;
+            Ok("new-watch".into())
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            core::future::pending().await
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(
+            &mut self,
+            _method: &str,
+            _sub_id: &str,
+        ) -> super::super::RpcResult<()> {
+            Err(super::super::JsonRpcError::new(-1, "unwatch failed"))
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn retained_watch_must_be_cleaned_before_new_submission() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: FailedUnwatchRpc { subscribe_calls: 0 },
+                follow_sub_id: "follow".into(),
+                finalized_hash: to_hex(&[0x55; 32]),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: Some("old-watch".into()),
+            };
+
+            assert!(
+                chain
+                    .watch_transaction(&[1, 2, 3], crate::WaitFor::Finalized, None)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(chain.active_tx_watch.as_deref(), Some("old-watch"));
+            assert_eq!(chain.rpc.subscribe_calls, 0);
         });
     }
 

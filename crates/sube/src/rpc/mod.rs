@@ -423,6 +423,220 @@ pub enum RequestCleanup {
     UnwatchTransaction,
 }
 
+/// Cancellation state shared by streaming transports whose send/read futures
+/// can be dropped after bytes have reached the remote JSON-RPC service.
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
+#[derive(Clone, Debug)]
+pub(crate) struct PendingRequest {
+    id: u32,
+    cleanup: RequestCleanup,
+    is_cleanup_request: bool,
+}
+
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
+#[derive(Default)]
+pub(crate) struct RequestTracker {
+    pending_request: Option<PendingRequest>,
+    pending_cleanup_retry: Option<(String, String)>,
+}
+
+/// Reusable cancellation-aware request machinery for WebSocket transports.
+/// A request is installed before its send future is polled, so cancelling at
+/// any await point leaves enough state to drain its response and tear down any
+/// operation or subscription it created.
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    all(feature = "ws-web", target_arch = "wasm32")
+))]
+#[allow(async_fn_in_trait)]
+pub(crate) trait TrackedTransport {
+    fn request_tracker(&mut self) -> &mut RequestTracker;
+    fn next_request_id(&mut self) -> &mut u32;
+    fn event_buffer(&mut self) -> &mut alloc::collections::VecDeque<(String, String)>;
+
+    async fn send_request_text(&mut self, request: &str) -> RpcResult<()>;
+    async fn read_tracked_message(&mut self) -> RpcResult<IncomingMessage>;
+
+    async fn start_request(
+        &mut self,
+        method: &str,
+        params: &str,
+        cleanup: RequestCleanup,
+        is_cleanup_request: bool,
+    ) -> RpcResult<u32> {
+        if self.request_tracker().pending_request.is_some() {
+            return Err(JsonRpcError::new(
+                -32603,
+                "cannot start RPC while a cancelled request is unresolved",
+            ));
+        }
+
+        let id = *self.next_request_id();
+        *self.next_request_id() = id.wrapping_add(1).max(1);
+        log::info!("RPC `{}` (ID={})", method, id);
+
+        let mut request = String::new();
+        format_request(&mut request, id, method, params);
+        log::debug!("RPC request: {}", &request);
+        self.request_tracker().pending_request = Some(PendingRequest {
+            id,
+            cleanup,
+            is_cleanup_request,
+        });
+        // Keep the request installed even when the transport reports a send
+        // error. A streaming transport can fail after writing some or all of
+        // the frame, so treating that error as proof the peer never observed
+        // the request would make an operation leak possible. The next tracked
+        // call must reconcile (or discard the connection) before proceeding.
+        self.send_request_text(&request).await?;
+        Ok(id)
+    }
+
+    async fn wait_for_response(&mut self, id: u32) -> RpcResult<String> {
+        loop {
+            match self.read_tracked_message().await? {
+                IncomingMessage::Response(response) if response.id == id => {
+                    self.request_tracker().pending_request = None;
+                    return response.result.ok_or_else(|| JsonRpcError {
+                        id: Some(id),
+                        code: -1,
+                        message: "no result".into(),
+                    });
+                }
+                IncomingMessage::Error(error) if error.id.is_none() || error.id == Some(id) => {
+                    self.request_tracker().pending_request = None;
+                    return Err(error);
+                }
+                IncomingMessage::Response(response) => {
+                    log::warn!("unexpected response id: {}", response.id);
+                }
+                IncomingMessage::Error(error) => {
+                    log::warn!("unexpected error response id: {:?}", error.id);
+                }
+                IncomingMessage::Notification(notification) => {
+                    self.event_buffer()
+                        .push_back((notification.params.subscription, notification.params.result));
+                }
+            }
+        }
+    }
+
+    async fn send_and_wait(
+        &mut self,
+        method: &str,
+        params: &str,
+        cleanup: RequestCleanup,
+        is_cleanup_request: bool,
+    ) -> RpcResult<String> {
+        let id = self
+            .start_request(method, params, cleanup, is_cleanup_request)
+            .await?;
+        self.wait_for_response(id).await
+    }
+
+    async fn apply_abandoned_cleanup(
+        &mut self,
+        cleanup: RequestCleanup,
+        response: &str,
+    ) -> RpcResult<()> {
+        match cleanup {
+            RequestCleanup::None => Ok(()),
+            RequestCleanup::StopChainHeadOperation {
+                follow_subscription,
+            } => {
+                let result = extract_json_str(response, "\"result\":\"");
+                if result != Some("started") {
+                    return Ok(());
+                }
+                let operation_id =
+                    extract_json_str(response, "\"operationId\":\"").ok_or_else(|| {
+                        JsonRpcError::new(-32603, "started operation has no operation id")
+                    })?;
+                let params = alloc::format!(r#"["{}","{}"]"#, follow_subscription, operation_id);
+                self.run_cleanup_request("chainHead_v1_stopOperation", &params)
+                    .await
+            }
+            RequestCleanup::UnwatchTransaction => {
+                let subscription_id = result_as_str(response).ok_or_else(|| {
+                    JsonRpcError::new(-32603, "transaction watch has no subscription id")
+                })?;
+                let params = alloc::format!(r#"["{}"]"#, subscription_id);
+                self.run_cleanup_request("transactionWatch_v1_unwatch", &params)
+                    .await
+            }
+        }
+    }
+
+    async fn run_cleanup_request(&mut self, method: &str, params: &str) -> RpcResult<()> {
+        self.request_tracker().pending_cleanup_retry = Some((method.into(), params.into()));
+        let result = self
+            .send_and_wait(method, params, RequestCleanup::None, true)
+            .await
+            .map(|_| ());
+        if result.is_ok() {
+            self.request_tracker().pending_cleanup_retry = None;
+        }
+        result
+    }
+
+    async fn reconcile_pending_request(&mut self) -> RpcResult<()> {
+        let Some(pending) = self.request_tracker().pending_request.clone() else {
+            return Ok(());
+        };
+        let response = match self.wait_for_response(pending.id).await {
+            Ok(response) => response,
+            Err(error) => {
+                // A matching JSON-RPC error proves that the abandoned request
+                // did not create server-side state. Transport failures retain
+                // the request so the caller can discard the connection.
+                if self.request_tracker().pending_request.is_none() && !pending.is_cleanup_request {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
+        if pending.is_cleanup_request {
+            self.request_tracker().pending_cleanup_retry = None;
+            return Ok(());
+        }
+        self.apply_abandoned_cleanup(pending.cleanup, &response)
+            .await
+    }
+
+    async fn reconcile_cleanup_retry(&mut self) -> RpcResult<()> {
+        self.reconcile_pending_request().await?;
+        let Some((method, params)) = self.request_tracker().pending_cleanup_retry.clone() else {
+            return Ok(());
+        };
+        self.run_cleanup_request(&method, &params).await
+    }
+
+    async fn tracked_rpc(&mut self, method: &str, params: &str) -> RpcResult<String> {
+        self.reconcile_cleanup_retry().await?;
+        self.send_and_wait(method, params, RequestCleanup::None, false)
+            .await
+    }
+
+    async fn tracked_rpc_with_cleanup(
+        &mut self,
+        method: &str,
+        params: &str,
+        cleanup: RequestCleanup,
+    ) -> RpcResult<String> {
+        self.reconcile_cleanup_retry().await?;
+        self.send_and_wait(method, params, cleanup, false).await
+    }
+}
+
 /// Helper: extract result as a JSON string value (strips quotes).
 #[cfg(any(
     feature = "ws",
@@ -528,6 +742,157 @@ pub mod managed_platform;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "ws", feature = "std"))]
+    struct TrackedMock {
+        tracker: RequestTracker,
+        next_id: u32,
+        events: alloc::collections::VecDeque<(String, String)>,
+        responses: alloc::collections::VecDeque<IncomingMessage>,
+        sent: Vec<String>,
+        stall_send: bool,
+    }
+
+    #[cfg(all(feature = "ws", feature = "std"))]
+    impl TrackedTransport for TrackedMock {
+        fn request_tracker(&mut self) -> &mut RequestTracker {
+            &mut self.tracker
+        }
+
+        fn next_request_id(&mut self) -> &mut u32 {
+            &mut self.next_id
+        }
+
+        fn event_buffer(&mut self) -> &mut alloc::collections::VecDeque<(String, String)> {
+            &mut self.events
+        }
+
+        async fn send_request_text(&mut self, request: &str) -> RpcResult<()> {
+            self.sent.push(request.into());
+            if request.contains("fail_send") {
+                Err(JsonRpcError::new(-32603, "ambiguous send failure"))
+            } else if self.stall_send {
+                core::future::pending().await
+            } else {
+                Ok(())
+            }
+        }
+
+        async fn read_tracked_message(&mut self) -> RpcResult<IncomingMessage> {
+            match self.responses.pop_front() {
+                Some(response) => Ok(response),
+                None => core::future::pending().await,
+            }
+        }
+    }
+
+    #[cfg(all(feature = "ws", feature = "std"))]
+    fn tracked_mock(stall_send: bool) -> TrackedMock {
+        TrackedMock {
+            tracker: RequestTracker::default(),
+            next_id: 1,
+            events: alloc::collections::VecDeque::new(),
+            responses: alloc::collections::VecDeque::new(),
+            sent: Vec::new(),
+            stall_send,
+        }
+    }
+
+    #[cfg(all(feature = "ws", feature = "std"))]
+    #[test]
+    fn cancelled_tracked_request_is_drained_and_cleaned() {
+        smol::block_on(async {
+            let mut transport = tracked_mock(false);
+            let result = crate::time::timeout(
+                core::time::Duration::from_millis(10),
+                TrackedTransport::tracked_rpc_with_cleanup(
+                    &mut transport,
+                    "chainHead_v1_storage",
+                    "[]",
+                    RequestCleanup::StopChainHeadOperation {
+                        follow_subscription: "follow".into(),
+                    },
+                ),
+            )
+            .await;
+            assert!(result.is_err());
+            assert_eq!(
+                transport
+                    .tracker
+                    .pending_request
+                    .as_ref()
+                    .map(|request| request.id),
+                Some(1)
+            );
+
+            transport
+                .responses
+                .push_back(IncomingMessage::Response(RpcResponse {
+                    id: 1,
+                    result: Some(
+                        r#"{"result":"started","operationId":"abandoned","discardedItems":0}"#
+                            .into(),
+                    ),
+                }));
+            transport
+                .responses
+                .push_back(IncomingMessage::Response(RpcResponse {
+                    id: 2,
+                    result: Some("null".into()),
+                }));
+            TrackedTransport::reconcile_cleanup_retry(&mut transport)
+                .await
+                .unwrap();
+
+            assert!(transport.tracker.pending_request.is_none());
+            assert!(transport.tracker.pending_cleanup_retry.is_none());
+            assert_eq!(transport.sent.len(), 2);
+            assert!(transport.sent[1].contains("chainHead_v1_stopOperation"));
+            assert!(transport.sent[1].contains("abandoned"));
+        });
+    }
+
+    #[cfg(all(feature = "ws", feature = "std"))]
+    #[test]
+    fn cancellation_during_send_retains_the_request_identity() {
+        smol::block_on(async {
+            let mut transport = tracked_mock(true);
+            let result = crate::time::timeout(
+                core::time::Duration::from_millis(10),
+                TrackedTransport::tracked_rpc(&mut transport, "state_getMetadata", "[]"),
+            )
+            .await;
+            assert!(result.is_err());
+            assert_eq!(
+                transport
+                    .tracker
+                    .pending_request
+                    .as_ref()
+                    .map(|request| request.id),
+                Some(1)
+            );
+        });
+    }
+
+    #[cfg(all(feature = "ws", feature = "std"))]
+    #[test]
+    fn send_failure_retains_the_request_identity() {
+        smol::block_on(async {
+            let mut transport = tracked_mock(false);
+            let error = TrackedTransport::tracked_rpc(&mut transport, "fail_send", "[]")
+                .await
+                .unwrap_err();
+            assert_eq!(error.message, "ambiguous send failure");
+            assert_eq!(
+                transport
+                    .tracker
+                    .pending_request
+                    .as_ref()
+                    .map(|request| request.id),
+                Some(1)
+            );
+        });
+    }
 
     #[cfg(any(
         feature = "ws",

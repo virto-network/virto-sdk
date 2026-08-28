@@ -747,8 +747,14 @@ pub enum Error {
     Signing(String),
     SubscriptionClosed,
     OperationFailed(String),
+    /// The transaction watch reached the terminal `invalid` state. The node
+    /// rejected the extrinsic and it cannot consume the account nonce.
+    TransactionInvalid(String),
     ConnectionTimeout,
-    RuntimeUpgrade { built_spec: u32, current_spec: u32 },
+    RuntimeUpgrade {
+        built_spec: u32,
+        current_spec: u32,
+    },
     GenesisMismatch,
 }
 
@@ -773,6 +779,7 @@ impl fmt::Display for Error {
             Self::Signing(e) => write!(f, "signing error: {e}"),
             Self::SubscriptionClosed => write!(f, "subscription closed"),
             Self::OperationFailed(e) => write!(f, "operation failed: {e}"),
+            Self::TransactionInvalid(e) => write!(f, "transaction invalid: {e}"),
             Self::ConnectionTimeout => write!(f, "connection timed out"),
             Self::RuntimeUpgrade {
                 built_spec,

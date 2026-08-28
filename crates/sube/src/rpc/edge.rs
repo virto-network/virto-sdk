@@ -24,7 +24,9 @@ use core::fmt::Write as FmtWrite;
 use edge_ws::{FrameHeader, FrameType};
 use embedded_io_async::{Read, Write};
 
-use super::{IncomingMessage, JsonRpcError, Rpc, RpcResult};
+use super::{
+    IncomingMessage, JsonRpcError, RequestCleanup, RequestTracker, Rpc, RpcResult, TrackedTransport,
+};
 use crate::Error;
 
 /// WebSocket backend over any `embedded_io_async` byte stream.
@@ -37,6 +39,7 @@ pub struct Backend<T> {
     event_buffer: VecDeque<(String, String)>,
     pub(crate) next_id: u32,
     frag_buf: Vec<u8>,
+    request_tracker: RequestTracker,
 }
 
 impl<T: Read + Write> Backend<T> {
@@ -56,6 +59,7 @@ impl<T: Read + Write> Backend<T> {
             event_buffer: VecDeque::new(),
             next_id: 1,
             frag_buf: Vec::new(),
+            request_tracker: RequestTracker::default(),
         }
     }
 
@@ -144,34 +148,44 @@ impl<T: Read + Write> Backend<T> {
     }
 }
 
+impl<T: Read + Write> TrackedTransport for Backend<T> {
+    fn request_tracker(&mut self) -> &mut RequestTracker {
+        &mut self.request_tracker
+    }
+
+    fn next_request_id(&mut self) -> &mut u32 {
+        &mut self.next_id
+    }
+
+    fn event_buffer(&mut self) -> &mut VecDeque<(String, String)> {
+        &mut self.event_buffer
+    }
+
+    async fn send_request_text(&mut self, request: &str) -> RpcResult<()> {
+        self.send_text(request.as_bytes()).await
+    }
+
+    async fn read_tracked_message(&mut self) -> RpcResult<IncomingMessage> {
+        self.read_message().await
+    }
+}
+
 impl<T: Read + Write> Rpc for Backend<T> {
     async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String> {
-        let id = self.next_id;
-        self.next_id += 1;
-        log::info!("RPC `{}` (ID={})", method, id);
+        TrackedTransport::tracked_rpc(self, method, params).await
+    }
 
-        let mut req = String::new();
-        super::format_request(&mut req, id, method, params);
-        self.send_text(req.as_bytes()).await?;
+    async fn rpc_with_cleanup(
+        &mut self,
+        method: &str,
+        params: &str,
+        cleanup: RequestCleanup,
+    ) -> RpcResult<String> {
+        TrackedTransport::tracked_rpc_with_cleanup(self, method, params, cleanup).await
+    }
 
-        loop {
-            match self.read_message().await? {
-                IncomingMessage::Response(r) if r.id == id => {
-                    return r.result.ok_or_else(|| JsonRpcError::new(-1, "no result"));
-                }
-                IncomingMessage::Error(e) if e.id.is_none() || e.id == Some(id) => return Err(e),
-                IncomingMessage::Error(e) => {
-                    log::warn!("unexpected error response id: {:?}", e.id);
-                }
-                IncomingMessage::Response(r) => {
-                    log::warn!("unexpected response id: {}", r.id);
-                }
-                IncomingMessage::Notification(n) => {
-                    self.event_buffer
-                        .push_back((n.params.subscription, n.params.result));
-                }
-            }
-        }
+    async fn cancel_pending_request(&mut self) -> RpcResult<()> {
+        TrackedTransport::reconcile_cleanup_retry(self).await
     }
 }
 
@@ -184,7 +198,25 @@ impl<T: Read + Write> super::RpcSubscription for Backend<T> {
             .ok_or_else(|| JsonRpcError::new(-32603, "expected string subscription id"))
     }
 
+    async fn subscribe_with_cleanup(
+        &mut self,
+        method: &str,
+        params: &str,
+        cleanup: RequestCleanup,
+    ) -> RpcResult<String> {
+        let result = self.rpc_with_cleanup(method, params, cleanup).await?;
+        super::result_as_str(&result)
+            .map(Into::into)
+            .ok_or_else(|| JsonRpcError::new(-32603, "expected string subscription id"))
+    }
+
     async fn next_event(&mut self) -> Option<(String, String)> {
+        if TrackedTransport::reconcile_cleanup_retry(self)
+            .await
+            .is_err()
+        {
+            return None;
+        }
         if let Some(event) = self.event_buffer.pop_front() {
             return Some(event);
         }
