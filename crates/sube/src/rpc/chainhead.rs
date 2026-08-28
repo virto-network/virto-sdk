@@ -480,11 +480,19 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .await
             .map_err(|e| crate::Error::Node(format!("header: {e}")))?;
 
-        let hex: String = result_as_str(&result)
-            .map(Into::into)
-            .ok_or_else(|| crate::Error::Decode("header response not a string".into()))?;
+        let Some(hex) = result_as_str(&result) else {
+            // `null` means the followed block is no longer pinned. This most
+            // commonly happens when a cold light client emits enough blocks
+            // during a large metadata decode for the node to stop the follow
+            // subscription. Mark it for re-follow so callers can recover.
+            if result.trim() == "null" {
+                self.needs_refollow = true;
+                return Err(crate::Error::SubscriptionClosed);
+            }
+            return Err(crate::Error::Decode("header response not a string".into()));
+        };
 
-        decode_header(&hex)
+        decode_header(hex)
     }
 
     /// Wait for the next user-visible chain event.
@@ -1462,19 +1470,38 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 parent: self.genesis_hash,
             }),
             None => {
-                let finalized_hash = self.finalized_hash.clone();
-                let header = self.header(&finalized_hash).await?;
-                let mut h = [0u8; 32];
-                hex::decode_to_slice(finalized_hash.trim_start_matches("0x"), &mut h)
-                    .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
-                let mut parent = [0u8; 32];
-                hex::decode_to_slice(header.parent_hash.trim_start_matches("0x"), &mut parent)
-                    .map_err(|_| crate::Error::Decode("parent hash hex decode failed".into()))?;
-                Ok(meta::BlockInfo {
-                    number: header.number,
-                    hash: h,
-                    parent,
-                })
+                // A follow subscription can be stopped while the caller is
+                // decoding a large metadata response. Drain lifecycle events
+                // and, if the stop races this header request, re-follow once
+                // and use the newly pinned finalized block.
+                for _ in 0..2 {
+                    let finalized_hash = self.prepare_operation().await?;
+                    match self.header(&finalized_hash).await {
+                        Ok(header) => {
+                            let mut h = [0u8; 32];
+                            hex::decode_to_slice(finalized_hash.trim_start_matches("0x"), &mut h)
+                                .map_err(|_| crate::Error::Decode("hex decode failed".into()))?;
+                            let mut parent = [0u8; 32];
+                            hex::decode_to_slice(
+                                header.parent_hash.trim_start_matches("0x"),
+                                &mut parent,
+                            )
+                            .map_err(|_| {
+                                crate::Error::Decode("parent hash hex decode failed".into())
+                            })?;
+                            return Ok(meta::BlockInfo {
+                                number: header.number,
+                                hash: h,
+                                parent,
+                            });
+                        }
+                        Err(crate::Error::SubscriptionClosed) => {
+                            self.needs_refollow = true;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                Err(crate::Error::SubscriptionClosed)
             }
             Some(n) => {
                 let hash_hex = self.archive_hash_by_height(n as u64).await?;
@@ -1803,6 +1830,83 @@ impl<R: Rpc + RpcSubscription> ChainSession for ChainHead<R> {
 #[cfg(test)]
 mod transaction_watch_tests {
     use super::*;
+
+    struct RecoveryRpc {
+        buffered: VecDeque<(String, String)>,
+        incoming: VecDeque<(String, String)>,
+        subscribe_calls: usize,
+    }
+
+    impl Rpc for RecoveryRpc {
+        async fn rpc(&mut self, method: &str, params: &str) -> super::super::RpcResult<String> {
+            assert_eq!(method, "chainHead_v1_header");
+            assert!(params.contains("new-follow"));
+            assert!(params.contains(&format!("0x{}", "22".repeat(32))));
+            let header = format!(
+                "\"0x{}a8{}{}\"",
+                "11".repeat(32),
+                "33".repeat(32),
+                "44".repeat(32)
+            );
+            Ok(header)
+        }
+    }
+
+    impl RpcSubscription for RecoveryRpc {
+        async fn subscribe(
+            &mut self,
+            method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            assert_eq!(method, "chainHead_v1_follow");
+            self.subscribe_calls += 1;
+            Ok("new-follow".into())
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            self.incoming.pop_front()
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            self.buffered.pop_front()
+        }
+
+        async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> super::super::RpcResult<()> {
+            assert_eq!(method, "chainHead_v1_unfollow");
+            assert_eq!(sub_id, "stopped-follow");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn finalized_block_recovers_a_stopped_follow_subscription() {
+        let new_hash = format!("0x{}", "22".repeat(32));
+        let rpc = RecoveryRpc {
+            buffered: [("stopped-follow".into(), r#"{"event":"stop"}"#.into())].into(),
+            incoming: [(
+                "new-follow".into(),
+                format!(r#"{{"event":"initialized","finalizedBlockHashes":["{new_hash}"]}}"#),
+            )]
+            .into(),
+            subscribe_calls: 0,
+        };
+        let mut chain = ChainHead {
+            rpc,
+            follow_sub_id: "stopped-follow".into(),
+            finalized_hash: format!("0x{}", "aa".repeat(32)),
+            genesis_hash: [0; 32],
+            storage_accum: BTreeMap::new(),
+            pending_unpin: Vec::new(),
+            needs_refollow: false,
+            event_queue: VecDeque::new(),
+        };
+
+        let info = smol::block_on(crate::Backend::block_info(&mut chain, None)).unwrap();
+        assert_eq!(info.number, 42);
+        assert_eq!(info.hash, [0x22; 32]);
+        assert_eq!(info.parent, [0x11; 32]);
+        assert_eq!(chain.rpc.subscribe_calls, 1);
+    }
 
     #[test]
     fn parses_best_inclusion_and_retraction() {
