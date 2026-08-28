@@ -97,6 +97,7 @@ pub struct StorageItem {
 const LIGHT_PAGE_CURSOR_MAGIC: &[u8; 8] = b"SUBEPG01";
 const LIGHT_PAGE_MAX_DEPTH: usize = 8;
 const LIGHT_PAGE_MAX_OPERATIONS: usize = 64;
+const ACTIVE_OPERATION_UNPIN_BATCH: usize = 8;
 
 #[derive(Debug)]
 enum KeyOperation {
@@ -1056,11 +1057,12 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     other => {
                         self.record_lifecycle_event(other);
                         // A cold light client can finalize many blocks while a
-                        // chain-head operation is in flight. Release those
-                        // lifecycle pins immediately instead of waiting for
-                        // the operation to finish, or smoldot can exhaust the
-                        // follow subscription's bounded pin budget and stop it.
-                        self.flush_unpins().await;
+                        // chain-head operation is in flight. Drain a small
+                        // batch before smoldot's bounded pin budget fills,
+                        // without issuing one RPC per notification.
+                        if self.pending_unpin.len() >= ACTIVE_OPERATION_UNPIN_BATCH {
+                            self.flush_unpins().await;
+                        }
                     }
                 }
             }
@@ -1071,6 +1073,9 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             let _ = self.stop_tracked_operation(target).await;
         } else if self.active_operation.as_deref() == Some(target) {
             self.active_operation = None;
+        }
+        if !self.needs_refollow {
+            self.flush_unpins().await;
         }
         result
     }
@@ -1311,10 +1316,11 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     other => {
                         self.record_lifecycle_event(other);
                         // Keep up with a fast cold sync while the descendant
-                        // proof is running. Deferring these unpins until the
-                        // operation completes can exhaust smoldot's bounded
-                        // follow-subscription pin budget.
-                        self.flush_unpins().await;
+                        // proof is running, while batching enough hashes to
+                        // avoid starving the proof with cleanup RPCs.
+                        if self.pending_unpin.len() >= ACTIVE_OPERATION_UNPIN_BATCH {
+                            self.flush_unpins().await;
+                        }
                     }
                 }
             }
@@ -1327,6 +1333,9 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             self.stop_tracked_operation(&operation_id).await?;
         } else if self.active_operation.as_deref() == Some(operation_id.as_str()) {
             self.active_operation = None;
+        }
+        if !self.needs_refollow {
+            self.flush_unpins().await;
         }
         outcome
     }
@@ -3314,14 +3323,16 @@ mod transaction_watch_tests {
         async fn rpc(&mut self, method: &str, params: &str) -> super::super::RpcResult<String> {
             match method {
                 "chainHead_v1_storage" => {
-                    let intermediate = format!("0x{}", "66".repeat(32));
-                    let finalized = format!("0x{}", "77".repeat(32));
-                    self.incoming.push_back((
-                        "follow".into(),
-                        format!(
-                            r#"{{"event":"finalized","finalizedBlockHashes":["{intermediate}","{finalized}"],"prunedBlockHashes":[]}}"#,
-                        ),
-                    ));
+                    for step in 0..5 {
+                        let intermediate = format!("0x{:064x}", 0x60 + step * 2);
+                        let finalized = format!("0x{:064x}", 0x61 + step * 2);
+                        self.incoming.push_back((
+                            "follow".into(),
+                            format!(
+                                r#"{{"event":"finalized","finalizedBlockHashes":["{intermediate}","{finalized}"],"prunedBlockHashes":[]}}"#,
+                            ),
+                        ));
+                    }
                     self.incoming.push_back((
                         "follow".into(),
                         r#"{"event":"operationStorageDone","operationId":"op"}"#.into(),
@@ -3367,7 +3378,7 @@ mod transaction_watch_tests {
     fn map_proof_flushes_finalized_pins_before_the_operation_finishes() {
         smol::block_on(async {
             let retained = format!("0x{}", "55".repeat(32));
-            let intermediate = format!("0x{}", "66".repeat(32));
+            let intermediate = format!("0x{:064x}", 0x66);
             let mut retained_hashes = BTreeMap::new();
             retained_hashes.insert(retained.clone(), 1);
             let mut chain = ChainHead {
@@ -3393,9 +3404,21 @@ mod transaction_watch_tests {
                 .await
                 .unwrap();
             assert!(matches!(result, KeyItemOperation::Complete(keys) if keys.is_empty()));
-            assert_eq!(chain.rpc.unpins.len(), 1);
-            assert!(chain.rpc.unpins[0].contains(&intermediate));
-            assert!(!chain.rpc.unpins[0].contains(&retained));
+            assert_eq!(chain.rpc.unpins.len(), 2);
+            assert!(
+                chain
+                    .rpc
+                    .unpins
+                    .iter()
+                    .any(|batch| batch.contains(&intermediate))
+            );
+            assert!(
+                chain
+                    .rpc
+                    .unpins
+                    .iter()
+                    .all(|batch| !batch.contains(&retained))
+            );
             assert!(chain.pending_unpin.is_empty());
         });
     }
