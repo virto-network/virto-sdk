@@ -107,8 +107,12 @@ impl IncomingMessage {
                 object_field(error, "message").and_then(parse_json_string),
             )
         {
-            let _ = u32::try_from(id).ok()?;
-            return Some(IncomingMessage::Error(JsonRpcError { code, message }));
+            let id = u32::try_from(id).ok()?;
+            return Some(IncomingMessage::Error(JsonRpcError {
+                id: Some(id),
+                code,
+                message,
+            }));
         }
 
         if let (Some(id), None) = (id, method) {
@@ -380,6 +384,10 @@ fn parse_json_string(raw: &str) -> Option<String> {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct JsonRpcError {
+    /// JSON-RPC response identifier. Locally generated transport errors have
+    /// no identifier and apply to the request currently being processed.
+    #[serde(default)]
+    pub id: Option<u32>,
     pub code: i64,
     pub message: String,
 }
@@ -387,6 +395,7 @@ pub struct JsonRpcError {
 impl JsonRpcError {
     pub fn new(code: i64, message: &str) -> Self {
         Self {
+            id: None,
             code,
             message: message.into(),
         }
@@ -400,6 +409,19 @@ impl core::fmt::Display for JsonRpcError {
 }
 
 pub type RpcResult<T> = Result<T, JsonRpcError>;
+
+/// Cleanup to perform if the future waiting for a request response is
+/// cancelled after the request was accepted by the JSON-RPC service.
+///
+/// This is public only because it appears in the transport trait. Applications
+/// should normally use the higher-level chainHead APIs instead.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub enum RequestCleanup {
+    None,
+    StopChainHeadOperation { follow_subscription: String },
+    UnwatchTransaction,
+}
 
 /// Helper: extract result as a JSON string value (strips quotes).
 #[cfg(any(
@@ -425,6 +447,26 @@ pub(crate) fn result_as_str(result: &str) -> Option<&str> {
 #[allow(async_fn_in_trait)]
 pub trait Rpc {
     async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String>;
+
+    /// Submit a request whose successful response may create server-side
+    /// state. Cancellation-aware transports retain enough information to tear
+    /// that state down when [`Self::cancel_pending_request`] is called.
+    #[doc(hidden)]
+    async fn rpc_with_cleanup(
+        &mut self,
+        method: &str,
+        params: &str,
+        _cleanup: RequestCleanup,
+    ) -> RpcResult<String> {
+        self.rpc(method, params).await
+    }
+
+    /// Finish and clean up a request whose owning future was cancelled while
+    /// waiting for its JSON-RPC response.
+    #[doc(hidden)]
+    async fn cancel_pending_request(&mut self) -> RpcResult<()> {
+        Ok(())
+    }
 }
 
 /// Backends that support JSON-RPC subscriptions (WebSocket, smoldot).
@@ -438,6 +480,17 @@ pub trait Rpc {
 pub trait RpcSubscription: Rpc {
     /// Subscribe to a method. Returns the subscription ID.
     async fn subscribe(&mut self, method: &str, params: &str) -> RpcResult<String>;
+
+    /// Cancellation-aware subscription establishment.
+    #[doc(hidden)]
+    async fn subscribe_with_cleanup(
+        &mut self,
+        method: &str,
+        params: &str,
+        _cleanup: RequestCleanup,
+    ) -> RpcResult<String> {
+        self.subscribe(method, params).await
+    }
 
     /// Read the next subscription event, blocking until one arrives.
     /// Returns `(subscription_id, raw_json_result)`.
@@ -530,6 +583,7 @@ mod tests {
         let msg = IncomingMessage::parse(json).unwrap();
         match msg {
             IncomingMessage::Error(e) => {
+                assert_eq!(e.id, Some(1));
                 assert_eq!(e.code, -32603);
                 assert_eq!(e.message, "bad");
             }

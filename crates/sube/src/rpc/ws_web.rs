@@ -73,7 +73,10 @@ impl super::Rpc for Backend {
                 IncomingMessage::Response(r) if r.id == id => {
                     return r.result.ok_or_else(|| JsonRpcError::new(-1, "no result"));
                 }
-                IncomingMessage::Error(e) => return Err(e),
+                IncomingMessage::Error(e) if e.id.is_none() || e.id == Some(id) => return Err(e),
+                IncomingMessage::Error(e) => {
+                    log::warn!("unexpected error response id: {:?}", e.id);
+                }
                 IncomingMessage::Response(r) => {
                     log::warn!("unexpected response id: {}", r.id);
                 }

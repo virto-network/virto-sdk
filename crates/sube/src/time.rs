@@ -10,6 +10,7 @@ use core::{
     task::{Context, Poll, Waker},
     time::Duration,
 };
+use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -25,10 +26,14 @@ struct State {
 struct JoinableTimer {
     state: Arc<(Mutex<State>, Condvar)>,
     thread: Option<JoinHandle<()>>,
+    // A safe executor may not synchronously move and poll this timer on the
+    // helper thread from its Waker. That makes the self-join escape below
+    // unreachable without an unsafe, unsound executor implementation.
+    _not_send: core::marker::PhantomData<Rc<()>>,
 }
 
 impl JoinableTimer {
-    fn new(duration: Duration) -> Self {
+    fn new(duration: Duration) -> std::io::Result<Self> {
         let state = Arc::new((
             Mutex::new(State {
                 cancelled: false,
@@ -53,12 +58,12 @@ impl JoinableTimer {
                         waker.wake();
                     }
                 }
-            })
-            .expect("failed to spawn joinable deadline thread");
-        Self {
+            })?;
+        Ok(Self {
             state,
             thread: Some(thread),
-        }
+            _not_send: core::marker::PhantomData,
+        })
     }
 }
 
@@ -102,9 +107,15 @@ impl Drop for JoinableTimer {
 
 /// Run `future` until it completes or the wall-clock deadline expires.
 /// Dropping either branch synchronously stops and joins its timer thread.
+///
+/// The returned future is deliberately `!Send`. Queueing executors such as
+/// VOS, smol, and Tokio therefore wake it back on its owning thread instead of
+/// recursively polling it on the timer helper, preserving the join-before-
+/// unload invariant without imposing a process-global timer reactor.
 pub async fn timeout<T>(duration: Duration, future: impl Future<Output = T>) -> Result<T, Elapsed> {
     let mut future = core::pin::pin!(future);
-    let mut timer = core::pin::pin!(JoinableTimer::new(duration));
+    let timer = JoinableTimer::new(duration).map_err(|_| Elapsed)?;
+    let mut timer = core::pin::pin!(timer);
     poll_fn(|cx| {
         if let Poll::Ready(output) = future.as_mut().poll(cx) {
             return Poll::Ready(Ok(output));
