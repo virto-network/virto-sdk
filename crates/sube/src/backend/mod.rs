@@ -88,6 +88,19 @@ impl Backend for AnyBackend {
         )
     }
 
+    async fn get_keys_page_at_hash(
+        &mut self,
+        prefix: crate::RawKey,
+        limit: u16,
+        cursor: Option<crate::RawKey>,
+        block_hash: [u8; 32],
+    ) -> SubeResult<crate::RawKeysPage> {
+        dispatch!(
+            self,
+            get_keys_page_at_hash(prefix, limit, cursor, block_hash)
+        )
+    }
+
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> SubeResult<()> {
         dispatch!(self, submit(ext, wait_for_finalization))
     }

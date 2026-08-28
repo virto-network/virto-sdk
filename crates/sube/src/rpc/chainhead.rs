@@ -81,6 +81,23 @@ enum OperationResult {
 pub struct StorageItem {
     pub key: String,
     pub value: Option<String>,
+    pub hash: Option<String>,
+    pub closest_descendant_merkle_value: Option<String>,
+}
+
+const LIGHT_PAGE_CURSOR_MAGIC: &[u8; 8] = b"SUBEPG01";
+const LIGHT_PAGE_LEAF_DEPTH: usize = 2;
+const LIGHT_PAGE_MAX_DEPTH: usize = 8;
+const LIGHT_PAGE_MAX_OPERATIONS: usize = 64;
+
+#[derive(Debug)]
+enum KeyOperation {
+    Complete {
+        keys: Vec<crate::RawKey>,
+        has_descendants: bool,
+    },
+    Truncated(Vec<crate::RawKey>),
+    Inaccessible,
 }
 
 // --- Follow event types ---
@@ -186,7 +203,7 @@ fn extract_str_array<'a>(json: &'a str, marker: &str) -> Vec<&'a str> {
 
 /// Deserialize storage items from a JSON `"items":[...]` array.
 ///
-/// Each item is `{"key":"0x...","value":"0x..."}` with optional value.
+/// Each item carries a key and one of value/hash/closest-descendant fields.
 fn parse_storage_items(json: &str) -> Vec<StorageItem> {
     let arr = match extract_json_object(json, "\"items\":") {
         Some(a) => a,
@@ -215,13 +232,116 @@ fn parse_storage_items(json: &str) -> Vec<StorageItem> {
                     let obj = &arr[start..=i];
                     let key = extract_json_string(obj, "\"key\":\"").unwrap_or_default();
                     let value = extract_json_string(obj, "\"value\":\"");
-                    items.push(StorageItem { key, value });
+                    let hash = extract_json_string(obj, "\"hash\":\"");
+                    let closest_descendant_merkle_value =
+                        extract_json_string(obj, "\"closestDescendantMerkleValue\":\"");
+                    items.push(StorageItem {
+                        key,
+                        value,
+                        hash,
+                        closest_descendant_merkle_value,
+                    });
                 }
             }
             _ => {}
         }
     }
     items
+}
+
+fn encode_light_page_cursor(
+    partition: &[u8],
+    after_key: Option<&[u8]>,
+) -> crate::Result<crate::RawKey> {
+    let partition_len = u8::try_from(partition.len()).map_err(|_| crate::Error::BadInput)?;
+    let after_key = after_key.unwrap_or_default();
+    let after_len = u16::try_from(after_key.len()).map_err(|_| crate::Error::BadInput)?;
+    let mut cursor = Vec::with_capacity(
+        LIGHT_PAGE_CURSOR_MAGIC.len() + 1 + partition.len() + 2 + after_key.len(),
+    );
+    cursor.extend_from_slice(LIGHT_PAGE_CURSOR_MAGIC);
+    cursor.push(partition_len);
+    cursor.extend_from_slice(partition);
+    cursor.extend_from_slice(&after_len.to_le_bytes());
+    cursor.extend_from_slice(after_key);
+    Ok(cursor)
+}
+
+fn decode_light_page_cursor(
+    prefix: &[u8],
+    cursor: Option<crate::RawKey>,
+) -> crate::Result<(Vec<u8>, Option<crate::RawKey>)> {
+    let Some(cursor) = cursor else {
+        return Ok((Vec::new(), None));
+    };
+
+    if !cursor.starts_with(LIGHT_PAGE_CURSOR_MAGIC) {
+        if !cursor.starts_with(prefix) {
+            return Err(crate::Error::BadInput);
+        }
+        let suffix = &cursor[prefix.len()..];
+        if suffix.is_empty() {
+            return Ok((vec![0], None));
+        }
+        let depth = core::cmp::min(LIGHT_PAGE_LEAF_DEPTH, suffix.len());
+        return Ok((suffix[..depth].to_vec(), Some(cursor)));
+    }
+
+    let partition_len = usize::from(
+        *cursor
+            .get(LIGHT_PAGE_CURSOR_MAGIC.len())
+            .ok_or(crate::Error::BadInput)?,
+    );
+    if partition_len > LIGHT_PAGE_MAX_DEPTH {
+        return Err(crate::Error::BadInput);
+    }
+    let partition_start = LIGHT_PAGE_CURSOR_MAGIC.len() + 1;
+    let partition_end = partition_start
+        .checked_add(partition_len)
+        .ok_or(crate::Error::BadInput)?;
+    let after_len_end = partition_end.checked_add(2).ok_or(crate::Error::BadInput)?;
+    let partition = cursor
+        .get(partition_start..partition_end)
+        .ok_or(crate::Error::BadInput)?
+        .to_vec();
+    let after_len = u16::from_le_bytes(
+        cursor
+            .get(partition_end..after_len_end)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(crate::Error::BadInput)?,
+    ) as usize;
+    let after_end = after_len_end
+        .checked_add(after_len)
+        .ok_or(crate::Error::BadInput)?;
+    if after_end != cursor.len() {
+        return Err(crate::Error::BadInput);
+    }
+    let after_key = if after_len == 0 {
+        None
+    } else {
+        let key = cursor[after_len_end..after_end].to_vec();
+        let mut expected_prefix = Vec::with_capacity(prefix.len() + partition.len());
+        expected_prefix.extend_from_slice(prefix);
+        expected_prefix.extend_from_slice(&partition);
+        if !key.starts_with(&expected_prefix) {
+            return Err(crate::Error::BadInput);
+        }
+        Some(key)
+    };
+    Ok((partition, after_key))
+}
+
+/// Advance past an entirely scanned prefix subtree. Truncating at the byte
+/// that carried preserves lexicographic depth-first traversal.
+fn advance_light_page_partition(partition: &mut Vec<u8>) -> bool {
+    for index in (0..partition.len()).rev() {
+        if partition[index] != u8::MAX {
+            partition[index] += 1;
+            partition.truncate(index + 1);
+            return true;
+        }
+    }
+    false
 }
 
 fn parse_follow_event(json: &str) -> Result<FollowEvent<'_>, crate::Error> {
@@ -921,33 +1041,27 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .collect()
     }
 
-    /// Stream only enough descendant keys to satisfy one page, then stop the
-    /// chainHead operation. The caller must retain `block_hash` for the life
-    /// of a multi-page scan.
-    async fn bounded_keys_page_at_hash(
+    /// Execute one bounded key operation at a pinned block. A `probe` asks
+    /// only whether the exact key and any descendant exist; a scan returns
+    /// hashes for the exact key and its descendants.
+    async fn key_operation_at_hash(
         &mut self,
-        prefix: &[u8],
-        size: u16,
-        start_key: Option<&[u8]>,
-        block_hash: &[u8; 32],
-    ) -> crate::Result<Vec<crate::RawKey>> {
-        if size == 0 {
-            return Ok(Vec::new());
-        }
-        let hash = to_hex(block_hash);
-        if !self.retained_hashes.contains_key(&hash) {
-            return Err(crate::Error::OperationFailed(
-                "block snapshot is not retained".into(),
-            ));
-        }
-
-        self.prepare_operation().await?;
-        if !self.retained_hashes.contains_key(&hash) {
-            return Err(crate::Error::SubscriptionClosed);
-        }
-
-        let prefix = to_hex(prefix);
-        let items_json = format!(r#"[{{"key":"{}","type":"descendantsHashes"}}]"#, prefix);
+        hash: &str,
+        key_prefix: &[u8],
+        probe: bool,
+        after_key: Option<&[u8]>,
+        collect_limit: usize,
+    ) -> crate::Result<KeyOperation> {
+        let key = to_hex(key_prefix);
+        let items_json = if probe {
+            format!(
+                r#"[{{"key":"{key}","type":"hash"}},{{"key":"{key}","type":"closestDescendantMerkleValue"}}]"#
+            )
+        } else {
+            format!(
+                r#"[{{"key":"{key}","type":"hash"}},{{"key":"{key}","type":"descendantsHashes"}}]"#
+            )
+        };
         let result = self
             .rpc
             .rpc(
@@ -970,7 +1084,8 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             }
         };
 
-        let mut keys = Vec::with_capacity(usize::from(size));
+        let mut keys = Vec::with_capacity(collect_limit.min(64));
+        let mut has_descendants = false;
         loop {
             let (sub_id, event_json) = self
                 .rpc
@@ -988,14 +1103,21 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     items,
                 } if event_id == operation_id => {
                     for item in items {
-                        let key = hex::decode(item.key.trim_start_matches("0x")).map_err(|_| {
-                            crate::Error::Decode("paged key hex decode failed".into())
-                        })?;
-                        if start_key.is_some_and(|start| key.as_slice() <= start) {
+                        has_descendants |= item.closest_descendant_merkle_value.is_some();
+                        if item.hash.is_none() {
                             continue;
                         }
-                        keys.push(key);
-                        if keys.len() == usize::from(size) {
+                        let decoded =
+                            hex::decode(item.key.trim_start_matches("0x")).map_err(|_| {
+                                crate::Error::Decode("paged key hex decode failed".into())
+                            })?;
+                        if after_key.is_some_and(|after| decoded.as_slice() <= after) {
+                            continue;
+                        }
+                        if keys.last().is_none_or(|last| last != &decoded) {
+                            keys.push(decoded);
+                        }
+                        if !probe && keys.len() >= collect_limit {
                             let _ = self
                                 .rpc
                                 .rpc(
@@ -1003,13 +1125,20 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                                     &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
                                 )
                                 .await;
-                            return Ok(keys);
+                            return Ok(KeyOperation::Truncated(keys));
                         }
                     }
                 }
                 FollowEvent::OperationStorageDone {
                     operation_id: event_id,
-                } if event_id == operation_id => return Ok(keys),
+                } if event_id == operation_id => {
+                    keys.sort_unstable();
+                    keys.dedup();
+                    return Ok(KeyOperation::Complete {
+                        keys,
+                        has_descendants,
+                    });
+                }
                 FollowEvent::OperationWaitingForContinue {
                     operation_id: event_id,
                 } if event_id == operation_id => {
@@ -1029,16 +1158,195 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 }
                 FollowEvent::OperationInaccessible {
                     operation_id: event_id,
-                } if event_id == operation_id => {
-                    return Err(crate::Error::OperationFailed(
-                        "block snapshot is no longer accessible".into(),
-                    ));
-                }
+                } if event_id == operation_id => return Ok(KeyOperation::Inaccessible),
                 FollowEvent::Stop => {
                     self.needs_refollow = true;
                     return Err(crate::Error::SubscriptionClosed);
                 }
                 other => self.record_lifecycle_event(other),
+            }
+        }
+    }
+
+    /// Traverse lexicographic state-trie partitions instead of asking a light
+    /// peer for an unbounded proof of every descendant below a map prefix.
+    /// The opaque cursor records the current partition and optional last key.
+    async fn partitioned_keys_page_at_hash(
+        &mut self,
+        prefix: &[u8],
+        limit: u16,
+        cursor: Option<crate::RawKey>,
+        block_hash: &[u8; 32],
+    ) -> crate::Result<crate::RawKeysPage> {
+        if limit == 0 {
+            return Err(crate::Error::BadInput);
+        }
+        let hash = to_hex(block_hash);
+        if !self.retained_hashes.contains_key(&hash) {
+            return Err(crate::Error::OperationFailed(
+                "block snapshot is not retained".into(),
+            ));
+        }
+        let (mut partition, mut after_key) = decode_light_page_cursor(prefix, cursor)?;
+
+        self.prepare_operation().await?;
+        if !self.retained_hashes.contains_key(&hash) {
+            return Err(crate::Error::SubscriptionClosed);
+        }
+
+        let mut page_keys = Vec::with_capacity(usize::from(limit));
+        let mut operations = 0usize;
+        loop {
+            if operations >= LIGHT_PAGE_MAX_OPERATIONS {
+                let next_cursor = encode_light_page_cursor(&partition, after_key.as_deref())?;
+                return Ok(crate::RawKeysPage {
+                    keys: page_keys,
+                    next_cursor: Some(next_cursor),
+                });
+            }
+
+            let mut key_prefix = Vec::with_capacity(prefix.len() + partition.len());
+            key_prefix.extend_from_slice(prefix);
+            key_prefix.extend_from_slice(&partition);
+            let remaining = usize::from(limit) - page_keys.len();
+            let probe = partition.len() < LIGHT_PAGE_LEAF_DEPTH;
+            let operation = self
+                .key_operation_at_hash(
+                    &hash,
+                    &key_prefix,
+                    probe,
+                    after_key.as_deref(),
+                    if probe { 1 } else { remaining + 1 },
+                )
+                .await?;
+            operations += 1;
+            self.flush_unpins().await;
+
+            match operation {
+                KeyOperation::Truncated(mut keys) => {
+                    keys.truncate(remaining);
+                    page_keys.extend(keys);
+                    let last = page_keys.last().ok_or(crate::Error::BadInput)?;
+                    let next_cursor = encode_light_page_cursor(&partition, Some(last))?;
+                    return Ok(crate::RawKeysPage {
+                        keys: page_keys,
+                        next_cursor: Some(next_cursor),
+                    });
+                }
+                KeyOperation::Complete {
+                    mut keys,
+                    has_descendants,
+                } => {
+                    if keys.len() > remaining {
+                        keys.truncate(remaining);
+                        page_keys.extend(keys);
+                        let last = page_keys.last().ok_or(crate::Error::BadInput)?;
+                        let next_cursor = encode_light_page_cursor(&partition, Some(last))?;
+                        return Ok(crate::RawKeysPage {
+                            keys: page_keys,
+                            next_cursor: Some(next_cursor),
+                        });
+                    }
+                    page_keys.append(&mut keys);
+
+                    let next_exists = if probe && has_descendants {
+                        partition.push(0);
+                        true
+                    } else {
+                        advance_light_page_partition(&mut partition)
+                    };
+                    after_key = None;
+
+                    if page_keys.len() == usize::from(limit) {
+                        return Ok(crate::RawKeysPage {
+                            keys: page_keys,
+                            next_cursor: next_exists
+                                .then(|| encode_light_page_cursor(&partition, None))
+                                .transpose()?,
+                        });
+                    }
+                    if !next_exists {
+                        return Ok(crate::RawKeysPage {
+                            keys: page_keys,
+                            next_cursor: None,
+                        });
+                    }
+                }
+                KeyOperation::Inaccessible => {
+                    if probe {
+                        return Err(crate::Error::OperationFailed(
+                            "light-client trie partition probe is inaccessible".into(),
+                        ));
+                    }
+                    if partition.len() >= LIGHT_PAGE_MAX_DEPTH {
+                        return Err(crate::Error::OperationFailed(
+                            "light-client trie partition remains too large".into(),
+                        ));
+                    }
+
+                    // A large descendant proof is split one byte deeper. Probe
+                    // first so an exact key at the partition boundary is not
+                    // skipped when descending.
+                    let probe_result = self
+                        .key_operation_at_hash(&hash, &key_prefix, true, after_key.as_deref(), 1)
+                        .await?;
+                    operations += 1;
+                    self.flush_unpins().await;
+                    let KeyOperation::Complete {
+                        mut keys,
+                        has_descendants,
+                    } = probe_result
+                    else {
+                        return Err(crate::Error::OperationFailed(
+                            "light-client trie partition probe is inaccessible".into(),
+                        ));
+                    };
+                    page_keys.append(&mut keys);
+                    if page_keys.len() == usize::from(limit) {
+                        let mut next_partition = partition.clone();
+                        if has_descendants {
+                            let next_byte = after_key
+                                .as_deref()
+                                .and_then(|key| key.get(prefix.len() + partition.len()))
+                                .copied()
+                                .unwrap_or(0);
+                            next_partition.push(next_byte);
+                        } else if !advance_light_page_partition(&mut next_partition) {
+                            return Ok(crate::RawKeysPage {
+                                keys: page_keys,
+                                next_cursor: None,
+                            });
+                        }
+                        return Ok(crate::RawKeysPage {
+                            keys: page_keys,
+                            next_cursor: Some(encode_light_page_cursor(
+                                &next_partition,
+                                after_key.as_deref(),
+                            )?),
+                        });
+                    }
+                    if has_descendants {
+                        let next_byte = after_key
+                            .as_deref()
+                            .and_then(|key| key.get(prefix.len() + partition.len()))
+                            .copied()
+                            .unwrap_or(0);
+                        partition.push(next_byte);
+                        if after_key.as_deref().is_some_and(|key| {
+                            !key.starts_with(&[prefix, partition.as_slice()].concat())
+                        }) {
+                            after_key = None;
+                        }
+                    } else {
+                        if !advance_light_page_partition(&mut partition) {
+                            return Ok(crate::RawKeysPage {
+                                keys: page_keys,
+                                next_cursor: None,
+                            });
+                        }
+                        after_key = None;
+                    }
+                }
             }
         }
     }
@@ -1448,7 +1756,18 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         start_key: Option<crate::RawKey>,
         block_hash: [u8; 32],
     ) -> crate::Result<Vec<crate::RawKey>> {
-        self.bounded_keys_page_at_hash(&prefix, size, start_key.as_deref(), &block_hash)
+        self.keys_paged_at_hash(&prefix, size, start_key.as_deref(), &block_hash)
+            .await
+    }
+
+    async fn get_keys_page_at_hash(
+        &mut self,
+        prefix: crate::RawKey,
+        limit: u16,
+        cursor: Option<crate::RawKey>,
+        block_hash: [u8; 32],
+    ) -> crate::Result<crate::RawKeysPage> {
+        self.partitioned_keys_page_at_hash(&prefix, limit, cursor, &block_hash)
             .await
     }
 
@@ -2049,6 +2368,47 @@ impl<R: Rpc + RpcSubscription> ChainSession for ChainHead<R> {
 #[cfg(test)]
 mod transaction_watch_tests {
     use super::*;
+
+    #[test]
+    fn light_page_cursor_round_trips_partition_and_last_key() {
+        let prefix = [0xaa, 0xbb];
+        let partition = [0x00, 0x42, 0x07];
+        let after = [0xaa, 0xbb, 0x00, 0x42, 0x07, 0x99];
+        let encoded = encode_light_page_cursor(&partition, Some(&after)).unwrap();
+        let (decoded_partition, decoded_after) =
+            decode_light_page_cursor(&prefix, Some(encoded)).unwrap();
+        assert_eq!(decoded_partition, partition);
+        assert_eq!(decoded_after.as_deref(), Some(after.as_slice()));
+    }
+
+    #[test]
+    fn light_page_cursor_rejects_a_last_key_outside_its_partition() {
+        let encoded = encode_light_page_cursor(&[0x01, 0x02], Some(&[0xaa, 0x01, 0x03])).unwrap();
+        assert!(decode_light_page_cursor(&[0xaa], Some(encoded)).is_err());
+    }
+
+    #[test]
+    fn light_page_partition_advances_depth_first_without_overlap() {
+        let mut partition = vec![0x00, 0x01, 0xfe];
+        assert!(advance_light_page_partition(&mut partition));
+        assert_eq!(partition, [0x00, 0x01, 0xff]);
+        assert!(advance_light_page_partition(&mut partition));
+        assert_eq!(partition, [0x00, 0x02]);
+        partition = vec![0xff, 0xff];
+        assert!(!advance_light_page_partition(&mut partition));
+    }
+
+    #[test]
+    fn storage_items_distinguish_hashes_from_descendant_probes() {
+        let items = parse_storage_items(
+            r#"{"items":[{"key":"0x01","hash":"0x02"},{"key":"0x01","closestDescendantMerkleValue":"0x03"}]}"#,
+        );
+        assert_eq!(items.len(), 2);
+        assert!(items[0].hash.is_some());
+        assert!(items[0].closest_descendant_merkle_value.is_none());
+        assert!(items[1].hash.is_none());
+        assert!(items[1].closest_descendant_merkle_value.is_some());
+    }
 
     struct RecoveryRpc {
         buffered: VecDeque<(String, String)>,

@@ -155,7 +155,7 @@ pub async fn query_at_hash(
 
 /// Query one bounded page of a partially-keyed storage map.
 ///
-/// `start_key` is an exclusive raw storage-key cursor. `block` selects the
+/// `start_key` is an opaque backend cursor. `block` selects the
 /// finalized snapshot; when omitted, the backend captures its current
 /// finalized block and returns it in [`StoragePage::at`].
 pub async fn query_page(
@@ -198,7 +198,7 @@ pub async fn query_page(
 
 /// Query one bounded map page at a finalized block hash already known to the
 /// caller. Unlike the height-based archive path, this works with a light
-/// client and preserves the exact snapshot across cursor continuations.
+/// client and preserves the exact snapshot across opaque cursor continuations.
 pub async fn query_page_at_hash(
     chain: &mut (impl Backend + ?Sized),
     meta: &Rc<Metadata>,
@@ -217,20 +217,18 @@ pub async fn query_page_at_hash(
         return Err(Error::BadInput);
     }
 
-    let requested = limit.checked_add(1).ok_or(Error::BadInput)?;
-    let mut keys = chain
-        .get_keys_paged_at_hash(storage_key.key(), requested, start_key, at.hash)
+    let raw_page = chain
+        .get_keys_page_at_hash(storage_key.key(), limit, start_key, at.hash)
         .await?;
-    let has_more = keys.len() > usize::from(limit);
-    keys.truncate(usize::from(limit));
-    let next_key = has_more.then(|| keys.last().cloned()).flatten();
-    let values = chain.get_storage_items_at_hash(keys, at.hash).await?;
+    let values = chain
+        .get_storage_items_at_hash(raw_page.keys, at.hash)
+        .await?;
     let entries = partial_storage_entries(values, &storage_key, meta)?;
 
     Ok(StoragePage {
         at,
         entries,
-        next_key,
+        next_key: raw_page.next_cursor,
         metadata: Rc::clone(meta),
     })
 }
@@ -375,7 +373,8 @@ pub struct StoragePageEntry {
 pub struct StoragePage {
     pub at: BlockInfo,
     pub entries: Vec<StoragePageEntry>,
-    /// Exclusive raw key for the next page. `None` means the scan is complete.
+    /// Opaque backend cursor for the next page. `None` means the scan is
+    /// complete. Feed it back unchanged; it is not necessarily a storage key.
     pub next_key: Option<RawKey>,
     /// Metadata used to decode `keys` and `value`.
     pub metadata: Rc<Metadata>,
@@ -457,6 +456,17 @@ impl Response {
 
 pub type RawKey = Vec<u8>;
 pub type RawValue = Vec<u8>;
+
+/// One backend-level page of raw storage keys.
+///
+/// `next_cursor` is opaque: callers must feed it back to the same backend,
+/// prefix, and block hash. Full-node backends commonly use the last raw key,
+/// while light clients may encode bounded trie-partition progress in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawKeysPage {
+    pub keys: Vec<RawKey>,
+    pub next_cursor: Option<RawKey>,
+}
 
 // --- Backend trait ---
 
@@ -546,6 +556,30 @@ pub trait Backend {
         Err(Error::OperationFailed(
             "hash-pinned key pagination is unsupported by this backend".into(),
         ))
+    }
+
+    /// Return a bounded page of keys at an authenticated block hash.
+    ///
+    /// The default adapts the legacy last-key API. Light-client backends can
+    /// override this to use an opaque cursor that bounds each state proof.
+    async fn get_keys_page_at_hash(
+        &mut self,
+        prefix: RawKey,
+        limit: u16,
+        cursor: Option<RawKey>,
+        block_hash: [u8; 32],
+    ) -> crate::Result<RawKeysPage> {
+        if limit == 0 {
+            return Err(Error::BadInput);
+        }
+        let requested = limit.checked_add(1).ok_or(Error::BadInput)?;
+        let mut keys = self
+            .get_keys_paged_at_hash(prefix, requested, cursor, block_hash)
+            .await?;
+        let has_more = keys.len() > usize::from(limit);
+        keys.truncate(usize::from(limit));
+        let next_cursor = has_more.then(|| keys.last().cloned()).flatten();
+        Ok(RawKeysPage { keys, next_cursor })
     }
 
     /// Submit an extrinsic. If `wait_for_finalization` is true, waits for

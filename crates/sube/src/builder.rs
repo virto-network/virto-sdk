@@ -215,7 +215,7 @@ impl<B: Backend> Sube<B> {
 
     /// Query a bounded page of a partially-keyed map at one finalized snapshot.
     ///
-    /// Feed `StoragePage::next_key` back as `start_key` and the returned
+    /// Feed the opaque `StoragePage::next_key` back as `start_key` and the returned
     /// `StoragePage::at.number` back as `block` to continue the same scan.
     pub async fn query_page(
         &mut self,
@@ -236,7 +236,7 @@ impl<B: Backend> Sube<B> {
     }
 
     /// Query a bounded map page at a known finalized hash. Feed
-    /// `StoragePage::next_key` and the same `at` value into the next call to
+    /// the opaque `StoragePage::next_key` and the same `at` value into the next call to
     /// continue the exact snapshot without requiring an archive node.
     pub async fn query_page_at_hash(
         &mut self,
