@@ -131,6 +131,32 @@ impl Backend for AnyBackend {
 // --- ChainSession implementation ---
 
 impl crate::rpc::chainhead::ChainSession for AnyBackend {
+    fn retain_block(&mut self, block_hash: &str) {
+        match self {
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(backend) => backend.retain_block(block_hash),
+            #[cfg(all(feature = "ws-web", target_arch = "wasm32"))]
+            AnyBackend::WsWeb(backend) => backend.retain_block(block_hash),
+            #[cfg(all(feature = "smoldot", feature = "std"))]
+            AnyBackend::Smoldot(backend) => backend.retain_block(block_hash),
+            #[allow(unreachable_patterns)]
+            _ => {}
+        }
+    }
+
+    fn release_block(&mut self, block_hash: &str) {
+        match self {
+            #[cfg(feature = "ws")]
+            AnyBackend::Ws(backend) => backend.release_block(block_hash),
+            #[cfg(all(feature = "ws-web", target_arch = "wasm32"))]
+            AnyBackend::WsWeb(backend) => backend.release_block(block_hash),
+            #[cfg(all(feature = "smoldot", feature = "std"))]
+            AnyBackend::Smoldot(backend) => backend.release_block(block_hash),
+            #[allow(unreachable_patterns)]
+            _ => {}
+        }
+    }
+
     async fn next_chain_event(&mut self) -> SubeResult<crate::rpc::chainhead::ChainEvent> {
         dispatch!(self, next_chain_event())
     }

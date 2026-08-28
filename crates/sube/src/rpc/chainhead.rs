@@ -63,6 +63,9 @@ pub struct ChainHead<R> {
     /// Set when a finalized event arrives after flush — means finalized_hash
     /// points to an already-unpinned block and we need to refollow.
     needs_refollow: bool,
+    /// Explicit snapshot leases held by higher-level paged queries. Leased
+    /// hashes are excluded from lazy unpin batches until released.
+    retained_hashes: BTreeMap<String, usize>,
     /// User-visible events buffered during internal operations.
     event_queue: VecDeque<ChainEvent>,
 }
@@ -415,6 +418,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             storage_accum: BTreeMap::new(),
             pending_unpin: Vec::new(),
             needs_refollow: false,
+            retained_hashes: BTreeMap::new(),
             event_queue: VecDeque::new(),
         };
 
@@ -549,7 +553,10 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
     /// Flush all pending unpins in a single batch RPC call.
     async fn flush_unpins(&mut self) {
-        let hashes = core::mem::take(&mut self.pending_unpin);
+        let hashes = core::mem::take(&mut self.pending_unpin)
+            .into_iter()
+            .filter(|hash| !self.retained_hashes.contains_key(hash))
+            .collect::<Vec<_>>();
         if hashes.is_empty() {
             return;
         }
@@ -572,6 +579,30 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 &format!(r#"["{}",{}]"#, self.follow_sub_id, hash_arr),
             )
             .await;
+    }
+
+    /// Keep a currently pinned block available across paged operations.
+    pub fn retain_block(&mut self, block_hash: &str) {
+        *self
+            .retained_hashes
+            .entry(block_hash.to_string())
+            .or_insert(0) += 1;
+        self.pending_unpin.retain(|hash| hash != block_hash);
+    }
+
+    /// Release one snapshot lease. A non-current block is unpinned lazily on
+    /// the next operation.
+    pub fn release_block(&mut self, block_hash: &str) {
+        let Some(count) = self.retained_hashes.get_mut(block_hash) else {
+            return;
+        };
+        *count -= 1;
+        if *count == 0 {
+            self.retained_hashes.remove(block_hash);
+            if self.finalized_hash != block_hash {
+                self.pending_unpin.push(block_hash.to_string());
+            }
+        }
     }
 
     /// Record a lifecycle event. Updates internal state, queues unpins,
@@ -662,6 +693,10 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         if stopped || self.needs_refollow {
             self.needs_refollow = false;
+            // A stopped follow invalidates every server-side pin. Callers
+            // holding leases will receive `SubscriptionClosed`/inaccessible
+            // on their next operation and must restart the snapshot.
+            self.retained_hashes.clear();
             // Unsubscribe old follow before creating a new one
             let _ = self
                 .rpc
@@ -884,6 +919,128 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     .map_err(|_| crate::Error::Decode("paged key hex decode failed".into()))
             })
             .collect()
+    }
+
+    /// Stream only enough descendant keys to satisfy one page, then stop the
+    /// chainHead operation. The caller must retain `block_hash` for the life
+    /// of a multi-page scan.
+    async fn bounded_keys_page_at_hash(
+        &mut self,
+        prefix: &[u8],
+        size: u16,
+        start_key: Option<&[u8]>,
+        block_hash: &[u8; 32],
+    ) -> crate::Result<Vec<crate::RawKey>> {
+        if size == 0 {
+            return Ok(Vec::new());
+        }
+        let hash = to_hex(block_hash);
+        if !self.retained_hashes.contains_key(&hash) {
+            return Err(crate::Error::OperationFailed(
+                "block snapshot is not retained".into(),
+            ));
+        }
+
+        self.prepare_operation().await?;
+        if !self.retained_hashes.contains_key(&hash) {
+            return Err(crate::Error::SubscriptionClosed);
+        }
+
+        let prefix = to_hex(prefix);
+        let items_json = format!(r#"[{{"key":"{}","type":"descendantsHashes"}}]"#, prefix);
+        let result = self
+            .rpc
+            .rpc(
+                "chainHead_v1_storage",
+                &format!(
+                    r#"["{}","{}",{},null]"#,
+                    self.follow_sub_id, hash, items_json
+                ),
+            )
+            .await
+            .map_err(|error| crate::Error::Node(error.to_string()))?;
+        let operation_id = match parse_operation_started(&result)
+            .map_err(|error| crate::Error::Node(format!("bad storage response: {error}")))?
+        {
+            OperationStarted::Started { operation_id } => operation_id.to_string(),
+            OperationStarted::LimitReached => {
+                return Err(crate::Error::Node(
+                    "chainHead operation limit reached".into(),
+                ));
+            }
+        };
+
+        let mut keys = Vec::with_capacity(usize::from(size));
+        loop {
+            let (sub_id, event_json) = self
+                .rpc
+                .next_event()
+                .await
+                .ok_or(crate::Error::SubscriptionClosed)?;
+            if sub_id != self.follow_sub_id {
+                continue;
+            }
+            let event = parse_follow_event(&event_json)
+                .map_err(|error| crate::Error::Decode(format!("follow event: {error}")))?;
+            match event {
+                FollowEvent::OperationStorageItems {
+                    operation_id: event_id,
+                    items,
+                } if event_id == operation_id => {
+                    for item in items {
+                        let key = hex::decode(item.key.trim_start_matches("0x")).map_err(|_| {
+                            crate::Error::Decode("paged key hex decode failed".into())
+                        })?;
+                        if start_key.is_some_and(|start| key.as_slice() <= start) {
+                            continue;
+                        }
+                        keys.push(key);
+                        if keys.len() == usize::from(size) {
+                            let _ = self
+                                .rpc
+                                .rpc(
+                                    "chainHead_v1_stopOperation",
+                                    &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
+                                )
+                                .await;
+                            return Ok(keys);
+                        }
+                    }
+                }
+                FollowEvent::OperationStorageDone {
+                    operation_id: event_id,
+                } if event_id == operation_id => return Ok(keys),
+                FollowEvent::OperationWaitingForContinue {
+                    operation_id: event_id,
+                } if event_id == operation_id => {
+                    let _ = self
+                        .rpc
+                        .rpc(
+                            "chainHead_v1_continue",
+                            &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
+                        )
+                        .await;
+                }
+                FollowEvent::OperationError {
+                    operation_id: event_id,
+                    error,
+                } if event_id == operation_id => {
+                    return Err(crate::Error::Node(error.into()));
+                }
+                FollowEvent::OperationInaccessible {
+                    operation_id: event_id,
+                } if event_id == operation_id => {
+                    return Err(crate::Error::OperationFailed(
+                        "block snapshot is no longer accessible".into(),
+                    ));
+                }
+                FollowEvent::Stop => {
+                    self.needs_refollow = true;
+                    return Err(crate::Error::SubscriptionClosed);
+                }
+                other => self.record_lifecycle_event(other),
+            }
+        }
     }
 
     /// Read storage through the legacy proof-backed method at an explicit
@@ -1291,7 +1448,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         start_key: Option<crate::RawKey>,
         block_hash: [u8; 32],
     ) -> crate::Result<Vec<crate::RawKey>> {
-        self.keys_paged_at_hash(&prefix, size, start_key.as_deref(), &block_hash)
+        self.bounded_keys_page_at_hash(&prefix, size, start_key.as_deref(), &block_hash)
             .await
     }
 
@@ -1830,6 +1987,8 @@ async fn skip_opaque_prefix<R: embedded_io_async::Read>(reader: &mut R) -> crate
 /// streaming and block-pinned queries generically.
 #[allow(async_fn_in_trait)]
 pub trait ChainSession: crate::Backend {
+    fn retain_block(&mut self, block_hash: &str);
+    fn release_block(&mut self, block_hash: &str);
     async fn next_chain_event(&mut self) -> crate::Result<ChainEvent>;
     fn try_next_chain_event(&mut self) -> Option<ChainEvent>;
     async fn header(&mut self, block_hash: &str) -> crate::Result<BlockHeader>;
@@ -1849,6 +2008,12 @@ pub trait ChainSession: crate::Backend {
 }
 
 impl<R: Rpc + RpcSubscription> ChainSession for ChainHead<R> {
+    fn retain_block(&mut self, block_hash: &str) {
+        self.retain_block(block_hash);
+    }
+    fn release_block(&mut self, block_hash: &str) {
+        self.release_block(block_hash);
+    }
     async fn next_chain_event(&mut self) -> crate::Result<ChainEvent> {
         self.next_chain_event().await
     }
@@ -1952,6 +2117,7 @@ mod transaction_watch_tests {
             storage_accum: BTreeMap::new(),
             pending_unpin: Vec::new(),
             needs_refollow: false,
+            retained_hashes: BTreeMap::new(),
             event_queue: VecDeque::new(),
         };
 

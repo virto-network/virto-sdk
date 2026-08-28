@@ -398,6 +398,18 @@ impl<B: Backend> Sube<B> {
 
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
 impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
+    /// Retain a finalized block for a bounded multi-request snapshot scan.
+    pub fn retain_finalized_hash(&mut self, block_hash: [u8; 32]) {
+        self.backend
+            .retain_block(&format!("0x{}", hex::encode(block_hash)));
+    }
+
+    /// Release a block previously retained with [`retain_finalized_hash`].
+    pub fn release_finalized_hash(&mut self, block_hash: [u8; 32]) {
+        self.backend
+            .release_block(&format!("0x{}", hex::encode(block_hash)));
+    }
+
     /// Wait for the next chain event (new block, finalization, best block change).
     ///
     /// ```rust,ignore
