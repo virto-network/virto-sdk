@@ -95,11 +95,20 @@ impl IntoFuture for SubeBuilder {
 
             let path = url.path();
             let mut backend = connect(&url, self.timeout).await?;
-            let meta = get_metadata(&mut backend, self.metadata).await?;
+            let at = backend.block_info(block).await?;
+            let meta = match self.metadata {
+                Some(metadata) => Rc::new(metadata),
+                None => Rc::new(
+                    backend
+                        .metadata_at_hash(at.hash)
+                        .await
+                        .map_err(|_| crate::Error::BadMetadata)?,
+                ),
+            };
 
             Ok(match path {
                 "/" | "" | "_meta" | "_meta/registry" => Response::Meta(Rc::clone(&meta)),
-                _ => crate::query(&mut backend, &meta, path, block).await?,
+                _ => crate::query_at_hash(&mut backend, &meta, path, at.hash).await?,
             })
         })
     }
@@ -175,6 +184,36 @@ impl<B: Backend> Sube<B> {
         self.metadata = Rc::new(metadata);
     }
 
+    async fn metadata_for_hash(&mut self, block_hash: [u8; 32]) -> SubeResult<Rc<Metadata>> {
+        let metadata = Rc::new(self.backend.metadata_at_hash(block_hash).await?);
+        self.metadata = Rc::clone(&metadata);
+        Ok(metadata)
+    }
+
+    /// Refresh the cached metadata at one captured finalized block and return
+    /// that authenticated block. Call construction can then use a runtime
+    /// snapshot that is internally consistent with its checkpoint.
+    pub async fn refresh_metadata(&mut self) -> SubeResult<crate::BlockInfo> {
+        let at = self.backend.block_info(None).await?;
+        self.metadata_for_hash(at.hash).await?;
+        Ok(at)
+    }
+
+    /// Resolve a caller-supplied hash to its verified header information.
+    pub async fn block_info_at_hash(
+        &mut self,
+        block_hash: [u8; 32],
+    ) -> SubeResult<crate::BlockInfo> {
+        self.backend.block_info_at_hash(block_hash).await
+    }
+
+    /// Cancel chain work whose owning future was dropped by an outer deadline.
+    /// Hosts with message-level timeouts should call this before reusing the
+    /// light-client session.
+    pub async fn cancel_active_operation(&mut self) -> SubeResult<()> {
+        self.backend.cancel_active_operation().await
+    }
+
     /// Query a storage path using human-readable names.
     ///
     /// Path format: `pallet/storage_item/key1/key2/...`
@@ -186,16 +225,20 @@ impl<B: Backend> Sube<B> {
     /// ```
     pub async fn query(&mut self, path: &str) -> SubeResult<Response> {
         let path = path.trim_matches('/');
+        let at = self.backend.block_info(None).await?;
+        let metadata = self.metadata_for_hash(at.hash).await?;
         match path {
-            "_meta" | "_meta/registry" => Ok(Response::Meta(Rc::clone(&self.metadata))),
-            _ => crate::query(&mut self.backend, &self.metadata, path, None).await,
+            "_meta" | "_meta/registry" => Ok(Response::Meta(metadata)),
+            _ => crate::query_at_hash(&mut self.backend, &metadata, path, at.hash).await,
         }
     }
 
     /// Query a storage path at a specific block number.
     pub async fn query_at(&mut self, path: &str, block: u32) -> SubeResult<Response> {
         let path = path.trim_matches('/');
-        crate::query(&mut self.backend, &self.metadata, path, Some(block)).await
+        let at = self.backend.block_info(Some(block)).await?;
+        let metadata = self.metadata_for_hash(at.hash).await?;
+        crate::query_at_hash(&mut self.backend, &metadata, path, at.hash).await
     }
 
     /// Query a constant or fully-keyed storage item at a known finalized hash.
@@ -204,9 +247,10 @@ impl<B: Backend> Sube<B> {
         path: &str,
         block_hash: [u8; 32],
     ) -> SubeResult<Response> {
+        let metadata = self.metadata_for_hash(block_hash).await?;
         crate::query_at_hash(
             &mut self.backend,
-            &self.metadata,
+            &metadata,
             path.trim_matches('/'),
             block_hash,
         )
@@ -224,13 +268,15 @@ impl<B: Backend> Sube<B> {
         start_key: Option<crate::RawKey>,
         block: Option<u32>,
     ) -> SubeResult<StoragePage> {
-        crate::query_page(
+        let at = self.backend.block_info(block).await?;
+        let metadata = self.metadata_for_hash(at.hash).await?;
+        crate::query_page_at_hash(
             &mut self.backend,
-            &self.metadata,
+            &metadata,
             path.trim_matches('/'),
             limit,
             start_key,
-            block,
+            at,
         )
         .await
     }
@@ -245,9 +291,10 @@ impl<B: Backend> Sube<B> {
         start_key: Option<crate::RawKey>,
         at: crate::BlockInfo,
     ) -> SubeResult<StoragePage> {
+        let metadata = self.metadata_for_hash(at.hash).await?;
         crate::query_page_at_hash(
             &mut self.backend,
-            &self.metadata,
+            &metadata,
             path.trim_matches('/'),
             limit,
             start_key,
@@ -353,6 +400,35 @@ impl<B: Backend> Sube<B> {
         .await
     }
 
+    /// Capture one finalized block, fetch that block's runtime metadata,
+    /// encode the call, and freeze an external-signing request against the
+    /// same state snapshot. This avoids races between a runtime upgrade and
+    /// separate refresh/prepare calls.
+    pub async fn prepare_external_call_signing<V: EncodeCall + ?Sized>(
+        &mut self,
+        path: &str,
+        body: &V,
+        signing_account: &[u8],
+        nonce_account: &[u8],
+        scheme: SignatureScheme,
+        options: TransactionOptions,
+    ) -> SubeResult<ExternalSigningRequest> {
+        let checkpoint = self.backend.block_info(None).await?;
+        let metadata = self.metadata_for_hash(checkpoint.hash).await?;
+        let call = crate::extrinsic::prepare_call(&metadata, path.trim_matches('/'), body)?;
+        crate::extrinsic::prepare_external_signing_at(
+            &mut self.backend,
+            &metadata,
+            &call,
+            signing_account,
+            nonce_account,
+            scheme,
+            &options,
+            checkpoint,
+        )
+        .await
+    }
+
     /// Finish an external V4 signing request locally without submitting it.
     pub fn finish_external_signing(
         &self,
@@ -376,21 +452,133 @@ impl<B: Backend> Sube<B> {
         extrinsic: &EncodedExtrinsic,
         wait_for: WaitFor,
     ) -> SubeResult<TransactionReceipt> {
-        // Never silently re-sign stale bytes after a runtime upgrade.
-        let live_metadata = self.backend.metadata().await?;
-        let current = crate::extrinsic::runtime_versions(&live_metadata)?;
-        if current != (extrinsic.spec_version, extrinsic.transaction_version) {
-            return Err(crate::Error::RuntimeUpgrade {
-                built_spec: extrinsic.spec_version,
-                current_spec: current.0,
-            });
+        self.submit_transaction_inner(extrinsic, wait_for, None)
+            .await
+    }
+
+    /// Submit with an aggregate transaction-watch deadline. A chainHead
+    /// backend explicitly unwatches the subscription before returning a
+    /// timeout or non-terminal best-block result.
+    pub async fn submit_transaction_with_timeout(
+        &mut self,
+        extrinsic: &EncodedExtrinsic,
+        wait_for: WaitFor,
+        timeout: core::time::Duration,
+    ) -> SubeResult<TransactionReceipt> {
+        self.submit_transaction_inner(extrinsic, wait_for, Some(timeout))
+            .await
+    }
+
+    async fn submit_transaction_inner(
+        &mut self,
+        extrinsic: &EncodedExtrinsic,
+        wait_for: WaitFor,
+        timeout: Option<core::time::Duration>,
+    ) -> SubeResult<TransactionReceipt> {
+        #[cfg(feature = "std")]
+        let started = std::time::Instant::now();
+
+        let preflight = async {
+            // Never silently submit bytes built for a different runtime.
+            let live_at = self.backend.block_info(None).await?;
+            let live_metadata = self.backend.metadata_at_hash(live_at.hash).await?;
+            let current = crate::extrinsic::runtime_versions(&live_metadata)?;
+            if current != (extrinsic.spec_version, extrinsic.transaction_version) {
+                return Err(crate::Error::RuntimeUpgrade {
+                    built_spec: extrinsic.spec_version,
+                    current_spec: current.0,
+                });
+            }
+            let genesis = self.backend.block_info(Some(0)).await?.hash;
+            if genesis != extrinsic.genesis_hash {
+                return Err(crate::Error::GenesisMismatch);
+            }
+            Ok(live_metadata)
+        };
+        #[cfg(feature = "std")]
+        let live_metadata = match timeout {
+            Some(timeout) => crate::time::timeout(timeout, preflight)
+                .await
+                .map_err(|_| crate::Error::ConnectionTimeout)??,
+            None => preflight.await?,
+        };
+        #[cfg(not(feature = "std"))]
+        let live_metadata = preflight.await?;
+
+        #[cfg(feature = "std")]
+        let watch_timeout = timeout
+            .map(|timeout| {
+                timeout
+                    .checked_sub(started.elapsed())
+                    .ok_or(crate::Error::ConnectionTimeout)
+            })
+            .transpose()?;
+        #[cfg(not(feature = "std"))]
+        let watch_timeout = timeout;
+
+        let receipt = match watch_timeout {
+            Some(watch_timeout) => {
+                self.backend
+                    .submit_transaction_with_timeout(extrinsic, wait_for, watch_timeout)
+                    .await?
+            }
+            None => self.backend.submit_transaction(extrinsic, wait_for).await?,
+        };
+
+        let raw_receipt = receipt.clone();
+        let fallback_metadata = live_metadata.clone();
+        let enrich = async {
+            let included_hash = receipt
+                .finalized_block_hash
+                .as_deref()
+                .or(receipt.best_block_hash.as_deref())
+                .and_then(|hash| {
+                    let mut decoded = [0u8; 32];
+                    hex::decode_to_slice(hash.trim_start_matches("0x"), &mut decoded)
+                        .ok()
+                        .map(|()| decoded)
+                });
+            let receipt_metadata = match included_hash {
+                Some(hash) => self.backend.metadata_at_hash(hash).await?,
+                None => live_metadata,
+            };
+            let receipt = self
+                .backend
+                .enrich_receipt(receipt, &receipt_metadata)
+                .await?;
+            Ok::<_, crate::Error>((receipt, receipt_metadata))
+        };
+
+        #[cfg(feature = "std")]
+        let enriched = if let Some(timeout) = timeout {
+            let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
+                self.metadata = Rc::new(fallback_metadata);
+                return Ok(raw_receipt);
+            };
+            match crate::time::timeout(remaining, enrich).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.metadata = Rc::new(fallback_metadata);
+                    return Ok(raw_receipt);
+                }
+            }
+        } else {
+            enrich.await
+        };
+        #[cfg(not(feature = "std"))]
+        let enriched = enrich.await;
+
+        match enriched {
+            Ok((receipt, receipt_metadata)) => {
+                self.metadata = Rc::new(receipt_metadata);
+                Ok(receipt)
+            }
+            Err(error) => {
+                log::warn!("transaction included but receipt enrichment failed: {error}");
+                self.metadata = Rc::new(fallback_metadata);
+                Ok(raw_receipt)
+            }
         }
-        let genesis = self.backend.block_info(Some(0)).await?.hash;
-        if genesis != extrinsic.genesis_hash {
-            return Err(crate::Error::GenesisMismatch);
-        }
-        let receipt = self.backend.submit_transaction(extrinsic, wait_for).await?;
-        self.backend.enrich_receipt(receipt, &self.metadata).await
     }
 }
 
@@ -767,6 +955,8 @@ mod tests {
     struct MockBackend {
         submissions: Rc<Cell<usize>>,
         property_reads: Rc<Cell<usize>>,
+        metadata_hash_byte: Rc<Cell<u8>>,
+        storage_hash_byte: Rc<Cell<u8>>,
         metadata: Metadata,
     }
 
@@ -777,6 +967,15 @@ mod tests {
             _block: Option<u32>,
         ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
             Ok(Vec::new())
+        }
+
+        async fn get_storage_items_at_hash(
+            &mut self,
+            keys: Vec<crate::RawKey>,
+            block_hash: [u8; 32],
+        ) -> SubeResult<Vec<(crate::RawKey, Option<crate::RawValue>)>> {
+            self.storage_hash_byte.set(block_hash[0]);
+            Ok(keys.into_iter().map(|key| (key, None)).collect())
         }
 
         async fn get_keys_paged(
@@ -794,6 +993,11 @@ mod tests {
         }
 
         async fn metadata(&mut self) -> SubeResult<Metadata> {
+            Ok(self.metadata.clone())
+        }
+
+        async fn metadata_at_hash(&mut self, block_hash: [u8; 32]) -> SubeResult<Metadata> {
+            self.metadata_hash_byte.set(block_hash[0]);
             Ok(self.metadata.clone())
         }
 
@@ -826,6 +1030,8 @@ mod tests {
             let backend = MockBackend {
                 submissions: Rc::clone(&submissions),
                 property_reads: Rc::clone(&property_reads),
+                metadata_hash_byte: Rc::new(Cell::new(0)),
+                storage_hash_byte: Rc::new(Cell::new(0)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));
@@ -859,6 +1065,62 @@ mod tests {
     }
 
     #[test]
+    fn hash_pinned_constants_refresh_metadata_at_that_hash() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let metadata_hash_byte = Rc::new(Cell::new(0));
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::clone(&metadata_hash_byte),
+                storage_hash_byte: Rc::new(Cell::new(0)),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+            let response = chain
+                .query_at_finalized_hash("system/_constants/version", [0x7b; 32])
+                .await
+                .unwrap();
+            assert!(matches!(response, Response::Value(_, _)));
+            assert_eq!(metadata_hash_byte.get(), 0x7b);
+        });
+    }
+
+    #[test]
+    fn automatic_nonce_uses_the_metadata_checkpoint_hash() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let metadata_hash_byte = Rc::new(Cell::new(0));
+            let storage_hash_byte = Rc::new(Cell::new(0));
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::clone(&metadata_hash_byte),
+                storage_hash_byte: Rc::clone(&storage_hash_byte),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+            let request = chain
+                .prepare_external_call_signing(
+                    "system/remark",
+                    &crate::Text("(remark:0x0102)"),
+                    &[7; 32],
+                    &[7; 32],
+                    crate::SignatureScheme::Sr25519,
+                    TransactionOptions::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(request.context.account_nonce, 0);
+            assert_eq!(request.context.checkpoint_hash, [2; 32]);
+            assert_eq!(metadata_hash_byte.get(), 2);
+            assert_eq!(storage_hash_byte.get(), 2);
+        });
+    }
+
+    #[test]
     fn external_v4_signing_matches_the_signer_path_byte_for_byte() {
         smol::block_on(async {
             let metadata =
@@ -866,6 +1128,8 @@ mod tests {
             let backend = MockBackend {
                 submissions: Rc::new(Cell::new(0)),
                 property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::new(Cell::new(0)),
+                storage_hash_byte: Rc::new(Cell::new(0)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));
@@ -909,6 +1173,8 @@ mod tests {
             let backend = MockBackend {
                 submissions: Rc::new(Cell::new(0)),
                 property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::new(Cell::new(0)),
+                storage_hash_byte: Rc::new(Cell::new(0)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));

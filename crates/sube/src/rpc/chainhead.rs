@@ -68,6 +68,12 @@ pub struct ChainHead<R> {
     retained_hashes: BTreeMap<String, usize>,
     /// User-visible events buffered during internal operations.
     event_queue: VecDeque<ChainEvent>,
+    /// Operation whose owning future is currently waiting for follow events.
+    /// It deliberately remains set when that future is cancelled.
+    active_operation: Option<String>,
+    /// Transaction-watch subscription retained across caller cancellation so
+    /// a host-level deadline can still unwatch it explicitly.
+    active_tx_watch: Option<String>,
 }
 
 /// Result from a chainHead operation.
@@ -86,17 +92,19 @@ pub struct StorageItem {
 }
 
 const LIGHT_PAGE_CURSOR_MAGIC: &[u8; 8] = b"SUBEPG01";
-const LIGHT_PAGE_LEAF_DEPTH: usize = 2;
 const LIGHT_PAGE_MAX_DEPTH: usize = 8;
 const LIGHT_PAGE_MAX_OPERATIONS: usize = 64;
 
 #[derive(Debug)]
 enum KeyOperation {
-    Complete {
-        keys: Vec<crate::RawKey>,
-        has_descendants: bool,
-    },
-    Truncated(Vec<crate::RawKey>),
+    Complete(Vec<crate::RawKey>),
+    Split { exact_keys: Vec<crate::RawKey> },
+}
+
+#[derive(Debug)]
+enum KeyItemOperation {
+    Complete(Vec<crate::RawKey>),
+    TooLarge,
     Inaccessible,
 }
 
@@ -283,7 +291,7 @@ fn decode_light_page_cursor(
         if suffix.is_empty() {
             return Ok((vec![0], None));
         }
-        let depth = core::cmp::min(LIGHT_PAGE_LEAF_DEPTH, suffix.len());
+        let depth = core::cmp::min(LIGHT_PAGE_MAX_DEPTH, suffix.len());
         return Ok((suffix[..depth].to_vec(), Some(cursor)));
     }
 
@@ -404,18 +412,44 @@ fn parse_follow_event(json: &str) -> Result<FollowEvent<'_>, crate::Error> {
 
 #[derive(Debug)]
 enum OperationStarted<'a> {
-    Started { operation_id: &'a str },
+    Started {
+        operation_id: &'a str,
+        discarded_items: usize,
+    },
     LimitReached,
+}
+
+fn extract_json_usize(json: &str, marker: &str) -> Option<usize> {
+    let tail = json.get(json.find(marker)? + marker.len()..)?;
+    let digits = tail
+        .trim_start()
+        .as_bytes()
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    (digits != 0)
+        .then(|| tail.trim_start().get(..digits)?.parse().ok())
+        .flatten()
 }
 
 fn parse_operation_started(json: &str) -> Result<OperationStarted<'_>, crate::Error> {
     let result = extract_json_str(json, "\"result\":\"")
         .ok_or_else(|| crate::Error::Decode("missing result in operation response".into()))?;
     match result {
-        "started" => Ok(OperationStarted::Started {
-            operation_id: extract_json_str(json, "\"operationId\":\"")
-                .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
-        }),
+        "started" => {
+            let discarded_items = if json.contains("\"discardedItems\":") {
+                extract_json_usize(json, "\"discardedItems\":").ok_or_else(|| {
+                    crate::Error::Decode("invalid discardedItems in operation response".into())
+                })?
+            } else {
+                0
+            };
+            Ok(OperationStarted::Started {
+                operation_id: extract_json_str(json, "\"operationId\":\"")
+                    .ok_or_else(|| crate::Error::Decode("missing operationId".into()))?,
+                discarded_items,
+            })
+        }
         "limitReached" => Ok(OperationStarted::LimitReached),
         other => Err(crate::Error::Decode(format!(
             "unknown operation result: {other}"
@@ -540,6 +574,8 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             needs_refollow: false,
             retained_hashes: BTreeMap::new(),
             event_queue: VecDeque::new(),
+            active_operation: None,
+            active_tx_watch: None,
         };
 
         ch.wait_initialized().await?;
@@ -836,81 +872,131 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         Ok(self.finalized_hash.clone())
     }
 
+    async fn stop_operation(&mut self, operation_id: &str) -> crate::Result<()> {
+        let params = format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id);
+        let stop = self.rpc.rpc("chainHead_v1_stopOperation", &params);
+        #[cfg(feature = "std")]
+        {
+            crate::time::timeout(core::time::Duration::from_secs(5), stop)
+                .await
+                .map_err(|_| crate::Error::ConnectionTimeout)?
+                .map(|_| ())
+                .map_err(|error| crate::Error::Node(format!("stop operation: {error}")))
+        }
+        #[cfg(not(feature = "std"))]
+        stop.await
+            .map(|_| ())
+            .map_err(|error| crate::Error::Node(format!("stop operation: {error}")))
+    }
+
+    /// Stop the operation left behind when a higher-level future was dropped.
+    pub async fn cancel_active_operation(&mut self) -> crate::Result<()> {
+        let mut first_error = None;
+        if let Some(operation_id) = self.active_operation.take() {
+            self.storage_accum.remove(&operation_id);
+            if let Err(error) = self.stop_operation(&operation_id).await {
+                first_error = Some(error);
+            }
+        }
+        if let Some(subscription_id) = self.active_tx_watch.clone()
+            && let Err(error) = self.unwatch_transaction(&subscription_id).await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// Poll the subscription until we get a result for the given operation,
     /// processing other follow events as side effects.
     async fn wait_for_operation(&mut self, target: &str) -> crate::Result<OperationResult> {
-        loop {
-            let (sub_id, event_json) = self
-                .rpc
-                .next_event()
-                .await
-                .ok_or(crate::Error::SubscriptionClosed)?;
+        self.active_operation = Some(target.to_string());
+        let result = async {
+            loop {
+                let (sub_id, event_json) = self
+                    .rpc
+                    .next_event()
+                    .await
+                    .ok_or(crate::Error::SubscriptionClosed)?;
 
-            // Skip events from non-follow subscriptions
-            if sub_id != self.follow_sub_id {
-                continue;
-            }
+                // Skip events from non-follow subscriptions
+                if sub_id != self.follow_sub_id {
+                    continue;
+                }
 
-            let event = parse_follow_event(&event_json)
-                .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
+                let event = parse_follow_event(&event_json)
+                    .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
-            match event {
-                FollowEvent::Stop => {
-                    return Err(crate::Error::SubscriptionClosed);
-                }
-                FollowEvent::OperationStorageItems {
-                    operation_id,
-                    items,
-                } => {
-                    let entry = self
-                        .storage_accum
-                        .entry(operation_id.to_string())
-                        .or_default();
-                    for item in items {
-                        entry.push(item);
+                match event {
+                    FollowEvent::Stop => {
+                        return Err(crate::Error::SubscriptionClosed);
                     }
-                }
-                FollowEvent::OperationStorageDone { operation_id } => {
-                    let items = self.storage_accum.remove(operation_id).unwrap_or_default();
-                    if operation_id == target {
-                        return Ok(OperationResult::StorageItems(items));
+                    FollowEvent::OperationStorageItems {
+                        operation_id,
+                        items,
+                    } => {
+                        let entry = self
+                            .storage_accum
+                            .entry(operation_id.to_string())
+                            .or_default();
+                        for item in items {
+                            entry.push(item);
+                        }
                     }
-                }
-                FollowEvent::OperationCallDone {
-                    operation_id,
-                    output,
-                } => {
-                    if operation_id == target {
-                        return Ok(OperationResult::CallDone(output.into()));
+                    FollowEvent::OperationStorageDone { operation_id } => {
+                        let items = self.storage_accum.remove(operation_id).unwrap_or_default();
+                        if operation_id == target {
+                            return Ok(OperationResult::StorageItems(items));
+                        }
                     }
-                }
-                FollowEvent::OperationError {
-                    operation_id,
-                    error,
-                } => {
-                    if operation_id == target {
-                        return Ok(OperationResult::Error(error.into()));
+                    FollowEvent::OperationCallDone {
+                        operation_id,
+                        output,
+                    } => {
+                        if operation_id == target {
+                            return Ok(OperationResult::CallDone(output.into()));
+                        }
                     }
-                }
-                FollowEvent::OperationInaccessible { operation_id } => {
-                    if operation_id == target {
-                        return Ok(OperationResult::Error("block inaccessible".into()));
+                    FollowEvent::OperationError {
+                        operation_id,
+                        error,
+                    } => {
+                        if operation_id == target {
+                            return Ok(OperationResult::Error(error.into()));
+                        }
                     }
-                }
-                FollowEvent::OperationWaitingForContinue { operation_id } => {
-                    if operation_id == target {
-                        let _ = self
-                            .rpc
-                            .rpc(
-                                "chainHead_v1_continue",
-                                &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
-                            )
-                            .await;
+                    FollowEvent::OperationInaccessible { operation_id } => {
+                        if operation_id == target {
+                            return Ok(OperationResult::Error("block inaccessible".into()));
+                        }
                     }
+                    FollowEvent::OperationWaitingForContinue { operation_id } => {
+                        if operation_id == target {
+                            let _ = self
+                                .rpc
+                                .rpc(
+                                    "chainHead_v1_continue",
+                                    &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
+                                )
+                                .await;
+                        }
+                    }
+                    other => self.record_lifecycle_event(other),
                 }
-                other => self.record_lifecycle_event(other),
             }
         }
+        .await;
+        if result.is_err() {
+            let _ = self.stop_operation(target).await;
+            self.storage_accum.remove(target);
+        }
+        if self.active_operation.as_deref() == Some(target) {
+            self.active_operation = None;
+        }
+        result
     }
 
     /// Send a storage query at a specific pinned block hash and wait for results.
@@ -936,48 +1022,19 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         hash: &str,
         keys: &[String],
     ) -> crate::Result<Vec<StorageItem>> {
-        let mut items_json = String::from("[");
-        for (i, k) in keys.iter().enumerate() {
-            if i > 0 {
-                items_json.push(',');
-            }
-            items_json.push_str(&format!(r#"{{"key":"{}","type":"value"}}"#, k));
+        let mut items = Vec::with_capacity(keys.len());
+        for key in keys {
+            items.extend(self.storage_one_with_hash(hash, key).await?);
         }
-        items_json.push(']');
-
-        let result = self
-            .rpc
-            .rpc(
-                "chainHead_v1_storage",
-                &format!(
-                    r#"["{}","{}",{},null]"#,
-                    self.follow_sub_id, hash, items_json
-                ),
-            )
-            .await
-            .map_err(|e| crate::Error::Node(e.to_string()))?;
-
-        let started = parse_operation_started(&result)
-            .map_err(|e| crate::Error::Node(format!("bad storage response: {e}")))?;
-
-        match started {
-            OperationStarted::Started { operation_id } => {
-                match self.wait_for_operation(operation_id).await? {
-                    OperationResult::StorageItems(items) => Ok(items),
-                    OperationResult::Error(e) => Err(crate::Error::Node(e)),
-                    _ => Err(crate::Error::Node("unexpected result".into())),
-                }
-            }
-            OperationStarted::LimitReached => Err(crate::Error::Node(
-                "chainHead operation limit reached".into(),
-            )),
-        }
+        Ok(items)
     }
 
-    /// Query storage using descendantsValues type.
-    async fn storage_descendants(&mut self, prefix: &str) -> crate::Result<Vec<StorageItem>> {
-        let hash = self.prepare_operation().await?;
-        let items_json = format!(r#"[{{"key":"{}","type":"descendantsValues"}}]"#, prefix);
+    async fn storage_one_with_hash(
+        &mut self,
+        hash: &str,
+        key: &str,
+    ) -> crate::Result<Vec<StorageItem>> {
+        let items_json = format!(r#"[{{"key":"{key}","type":"value"}}]"#);
 
         let result = self
             .rpc
@@ -995,12 +1052,22 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .map_err(|e| crate::Error::Node(format!("bad storage response: {e}")))?;
 
         match started {
-            OperationStarted::Started { operation_id } => {
-                match self.wait_for_operation(operation_id).await? {
-                    OperationResult::StorageItems(items) => Ok(items),
-                    OperationResult::Error(e) => Err(crate::Error::Node(e)),
-                    _ => Err(crate::Error::Node("unexpected result".into())),
-                }
+            OperationStarted::Started {
+                operation_id,
+                discarded_items: 0,
+            } => match self.wait_for_operation(operation_id).await? {
+                OperationResult::StorageItems(items) => Ok(items),
+                OperationResult::Error(e) => Err(crate::Error::Node(e)),
+                _ => Err(crate::Error::Node("unexpected result".into())),
+            },
+            OperationStarted::Started {
+                operation_id,
+                discarded_items,
+            } => {
+                let _ = self.stop_operation(operation_id).await;
+                Err(crate::Error::OperationFailed(format!(
+                    "chainHead discarded {discarded_items} storage item(s)"
+                )))
             }
             OperationStarted::LimitReached => Err(crate::Error::Node(
                 "chainHead operation limit reached".into(),
@@ -1041,27 +1108,20 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .collect()
     }
 
-    /// Execute one bounded key operation at a pinned block. A `probe` asks
-    /// only whether the exact key and any descendant exist; a scan returns
-    /// hashes for the exact key and its descendants.
-    async fn key_operation_at_hash(
+    /// Execute one single-item storage operation. Smoldot-light 1.3 accounts
+    /// operation slots per item but releases them per operation, so combining
+    /// items here would permanently consume slots. Partial unordered results
+    /// are never exposed as a page: an oversized proof requests a split.
+    async fn key_item_operation_at_hash(
         &mut self,
         hash: &str,
         key_prefix: &[u8],
-        probe: bool,
+        item_type: &str,
         after_key: Option<&[u8]>,
         collect_limit: usize,
-    ) -> crate::Result<KeyOperation> {
+    ) -> crate::Result<KeyItemOperation> {
         let key = to_hex(key_prefix);
-        let items_json = if probe {
-            format!(
-                r#"[{{"key":"{key}","type":"hash"}},{{"key":"{key}","type":"closestDescendantMerkleValue"}}]"#
-            )
-        } else {
-            format!(
-                r#"[{{"key":"{key}","type":"hash"}},{{"key":"{key}","type":"descendantsHashes"}}]"#
-            )
-        };
+        let items_json = format!(r#"[{{"key":"{key}","type":"{item_type}"}}]"#);
         let result = self
             .rpc
             .rpc(
@@ -1076,7 +1136,20 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         let operation_id = match parse_operation_started(&result)
             .map_err(|error| crate::Error::Node(format!("bad storage response: {error}")))?
         {
-            OperationStarted::Started { operation_id } => operation_id.to_string(),
+            OperationStarted::Started {
+                operation_id,
+                discarded_items: 0,
+            } => operation_id.to_string(),
+            OperationStarted::Started {
+                operation_id,
+                discarded_items,
+            } => {
+                let operation_id = operation_id.to_string();
+                let _ = self.stop_operation(&operation_id).await;
+                return Err(crate::Error::OperationFailed(format!(
+                    "chainHead discarded {discarded_items} key item(s)"
+                )));
+            }
             OperationStarted::LimitReached => {
                 return Err(crate::Error::Node(
                     "chainHead operation limit reached".into(),
@@ -1084,86 +1157,133 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             }
         };
 
-        let mut keys = Vec::with_capacity(collect_limit.min(64));
-        let mut has_descendants = false;
-        loop {
-            let (sub_id, event_json) = self
-                .rpc
-                .next_event()
-                .await
-                .ok_or(crate::Error::SubscriptionClosed)?;
-            if sub_id != self.follow_sub_id {
-                continue;
-            }
-            let event = parse_follow_event(&event_json)
-                .map_err(|error| crate::Error::Decode(format!("follow event: {error}")))?;
-            match event {
-                FollowEvent::OperationStorageItems {
-                    operation_id: event_id,
-                    items,
-                } if event_id == operation_id => {
-                    for item in items {
-                        has_descendants |= item.closest_descendant_merkle_value.is_some();
-                        if item.hash.is_none() {
-                            continue;
-                        }
-                        let decoded =
-                            hex::decode(item.key.trim_start_matches("0x")).map_err(|_| {
-                                crate::Error::Decode("paged key hex decode failed".into())
-                            })?;
-                        if after_key.is_some_and(|after| decoded.as_slice() <= after) {
-                            continue;
-                        }
-                        if keys.last().is_none_or(|last| last != &decoded) {
+        self.active_operation = Some(operation_id.clone());
+        let outcome = async {
+            let mut keys = Vec::with_capacity(collect_limit.saturating_add(1).min(64));
+            loop {
+                let (sub_id, event_json) = self
+                    .rpc
+                    .next_event()
+                    .await
+                    .ok_or(crate::Error::SubscriptionClosed)?;
+                if sub_id != self.follow_sub_id {
+                    continue;
+                }
+                let event = parse_follow_event(&event_json)
+                    .map_err(|error| crate::Error::Decode(format!("follow event: {error}")))?;
+                match event {
+                    FollowEvent::OperationStorageItems {
+                        operation_id: event_id,
+                        items,
+                    } if event_id == operation_id => {
+                        for item in items {
+                            if item.hash.is_none() {
+                                continue;
+                            }
+                            let decoded =
+                                hex::decode(item.key.trim_start_matches("0x")).map_err(|_| {
+                                    crate::Error::Decode("paged key hex decode failed".into())
+                                })?;
+                            if after_key.is_some_and(|after| decoded.as_slice() <= after) {
+                                continue;
+                            }
                             keys.push(decoded);
-                        }
-                        if !probe && keys.len() >= collect_limit {
-                            let _ = self
-                                .rpc
-                                .rpc(
-                                    "chainHead_v1_stopOperation",
-                                    &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
-                                )
-                                .await;
-                            return Ok(KeyOperation::Truncated(keys));
+                            if keys.len() > collect_limit {
+                                let _ = self.stop_operation(&operation_id).await;
+                                return Ok(KeyItemOperation::TooLarge);
+                            }
                         }
                     }
+                    FollowEvent::OperationStorageDone {
+                        operation_id: event_id,
+                    } if event_id == operation_id => {
+                        keys.sort_unstable();
+                        keys.dedup();
+                        return Ok(KeyItemOperation::Complete(keys));
+                    }
+                    FollowEvent::OperationWaitingForContinue {
+                        operation_id: event_id,
+                    } if event_id == operation_id => {
+                        let _ = self
+                            .rpc
+                            .rpc(
+                                "chainHead_v1_continue",
+                                &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
+                            )
+                            .await;
+                    }
+                    FollowEvent::OperationError {
+                        operation_id: event_id,
+                        error,
+                    } if event_id == operation_id => {
+                        return Err(crate::Error::Node(error.into()));
+                    }
+                    FollowEvent::OperationInaccessible {
+                        operation_id: event_id,
+                    } if event_id == operation_id => return Ok(KeyItemOperation::Inaccessible),
+                    FollowEvent::Stop => {
+                        self.needs_refollow = true;
+                        return Err(crate::Error::SubscriptionClosed);
+                    }
+                    other => self.record_lifecycle_event(other),
                 }
-                FollowEvent::OperationStorageDone {
-                    operation_id: event_id,
-                } if event_id == operation_id => {
-                    keys.sort_unstable();
-                    keys.dedup();
-                    return Ok(KeyOperation::Complete {
-                        keys,
-                        has_descendants,
-                    });
+            }
+        }
+        .await;
+        if outcome.is_err() {
+            let _ = self.stop_operation(&operation_id).await;
+        }
+        if self.active_operation.as_deref() == Some(operation_id.as_str()) {
+            self.active_operation = None;
+        }
+        outcome
+    }
+
+    /// Collect the exact key and its descendants through separate one-item
+    /// operations. Only a completed, sorted descendant proof can produce a
+    /// cursor. Oversized or inaccessible descendant proofs split adaptively.
+    async fn key_operation_at_hash(
+        &mut self,
+        hash: &str,
+        key_prefix: &[u8],
+        after_key: Option<&[u8]>,
+        collect_limit: usize,
+    ) -> crate::Result<KeyOperation> {
+        let exact_keys = if after_key.is_some_and(|after| key_prefix <= after) {
+            Vec::new()
+        } else {
+            match self
+                .key_item_operation_at_hash(hash, key_prefix, "hash", after_key, 1)
+                .await?
+            {
+                KeyItemOperation::Complete(keys) => keys,
+                KeyItemOperation::TooLarge | KeyItemOperation::Inaccessible => {
+                    return Err(crate::Error::OperationFailed(
+                        "exact trie key is inaccessible".into(),
+                    ));
                 }
-                FollowEvent::OperationWaitingForContinue {
-                    operation_id: event_id,
-                } if event_id == operation_id => {
-                    let _ = self
-                        .rpc
-                        .rpc(
-                            "chainHead_v1_continue",
-                            &format!(r#"["{}","{}"]"#, self.follow_sub_id, operation_id),
-                        )
-                        .await;
-                }
-                FollowEvent::OperationError {
-                    operation_id: event_id,
-                    error,
-                } if event_id == operation_id => {
-                    return Err(crate::Error::Node(error.into()));
-                }
-                FollowEvent::OperationInaccessible {
-                    operation_id: event_id,
-                } if event_id == operation_id => return Ok(KeyOperation::Inaccessible),
-                FollowEvent::Stop => {
-                    self.needs_refollow = true;
-                    return Err(crate::Error::SubscriptionClosed);
-                }
-                other => self.record_lifecycle_event(other),
+            }
+        };
+
+        let descendant_limit = collect_limit.saturating_sub(exact_keys.len());
+        match self
+            .key_item_operation_at_hash(
+                hash,
+                key_prefix,
+                "descendantsHashes",
+                after_key,
+                descendant_limit,
+            )
+            .await?
+        {
+            KeyItemOperation::Complete(mut keys) => {
+                keys.extend(exact_keys);
+                keys.sort_unstable();
+                keys.dedup();
+                Ok(KeyOperation::Complete(keys))
+            }
+            KeyItemOperation::TooLarge | KeyItemOperation::Inaccessible => {
+                Ok(KeyOperation::Split { exact_keys })
             }
         }
     }
@@ -1209,34 +1329,14 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             key_prefix.extend_from_slice(prefix);
             key_prefix.extend_from_slice(&partition);
             let remaining = usize::from(limit) - page_keys.len();
-            let probe = partition.len() < LIGHT_PAGE_LEAF_DEPTH;
             let operation = self
-                .key_operation_at_hash(
-                    &hash,
-                    &key_prefix,
-                    probe,
-                    after_key.as_deref(),
-                    if probe { 1 } else { remaining + 1 },
-                )
+                .key_operation_at_hash(&hash, &key_prefix, after_key.as_deref(), remaining + 1)
                 .await?;
             operations += 1;
             self.flush_unpins().await;
 
             match operation {
-                KeyOperation::Truncated(mut keys) => {
-                    keys.truncate(remaining);
-                    page_keys.extend(keys);
-                    let last = page_keys.last().ok_or(crate::Error::BadInput)?;
-                    let next_cursor = encode_light_page_cursor(&partition, Some(last))?;
-                    return Ok(crate::RawKeysPage {
-                        keys: page_keys,
-                        next_cursor: Some(next_cursor),
-                    });
-                }
-                KeyOperation::Complete {
-                    mut keys,
-                    has_descendants,
-                } => {
+                KeyOperation::Complete(mut keys) => {
                     if keys.len() > remaining {
                         keys.truncate(remaining);
                         page_keys.extend(keys);
@@ -1249,12 +1349,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     }
                     page_keys.append(&mut keys);
 
-                    let next_exists = if probe && has_descendants {
-                        partition.push(0);
-                        true
-                    } else {
-                        advance_light_page_partition(&mut partition)
-                    };
+                    let next_exists = advance_light_page_partition(&mut partition);
                     after_key = None;
 
                     if page_keys.len() == usize::from(limit) {
@@ -1272,78 +1367,37 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                         });
                     }
                 }
-                KeyOperation::Inaccessible => {
-                    if probe {
-                        return Err(crate::Error::OperationFailed(
-                            "light-client trie partition probe is inaccessible".into(),
-                        ));
-                    }
+                KeyOperation::Split { mut exact_keys } => {
                     if partition.len() >= LIGHT_PAGE_MAX_DEPTH {
                         return Err(crate::Error::OperationFailed(
                             "light-client trie partition remains too large".into(),
                         ));
                     }
 
-                    // A large descendant proof is split one byte deeper. Probe
-                    // first so an exact key at the partition boundary is not
-                    // skipped when descending.
-                    let probe_result = self
-                        .key_operation_at_hash(&hash, &key_prefix, true, after_key.as_deref(), 1)
-                        .await?;
-                    operations += 1;
-                    self.flush_unpins().await;
-                    let KeyOperation::Complete {
-                        mut keys,
-                        has_descendants,
-                    } = probe_result
-                    else {
-                        return Err(crate::Error::OperationFailed(
-                            "light-client trie partition probe is inaccessible".into(),
-                        ));
-                    };
-                    page_keys.append(&mut keys);
+                    exact_keys.truncate(remaining);
+                    page_keys.append(&mut exact_keys);
                     if page_keys.len() == usize::from(limit) {
-                        let mut next_partition = partition.clone();
-                        if has_descendants {
-                            let next_byte = after_key
-                                .as_deref()
-                                .and_then(|key| key.get(prefix.len() + partition.len()))
-                                .copied()
-                                .unwrap_or(0);
-                            next_partition.push(next_byte);
-                        } else if !advance_light_page_partition(&mut next_partition) {
-                            return Ok(crate::RawKeysPage {
-                                keys: page_keys,
-                                next_cursor: None,
-                            });
-                        }
+                        let last = page_keys.last().cloned().ok_or(crate::Error::BadInput)?;
+                        let next_cursor = encode_light_page_cursor(&partition, Some(&last))?;
                         return Ok(crate::RawKeysPage {
                             keys: page_keys,
-                            next_cursor: Some(encode_light_page_cursor(
-                                &next_partition,
-                                after_key.as_deref(),
-                            )?),
+                            next_cursor: Some(next_cursor),
                         });
                     }
-                    if has_descendants {
-                        let next_byte = after_key
-                            .as_deref()
-                            .and_then(|key| key.get(prefix.len() + partition.len()))
-                            .copied()
-                            .unwrap_or(0);
-                        partition.push(next_byte);
-                        if after_key.as_deref().is_some_and(|key| {
-                            !key.starts_with(&[prefix, partition.as_slice()].concat())
-                        }) {
-                            after_key = None;
-                        }
-                    } else {
-                        if !advance_light_page_partition(&mut partition) {
-                            return Ok(crate::RawKeysPage {
-                                keys: page_keys,
-                                next_cursor: None,
-                            });
-                        }
+
+                    let next_byte = after_key
+                        .as_deref()
+                        .and_then(|key| key.get(prefix.len() + partition.len()))
+                        .copied()
+                        .unwrap_or(0);
+                    partition.push(next_byte);
+                    let mut expected_prefix = Vec::with_capacity(prefix.len() + partition.len());
+                    expected_prefix.extend_from_slice(prefix);
+                    expected_prefix.extend_from_slice(&partition);
+                    if after_key
+                        .as_deref()
+                        .is_some_and(|key| !key.starts_with(&expected_prefix))
+                    {
                         after_key = None;
                     }
                 }
@@ -1384,6 +1438,54 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             values.push((key, value));
         }
         Ok(values)
+    }
+
+    /// Fetch metadata through the legacy proof-backed endpoint. Unlike a
+    /// chainHead call, this remains usable for an authenticated finalized hash
+    /// after its follow pin has moved on.
+    async fn legacy_metadata_at_hash(&mut self, block_hash: &[u8; 32]) -> crate::Result<Metadata> {
+        let raw = self
+            .rpc
+            .rpc(
+                "state_getMetadata",
+                &format!(r#"["{}"]"#, to_hex(block_hash)),
+            )
+            .await
+            .map_err(|error| crate::Error::Node(format!("metadata at hash: {error}")))?;
+        let encoded = result_as_str(&raw)
+            .ok_or_else(|| crate::Error::Decode("metadata response is not hex".into()))?;
+        let bytes = hex::decode(encoded.trim_start_matches("0x"))
+            .map_err(|_| crate::Error::Decode("metadata hex decode failed".into()))?;
+        meta::from_bytes(&bytes)
+    }
+
+    /// Resolve a header through the legacy verified-header endpoint so callers
+    /// cannot attach an arbitrary number to a valid block hash.
+    async fn legacy_block_info_at_hash(
+        &mut self,
+        block_hash: &[u8; 32],
+    ) -> crate::Result<meta::BlockInfo> {
+        let raw = self
+            .rpc
+            .rpc("chain_getHeader", &format!(r#"["{}"]"#, to_hex(block_hash)))
+            .await
+            .map_err(|error| crate::Error::Node(format!("header at hash: {error}")))?;
+        if raw.trim() == "null" {
+            return Err(crate::Error::BadBlockNumber);
+        }
+        let number = extract_json_str(&raw, "\"number\":\"")
+            .and_then(|number| u64::from_str_radix(number.trim_start_matches("0x"), 16).ok())
+            .ok_or_else(|| crate::Error::Decode("header number is missing or invalid".into()))?;
+        let parent_hex = extract_json_str(&raw, "\"parentHash\":\"")
+            .ok_or_else(|| crate::Error::Decode("header parentHash is missing".into()))?;
+        let mut parent = [0u8; 32];
+        hex::decode_to_slice(parent_hex.trim_start_matches("0x"), &mut parent)
+            .map_err(|_| crate::Error::Decode("header parent hash is invalid".into()))?;
+        Ok(meta::BlockInfo {
+            number,
+            hash: *block_hash,
+            parent,
+        })
     }
 
     /// Execute a runtime call at a specific pinned block hash.
@@ -1427,15 +1529,25 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             .map_err(|e| crate::Error::Node(format!("bad call response: {e}")))?;
 
         match started {
-            OperationStarted::Started { operation_id } => {
-                match self.wait_for_operation(operation_id).await? {
-                    OperationResult::CallDone(hex_output) => {
-                        hex::decode(hex_output.trim_start_matches("0x"))
-                            .map_err(|_| crate::Error::Decode("runtime call hex decode".into()))
-                    }
-                    OperationResult::Error(e) => Err(crate::Error::Node(e)),
-                    _ => Err(crate::Error::Node("unexpected result".into())),
+            OperationStarted::Started {
+                operation_id,
+                discarded_items: 0,
+            } => match self.wait_for_operation(operation_id).await? {
+                OperationResult::CallDone(hex_output) => {
+                    hex::decode(hex_output.trim_start_matches("0x"))
+                        .map_err(|_| crate::Error::Decode("runtime call hex decode".into()))
                 }
+                OperationResult::Error(e) => Err(crate::Error::Node(e)),
+                _ => Err(crate::Error::Node("unexpected result".into())),
+            },
+            OperationStarted::Started {
+                operation_id,
+                discarded_items,
+            } => {
+                let _ = self.stop_operation(operation_id).await;
+                Err(crate::Error::OperationFailed(format!(
+                    "chainHead discarded {discarded_items} call item(s)"
+                )))
             }
             OperationStarted::LimitReached => Err(crate::Error::Node(
                 "chainHead operation limit reached".into(),
@@ -1607,10 +1719,28 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         decode_storage_items(&keys, &items)
     }
 
+    async fn unwatch_transaction(&mut self, sub_id: &str) -> crate::Result<()> {
+        let unsubscribe = self.rpc.unsubscribe("transactionWatch_v1_unwatch", sub_id);
+        #[cfg(feature = "std")]
+        let result = crate::time::timeout(core::time::Duration::from_secs(5), unsubscribe)
+            .await
+            .map_err(|_| crate::Error::ConnectionTimeout)?
+            .map_err(|error| crate::Error::Node(format!("tx unwatch: {error}")));
+        #[cfg(not(feature = "std"))]
+        let result = unsubscribe
+            .await
+            .map_err(|error| crate::Error::Node(format!("tx unwatch: {error}")));
+        if result.is_ok() && self.active_tx_watch.as_deref() == Some(sub_id) {
+            self.active_tx_watch = None;
+        }
+        result
+    }
+
     async fn watch_transaction(
         &mut self,
         ext: &[u8],
         wait_for: crate::WaitFor,
+        timeout: Option<core::time::Duration>,
     ) -> crate::Result<crate::TransactionReceipt> {
         let hex = to_hex(ext);
         let sub_id = self
@@ -1621,24 +1751,55 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             )
             .await
             .map_err(|e| crate::Error::Node(format!("tx watch: {e}")))?;
+        self.active_tx_watch = Some(sub_id.clone());
 
         let mut receipt = crate::TransactionReceipt::default();
+        #[cfg(feature = "std")]
+        let deadline = timeout.and_then(|duration| std::time::Instant::now().checked_add(duration));
+        #[cfg(not(feature = "std"))]
+        let _ = timeout;
 
         loop {
-            let (event_sub_id, event_json) = self
-                .rpc
-                .next_event()
-                .await
-                .ok_or(crate::Error::SubscriptionClosed)?;
+            #[cfg(feature = "std")]
+            let next_event = if let Some(deadline) = deadline {
+                let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now())
+                else {
+                    let _ = self.unwatch_transaction(&sub_id).await;
+                    return Err(crate::Error::ConnectionTimeout);
+                };
+                match crate::time::timeout(remaining, self.rpc.next_event()).await {
+                    Ok(event) => event,
+                    Err(_) => {
+                        let _ = self.unwatch_transaction(&sub_id).await;
+                        return Err(crate::Error::ConnectionTimeout);
+                    }
+                }
+            } else {
+                self.rpc.next_event().await
+            };
+            #[cfg(not(feature = "std"))]
+            let next_event = self.rpc.next_event().await;
+
+            let Some((event_sub_id, event_json)) = next_event else {
+                let _ = self.unwatch_transaction(&sub_id).await;
+                self.active_tx_watch = None;
+                return Err(crate::Error::SubscriptionClosed);
+            };
 
             if event_sub_id == sub_id {
-                let event = parse_tx_event(&event_json)
-                    .map_err(|e| crate::Error::Decode(format!("tx event: {e}")))?;
+                let event = match parse_tx_event(&event_json) {
+                    Ok(event) => event,
+                    Err(error) => {
+                        let _ = self.unwatch_transaction(&sub_id).await;
+                        return Err(crate::Error::Decode(format!("tx event: {error}")));
+                    }
+                };
                 match event {
                     TxEvent::BestChainBlockIncluded { block: Some(block) } => {
                         receipt.best_block_hash = Some(block.hash);
                         receipt.extrinsic_index = Some(block.index);
                         if matches!(wait_for, crate::WaitFor::BestBlock) {
+                            self.unwatch_transaction(&sub_id).await?;
                             return Ok(receipt);
                         }
                     }
@@ -1650,19 +1811,23 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     TxEvent::Finalized { block } => {
                         receipt.finalized_block_hash = Some(block.hash);
                         receipt.extrinsic_index = Some(block.index);
+                        self.active_tx_watch = None;
                         return Ok(receipt);
                     }
                     TxEvent::Invalid { error } => {
+                        self.active_tx_watch = None;
                         return Err(crate::Error::OperationFailed(format!(
                             "tx invalid: {error}"
                         )));
                     }
                     TxEvent::Dropped { error } => {
+                        self.active_tx_watch = None;
                         return Err(crate::Error::OperationFailed(format!(
                             "tx dropped: {error}"
                         )));
                     }
                     TxEvent::Error { error } => {
+                        self.active_tx_watch = None;
                         return Err(crate::Error::OperationFailed(format!("tx error: {error}")));
                     }
                     TxEvent::Validated | TxEvent::Broadcasted => {}
@@ -1771,6 +1936,10 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .await
     }
 
+    async fn cancel_active_operation(&mut self) -> crate::Result<()> {
+        ChainHead::cancel_active_operation(self).await
+    }
+
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> crate::Result<()> {
         self.watch_transaction(
             ext,
@@ -1779,6 +1948,7 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             } else {
                 crate::WaitFor::BestBlock
             },
+            None,
         )
         .await
         .map(|_| ())
@@ -1789,7 +1959,17 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         ext: &crate::EncodedExtrinsic,
         wait_for: crate::WaitFor,
     ) -> crate::Result<crate::TransactionReceipt> {
-        self.watch_transaction(&ext.bytes, wait_for).await
+        self.watch_transaction(&ext.bytes, wait_for, None).await
+    }
+
+    async fn submit_transaction_with_timeout(
+        &mut self,
+        ext: &crate::EncodedExtrinsic,
+        wait_for: crate::WaitFor,
+        timeout: core::time::Duration,
+    ) -> crate::Result<crate::TransactionReceipt> {
+        self.watch_transaction(&ext.bytes, wait_for, Some(timeout))
+            .await
     }
 
     async fn inspect_transaction(
@@ -1992,6 +2172,10 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         meta::from_bytes(&raw)
     }
 
+    async fn metadata_at_hash(&mut self, block_hash: [u8; 32]) -> crate::Result<Metadata> {
+        self.legacy_metadata_at_hash(&block_hash).await
+    }
+
     async fn block_info(&mut self, at: Option<u32>) -> crate::Result<meta::BlockInfo> {
         match at {
             Some(0) => Ok(meta::BlockInfo {
@@ -2045,6 +2229,10 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 })
             }
         }
+    }
+
+    async fn block_info_at_hash(&mut self, block_hash: [u8; 32]) -> crate::Result<meta::BlockInfo> {
+        self.legacy_block_info_at_hash(&block_hash).await
     }
 }
 
@@ -2370,6 +2558,168 @@ mod transaction_watch_tests {
     use super::*;
 
     #[test]
+    fn operation_started_preserves_discarded_item_count() {
+        assert!(matches!(
+            parse_operation_started(
+                r#"{"result":"started","operationId":"op","discardedItems":2}"#
+            )
+            .unwrap(),
+            OperationStarted::Started {
+                operation_id: "op",
+                discarded_items: 2
+            }
+        ));
+    }
+
+    struct DiscardedStorageRpc {
+        stopped: bool,
+    }
+
+    impl Rpc for DiscardedStorageRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            match method {
+                "chainHead_v1_storage" => Ok(
+                    r#"{"result":"started","operationId":"discarded","discardedItems":1}"#.into(),
+                ),
+                "chainHead_v1_stopOperation" => {
+                    self.stopped = true;
+                    Ok("null".into())
+                }
+                other => panic!("unexpected RPC method: {other}"),
+            }
+        }
+    }
+
+    impl RpcSubscription for DiscardedStorageRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            unreachable!()
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            panic!("discarded operation must not be awaited")
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(
+            &mut self,
+            _method: &str,
+            _sub_id: &str,
+        ) -> super::super::RpcResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn discarded_storage_item_stops_the_operation_and_fails_closed() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: DiscardedStorageRpc { stopped: false },
+                follow_sub_id: "follow".into(),
+                finalized_hash: to_hex(&[0x11; 32]),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+            let error = chain
+                .storage_one_with_hash(&to_hex(&[0x11; 32]), "0xaabb")
+                .await
+                .unwrap_err();
+            assert!(matches!(error, crate::Error::OperationFailed(_)));
+            assert!(chain.rpc.stopped);
+        });
+    }
+
+    #[cfg(feature = "std")]
+    struct PendingKeyRpc {
+        stopped: usize,
+    }
+
+    #[cfg(feature = "std")]
+    impl Rpc for PendingKeyRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            match method {
+                "chainHead_v1_storage" => Ok(
+                    r#"{"result":"started","operationId":"pending-key","discardedItems":0}"#.into(),
+                ),
+                "chainHead_v1_stopOperation" => {
+                    self.stopped += 1;
+                    Ok("null".into())
+                }
+                other => panic!("unexpected RPC method: {other}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    impl RpcSubscription for PendingKeyRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            unreachable!()
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            core::future::pending().await
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(
+            &mut self,
+            _method: &str,
+            _sub_id: &str,
+        ) -> super::super::RpcResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn cancelled_key_page_leaves_an_explicitly_stoppable_operation() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: PendingKeyRpc { stopped: 0 },
+                follow_sub_id: "follow".into(),
+                finalized_hash: to_hex(&[0x11; 32]),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+            let timed_out = crate::time::timeout(
+                core::time::Duration::from_millis(10),
+                chain.key_item_operation_at_hash("0x11", &[0xaa], "hash", None, 1),
+            )
+            .await;
+            assert!(timed_out.is_err());
+            assert_eq!(chain.active_operation.as_deref(), Some("pending-key"));
+            chain.cancel_active_operation().await.unwrap();
+            assert!(chain.active_operation.is_none());
+            assert_eq!(chain.rpc.stopped, 1);
+        });
+    }
+
+    #[test]
     fn light_page_cursor_round_trips_partition_and_last_key() {
         let prefix = [0xaa, 0xbb];
         let partition = [0x00, 0x42, 0x07];
@@ -2408,6 +2758,116 @@ mod transaction_watch_tests {
         assert!(items[0].closest_descendant_merkle_value.is_none());
         assert!(items[1].hash.is_none());
         assert!(items[1].closest_descendant_merkle_value.is_some());
+    }
+
+    struct UnorderedKeysRpc {
+        operation: usize,
+        incoming: VecDeque<(String, String)>,
+    }
+
+    impl Rpc for UnorderedKeysRpc {
+        async fn rpc(&mut self, method: &str, params: &str) -> super::super::RpcResult<String> {
+            match method {
+                "chainHead_v1_storage" => {
+                    let operation_id = format!("op{}", self.operation);
+                    let keys = if params.contains("descendantsHashes") {
+                        [0x30u8, 0x20, 0x10]
+                            .into_iter()
+                            .map(|suffix| {
+                                format!(
+                                    r#"{{"key":"0xaa{suffix:02x}","hash":"0x{}"}}"#,
+                                    "11".repeat(32)
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    } else {
+                        String::new()
+                    };
+                    self.incoming.push_back((
+                        "follow".into(),
+                        format!(
+                            r#"{{"event":"operationStorageItems","operationId":"{operation_id}","items":[{keys}]}}"#
+                        ),
+                    ));
+                    self.incoming.push_back((
+                        "follow".into(),
+                        format!(
+                            r#"{{"event":"operationStorageDone","operationId":"{operation_id}"}}"#
+                        ),
+                    ));
+                    self.operation += 1;
+                    Ok(format!(
+                        r#"{{"result":"started","operationId":"{operation_id}","discardedItems":0}}"#
+                    ))
+                }
+                other => panic!("unexpected RPC method: {other}"),
+            }
+        }
+    }
+
+    impl RpcSubscription for UnorderedKeysRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            unreachable!()
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            self.incoming.pop_front()
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(
+            &mut self,
+            _method: &str,
+            _sub_id: &str,
+        ) -> super::super::RpcResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn unordered_descendants_are_sorted_before_cursoring() {
+        smol::block_on(async {
+            let hash = [0x55; 32];
+            let hash_hex = to_hex(&hash);
+            let mut retained_hashes = BTreeMap::new();
+            retained_hashes.insert(hash_hex.clone(), 1);
+            let mut chain = ChainHead {
+                rpc: UnorderedKeysRpc {
+                    operation: 0,
+                    incoming: VecDeque::new(),
+                },
+                follow_sub_id: "follow".into(),
+                finalized_hash: hash_hex,
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes,
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+
+            let first = chain
+                .partitioned_keys_page_at_hash(&[0xaa], 2, None, &hash)
+                .await
+                .unwrap();
+            assert_eq!(first.keys, [vec![0xaa, 0x10], vec![0xaa, 0x20]]);
+            let second = chain
+                .partitioned_keys_page_at_hash(&[0xaa], 2, first.next_cursor, &hash)
+                .await
+                .unwrap();
+            assert_eq!(second.keys, [vec![0xaa, 0x30]]);
+            assert!(second.next_cursor.is_none());
+        });
     }
 
     struct RecoveryRpc {
@@ -2479,6 +2939,8 @@ mod transaction_watch_tests {
             needs_refollow: false,
             retained_hashes: BTreeMap::new(),
             event_queue: VecDeque::new(),
+            active_operation: None,
+            active_tx_watch: None,
         };
 
         let info = smol::block_on(crate::Backend::block_info(&mut chain, None)).unwrap();
@@ -2517,6 +2979,254 @@ mod transaction_watch_tests {
             other => panic!("unexpected event: {other:?}"),
         }
         assert!(parse_tx_event(r#"{"event":"finalized"}"#).is_err());
+    }
+
+    struct BestBlockWatchRpc {
+        incoming: VecDeque<(String, String)>,
+        unwatched: usize,
+    }
+
+    impl Rpc for BestBlockWatchRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            panic!("unexpected RPC call: {method}")
+        }
+    }
+
+    impl RpcSubscription for BestBlockWatchRpc {
+        async fn subscribe(
+            &mut self,
+            method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            assert_eq!(method, "transactionWatch_v1_submitAndWatch");
+            Ok("tx-watch".into())
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            self.incoming.pop_front()
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> super::super::RpcResult<()> {
+            assert_eq!(method, "transactionWatch_v1_unwatch");
+            assert_eq!(sub_id, "tx-watch");
+            self.unwatched += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn best_block_result_explicitly_unwatches_subscription() {
+        smol::block_on(async {
+            let rpc = BestBlockWatchRpc {
+                incoming: [(
+                    "tx-watch".into(),
+                    r#"{"event":"bestChainBlockIncluded","block":{"hash":"0xabc","index":3}}"#
+                        .into(),
+                )]
+                .into(),
+                unwatched: 0,
+            };
+            let mut chain = ChainHead {
+                rpc,
+                follow_sub_id: "follow".into(),
+                finalized_hash: format!("0x{}", "55".repeat(32)),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+            let receipt = chain
+                .watch_transaction(&[1, 2, 3], crate::WaitFor::BestBlock, None)
+                .await
+                .unwrap();
+            assert_eq!(receipt.best_block_hash.as_deref(), Some("0xabc"));
+            assert_eq!(chain.rpc.unwatched, 1);
+            assert!(chain.active_tx_watch.is_none());
+        });
+    }
+
+    #[cfg(feature = "std")]
+    struct TimeoutWatchRpc {
+        unwatched: usize,
+    }
+
+    #[cfg(feature = "std")]
+    impl Rpc for TimeoutWatchRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            panic!("unexpected RPC call: {method}")
+        }
+    }
+
+    #[cfg(feature = "std")]
+    impl RpcSubscription for TimeoutWatchRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            Ok("tx-watch".into())
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            core::future::pending().await
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> super::super::RpcResult<()> {
+            assert_eq!(method, "transactionWatch_v1_unwatch");
+            assert_eq!(sub_id, "tx-watch");
+            self.unwatched += 1;
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn transaction_timeout_explicitly_unwatches_subscription() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: TimeoutWatchRpc { unwatched: 0 },
+                follow_sub_id: "follow".into(),
+                finalized_hash: to_hex(&[0x55; 32]),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+            let error = chain
+                .watch_transaction(
+                    &[1, 2, 3],
+                    crate::WaitFor::Finalized,
+                    Some(core::time::Duration::from_millis(10)),
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error, crate::Error::ConnectionTimeout));
+            assert_eq!(chain.rpc.unwatched, 1);
+            assert!(chain.active_tx_watch.is_none());
+        });
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn cancelled_transaction_watch_remains_explicitly_unwatchable() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: TimeoutWatchRpc { unwatched: 0 },
+                follow_sub_id: "follow".into(),
+                finalized_hash: to_hex(&[0x55; 32]),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+            let result = crate::time::timeout(
+                core::time::Duration::from_millis(10),
+                chain.watch_transaction(&[1, 2, 3], crate::WaitFor::Finalized, None),
+            )
+            .await;
+            assert!(result.is_err());
+            assert_eq!(chain.active_tx_watch.as_deref(), Some("tx-watch"));
+            chain.cancel_active_operation().await.unwrap();
+            assert_eq!(chain.rpc.unwatched, 1);
+            assert!(chain.active_tx_watch.is_none());
+        });
+    }
+
+    struct LegacyBlockRpc;
+
+    impl Rpc for LegacyBlockRpc {
+        async fn rpc(&mut self, method: &str, params: &str) -> super::super::RpcResult<String> {
+            assert!(params.contains(&format!("0x{}", "77".repeat(32))));
+            match method {
+                "state_getMetadata" => Ok(format!(
+                    "\"0x{}\"",
+                    hex::encode(include_bytes!("../../tests/fixtures/kreivo.scale"))
+                )),
+                "chain_getHeader" => Ok(format!(
+                    r#"{{"parentHash":"0x{}","number":"0x2a","stateRoot":"0x{}","extrinsicsRoot":"0x{}"}}"#,
+                    "66".repeat(32),
+                    "55".repeat(32),
+                    "44".repeat(32)
+                )),
+                other => panic!("unexpected RPC method: {other}"),
+            }
+        }
+    }
+
+    impl RpcSubscription for LegacyBlockRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            unreachable!()
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            unreachable!()
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(
+            &mut self,
+            _method: &str,
+            _sub_id: &str,
+        ) -> super::super::RpcResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn metadata_and_block_number_are_resolved_at_the_supplied_hash() {
+        smol::block_on(async {
+            let hash = [0x77; 32];
+            let mut chain = ChainHead {
+                rpc: LegacyBlockRpc,
+                follow_sub_id: "follow".into(),
+                finalized_hash: to_hex(&hash),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+            };
+            let metadata = crate::Backend::metadata_at_hash(&mut chain, hash)
+                .await
+                .unwrap();
+            assert!(metadata.pallet_by_name("System").is_some());
+            let block = crate::Backend::block_info_at_hash(&mut chain, hash)
+                .await
+                .unwrap();
+            assert_eq!(block.number, 42);
+            assert_eq!(block.hash, hash);
+            assert_eq!(block.parent, [0x66; 32]);
+        });
     }
 
     #[test]

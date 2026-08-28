@@ -1,21 +1,19 @@
 //! Joinable std platform for embedded smoldot light clients.
 //!
-//! Smoldot's default std platform detaches its executor threads. That is fine
-//! for a process-lifetime client, but not for a client living in an unloadable
-//! shared library: code must stop executing before the library is unmapped.
-//! This platform owns one or more executor threads through [`RuntimeGuard`],
-//! whose `Drop` signals shutdown and joins every thread.
-//!
-//! Only raw TCP bootnodes are enabled. Smoldot still owns multistream-select,
-//! Noise, Yamux, and the Substrate protocols above the socket.
+//! The entire executor, timer, DNS, and socket reactor belongs to one Tokio
+//! runtime. Dropping [`RuntimeGuard`] first prevents new tasks from spawning,
+//! then shuts down and joins that runtime before an unloadable library can be
+//! unmapped. No process-global async driver is used.
 
 use alloc::{
     borrow::Cow,
+    rc::Rc,
     string::{String, ToString},
     sync::{Arc, Weak},
 };
 use core::{
-    convert::Infallible, fmt, future::Future, net::IpAddr, panic, pin::Pin, time::Duration,
+    convert::Infallible, fmt, future::Future, marker::PhantomData, net::IpAddr, panic, pin::Pin,
+    time::Duration,
 };
 use futures_util::{FutureExt as _, future};
 use smoldot_light::platform::{
@@ -28,34 +26,32 @@ use std::{
     thread,
     time::{Instant, UNIX_EPOCH},
 };
+use tokio_util::compat::{Compat, TokioAsyncReadCompatExt as _};
 
-type SocketFuture = future::BoxFuture<'static, Result<smol::net::TcpStream, io::Error>>;
-type Stream = with_buffers::WithBuffers<SocketFuture, smol::net::TcpStream, Instant>;
+type Socket = Compat<tokio::net::TcpStream>;
+type SocketFuture = future::BoxFuture<'static, Result<Socket, io::Error>>;
+type Stream = with_buffers::WithBuffers<SocketFuture, Socket, Instant>;
 
-/// Cheap platform handle cloned into smoldot tasks.
-///
-/// The executor reference is weak on purpose: tasks must not keep the runtime
-/// that owns them alive. [`RuntimeGuard`] is the sole strong owner.
 #[derive(Clone)]
 pub struct ManagedPlatform {
-    executor: Weak<smol::Executor<'static>>,
+    runtime: tokio::runtime::Handle,
+    alive: Weak<()>,
     client_name: Arc<str>,
     client_version: Arc<str>,
 }
 
 impl panic::UnwindSafe for ManagedPlatform {}
 
-/// Owns and synchronously shuts down all platform executor threads.
+/// Owns and synchronously shuts down all platform facilities and threads.
 pub struct RuntimeGuard {
-    executor: Arc<smol::Executor<'static>>,
-    shutdown: Arc<event_listener::Event>,
-    threads: Vec<thread::JoinHandle<()>>,
+    alive: Option<Arc<()>>,
+    runtime: Option<tokio::runtime::Runtime>,
+    // A guard cannot be moved onto one of the Send tasks it owns: joining an
+    // executor from its own worker would be logically impossible.
+    _not_send: PhantomData<Rc<()>>,
 }
 
 impl RuntimeGuard {
-    /// Create a platform and its owner using exactly `threads` executor
-    /// threads. The returned guard must outlive every smoldot client using the
-    /// platform.
     pub fn new(
         client_name: impl Into<String>,
         client_version: impl Into<String>,
@@ -68,58 +64,55 @@ impl RuntimeGuard {
             ));
         }
 
-        let executor = Arc::new(smol::Executor::new());
-        let shutdown = Arc::new(event_listener::Event::new());
-        let mut handles = Vec::with_capacity(threads);
-
-        for index in 0..threads {
-            let listener = shutdown.listen();
-            let thread_executor = Arc::clone(&executor);
-            match thread::Builder::new()
-                .name(format!("sube-smoldot-{index}"))
-                .spawn(move || smol::block_on(thread_executor.run(listener)))
-            {
-                Ok(handle) => handles.push(handle),
-                Err(error) => {
-                    shutdown.notify(usize::MAX);
-                    for handle in handles {
-                        let _ = handle.join();
-                    }
-                    return Err(error);
-                }
-            }
-        }
-
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(threads)
+            .thread_name("sube-smoldot")
+            .enable_io()
+            .enable_time()
+            .build()?;
+        let alive = Arc::new(());
         let platform = ManagedPlatform {
-            executor: Arc::downgrade(&executor),
+            runtime: runtime.handle().clone(),
+            alive: Arc::downgrade(&alive),
             client_name: Arc::from(client_name.into()),
             client_version: Arc::from(client_version.into()),
         };
-        let guard = RuntimeGuard {
-            executor,
-            shutdown,
-            threads: handles,
-        };
-        Ok((platform, guard))
+        Ok((
+            platform,
+            Self {
+                alive: Some(alive),
+                runtime: Some(runtime),
+                _not_send: PhantomData,
+            },
+        ))
     }
 }
 
 impl Drop for RuntimeGuard {
     fn drop(&mut self) {
-        self.shutdown.notify(usize::MAX);
-        for handle in self.threads.drain(..) {
-            if handle.thread().id() != thread::current().id() {
-                let _ = handle.join();
-            }
-        }
-        // Keep the executor alive through every join. It is dropped, along
-        // with any cancelled tasks, immediately after this method returns.
-        let _ = &self.executor;
+        // Refuse new spawns before Runtime::drop cancels tasks and joins every
+        // worker, I/O driver, timer driver, and blocking worker it owns.
+        self.alive.take();
+        let Some(runtime) = self.runtime.take() else {
+            return;
+        };
+
+        // Tokio deliberately rejects blocking Runtime::drop from within an
+        // async context. Destruction on a short-lived helper keeps Sube safe
+        // to use from a foreign Tokio application while still joining every
+        // owned thread before this guard returns.
+        let shutdown = thread::Builder::new()
+            .name("sube-smoldot-shutdown".into())
+            .spawn(move || drop(runtime))
+            .expect("failed to spawn smoldot runtime shutdown thread");
+        shutdown
+            .join()
+            .expect("smoldot runtime shutdown thread panicked");
     }
 }
 
 impl PlatformRef for ManagedPlatform {
-    type Delay = futures_util::future::Map<smol::Timer, fn(Instant) -> ()>;
+    type Delay = future::BoxFuture<'static, ()>;
     type Instant = Instant;
     type MultiStream = Infallible;
     type Stream = Stream;
@@ -145,16 +138,19 @@ impl PlatformRef for ManagedPlatform {
     }
 
     fn sleep(&self, duration: Duration) -> Self::Delay {
-        smol::Timer::after(duration).map(|_| ())
+        Box::pin(async move { tokio::time::sleep(duration).await })
     }
 
     fn sleep_until(&self, when: Self::Instant) -> Self::Delay {
-        smol::Timer::at(when).map(|_| ())
+        Box::pin(async move { tokio::time::sleep_until(when.into()).await })
     }
 
     fn spawn_task(&self, _task_name: Cow<str>, task: impl Future<Output = ()> + Send + 'static) {
-        if let Some(executor) = self.executor.upgrade() {
-            executor.spawn(task).detach();
+        if self.alive.upgrade().is_some() {
+            drop(
+                self.runtime
+                    .spawn(panic::AssertUnwindSafe(task).catch_unwind().map(|_| ())),
+            );
         }
     }
 
@@ -223,11 +219,13 @@ impl PlatformRef for ManagedPlatform {
 
         let socket: SocketFuture = Box::pin(async move {
             let socket = match target {
-                Target::Socket(address) => smol::net::TcpStream::connect(address).await?,
-                Target::Dns(host, port) => smol::net::TcpStream::connect((&host[..], port)).await?,
+                Target::Socket(address) => tokio::net::TcpStream::connect(address).await?,
+                Target::Dns(host, port) => {
+                    tokio::net::TcpStream::connect((&host[..], port)).await?
+                }
             };
             socket.set_nodelay(true)?;
-            Ok(socket)
+            Ok(socket.compat())
         });
         future::ready(with_buffers::WithBuffers::new(socket))
     }
@@ -256,7 +254,7 @@ impl PlatformRef for ManagedPlatform {
         stream: Pin<&'a mut Self::Stream>,
     ) -> Self::StreamUpdateFuture<'a> {
         Box::pin(stream.wait_read_write_again(|when| async move {
-            smol::Timer::at(when).await;
+            tokio::time::sleep_until(when.into()).await;
         }))
     }
 }
@@ -279,12 +277,13 @@ mod tests {
     }
 
     #[test]
-    fn guard_joins_threads_and_drops_pending_tasks() {
+    fn guard_joins_runtime_after_timer_and_pending_task() {
         let (platform, guard) = RuntimeGuard::new("test", "1", 1).unwrap();
         let (started_tx, started_rx) = mpsc::channel();
         let dropped = Arc::new(AtomicBool::new(false));
         let flag = DropFlag(Arc::clone(&dropped));
         platform.spawn_task("pending".into(), async move {
+            tokio::time::sleep(Duration::from_millis(5)).await;
             let _flag = flag;
             started_tx.send(()).unwrap();
             future::pending::<()>().await;
@@ -292,9 +291,22 @@ mod tests {
 
         started_rx
             .recv_timeout(Duration::from_secs(1))
-            .expect("task started");
+            .expect("timer-backed task started");
         drop(guard);
         assert!(dropped.load(Ordering::SeqCst));
-        assert!(platform.executor.upgrade().is_none());
+        assert!(platform.alive.upgrade().is_none());
+    }
+
+    #[test]
+    fn guard_can_be_dropped_from_a_foreign_tokio_context() {
+        let outer = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        outer.block_on(async {
+            let (_platform, guard) = RuntimeGuard::new("test", "1", 1).unwrap();
+            tokio::task::yield_now().await;
+            drop(guard);
+        });
     }
 }

@@ -43,8 +43,9 @@ gloo-net = { version = "0.6", default-features = false, features = ["websocket"]
 
 # light client
 smoldot-light = { version = "1.3", optional = true, default-features = false }
-event-listener = { version = "5", optional = true }
 getrandom = { version = "0.3", optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "time"] }
+tokio-util = { version = "0.7", optional = true, features = ["compat"] }
 
 rand_core = { version = "0.10", optional = true }
 libwallet = { path = "../libwallet", version = "0.3", optional = true, default-features = false, features = [
@@ -83,10 +84,10 @@ smoldot = ["dep:smoldot-light"]
 smoldot-std = [
 	"smoldot",
 	"std",
-	"dep:smol",
 	"dep:futures-util",
-	"dep:event-listener",
 	"dep:getrandom",
+	"dep:tokio",
+	"dep:tokio-util",
 	"smoldot-light/std",
 	"smoldot-light/wasmtime",
 ]

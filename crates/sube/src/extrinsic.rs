@@ -510,8 +510,33 @@ pub async fn prepare_external_signing(
     scheme: SignatureScheme,
     options: &TransactionOptions,
 ) -> Result<ExternalSigningRequest> {
+    let checkpoint = chain.block_info(None).await?;
+    prepare_external_signing_at(
+        chain,
+        meta,
+        call,
+        signing_account,
+        nonce_account,
+        scheme,
+        options,
+        checkpoint,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn prepare_external_signing_at(
+    chain: &mut (impl Backend + ?Sized),
+    meta: &Rc<Metadata>,
+    call: &PreparedCall,
+    signing_account: &[u8],
+    nonce_account: &[u8],
+    scheme: SignatureScheme,
+    options: &TransactionOptions,
+    checkpoint: crate::BlockInfo,
+) -> Result<ExternalSigningRequest> {
     ensure_v4(meta)?;
-    let context = build_context(chain, meta, options, nonce_account).await?;
+    let context = build_context_at(chain, meta, options, nonce_account, checkpoint).await?;
     let (extra, additional_signed, extensions) = encode_extensions_detailed(
         &meta.extrinsic.extensions,
         &meta.registry,
@@ -909,6 +934,17 @@ pub async fn build_context(
     options: &TransactionOptions,
     account: &[u8],
 ) -> Result<ChainContext> {
+    let checkpoint = chain.block_info(None).await?;
+    build_context_at(chain, meta, options, account, checkpoint).await
+}
+
+async fn build_context_at(
+    chain: &mut (impl Backend + ?Sized),
+    meta: &Rc<Metadata>,
+    options: &TransactionOptions,
+    account: &[u8],
+    checkpoint: crate::BlockInfo,
+) -> Result<ChainContext> {
     let (spec_version, tx_version) = runtime_versions(meta)?;
 
     // Genesis hash
@@ -917,12 +953,17 @@ pub async fn build_context(
         .try_into()
         .map_err(|_| Error::Decode("genesis block hash is not 32 bytes".into()))?;
 
-    // Mortal transactions are anchored at the actual finalized header.
-    let checkpoint = chain.block_info(None).await?;
-
-    // Nonce
-    let account_nonce =
-        resolve_nonce(chain, meta, options.nonce, &options.extensions, account).await?;
+    // Resolve the nonce at the same authenticated state/runtime snapshot as
+    // the mortality checkpoint and metadata.
+    let account_nonce = resolve_nonce(
+        chain,
+        meta,
+        options.nonce,
+        &options.extensions,
+        account,
+        checkpoint.hash,
+    )
+    .await?;
 
     Ok(ChainContext {
         spec_version,
@@ -978,6 +1019,7 @@ async fn resolve_nonce(
     nonce: Option<u64>,
     extensions: &[(String, DynValue)],
     account: &[u8],
+    block_hash: [u8; 32],
 ) -> Result<u64> {
     if let Some(nonce) = nonce {
         return Ok(nonce);
@@ -988,11 +1030,11 @@ async fn resolve_nonce(
             .ok_or(Error::Mapping("CheckNonce override is not a number".into()));
     }
 
-    let response = crate::query(
+    let response = crate::query_at_hash(
         chain,
         meta,
         &format!("system/account/0x{}", hex::encode(account)),
-        None,
+        block_hash,
     )
     .await?;
 

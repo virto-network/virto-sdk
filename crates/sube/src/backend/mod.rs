@@ -101,6 +101,10 @@ impl Backend for AnyBackend {
         )
     }
 
+    async fn cancel_active_operation(&mut self) -> SubeResult<()> {
+        dispatch!(self, cancel_active_operation())
+    }
+
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> SubeResult<()> {
         dispatch!(self, submit(ext, wait_for_finalization))
     }
@@ -111,6 +115,18 @@ impl Backend for AnyBackend {
         wait_for: crate::WaitFor,
     ) -> SubeResult<crate::TransactionReceipt> {
         dispatch!(self, submit_transaction(ext, wait_for))
+    }
+
+    async fn submit_transaction_with_timeout(
+        &mut self,
+        ext: &crate::EncodedExtrinsic,
+        wait_for: crate::WaitFor,
+        timeout: core::time::Duration,
+    ) -> SubeResult<crate::TransactionReceipt> {
+        dispatch!(
+            self,
+            submit_transaction_with_timeout(ext, wait_for, timeout)
+        )
     }
 
     async fn inspect_transaction(
@@ -136,8 +152,19 @@ impl Backend for AnyBackend {
         dispatch!(self, metadata())
     }
 
+    async fn metadata_at_hash(&mut self, block_hash: [u8; 32]) -> SubeResult<Metadata> {
+        dispatch!(self, metadata_at_hash(block_hash))
+    }
+
     async fn block_info(&mut self, at: Option<u32>) -> SubeResult<crate::meta::BlockInfo> {
         dispatch!(self, block_info(at))
+    }
+
+    async fn block_info_at_hash(
+        &mut self,
+        block_hash: [u8; 32],
+    ) -> SubeResult<crate::meta::BlockInfo> {
+        dispatch!(self, block_info_at_hash(block_hash))
     }
 }
 
@@ -261,11 +288,9 @@ async fn with_timeout<T>(
     duration: Duration,
     fut: impl core::future::Future<Output = SubeResult<T>>,
 ) -> SubeResult<T> {
-    use core::pin::pin;
-    use futures_util::future::Either;
-    match futures_util::future::select(pin!(fut), pin!(smol::Timer::after(duration))).await {
-        Either::Left((result, _)) => result,
-        Either::Right((_, _)) => Err(Error::ConnectionTimeout),
+    match crate::time::timeout(duration, fut).await {
+        Ok(result) => result,
+        Err(_) => Err(Error::ConnectionTimeout),
     }
 }
 

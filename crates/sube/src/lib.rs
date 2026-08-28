@@ -87,6 +87,8 @@ pub mod libwallet;
 pub mod metadata;
 pub mod rpc;
 pub mod signer;
+#[cfg(feature = "std")]
+pub mod time;
 pub mod util;
 pub mod value;
 
@@ -110,7 +112,8 @@ pub const DEFAULT_TIMEOUT: core::time::Duration = core::time::Duration::from_sec
 
 pub type Result<T> = core::result::Result<T, Error>;
 
-pub(crate) async fn query(
+#[cfg(test)]
+async fn query(
     chain: &mut (impl Backend + ?Sized),
     meta: &Rc<Metadata>,
     path: &str,
@@ -175,6 +178,7 @@ pub async fn query_page(
     if !storage_key.is_partial() {
         return Err(Error::BadInput);
     }
+    ensure_decodable_map_keys(&storage_key)?;
 
     let at = chain.block_info(block).await?;
     let block_number = u32::try_from(at.number).map_err(|_| Error::BadBlockNumber)?;
@@ -216,6 +220,7 @@ pub async fn query_page_at_hash(
     if !storage_key.is_partial() {
         return Err(Error::BadInput);
     }
+    ensure_decodable_map_keys(&storage_key)?;
 
     let raw_page = chain
         .get_keys_page_at_hash(storage_key.key(), limit, start_key, at.hash)
@@ -272,6 +277,7 @@ pub(crate) fn storage_response(
     }
 }
 
+#[cfg(test)]
 fn partial_storage_response(
     values: Vec<(RawKey, Option<RawValue>)>,
     storage_key: &StorageKey,
@@ -289,6 +295,7 @@ fn partial_storage_entries(
     storage_key: &StorageKey,
     meta: &Rc<Metadata>,
 ) -> Result<Vec<StoragePageEntry>> {
+    ensure_decodable_map_keys(storage_key)?;
     let prefix_len = storage_key.pallet.len() + storage_key.call.len();
     let mut decoded = Vec::with_capacity(values.len());
 
@@ -328,6 +335,9 @@ fn partial_storage_entries(
             offset = end;
         }
 
+        if offset != key.len() {
+            return Err(Error::Decode("storage map key has trailing bytes".into()));
+        }
         decoded.push(StoragePageEntry {
             raw_key,
             keys: parts,
@@ -336,6 +346,19 @@ fn partial_storage_entries(
     }
 
     Ok(decoded)
+}
+
+fn ensure_decodable_map_keys(storage_key: &StorageKey) -> Result<()> {
+    if storage_key
+        .hashers
+        .iter()
+        .any(|hasher| !hasher.is_transparent())
+    {
+        return Err(Error::OperationFailed(
+            "map keys cannot be decoded through a non-transparent storage hasher".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_uri(uri: &str) -> Option<(String, String, Vec<String>)> {
@@ -582,6 +605,12 @@ pub trait Backend {
         Ok(RawKeysPage { keys, next_cursor })
     }
 
+    /// Stop an in-flight backend operation or subscription after its owning
+    /// future was cancelled. Backends without long-lived work have no cleanup.
+    async fn cancel_active_operation(&mut self) -> Result<()> {
+        Ok(())
+    }
+
     /// Submit an extrinsic. If `wait_for_finalization` is true, waits for
     /// full finalization; otherwise returns after best-chain inclusion.
     async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> Result<()>;
@@ -614,6 +643,18 @@ pub trait Backend {
         Ok(TransactionReceipt::default())
     }
 
+    /// Submit with an aggregate watch deadline. Backends that cannot enforce
+    /// cancellation retain compatibility by delegating to the ordinary
+    /// submission method; native chainHead backends override this.
+    async fn submit_transaction_with_timeout(
+        &mut self,
+        ext: &EncodedExtrinsic,
+        wait_for: WaitFor,
+        _timeout: core::time::Duration,
+    ) -> Result<TransactionReceipt> {
+        self.submit_transaction(ext, wait_for).await
+    }
+
     /// Populate metadata-decoded events and dispatch outcome for a receipt.
     async fn enrich_receipt(
         &mut self,
@@ -631,7 +672,23 @@ pub trait Backend {
 
     async fn metadata(&mut self) -> Result<Metadata>;
 
+    /// Fetch runtime metadata at an authenticated block hash. Backends must
+    /// reject this operation when they cannot prove historical runtime state;
+    /// silently returning current metadata would misdecode storage.
+    async fn metadata_at_hash(&mut self, _block_hash: [u8; 32]) -> Result<Metadata> {
+        Err(Error::OperationFailed(
+            "hash-pinned metadata is unsupported by this backend".into(),
+        ))
+    }
+
     async fn block_info(&mut self, at: Option<u32>) -> Result<meta::BlockInfo>;
+
+    /// Resolve and verify a header supplied by hash.
+    async fn block_info_at_hash(&mut self, _block_hash: [u8; 32]) -> Result<meta::BlockInfo> {
+        Err(Error::OperationFailed(
+            "header lookup by hash is unsupported by this backend".into(),
+        ))
+    }
 }
 
 /// A dummy backend for offline querying of metadata.
@@ -974,6 +1031,22 @@ mod tests {
             assert!(matches!(response, Response::Value(_, _)));
             assert_eq!(backend.storage_calls, 0);
         });
+    }
+
+    #[test]
+    fn paged_map_rejects_non_transparent_key_hashers() {
+        let metadata = fixture_metadata();
+        let storage_key = StorageKey::new(
+            0,
+            Vec::new(),
+            Vec::new(),
+            vec![KeyValue::Empty(0)],
+            vec![meta::Hasher::Blake2_256],
+        );
+        let error = partial_storage_entries(Vec::new(), &storage_key, &metadata).unwrap_err();
+        assert!(
+            matches!(error, Error::OperationFailed(message) if message.contains("non-transparent"))
+        );
     }
 
     #[test]

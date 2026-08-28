@@ -183,7 +183,7 @@ impl Backend<super::managed_platform::ManagedPlatform> {
         let (platform, runtime) = super::managed_platform::RuntimeGuard::new(
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
-            1,
+            2,
         )
         .map_err(|error| Error::Node(format!("managed smoldot runtime: {error}")))?;
         let mut backend = Self::new(platform, chain_spec, relay_spec)?;
