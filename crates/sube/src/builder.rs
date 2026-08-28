@@ -636,16 +636,27 @@ impl Sube {
     /// Connect a parachain via smoldot light client.
     #[cfg(all(feature = "smoldot", feature = "std"))]
     pub async fn connect_light_para(chain_spec: &str, relay_spec: &str) -> SubeResult<Self> {
+        Self::connect_light_para_with_timeout(chain_spec, relay_spec, crate::DEFAULT_TIMEOUT).await
+    }
+
+    /// Connect a parachain via smoldot with an explicit initialization
+    /// timeout. Initial relay warp sync and parachain runtime proofs can take
+    /// longer than the general-purpose default on a cold light client.
+    #[cfg(all(feature = "smoldot", feature = "std"))]
+    pub async fn connect_light_para_with_timeout(
+        chain_spec: &str,
+        relay_spec: &str,
+        timeout: core::time::Duration,
+    ) -> SubeResult<Self> {
         let mut backend =
-            crate::backend::connect_light_para(chain_spec, relay_spec, crate::DEFAULT_TIMEOUT)
-                .await?;
+            crate::backend::connect_light_para(chain_spec, relay_spec, timeout).await?;
         let metadata = get_metadata(&mut backend, None).await?;
         Ok(Sube {
             backend,
             metadata,
             chain_properties: None,
             url: String::new(),
-            timeout: crate::DEFAULT_TIMEOUT,
+            timeout,
         })
     }
 
