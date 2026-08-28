@@ -420,6 +420,8 @@ pub type RpcResult<T> = Result<T, JsonRpcError>;
 pub enum RequestCleanup {
     None,
     StopChainHeadOperation { follow_subscription: String },
+    UnfollowChainHead,
+    StopArchiveStorage,
     UnwatchTransaction,
 }
 
@@ -563,6 +565,21 @@ pub(crate) trait TrackedTransport {
                     })?;
                 let params = alloc::format!(r#"["{}","{}"]"#, follow_subscription, operation_id);
                 self.run_cleanup_request("chainHead_v1_stopOperation", &params)
+                    .await
+            }
+            RequestCleanup::UnfollowChainHead => {
+                let subscription_id = result_as_str(response)
+                    .ok_or_else(|| JsonRpcError::new(-32603, "follow has no subscription id"))?;
+                let params = alloc::format!(r#"["{}"]"#, subscription_id);
+                self.run_cleanup_request("chainHead_v1_unfollow", &params)
+                    .await
+            }
+            RequestCleanup::StopArchiveStorage => {
+                let subscription_id = result_as_str(response).ok_or_else(|| {
+                    JsonRpcError::new(-32603, "archive storage has no subscription id")
+                })?;
+                let params = alloc::format!(r#"["{}"]"#, subscription_id);
+                self.run_cleanup_request("archive_v1_stopStorage", &params)
                     .await
             }
             RequestCleanup::UnwatchTransaction => {
@@ -849,6 +866,60 @@ mod tests {
             assert_eq!(transport.sent.len(), 2);
             assert!(transport.sent[1].contains("chainHead_v1_stopOperation"));
             assert!(transport.sent[1].contains("abandoned"));
+        });
+    }
+
+    #[cfg(all(feature = "ws", feature = "std"))]
+    #[test]
+    fn abandoned_subscriptions_use_their_protocol_specific_cleanup() {
+        smol::block_on(async {
+            for (start_method, cleanup, cleanup_method) in [
+                (
+                    "chainHead_v1_follow",
+                    RequestCleanup::UnfollowChainHead,
+                    "chainHead_v1_unfollow",
+                ),
+                (
+                    "archive_v1_storage",
+                    RequestCleanup::StopArchiveStorage,
+                    "archive_v1_stopStorage",
+                ),
+            ] {
+                let mut transport = tracked_mock(false);
+                let cancelled = crate::time::timeout(
+                    core::time::Duration::from_millis(10),
+                    TrackedTransport::tracked_rpc_with_cleanup(
+                        &mut transport,
+                        start_method,
+                        "[]",
+                        cleanup,
+                    ),
+                )
+                .await;
+                assert!(cancelled.is_err());
+
+                transport
+                    .responses
+                    .push_back(IncomingMessage::Response(RpcResponse {
+                        id: 1,
+                        result: Some(r#""abandoned-subscription""#.into()),
+                    }));
+                transport
+                    .responses
+                    .push_back(IncomingMessage::Response(RpcResponse {
+                        id: 2,
+                        result: Some("null".into()),
+                    }));
+                TrackedTransport::reconcile_cleanup_retry(&mut transport)
+                    .await
+                    .unwrap();
+
+                assert!(transport.tracker.pending_request.is_none());
+                assert!(transport.tracker.pending_cleanup_retry.is_none());
+                assert_eq!(transport.sent.len(), 2);
+                assert!(transport.sent[1].contains(cleanup_method));
+                assert!(transport.sent[1].contains("abandoned-subscription"));
+            }
         });
     }
 

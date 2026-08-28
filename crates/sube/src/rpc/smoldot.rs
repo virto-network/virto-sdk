@@ -212,6 +212,21 @@ impl<P: PlatformRef> Backend<P> {
                 self.run_cleanup_request("chainHead_v1_stopOperation", &params)
                     .await
             }
+            RequestCleanup::UnfollowChainHead => {
+                let subscription_id = super::result_as_str(response)
+                    .ok_or_else(|| JsonRpcError::new(-32603, "follow has no subscription id"))?;
+                let params = format!(r#"["{}"]"#, subscription_id);
+                self.run_cleanup_request("chainHead_v1_unfollow", &params)
+                    .await
+            }
+            RequestCleanup::StopArchiveStorage => {
+                let subscription_id = super::result_as_str(response).ok_or_else(|| {
+                    JsonRpcError::new(-32603, "archive storage has no subscription id")
+                })?;
+                let params = format!(r#"["{}"]"#, subscription_id);
+                self.run_cleanup_request("archive_v1_stopStorage", &params)
+                    .await
+            }
             RequestCleanup::UnwatchTransaction => {
                 let subscription_id = super::result_as_str(response).ok_or_else(|| {
                     JsonRpcError::new(-32603, "transaction watch has no subscription id")

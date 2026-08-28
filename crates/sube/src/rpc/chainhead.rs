@@ -74,6 +74,9 @@ pub struct ChainHead<R> {
     /// Transaction-watch subscription retained across caller cancellation so
     /// a host-level deadline can still unwatch it explicitly.
     active_tx_watch: Option<String>,
+    /// Archive-storage subscription retained across caller cancellation so a
+    /// host-level deadline can still stop it explicitly.
+    active_archive_storage: Option<String>,
 }
 
 /// Result from a chainHead operation.
@@ -576,6 +579,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             event_queue: VecDeque::new(),
             active_operation: None,
             active_tx_watch: None,
+            active_archive_storage: None,
         };
 
         ch.wait_initialized().await?;
@@ -848,26 +852,38 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         self.flush_unpins().await;
 
-        if stopped || self.needs_refollow {
-            self.needs_refollow = false;
+        if stopped {
+            self.needs_refollow = true;
+        }
+
+        if self.needs_refollow {
             // A stopped follow invalidates every server-side pin. Callers
             // holding leases will receive `SubscriptionClosed`/inaccessible
             // on their next operation and must restart the snapshot.
             self.retained_hashes.clear();
-            // Unsubscribe old follow before creating a new one
-            let _ = self
-                .rpc
+            // Keep `needs_refollow` set until the replacement has delivered
+            // its initialized event. Cancellation at any await point then
+            // leaves a retryable state rather than a dead subscription that
+            // appears healthy.
+            self.rpc
                 .unsubscribe("chainHead_v1_unfollow", &self.follow_sub_id)
-                .await;
-            self.follow_sub_id = self
+                .await
+                .map_err(|e| crate::Error::Node(format!("unfollow failed: {e}")))?;
+            let follow_sub_id = self
                 .rpc
-                .subscribe("chainHead_v1_follow", "[true]")
+                .subscribe_with_cleanup(
+                    "chainHead_v1_follow",
+                    "[true]",
+                    RequestCleanup::UnfollowChainHead,
+                )
                 .await
                 .map_err(|e| crate::Error::Node(format!("refollow failed: {e}")))?;
+            self.follow_sub_id = follow_sub_id;
             self.finalized_hash.clear();
             self.pending_unpin.clear();
             self.wait_initialized().await?;
             self.flush_unpins().await;
+            self.needs_refollow = false;
         }
 
         Ok(self.finalized_hash.clone())
@@ -930,6 +946,12 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         {
             first_error = Some(error);
         }
+        if let Some(subscription_id) = self.active_archive_storage.clone()
+            && let Err(error) = self.stop_archive_storage(&subscription_id).await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -940,10 +962,10 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// cleanup. Retry that cleanup before starting unrelated work and fail
     /// closed if the server still cannot confirm it.
     async fn reconcile_active_operations(&mut self) -> crate::Result<()> {
-        if self.active_operation.is_some() || self.active_tx_watch.is_some() {
-            self.cancel_active_operation().await?;
-        }
-        Ok(())
+        // Pending request state can exist before a server-generated
+        // identifier is known, so reconciliation cannot be conditional on
+        // one of the high-level `active_*` fields being populated.
+        self.cancel_active_operation().await
     }
 
     /// Poll the subscription until we get a result for the given operation,
@@ -1636,6 +1658,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         block_hash: &str,
         keys: &[String],
     ) -> crate::Result<Vec<StorageItem>> {
+        self.reconcile_active_operations().await?;
         let mut items_json = String::from("[");
         for (i, k) in keys.iter().enumerate() {
             if i > 0 {
@@ -1647,14 +1670,33 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         let archive_sub_id = self
             .rpc
-            .subscribe(
+            .subscribe_with_cleanup(
                 "archive_v1_storage",
                 &format!(r#"["{}",{}]"#, block_hash, items_json),
+                RequestCleanup::StopArchiveStorage,
             )
             .await
             .map_err(|e| crate::Error::Node(format!("archive_v1_storage: {e}")))?;
 
+        self.active_archive_storage = Some(archive_sub_id.clone());
         self.wait_for_archive_storage(&archive_sub_id).await
+    }
+
+    async fn stop_archive_storage(&mut self, sub_id: &str) -> crate::Result<()> {
+        let stop = self.rpc.unsubscribe("archive_v1_stopStorage", sub_id);
+        #[cfg(feature = "std")]
+        let result = crate::time::timeout(core::time::Duration::from_secs(5), stop)
+            .await
+            .map_err(|_| crate::Error::ConnectionTimeout)?
+            .map_err(|error| crate::Error::Node(format!("archive storage stop: {error}")));
+        #[cfg(not(feature = "std"))]
+        let result = stop
+            .await
+            .map_err(|error| crate::Error::Node(format!("archive storage stop: {error}")));
+        if result.is_ok() && self.active_archive_storage.as_deref() == Some(sub_id) {
+            self.active_archive_storage = None;
+        }
+        result
     }
 
     /// Wait for archive storage events, routing follow events to lifecycle handling.
@@ -1664,16 +1706,18 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
     ) -> crate::Result<Vec<StorageItem>> {
         let mut result_items = Vec::new();
 
-        loop {
-            let (sub_id, event_json) = self
-                .rpc
-                .next_event()
-                .await
-                .ok_or(crate::Error::SubscriptionClosed)?;
+        let result = loop {
+            let Some((sub_id, event_json)) = self.rpc.next_event().await else {
+                break Err(crate::Error::SubscriptionClosed);
+            };
 
             if sub_id == archive_sub_id {
-                let event = parse_archive_storage_event(&event_json)
-                    .map_err(|e| crate::Error::Decode(format!("archive event: {e}")))?;
+                let event = match parse_archive_storage_event(&event_json)
+                    .map_err(|e| crate::Error::Decode(format!("archive event: {e}")))
+                {
+                    Ok(event) => event,
+                    Err(error) => break Err(error),
+                };
 
                 match event {
                     ArchiveStorageEvent::Items { items } => {
@@ -1681,9 +1725,9 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                             result_items.push(item);
                         }
                     }
-                    ArchiveStorageEvent::Done => return Ok(result_items),
+                    ArchiveStorageEvent::Done => break Ok(result_items),
                     ArchiveStorageEvent::Error { error } => {
-                        return Err(crate::Error::Node(format!("archive storage: {error}")));
+                        break Err(crate::Error::Node(format!("archive storage: {error}")));
                     }
                     ArchiveStorageEvent::WaitingForContinue => {
                         let _ = self
@@ -1707,6 +1751,21 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 }
             }
             // Events from unknown subscriptions are discarded
+        };
+
+        match result {
+            Ok(items) => {
+                if self.active_archive_storage.as_deref() == Some(archive_sub_id) {
+                    self.active_archive_storage = None;
+                }
+                Ok(items)
+            }
+            Err(error) => {
+                // Parse/transport failures are ambiguous: keep the identifier
+                // unless the node confirms the subscription has stopped.
+                let _ = self.stop_archive_storage(archive_sub_id).await;
+                Err(error)
+            }
         }
     }
 }
@@ -2702,6 +2761,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let error = chain
                 .storage_one_with_hash(&to_hex(&[0x11; 32]), "0xaabb")
@@ -2789,6 +2849,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let timed_out = crate::time::timeout(
                 core::time::Duration::from_millis(10),
@@ -2885,6 +2946,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let timed_out = crate::time::timeout(
                 core::time::Duration::from_millis(10),
@@ -2920,6 +2982,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: Some("retryable".into()),
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             assert!(chain.cancel_active_operation().await.is_err());
             assert_eq!(chain.active_operation.as_deref(), Some("retryable"));
@@ -2946,6 +3009,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: Some("retryable".into()),
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
 
             assert!(
@@ -2979,6 +3043,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
 
             assert!(chain.storage_one_with_hash("0x11", "0xaabb").await.is_err());
@@ -3126,6 +3191,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
 
             let first = chain
@@ -3213,6 +3279,7 @@ mod transaction_watch_tests {
             event_queue: VecDeque::new(),
             active_operation: None,
             active_tx_watch: None,
+            active_archive_storage: None,
         };
 
         let info = smol::block_on(crate::Backend::block_info(&mut chain, None)).unwrap();
@@ -3220,6 +3287,205 @@ mod transaction_watch_tests {
         assert_eq!(info.hash, [0x22; 32]);
         assert_eq!(info.parent, [0x11; 32]);
         assert_eq!(chain.rpc.subscribe_calls, 1);
+    }
+
+    #[cfg(feature = "std")]
+    struct CancelledRefollowRpc {
+        allow_subscribe: bool,
+        pending_subscribe: bool,
+        cancelled_subscribes: usize,
+        unfollows: Vec<String>,
+        incoming: VecDeque<(String, String)>,
+    }
+
+    #[cfg(feature = "std")]
+    impl Rpc for CancelledRefollowRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            panic!("unexpected RPC call: {method}")
+        }
+
+        async fn cancel_pending_request(&mut self) -> super::super::RpcResult<()> {
+            if self.pending_subscribe {
+                self.pending_subscribe = false;
+                self.cancelled_subscribes += 1;
+            }
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "std")]
+    impl RpcSubscription for CancelledRefollowRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            unreachable!()
+        }
+
+        async fn subscribe_with_cleanup(
+            &mut self,
+            method: &str,
+            _params: &str,
+            cleanup: RequestCleanup,
+        ) -> super::super::RpcResult<String> {
+            assert_eq!(method, "chainHead_v1_follow");
+            assert!(matches!(cleanup, RequestCleanup::UnfollowChainHead));
+            if !self.allow_subscribe {
+                self.pending_subscribe = true;
+                return core::future::pending().await;
+            }
+            Ok("replacement-follow".into())
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            self.incoming.pop_front()
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> super::super::RpcResult<()> {
+            assert_eq!(method, "chainHead_v1_unfollow");
+            self.unfollows.push(sub_id.into());
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn cancelled_refollow_remains_marked_for_retry_until_initialized() {
+        smol::block_on(async {
+            let new_hash = format!("0x{}", "22".repeat(32));
+            let mut chain = ChainHead {
+                rpc: CancelledRefollowRpc {
+                    allow_subscribe: false,
+                    pending_subscribe: false,
+                    cancelled_subscribes: 0,
+                    unfollows: Vec::new(),
+                    incoming: [(
+                        "replacement-follow".into(),
+                        format!(
+                            r#"{{"event":"initialized","finalizedBlockHashes":["{new_hash}"]}}"#
+                        ),
+                    )]
+                    .into(),
+                },
+                follow_sub_id: "stopped-follow".into(),
+                finalized_hash: format!("0x{}", "aa".repeat(32)),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: true,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+                active_archive_storage: None,
+            };
+
+            let cancelled = crate::time::timeout(
+                core::time::Duration::from_millis(10),
+                chain.prepare_operation(),
+            )
+            .await;
+            assert!(cancelled.is_err());
+            assert!(chain.needs_refollow);
+            assert_eq!(chain.follow_sub_id, "stopped-follow");
+            assert!(chain.rpc.pending_subscribe);
+
+            chain.rpc.allow_subscribe = true;
+            assert_eq!(chain.prepare_operation().await.unwrap(), new_hash);
+            assert!(!chain.needs_refollow);
+            assert_eq!(chain.follow_sub_id, "replacement-follow");
+            assert_eq!(chain.rpc.cancelled_subscribes, 1);
+            assert_eq!(chain.rpc.unfollows, ["stopped-follow", "stopped-follow"]);
+        });
+    }
+
+    #[cfg(feature = "std")]
+    struct CancelledArchiveRpc {
+        stopped: usize,
+    }
+
+    #[cfg(feature = "std")]
+    impl Rpc for CancelledArchiveRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            panic!("unexpected RPC call: {method}")
+        }
+    }
+
+    #[cfg(feature = "std")]
+    impl RpcSubscription for CancelledArchiveRpc {
+        async fn subscribe(
+            &mut self,
+            _method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            unreachable!()
+        }
+
+        async fn subscribe_with_cleanup(
+            &mut self,
+            method: &str,
+            _params: &str,
+            cleanup: RequestCleanup,
+        ) -> super::super::RpcResult<String> {
+            assert_eq!(method, "archive_v1_storage");
+            assert!(matches!(cleanup, RequestCleanup::StopArchiveStorage));
+            Ok("archive-storage".into())
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            core::future::pending().await
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(&mut self, method: &str, sub_id: &str) -> super::super::RpcResult<()> {
+            assert_eq!(method, "archive_v1_stopStorage");
+            assert_eq!(sub_id, "archive-storage");
+            self.stopped += 1;
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn cancelled_archive_storage_remains_explicitly_stoppable() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: CancelledArchiveRpc { stopped: 0 },
+                follow_sub_id: "follow".into(),
+                finalized_hash: format!("0x{}", "11".repeat(32)),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+                active_archive_storage: None,
+            };
+
+            let cancelled = crate::time::timeout(
+                core::time::Duration::from_millis(10),
+                chain.archive_storage("0x11", &["0xaabb".into()]),
+            )
+            .await;
+            assert!(cancelled.is_err());
+            assert_eq!(
+                chain.active_archive_storage.as_deref(),
+                Some("archive-storage")
+            );
+            chain.cancel_active_operation().await.unwrap();
+            assert!(chain.active_archive_storage.is_none());
+            assert_eq!(chain.rpc.stopped, 1);
+        });
     }
 
     #[test]
@@ -3314,6 +3580,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let receipt = chain
                 .watch_transaction(&[1, 2, 3], crate::WaitFor::BestBlock, None)
@@ -3348,6 +3615,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
 
             let error = chain
@@ -3416,6 +3684,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let error = chain
                 .watch_transaction(
@@ -3510,6 +3779,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let error = chain
                 .watch_transaction(
@@ -3542,6 +3812,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let result = crate::time::timeout(
                 core::time::Duration::from_millis(10),
@@ -3612,6 +3883,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: Some("old-watch".into()),
+                active_archive_storage: None,
             };
 
             assert!(
@@ -3688,6 +3960,7 @@ mod transaction_watch_tests {
                 event_queue: VecDeque::new(),
                 active_operation: None,
                 active_tx_watch: None,
+                active_archive_storage: None,
             };
             let metadata = crate::Backend::metadata_at_hash(&mut chain, hash)
                 .await
