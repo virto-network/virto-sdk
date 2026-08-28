@@ -94,7 +94,7 @@ pub struct StorageItem {
     pub closest_descendant_merkle_value: Option<String>,
 }
 
-const LIGHT_PAGE_CURSOR_MAGIC: &[u8; 8] = b"SUBEPG01";
+const LIGHT_PAGE_CURSOR_MAGIC: &[u8; 8] = b"SUBEPG02";
 const LIGHT_PAGE_MAX_DEPTH: usize = 8;
 const LIGHT_PAGE_MAX_OPERATIONS: usize = 64;
 const ACTIVE_OPERATION_UNPIN_BATCH: usize = 8;
@@ -1408,6 +1408,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                 "block snapshot is not retained".into(),
             ));
         }
+        let first_page = cursor.is_none();
         let (mut partition, mut after_key) = decode_light_page_cursor(prefix, cursor)?;
 
         self.prepare_operation().await?;
@@ -1417,6 +1418,37 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
         let mut page_keys = Vec::with_capacity(usize::from(limit));
         let mut operations = 0usize;
+        if first_page {
+            // A partial storage key can theoretically also be an exact trie
+            // key (for example, a zero-width encoded map key), so preserve it
+            // without ever requesting descendants for the entire map. Large
+            // maps can make that root proof time out before the adaptive
+            // splitter has a chance to run.
+            match self
+                .key_item_operation_at_hash(&hash, prefix, "hash", None, 1)
+                .await?
+            {
+                KeyItemOperation::Complete(mut keys) => page_keys.append(&mut keys),
+                KeyItemOperation::TooLarge | KeyItemOperation::Inaccessible => {
+                    return Err(crate::Error::OperationFailed(
+                        "exact trie key is inaccessible".into(),
+                    ));
+                }
+            }
+            operations += 1;
+            self.flush_unpins().await;
+        }
+        if partition.is_empty() {
+            // Begin below the root so a bounded page never first asks a light
+            // peer to prove every descendant of a large storage map.
+            partition.push(0);
+        }
+        if page_keys.len() == usize::from(limit) {
+            return Ok(crate::RawKeysPage {
+                keys: page_keys,
+                next_cursor: Some(encode_light_page_cursor(&partition, None)?),
+            });
+        }
         loop {
             if operations >= LIGHT_PAGE_MAX_OPERATIONS {
                 let next_cursor = encode_light_page_cursor(&partition, after_key.as_deref())?;
@@ -3214,16 +3246,24 @@ mod transaction_watch_tests {
                 "chainHead_v1_storage" => {
                     let operation_id = format!("op{}", self.operation);
                     let keys = if params.contains("descendantsHashes") {
-                        [0x30u8, 0x20, 0x10]
-                            .into_iter()
-                            .map(|suffix| {
-                                format!(
-                                    r#"{{"key":"0xaa{suffix:02x}","hash":"0x{}"}}"#,
-                                    "11".repeat(32)
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",")
+                        if params.contains(r#""key":"0xaa00""#) {
+                            [0x30u8, 0x20, 0x10]
+                                .into_iter()
+                                .map(|suffix| {
+                                    format!(
+                                        r#"{{"key":"0xaa00{suffix:02x}","hash":"0x{}"}}"#,
+                                        "11".repeat(32)
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(",")
+                        } else if params.contains(r#""key":"0xaa01""#) {
+                            format!(r#"{{"key":"0xaa0110","hash":"0x{}"}}"#, "11".repeat(32))
+                        } else {
+                            panic!("unexpected descendant partition: {params}")
+                        }
+                    } else if params.contains(r#""key":"0xaa","type":"hash""#) {
+                        format!(r#"{{"key":"0xaa","hash":"0x{}"}}"#, "11".repeat(32))
                     } else {
                         String::new()
                     };
@@ -3301,16 +3341,22 @@ mod transaction_watch_tests {
             };
 
             let first = chain
-                .partitioned_keys_page_at_hash(&[0xaa], 2, None, &hash)
+                .partitioned_keys_page_at_hash(&[0xaa], 3, None, &hash)
                 .await
                 .unwrap();
-            assert_eq!(first.keys, [vec![0xaa, 0x10], vec![0xaa, 0x20]]);
+            assert_eq!(
+                first.keys,
+                [vec![0xaa], vec![0xaa, 0x00, 0x10], vec![0xaa, 0x00, 0x20]]
+            );
             let second = chain
                 .partitioned_keys_page_at_hash(&[0xaa], 2, first.next_cursor, &hash)
                 .await
                 .unwrap();
-            assert_eq!(second.keys, [vec![0xaa, 0x30]]);
-            assert!(second.next_cursor.is_none());
+            assert_eq!(
+                second.keys,
+                [vec![0xaa, 0x00, 0x30], vec![0xaa, 0x01, 0x10]]
+            );
+            assert!(second.next_cursor.is_some());
         });
     }
 
