@@ -10,7 +10,7 @@ repository = "https://github.com/virto-network/virto-sdk"
 
 [dependencies]
 blake2 = { version = "0.10", default-features = false }
-codec = { workspace = true }
+codec = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
 log = { workspace = true }
 scales = { path = "../scales", version = "1.1", package = "scale-serialization", default-features = false, features = [

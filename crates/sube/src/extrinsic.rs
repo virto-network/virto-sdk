@@ -7,7 +7,7 @@ use crate::signer::SignatureScheme;
 use crate::{Backend, Error, Metadata, Response, Result};
 
 use crate::value::DynValue;
-use codec::{Compact, Encode};
+use codec::{Compact, Decode, Encode};
 use scales::Value;
 use serde::Serialize;
 
@@ -220,6 +220,148 @@ pub struct ExternalSigningRequest {
     pub scheme: SignatureScheme,
     pub extensions: Vec<EncodedExtension>,
     extension_overrides: Vec<(String, DynValue)>,
+}
+
+/// Stable, metadata-independent wire used to durably retain an external
+/// signing request between preparation and submission.
+///
+/// Custom signed-extension overrides are deliberately excluded: callers that
+/// use them must keep the live request. The ordinary managed V4 surface uses
+/// no overrides and can therefore freeze, restore, and finish the exact same
+/// extrinsic after a process restart.
+#[derive(Encode, Decode)]
+struct FrozenExternalSigningRequest {
+    version: u8,
+    call_pallet: String,
+    call_name: String,
+    call_bytes: Vec<u8>,
+    signing_payload: Vec<u8>,
+    spec_version: u32,
+    tx_version: u32,
+    genesis_hash: [u8; 32],
+    account_nonce: u64,
+    checkpoint_number: u64,
+    checkpoint_hash: [u8; 32],
+    mortality_checkpoint_hash: [u8; 32],
+    mortality_period: Option<u64>,
+    tip: u64,
+    signing_account: Vec<u8>,
+    nonce_account: Vec<u8>,
+    scheme: u8,
+    extensions: Vec<(String, String, String)>,
+}
+
+impl ExternalSigningRequest {
+    /// Encode this frozen request for durable storage.
+    ///
+    /// Restoring the bytes never trusts them blindly: [`Self::from_frozen`]
+    /// reconstructs the request, and [`finish_external_signing`] re-derives all
+    /// metadata-driven bytes before accepting a signature.
+    pub fn to_frozen(&self) -> Result<Vec<u8>> {
+        if !self.extension_overrides.is_empty() {
+            return Err(Error::OperationFailed(
+                "external signing requests with custom extension overrides cannot be frozen".into(),
+            ));
+        }
+        Ok(FrozenExternalSigningRequest {
+            version: 1,
+            call_pallet: self.call.pallet.clone(),
+            call_name: self.call.call.clone(),
+            call_bytes: self.call.bytes.clone(),
+            signing_payload: self.signing_payload.clone(),
+            spec_version: self.context.spec_version,
+            tx_version: self.context.tx_version,
+            genesis_hash: self.context.genesis_hash,
+            account_nonce: self.context.account_nonce,
+            checkpoint_number: self.context.checkpoint_number,
+            checkpoint_hash: self.context.checkpoint_hash,
+            mortality_checkpoint_hash: self.context.mortality_checkpoint_hash,
+            mortality_period: match self.context.mortality {
+                Mortality::Immortal => None,
+                Mortality::Mortal { period } => Some(period),
+            },
+            tip: self.context.tip,
+            signing_account: self.signing_account.clone(),
+            nonce_account: self.nonce_account.clone(),
+            scheme: match self.scheme {
+                SignatureScheme::Sr25519 => 0,
+                SignatureScheme::Ed25519 => 1,
+                SignatureScheme::Ecdsa => 2,
+            },
+            extensions: self
+                .extensions
+                .iter()
+                .map(|extension| {
+                    (
+                        extension.identifier.clone(),
+                        extension.extra_hex.clone(),
+                        extension.additional_signed_hex.clone(),
+                    )
+                })
+                .collect(),
+        }
+        .encode())
+    }
+
+    /// Restore a request previously returned by [`Self::to_frozen`].
+    pub fn from_frozen(bytes: &[u8]) -> Result<Self> {
+        let mut input = bytes;
+        let frozen = FrozenExternalSigningRequest::decode(&mut input)
+            .map_err(|error| Error::Decode(format!("frozen signing request: {error}")))?;
+        if !input.is_empty() || frozen.version != 1 {
+            return Err(Error::Decode(
+                "unsupported or trailing frozen signing request bytes".into(),
+            ));
+        }
+        let scheme = match frozen.scheme {
+            0 => SignatureScheme::Sr25519,
+            1 => SignatureScheme::Ed25519,
+            2 => SignatureScheme::Ecdsa,
+            _ => return Err(Error::Decode("unknown frozen signature scheme".into())),
+        };
+        let mortality = match frozen.mortality_period {
+            None => Mortality::Immortal,
+            Some(period) if (4..=65_536).contains(&period) => Mortality::Mortal { period },
+            Some(_) => return Err(Error::Decode("invalid frozen mortality period".into())),
+        };
+        let call = PreparedCall {
+            pallet: frozen.call_pallet,
+            call: frozen.call_name,
+            hex: format!("0x{}", hex::encode(&frozen.call_bytes)),
+            bytes: frozen.call_bytes,
+        };
+        Ok(Self {
+            signing_payload_hex: format!("0x{}", hex::encode(&frozen.signing_payload)),
+            signing_payload: frozen.signing_payload,
+            call,
+            context: ChainContext {
+                spec_version: frozen.spec_version,
+                tx_version: frozen.tx_version,
+                genesis_hash: frozen.genesis_hash,
+                account_nonce: frozen.account_nonce,
+                checkpoint_number: frozen.checkpoint_number,
+                checkpoint_hash: frozen.checkpoint_hash,
+                mortality_checkpoint_hash: frozen.mortality_checkpoint_hash,
+                mortality,
+                tip: frozen.tip,
+            },
+            signing_account: frozen.signing_account,
+            nonce_account: frozen.nonce_account,
+            scheme,
+            extensions: frozen
+                .extensions
+                .into_iter()
+                .map(
+                    |(identifier, extra_hex, additional_signed_hex)| EncodedExtension {
+                        identifier,
+                        extra_hex,
+                        additional_signed_hex,
+                    },
+                )
+                .collect(),
+            extension_overrides: Vec::new(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1071,6 +1213,73 @@ mod tests {
                 .map(|extension| extension.identifier.as_str())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn frozen_external_signing_request_round_trips_exact_inputs() {
+        let request = ExternalSigningRequest {
+            call: PreparedCall {
+                pallet: "Balances".into(),
+                call: "transfer_keep_alive".into(),
+                bytes: vec![5, 3, 1, 2, 3],
+                hex: "0x0503010203".into(),
+            },
+            signing_payload: vec![9, 8, 7],
+            signing_payload_hex: "0x090807".into(),
+            context: test_ctx(),
+            signing_account: vec![1; 32],
+            nonce_account: vec![2; 32],
+            scheme: SignatureScheme::Ed25519,
+            extensions: vec![EncodedExtension {
+                identifier: "CheckNonce".into(),
+                extra_hex: "0xa8".into(),
+                additional_signed_hex: "0x".into(),
+            }],
+            extension_overrides: Vec::new(),
+        };
+
+        let frozen = request.to_frozen().unwrap();
+        let restored = ExternalSigningRequest::from_frozen(&frozen).unwrap();
+        assert_eq!(restored.call, request.call);
+        assert_eq!(restored.signing_payload, request.signing_payload);
+        assert_eq!(restored.signing_payload_hex, request.signing_payload_hex);
+        assert_eq!(restored.context, request.context);
+        assert_eq!(restored.signing_account, request.signing_account);
+        assert_eq!(restored.nonce_account, request.nonce_account);
+        assert_eq!(restored.scheme, request.scheme);
+        assert_eq!(restored.extensions, request.extensions);
+        assert!(restored.extension_overrides.is_empty());
+
+        let mut trailing = frozen;
+        trailing.push(0);
+        assert!(matches!(
+            ExternalSigningRequest::from_frozen(&trailing),
+            Err(Error::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn custom_extension_overrides_cannot_be_frozen() {
+        let request = ExternalSigningRequest {
+            call: PreparedCall {
+                pallet: "Custom".into(),
+                call: "call".into(),
+                bytes: vec![1],
+                hex: "0x01".into(),
+            },
+            signing_payload: vec![2],
+            signing_payload_hex: "0x02".into(),
+            context: test_ctx(),
+            signing_account: vec![1; 32],
+            nonce_account: vec![1; 32],
+            scheme: SignatureScheme::Sr25519,
+            extensions: Vec::new(),
+            extension_overrides: vec![("Custom".into(), DynValue::Null)],
+        };
+        assert!(matches!(
+            request.to_frozen(),
+            Err(Error::OperationFailed(_))
+        ));
     }
 }
 
