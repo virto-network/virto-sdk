@@ -743,7 +743,13 @@ pub enum Error {
     AccountNotFound,
     ConstantNotFound(String),
     BadBlockNumber,
+    /// A hash presented as finalized is either ahead of the finalized head or
+    /// is not the canonical hash at its claimed height.
+    InvalidFinalizedBlock(String),
     MissingExtensionValue(String),
+    /// [`TransactionOptions::with_extension`] attempted to replace an
+    /// extension whose bytes are derived from the signed [`ChainContext`].
+    ManagedExtensionOverride(String),
     Signing(String),
     SubscriptionClosed,
     OperationFailed(String),
@@ -775,7 +781,14 @@ impl fmt::Display for Error {
             Self::AccountNotFound => write!(f, "account not found"),
             Self::ConstantNotFound(c) => write!(f, "constant not found: {c}"),
             Self::BadBlockNumber => write!(f, "bad block number"),
+            Self::InvalidFinalizedBlock(reason) => {
+                write!(f, "invalid finalized block: {reason}")
+            }
             Self::MissingExtensionValue(ext) => write!(f, "missing value for extension: {ext}"),
+            Self::ManagedExtensionOverride(ext) => write!(
+                f,
+                "extension {ext} is managed by TransactionOptions and cannot be overridden"
+            ),
             Self::Signing(e) => write!(f, "signing error: {e}"),
             Self::SubscriptionClosed => write!(f, "subscription closed"),
             Self::OperationFailed(e) => write!(f, "operation failed: {e}"),

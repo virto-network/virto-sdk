@@ -199,12 +199,50 @@ impl<B: Backend> Sube<B> {
         Ok(at)
     }
 
-    /// Resolve a caller-supplied hash to its verified header information.
+    /// Resolve a caller-supplied hash to its header information.
+    ///
+    /// This does not establish finality. Call
+    /// [`Self::finalized_block_info_at_hash`] when a hash will anchor state or
+    /// metadata reads.
     pub async fn block_info_at_hash(
         &mut self,
         block_hash: [u8; 32],
     ) -> SubeResult<crate::BlockInfo> {
         self.backend.block_info_at_hash(block_hash).await
+    }
+
+    /// Verify that `block_hash` is finalized and canonical, then return its
+    /// authenticated header information.
+    ///
+    /// Header lookup by hash alone is insufficient: legacy RPC servers may
+    /// return a recent best-chain or fork header. We additionally compare the
+    /// candidate height with the finalized head and resolve the canonical hash
+    /// at that finalized height.
+    pub async fn finalized_block_info_at_hash(
+        &mut self,
+        block_hash: [u8; 32],
+    ) -> SubeResult<crate::BlockInfo> {
+        let candidate = self.backend.block_info_at_hash(block_hash).await?;
+        let finalized = self.backend.block_info(None).await?;
+        if candidate.number > finalized.number {
+            return Err(crate::Error::InvalidFinalizedBlock(format!(
+                "block {} is ahead of finalized head {}",
+                candidate.number, finalized.number
+            )));
+        }
+        let height = u32::try_from(candidate.number).map_err(|_| {
+            crate::Error::InvalidFinalizedBlock(
+                "block height exceeds the backend block-number range".into(),
+            )
+        })?;
+        let canonical = self.backend.block_info(Some(height)).await?;
+        if canonical.number != candidate.number || canonical.hash != block_hash {
+            return Err(crate::Error::InvalidFinalizedBlock(format!(
+                "hash is not canonical at height {}",
+                candidate.number
+            )));
+        }
+        Ok(candidate)
     }
 
     /// Cancel chain work whose owning future was dropped by an outer deadline.
@@ -247,14 +285,28 @@ impl<B: Backend> Sube<B> {
         path: &str,
         block_hash: [u8; 32],
     ) -> SubeResult<Response> {
+        self.query_at_finalized_hash_with_info(path, block_hash)
+            .await
+            .map(|(_, response)| response)
+    }
+
+    /// Query at a caller-supplied finalized hash and return the verified block
+    /// information alongside the decoded response.
+    pub async fn query_at_finalized_hash_with_info(
+        &mut self,
+        path: &str,
+        block_hash: [u8; 32],
+    ) -> SubeResult<(crate::BlockInfo, Response)> {
+        let block = self.finalized_block_info_at_hash(block_hash).await?;
         let metadata = self.metadata_for_hash(block_hash).await?;
-        crate::query_at_hash(
+        let response = crate::query_at_hash(
             &mut self.backend,
             &metadata,
             path.trim_matches('/'),
             block_hash,
         )
-        .await
+        .await?;
+        Ok((block, response))
     }
 
     /// Query a bounded page of a partially-keyed map at one finalized snapshot.
@@ -1027,6 +1079,18 @@ mod tests {
                 parent: if number == 0 { [1; 32] } else { [3; 32] },
             })
         }
+
+        async fn block_info_at_hash(
+            &mut self,
+            block_hash: [u8; 32],
+        ) -> SubeResult<crate::metadata::BlockInfo> {
+            let number = block_hash[0] as u64;
+            Ok(crate::metadata::BlockInfo {
+                number,
+                hash: block_hash,
+                parent: if number == 0 { [1; 32] } else { [3; 32] },
+            })
+        }
     }
 
     #[test]
@@ -1097,6 +1161,65 @@ mod tests {
                 .unwrap();
             assert!(matches!(response, Response::Value(_, _)));
             assert_eq!(metadata_hash_byte.get(), 0x7b);
+            assert_eq!(chain.backend().historical_read.get(), Some(0x7b));
+        });
+    }
+
+    #[test]
+    fn hash_pinned_query_rejects_a_non_finalized_header_before_metadata_reads() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let metadata_hash_byte = Rc::new(Cell::new(0));
+            let historical_read = Rc::new(Cell::new(None));
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::clone(&metadata_hash_byte),
+                storage_hash_byte: Rc::new(Cell::new(0)),
+                head_number: 128,
+                historical_read: Rc::clone(&historical_read),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+
+            let error = chain
+                .query_at_finalized_hash("system/_constants/version", [129; 32])
+                .await
+                .unwrap_err();
+            assert!(matches!(error, crate::Error::InvalidFinalizedBlock(_)));
+            assert_eq!(metadata_hash_byte.get(), 0);
+            assert_eq!(historical_read.get(), None);
+        });
+    }
+
+    #[test]
+    fn hash_pinned_query_rejects_a_finalized_height_fork() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let metadata_hash_byte = Rc::new(Cell::new(0));
+            let historical_read = Rc::new(Cell::new(None));
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::clone(&metadata_hash_byte),
+                storage_hash_byte: Rc::new(Cell::new(0)),
+                head_number: 128,
+                historical_read: Rc::clone(&historical_read),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+            let mut fork_hash = [123; 32];
+            fork_hash[31] = 99;
+
+            let error = chain
+                .query_at_finalized_hash("system/_constants/version", fork_hash)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, crate::Error::InvalidFinalizedBlock(_)));
+            assert_eq!(metadata_hash_byte.get(), 0);
+            assert_eq!(historical_read.get(), Some(123));
         });
     }
 

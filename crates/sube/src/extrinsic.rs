@@ -140,6 +140,13 @@ impl TransactionOptions {
         self
     }
 
+    /// Override a runtime-specific signed extension.
+    ///
+    /// Context-managed built-ins (`CheckMortality`, `CheckNonce`, version and
+    /// genesis checks, and transaction-payment extensions) are rejected when
+    /// the transaction is built. Use [`Self::nonce`], [`Self::tip`],
+    /// [`Self::mortal`], or [`Self::immortal`] for those values so their `extra`
+    /// and `additional_signed` bytes cannot disagree.
     pub fn with_extension(mut self, identifier: impl Into<String>, value: DynValue) -> Self {
         let identifier = identifier.into();
         self.extensions.retain(|(id, _)| id != &identifier);
@@ -307,6 +314,33 @@ fn find_override(extensions: &[(String, DynValue)], id: &str) -> Option<DynValue
         .map(|(_, v)| v.clone())
 }
 
+/// Extensions whose signed bytes are coupled to fields in [`ChainContext`].
+/// Letting an arbitrary `DynValue` replace only their `extra` bytes can make
+/// the additional-signed payload, reported nonce, mortality checkpoint, or tip
+/// describe a different transaction than the one that is actually encoded.
+fn is_managed_extension(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "CheckSpecVersion"
+            | "CheckTxVersion"
+            | "CheckGenesis"
+            | "CheckMortality"
+            | "CheckNonce"
+            | "ChargeTransactionPayment"
+            | "ChargeAssetTxPayment"
+    )
+}
+
+fn validate_extension_overrides(overrides: &[(String, DynValue)]) -> Result<()> {
+    if let Some((identifier, _)) = overrides
+        .iter()
+        .find(|(identifier, _)| is_managed_extension(identifier))
+    {
+        return Err(Error::ManagedExtensionOverride(identifier.clone()));
+    }
+    Ok(())
+}
+
 /// Default JSON value for a well-known extension's "extra" data.
 fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
@@ -433,6 +467,7 @@ pub fn encode_extensions_detailed(
     ctx: &ChainContext,
     overrides: &[(String, DynValue)],
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<EncodedExtension>)> {
+    validate_extension_overrides(overrides)?;
     let mut extra = Vec::new();
     let mut additional = Vec::new();
     let mut summaries = Vec::with_capacity(extensions.len());
@@ -949,6 +984,45 @@ mod tests {
     }
 
     #[test]
+    fn context_managed_extension_overrides_are_rejected() {
+        for identifier in [
+            "CheckSpecVersion",
+            "CheckTxVersion",
+            "CheckGenesis",
+            "CheckMortality",
+            "CheckNonce",
+            "ChargeTransactionPayment",
+            "ChargeAssetTxPayment",
+        ] {
+            let error = validate_extension_overrides(&[(identifier.into(), DynValue::Null)])
+                .expect_err("managed override must fail closed");
+            assert!(matches!(
+                error,
+                Error::ManagedExtensionOverride(ref rejected) if rejected == identifier
+            ));
+        }
+        assert!(
+            validate_extension_overrides(&[("CustomExtension".into(), DynValue::Null)]).is_ok()
+        );
+    }
+
+    #[test]
+    fn public_extension_encoder_rejects_a_managed_override() {
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+        let error = encode_extensions_detailed(
+            &meta.extrinsic.extensions,
+            &meta.registry,
+            &test_ctx(),
+            &[("CheckMortality".into(), DynValue::Null)],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::ManagedExtensionOverride(identifier) if identifier == "CheckMortality"
+        ));
+    }
+
+    #[test]
     fn metadata_typed_option_defaults_to_none() {
         let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
         let extension = meta
@@ -1018,6 +1092,7 @@ async fn build_context_at(
     account: &[u8],
     checkpoint: crate::BlockInfo,
 ) -> Result<ChainContext> {
+    validate_extension_overrides(&options.extensions)?;
     let (spec_version, tx_version) = runtime_versions(meta)?;
 
     // Genesis hash
@@ -1028,15 +1103,7 @@ async fn build_context_at(
 
     // Resolve the nonce at the same authenticated state/runtime snapshot as
     // the mortality checkpoint and metadata.
-    let account_nonce = resolve_nonce(
-        chain,
-        meta,
-        options.nonce,
-        &options.extensions,
-        account,
-        checkpoint.hash,
-    )
-    .await?;
+    let account_nonce = resolve_nonce(chain, meta, options.nonce, account, checkpoint.hash).await?;
 
     let mortality_checkpoint_hash = match options.mortality {
         Mortality::Immortal => genesis_hash,
@@ -1109,24 +1176,17 @@ pub fn runtime_versions(meta: &Metadata) -> Result<(u32, u32)> {
     }
 }
 
-/// Resolve nonce from: explicit field, extension override, or on-chain query.
+/// Resolve nonce from the dedicated option or the authenticated chain state.
 async fn resolve_nonce(
     chain: &mut (impl Backend + ?Sized),
     meta: &Rc<Metadata>,
     nonce: Option<u64>,
-    extensions: &[(String, DynValue)],
     account: &[u8],
     block_hash: [u8; 32],
 ) -> Result<u64> {
     if let Some(nonce) = nonce {
         return Ok(nonce);
     }
-    if let Some(val) = find_override(extensions, "CheckNonce") {
-        return val
-            .as_u64()
-            .ok_or(Error::Mapping("CheckNonce override is not a number".into()));
-    }
-
     let response = crate::query_at_hash(
         chain,
         meta,
