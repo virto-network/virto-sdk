@@ -51,9 +51,9 @@ pub use builder::{CallBuilder, Sube, SubeBuilder};
 pub use builder::{EdgeResources, EdgeSube, connect_edge, connect_edge_with_meta};
 pub use extrinsic::{
     AssembledExtrinsic, AuthorizationSummary, ChainProperties, DispatchOutcome, EncodeCall,
-    EncodedExtension, EncodedExtrinsic, ExternalSigningRequest, Mortality, PreparedCall, Text,
-    TransactionEvent, TransactionOptions, TransactionReceipt, TransactionReport,
-    TransactionValidity, TransactionWeight, WaitFor,
+    EncodedExtension, EncodedExtrinsic, ExternalSigningRequest, MortalEra, Mortality, PreparedCall,
+    Text, TransactionEvent, TransactionOptions, TransactionReceipt, TransactionReport,
+    TransactionValidity, TransactionWeight, WaitFor, mortal_era, mortality_expiry,
 };
 pub use meta::{BlockInfo, Metadata};
 #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]

@@ -89,6 +89,16 @@ pub enum Mortality {
     Mortal { period: u64 },
 }
 
+/// Canonical values encoded by `sp_runtime::generic::Era::Mortal` for a
+/// transaction prepared at `current`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MortalEra {
+    pub period: u64,
+    pub phase: u64,
+    pub birth: u64,
+    pub death: u64,
+}
+
 /// Options used while signing and encoding a transaction.
 #[derive(Clone, Debug)]
 pub struct TransactionOptions {
@@ -279,7 +289,12 @@ pub struct ChainContext {
     pub genesis_hash: [u8; 32],
     pub account_nonce: u64,
     pub checkpoint_number: u64,
+    /// Authenticated finalized head used for metadata, nonce lookup, and
+    /// runtime diagnostics.
     pub checkpoint_hash: [u8; 32],
+    /// Block hash committed by CheckMortality. For long eras the encoded phase
+    /// is quantized, so this can precede `checkpoint_hash` by a few blocks.
+    pub mortality_checkpoint_hash: [u8; 32],
     pub mortality: Mortality,
     pub tip: u64,
 }
@@ -297,13 +312,13 @@ fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
         "CheckMortality" => match ctx.mortality {
             Mortality::Immortal => Some(DynValue::obj(&[("Immortal", DynValue::Null)])),
-            Mortality::Mortal { period } => Some(DynValue::obj(&[(
-                "Mortal",
-                DynValue::Seq(vec![
-                    DynValue::from(period),
-                    DynValue::from(ctx.checkpoint_number % normalize_period(period)),
-                ]),
-            )])),
+            Mortality::Mortal { period } => {
+                let era = mortal_era(period, ctx.checkpoint_number);
+                Some(DynValue::obj(&[(
+                    "Mortal",
+                    DynValue::Seq(vec![DynValue::from(era.period), DynValue::from(era.phase)]),
+                )]))
+            }
         },
         "CheckNonce" => Some(DynValue::from(ctx.account_nonce)),
         "ChargeTransactionPayment" => Some(DynValue::from(ctx.tip)),
@@ -325,7 +340,7 @@ fn default_additional(identifier: &str, ctx: &ChainContext) -> Option<DynValue> 
         "CheckGenesis" => Some(DynValue::from(ctx.genesis_hash)),
         "CheckMortality" => Some(DynValue::from(match ctx.mortality {
             Mortality::Immortal => ctx.genesis_hash,
-            Mortality::Mortal { .. } => ctx.checkpoint_hash,
+            Mortality::Mortal { .. } => ctx.mortality_checkpoint_hash,
         })),
         _ => None,
     }
@@ -365,12 +380,36 @@ fn normalize_period(period: u64) -> u64 {
         .clamp(4, 1 << 16)
 }
 
-/// Encode `sp_runtime::generic::Era::Mortal` using its compact two-byte format.
-pub fn encode_mortal_era(period: u64, current: u64) -> [u8; 2] {
+/// Reproduce Substrate's mortal-era normalization, phase quantization, and
+/// birth/death calculations without depending on `sp_runtime`.
+pub fn mortal_era(period: u64, current: u64) -> MortalEra {
     let period = normalize_period(period);
     let quantize_factor = (period >> 12).max(1);
     let phase = (current % period) / quantize_factor * quantize_factor;
-    let encoded = (period.trailing_zeros() - 1) as u16 | (((phase / quantize_factor) << 4) as u16);
+    let birth = (current.max(phase) - phase) / period * period + phase;
+    MortalEra {
+        period,
+        phase,
+        birth,
+        death: birth.saturating_add(period),
+    }
+}
+
+/// First block at which a transaction prepared at `current` is no longer
+/// valid, matching `sp_runtime::generic::Era::death`.
+pub fn mortality_expiry(mortality: Mortality, current: u64) -> Option<u64> {
+    match mortality {
+        Mortality::Immortal => None,
+        Mortality::Mortal { period } => Some(mortal_era(period, current).death),
+    }
+}
+
+/// Encode `sp_runtime::generic::Era::Mortal` using its compact two-byte format.
+pub fn encode_mortal_era(period: u64, current: u64) -> [u8; 2] {
+    let era = mortal_era(period, current);
+    let quantize_factor = (era.period >> 12).max(1);
+    let encoded =
+        (era.period.trailing_zeros() - 1) as u16 | (((era.phase / quantize_factor) << 4) as u16);
     encoded.to_le_bytes()
 }
 
@@ -649,13 +688,7 @@ fn encode_transaction(
     )
     .encode();
     let bytes = [len, assembled.bytes].concat();
-    let expires_at = match ctx.mortality {
-        Mortality::Immortal => None,
-        Mortality::Mortal { period } => {
-            let period = normalize_period(period);
-            Some(ctx.checkpoint_number - (ctx.checkpoint_number % period) + period)
-        }
-    };
+    let expires_at = mortality_expiry(ctx.mortality, ctx.checkpoint_number);
     Ok(EncodedExtrinsic {
         hex: format!("0x{}", hex::encode(&bytes)),
         bytes,
@@ -779,6 +812,7 @@ mod tests {
             account_nonce: 42,
             checkpoint_number: 128,
             checkpoint_hash: [0xcd; 32],
+            mortality_checkpoint_hash: [0xce; 32],
             mortality: Mortality::Mortal { period: 64 },
             tip: 0,
         }
@@ -801,6 +835,36 @@ mod tests {
         assert_eq!(encode_mortal_era(64, 0), [0x05, 0x00]);
         assert_eq!(encode_mortal_era(64, 42), [0xa5, 0x02]);
         assert_eq!(encode_mortal_era(3, 5), encode_mortal_era(4, 5));
+    }
+
+    #[test]
+    fn mortal_era_expiry_is_anchored_at_its_encoded_birth() {
+        assert_eq!(
+            mortal_era(64, 42),
+            MortalEra {
+                period: 64,
+                phase: 42,
+                birth: 42,
+                death: 106,
+            }
+        );
+        assert_eq!(
+            mortality_expiry(Mortality::Mortal { period: 64 }, 42),
+            Some(106)
+        );
+    }
+
+    #[test]
+    fn long_mortal_era_quantizes_birth_and_death_together() {
+        assert_eq!(
+            mortal_era(8_192, 10_005),
+            MortalEra {
+                period: 8_192,
+                phase: 1_812,
+                birth: 10_004,
+                death: 18_196,
+            }
+        );
     }
 
     #[test]
@@ -851,6 +915,15 @@ mod tests {
         assert_eq!(
             default_additional("CheckGenesis", &ctx),
             Some(DynValue::from([0xab; 32]))
+        );
+    }
+
+    #[test]
+    fn default_additional_check_mortality_uses_era_birth_hash() {
+        let ctx = test_ctx();
+        assert_eq!(
+            default_additional("CheckMortality", &ctx),
+            Some(DynValue::from([0xce; 32]))
         );
     }
 
@@ -965,6 +1038,29 @@ async fn build_context_at(
     )
     .await?;
 
+    let mortality_checkpoint_hash = match options.mortality {
+        Mortality::Immortal => genesis_hash,
+        Mortality::Mortal { period } => {
+            let era = mortal_era(period, checkpoint.number);
+            if era.birth == checkpoint.number {
+                checkpoint.hash
+            } else {
+                let birth = u32::try_from(era.birth).map_err(|_| {
+                    Error::OperationFailed(
+                        "mortal era birth exceeds the backend block-number range".into(),
+                    )
+                })?;
+                let birth_block = chain.block_info(Some(birth)).await?;
+                if birth_block.number != era.birth {
+                    return Err(Error::OperationFailed(
+                        "backend returned the wrong mortal-era birth block".into(),
+                    ));
+                }
+                birth_block.hash
+            }
+        }
+    };
+
     Ok(ChainContext {
         spec_version,
         tx_version,
@@ -972,6 +1068,7 @@ async fn build_context_at(
         account_nonce,
         checkpoint_number: checkpoint.number,
         checkpoint_hash: checkpoint.hash,
+        mortality_checkpoint_hash,
         mortality: options.mortality,
         tip: options.tip,
     })

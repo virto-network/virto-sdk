@@ -957,6 +957,8 @@ mod tests {
         property_reads: Rc<Cell<usize>>,
         metadata_hash_byte: Rc<Cell<u8>>,
         storage_hash_byte: Rc<Cell<u8>>,
+        head_number: u64,
+        historical_read: Rc<Cell<Option<u32>>>,
         metadata: Metadata,
     }
 
@@ -1011,10 +1013,17 @@ mod tests {
         }
 
         async fn block_info(&mut self, at: Option<u32>) -> SubeResult<crate::metadata::BlockInfo> {
-            let number = if at == Some(0) { 0 } else { 128 };
+            let (number, hash) = match at {
+                None => (self.head_number, [2; 32]),
+                Some(0) => (0, [1; 32]),
+                Some(number) => {
+                    self.historical_read.set(Some(number));
+                    (number as u64, [number as u8; 32])
+                }
+            };
             Ok(crate::metadata::BlockInfo {
                 number,
-                hash: if number == 0 { [1; 32] } else { [2; 32] },
+                hash,
                 parent: if number == 0 { [1; 32] } else { [3; 32] },
             })
         }
@@ -1032,6 +1041,8 @@ mod tests {
                 property_reads: Rc::clone(&property_reads),
                 metadata_hash_byte: Rc::new(Cell::new(0)),
                 storage_hash_byte: Rc::new(Cell::new(0)),
+                head_number: 128,
+                historical_read: Rc::new(Cell::new(None)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));
@@ -1075,6 +1086,8 @@ mod tests {
                 property_reads: Rc::new(Cell::new(0)),
                 metadata_hash_byte: Rc::clone(&metadata_hash_byte),
                 storage_hash_byte: Rc::new(Cell::new(0)),
+                head_number: 128,
+                historical_read: Rc::new(Cell::new(None)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));
@@ -1099,6 +1112,8 @@ mod tests {
                 property_reads: Rc::new(Cell::new(0)),
                 metadata_hash_byte: Rc::clone(&metadata_hash_byte),
                 storage_hash_byte: Rc::clone(&storage_hash_byte),
+                head_number: 128,
+                historical_read: Rc::new(Cell::new(None)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));
@@ -1121,6 +1136,41 @@ mod tests {
     }
 
     #[test]
+    fn long_mortal_era_fetches_its_quantized_birth_hash() {
+        smol::block_on(async {
+            let metadata =
+                Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+            let historical_read = Rc::new(Cell::new(None));
+            let backend = MockBackend {
+                submissions: Rc::new(Cell::new(0)),
+                property_reads: Rc::new(Cell::new(0)),
+                metadata_hash_byte: Rc::new(Cell::new(0)),
+                storage_hash_byte: Rc::new(Cell::new(0)),
+                head_number: 10_005,
+                historical_read: Rc::clone(&historical_read),
+                metadata: metadata.clone(),
+            };
+            let mut chain = Sube::from_parts(backend, Rc::new(metadata));
+            let request = chain
+                .prepare_external_call_signing(
+                    "system/remark",
+                    &crate::Text("(remark:0x0102)"),
+                    &[7; 32],
+                    &[7; 32],
+                    crate::SignatureScheme::Sr25519,
+                    TransactionOptions::default().nonce(0).mortal(8_192),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(request.context.checkpoint_number, 10_005);
+            assert_eq!(request.context.checkpoint_hash, [2; 32]);
+            assert_eq!(historical_read.get(), Some(10_004));
+            assert_eq!(request.context.mortality_checkpoint_hash, [20; 32]);
+        });
+    }
+
+    #[test]
     fn external_v4_signing_matches_the_signer_path_byte_for_byte() {
         smol::block_on(async {
             let metadata =
@@ -1130,6 +1180,8 @@ mod tests {
                 property_reads: Rc::new(Cell::new(0)),
                 metadata_hash_byte: Rc::new(Cell::new(0)),
                 storage_hash_byte: Rc::new(Cell::new(0)),
+                head_number: 128,
+                historical_read: Rc::new(Cell::new(None)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));
@@ -1175,6 +1227,8 @@ mod tests {
                 property_reads: Rc::new(Cell::new(0)),
                 metadata_hash_byte: Rc::new(Cell::new(0)),
                 storage_hash_byte: Rc::new(Cell::new(0)),
+                head_number: 128,
+                historical_read: Rc::new(Cell::new(None)),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));

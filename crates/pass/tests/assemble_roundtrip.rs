@@ -24,6 +24,7 @@ fn ctx() -> ChainContext {
         account_nonce: 0,
         checkpoint_number: 128,
         checkpoint_hash: [0xcd; 32],
+        mortality_checkpoint_hash: [0xcd; 32],
         mortality: Mortality::Mortal { period: 64 },
         tip: 0,
     }
