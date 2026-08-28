@@ -594,19 +594,25 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             let event = parse_follow_event(&event_json)
                 .map_err(|e| crate::Error::Decode(format!("follow event: {e}")))?;
 
-            if let FollowEvent::Initialized {
-                finalized_block_hashes,
-                ..
-            } = event
-            {
-                if let Some(h) = finalized_block_hashes.last() {
-                    self.finalized_hash = h.to_string();
+            match event {
+                FollowEvent::Initialized {
+                    finalized_block_hashes,
+                    ..
+                } => {
+                    if let Some(h) = finalized_block_hashes.last() {
+                        self.finalized_hash = h.to_string();
+                    }
+                    // Queue unpin for all initialized blocks except the latest finalized
+                    for h in finalized_block_hashes.iter().rev().skip(1) {
+                        self.pending_unpin.push(h.to_string());
+                    }
+                    return Ok(());
                 }
-                // Queue unpin for all initialized blocks except the latest finalized
-                for h in finalized_block_hashes.iter().rev().skip(1) {
-                    self.pending_unpin.push(h.to_string());
+                FollowEvent::Stop => {
+                    self.needs_refollow = true;
+                    return Err(crate::Error::SubscriptionClosed);
                 }
-                return Ok(());
+                _ => {}
             }
         }
     }
@@ -2686,6 +2692,74 @@ impl<R: Rpc + RpcSubscription> ChainSession for ChainHead<R> {
 #[cfg(test)]
 mod transaction_watch_tests {
     use super::*;
+
+    struct StopDuringInitializationRpc {
+        next_calls: usize,
+    }
+
+    impl Rpc for StopDuringInitializationRpc {
+        async fn rpc(&mut self, method: &str, _params: &str) -> super::super::RpcResult<String> {
+            panic!("unexpected RPC call: {method}")
+        }
+    }
+
+    impl RpcSubscription for StopDuringInitializationRpc {
+        async fn subscribe(
+            &mut self,
+            method: &str,
+            _params: &str,
+        ) -> super::super::RpcResult<String> {
+            panic!("unexpected subscription: {method}")
+        }
+
+        async fn next_event(&mut self) -> Option<(String, String)> {
+            self.next_calls += 1;
+            assert_eq!(
+                self.next_calls, 1,
+                "initialization must stop polling after the stop event"
+            );
+            Some(("follow".into(), r#"{"event":"stop"}"#.into()))
+        }
+
+        fn try_next_event(&mut self) -> Option<(String, String)> {
+            None
+        }
+
+        async fn unsubscribe(
+            &mut self,
+            method: &str,
+            _sub_id: &str,
+        ) -> super::super::RpcResult<()> {
+            panic!("unexpected unsubscribe: {method}")
+        }
+    }
+
+    #[test]
+    fn stop_event_aborts_follow_initialization() {
+        smol::block_on(async {
+            let mut chain = ChainHead {
+                rpc: StopDuringInitializationRpc { next_calls: 0 },
+                follow_sub_id: "follow".into(),
+                finalized_hash: String::new(),
+                genesis_hash: [0; 32],
+                storage_accum: BTreeMap::new(),
+                pending_unpin: Vec::new(),
+                needs_refollow: false,
+                retained_hashes: BTreeMap::new(),
+                event_queue: VecDeque::new(),
+                active_operation: None,
+                active_tx_watch: None,
+                active_archive_storage: None,
+            };
+
+            assert!(matches!(
+                chain.wait_initialized().await,
+                Err(crate::Error::SubscriptionClosed)
+            ));
+            assert!(chain.needs_refollow);
+            assert_eq!(chain.rpc.next_calls, 1);
+        });
+    }
 
     #[test]
     fn operation_started_preserves_discarded_item_count() {
