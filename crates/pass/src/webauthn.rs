@@ -165,15 +165,19 @@ mod desktop {
                 .map_err(map_backend_error)?;
             let authenticator_data =
                 attestation_authenticator_data(&credential.response.attestation_object)?;
-
-            // pallet-pass calls this field `public_key`, but its WebAuthn
-            // verifier uses the opaque credential id to select the registered
-            // authenticator key.
+            // The runtime stores this key and verifies every later assertion
+            // against it as a DER SubjectPublicKeyInfo.
+            let (credential_id, public_key) = attested_p256_key(&authenticator_data)?;
+            if credential_id != credential.raw_id {
+                return Err(AuthenticatorError::Other(
+                    "WebAuthn attested credential id does not match the credential".into(),
+                ));
+            }
             Ok(AttestationResponse {
-                credential_id: credential.raw_id.clone(),
+                credential_id: credential.raw_id,
                 authenticator_data,
                 client_data: credential.response.client_data_json,
-                public_key: credential.raw_id,
+                public_key: public_key.to_vec(),
             })
         }
 
@@ -282,6 +286,71 @@ mod desktop {
             })
     }
 
+    /// DER `SubjectPublicKeyInfo` prefix of an uncompressed P-256 key
+    /// (id-ecPublicKey, prime256v1), as `pallet-pass`'s WebAuthn verifier
+    /// expects it.
+    const P256_SPKI_PREFIX: [u8; 26] = [
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08,
+        0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+    ];
+
+    /// Extract the attested credential id and its ES256 (P-256) public key,
+    /// DER-encoded, from WebAuthn authenticator data.
+    pub(super) fn attested_p256_key(
+        authenticator_data: &[u8],
+    ) -> core::result::Result<(Vec<u8>, [u8; 91]), AuthenticatorError> {
+        let invalid = |what: &str| AuthenticatorError::Other(format!("WebAuthn {what}"));
+        // rpIdHash (32) | flags (1) | signCount (4) | aaguid (16) | len (2) | id | key
+        const AT: u8 = 0x40;
+        let flags = *authenticator_data
+            .get(32)
+            .ok_or_else(|| invalid("authenticator data is truncated"))?;
+        if flags & AT == 0 {
+            return Err(invalid("authenticator data has no attested credential"));
+        }
+        let rest = authenticator_data
+            .get(53..)
+            .ok_or_else(|| invalid("authenticator data is truncated"))?;
+        let (len, rest) = rest
+            .split_first_chunk::<2>()
+            .ok_or_else(|| invalid("authenticator data is truncated"))?;
+        let len = usize::from(u16::from_be_bytes(*len));
+        if rest.len() < len {
+            return Err(invalid("authenticator data is truncated"));
+        }
+        let (credential_id, cose) = rest.split_at(len);
+        // The COSE key may be followed by extension data.
+        let key = serde_cbor_2::Deserializer::from_slice(cose)
+            .into_iter::<Value>()
+            .next()
+            .ok_or_else(|| invalid("credential has no public key"))?
+            .map_err(|error| invalid(&format!("credential public key is invalid: {error}")))?;
+        let Value::Map(key) = key else {
+            return Err(invalid("credential public key is not a COSE key"));
+        };
+        let int = |label: i128| match key.get(&Value::Integer(label)) {
+            Some(Value::Integer(value)) => Some(*value),
+            _ => None,
+        };
+        let coordinate = |label: i128| match key.get(&Value::Integer(label)) {
+            Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(bytes.as_slice()),
+            _ => None,
+        };
+        // kty EC2 (2), alg ES256 (-7), crv P-256 (1)
+        if int(1) != Some(2) || int(3) != Some(-7) || int(-1) != Some(1) {
+            return Err(invalid("credential key is not an ES256 P-256 key"));
+        }
+        let (Some(x), Some(y)) = (coordinate(-2), coordinate(-3)) else {
+            return Err(invalid("credential key has invalid coordinates"));
+        };
+        let mut der = [0u8; 91];
+        der[..26].copy_from_slice(&P256_SPKI_PREFIX);
+        der[26] = 0x04;
+        der[27..59].copy_from_slice(x);
+        der[59..].copy_from_slice(y);
+        Ok((credential_id.to_vec(), der))
+    }
+
     fn map_backend_error(error: WebauthnCError) -> AuthenticatorError {
         match error {
             WebauthnCError::Cancelled => AuthenticatorError::Canceled,
@@ -341,6 +410,59 @@ mod desktop {
                 attestation_authenticator_data(&object).unwrap(),
                 vec![7; 37]
             );
+        }
+
+        /// Authenticator data attesting `credential_id` with an ES256 COSE key,
+        /// followed by `trailing` (extension) bytes.
+        fn auth_data_with_key(
+            credential_id: &[u8],
+            x: &[u8],
+            y: &[u8],
+            trailing: &[u8],
+        ) -> Vec<u8> {
+            use alloc::collections::BTreeMap;
+            let mut key = BTreeMap::new();
+            key.insert(Value::Integer(1), Value::Integer(2));
+            key.insert(Value::Integer(3), Value::Integer(-7));
+            key.insert(Value::Integer(-1), Value::Integer(1));
+            key.insert(Value::Integer(-2), Value::Bytes(x.to_vec()));
+            key.insert(Value::Integer(-3), Value::Bytes(y.to_vec()));
+            let mut data = vec![7; 32];
+            data.push(0x45); // UP | UV | AT
+            data.extend([0, 0, 0, 1]);
+            data.extend([0; 16]);
+            data.extend((credential_id.len() as u16).to_be_bytes());
+            data.extend(credential_id);
+            data.extend(serde_cbor_2::to_vec(&Value::Map(key)).unwrap());
+            data.extend(trailing);
+            data
+        }
+
+        #[test]
+        fn attested_key_is_der_encoded_like_openssl() {
+            // `openssl ec -pubout -outform DER` of a P-256 key.
+            let expected = hex::decode(
+                "3059301306072a8648ce3d020106082a8648ce3d03010703420004\
+                 c89152d85396f757b6d4e66e09916265daf72edfc2cd724cab48f0d1a1e5810a\
+                 92d8eea8f84fa4a3767c239b918dd0409d1b90ef8f1a0ea6bbba3e8e1169ede0",
+            )
+            .unwrap();
+            let (x, y) = expected[27..].split_at(32);
+            let extensions = serde_cbor_2::to_vec(&Value::Text("ext".into())).unwrap();
+            let data = auth_data_with_key(&[3, 4, 5], x, y, &extensions);
+            let (credential_id, der) = attested_p256_key(&data).unwrap();
+            assert_eq!(credential_id, [3, 4, 5]);
+            assert_eq!(der.as_slice(), expected.as_slice());
+        }
+
+        #[test]
+        fn attested_key_rejects_missing_or_foreign_keys() {
+            let mut data = auth_data_with_key(&[1], &[1; 32], &[2; 32], &[]);
+            assert!(attested_p256_key(&data[..60]).is_err());
+            data[32] = 0x05; // AT cleared
+            assert!(attested_p256_key(&data).is_err());
+            let short_y = auth_data_with_key(&[1], &[1; 32], &[2; 31], &[]);
+            assert!(attested_p256_key(&short_y).is_err());
         }
 
         #[test]
