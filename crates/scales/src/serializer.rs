@@ -610,12 +610,15 @@ where
     }
 }
 
-/// Resolve a field type, unwrapping newtypes (serde_json unwraps them)
-fn unwrap_newtype(reg: &Registry, ty_id: TypeId) -> TypeId {
-    match reg.resolve(ty_id).expect("in registry") {
-        TypeDef::StructNewType(inner) => inner,
-        _ => ty_id,
+/// Resolve a field type, unwrapping newtypes (serde_json unwraps them).
+///
+/// Unwraps every layer: runtime types nest newtypes, e.g. a
+/// `BoundedBTreeSet` around a `BTreeSet` around a sequence.
+fn unwrap_newtype(reg: &Registry, mut ty_id: TypeId) -> TypeId {
+    while let TypeDef::StructNewType(inner) = reg.resolve(ty_id).expect("in registry") {
+        ty_id = inner;
     }
+    ty_id
 }
 
 impl<B> ser::SerializeMap for TypedSerializer<'_, '_, B>

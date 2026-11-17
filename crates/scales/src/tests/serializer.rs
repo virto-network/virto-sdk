@@ -742,3 +742,82 @@ fn json_nested_option_in_enum() -> Result<()> {
     assert_eq!(out, input.encode());
     Ok(())
 }
+
+#[test]
+fn json_sequence_of_tuples() -> Result<()> {
+    let input: Vec<(u8, u8)> = vec![(10, 3), (5, 0), (7, 1)];
+    let mut out = Vec::<u8>::new();
+    let (id, reg) = register(&input);
+    to_bytes_with_info(&mut out, &to_value(&input).unwrap(), Some((&reg, id)))?;
+    assert_eq!(out, input.encode());
+    Ok(())
+}
+
+#[test]
+fn json_variant_with_newtype_sequence_of_tuples() -> Result<()> {
+    // The shape of pallet-pass's `DeviceFilter::Calls(BoundedBTreeSet<(u8, u8)>)`.
+    #[derive(Debug, Serialize, Encode, TypeInfo)]
+    struct Set(Vec<(u8, u8)>);
+    #[derive(Debug, Serialize, Encode, TypeInfo)]
+    #[allow(dead_code)] // the other variants fix `Calls` at index 2, as on-chain
+    enum Filter {
+        Admin,
+        Pallets(Vec<u8>),
+        Calls(Set),
+    }
+    let input = Filter::Calls(Set(vec![(5, 0), (10, 3)]));
+    let mut out = Vec::<u8>::new();
+    let (id, reg) = register(&input);
+    to_bytes_with_info(&mut out, &to_value(&input).unwrap(), Some((&reg, id)))?;
+    assert_eq!(out, input.encode());
+    Ok(())
+}
+
+/// A `(u8, u8)` pair serialized as a sequence of `u8`s, the way dynamic values
+/// (e.g. sube's `DynValue::Seq`) present tuples.
+struct SeqPair(u8, u8);
+impl Serialize for SeqPair {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> core::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = s.serialize_seq(Some(2))?;
+        seq.serialize_element(&self.0)?;
+        seq.serialize_element(&self.1)?;
+        seq.end()
+    }
+}
+
+#[test]
+fn dynamic_sequence_of_tuples() -> Result<()> {
+    let typed: Vec<(u8, u8)> = vec![(10, 3), (5, 0), (7, 1)];
+    let dynamic: Vec<SeqPair> = typed.iter().map(|(a, b)| SeqPair(*a, *b)).collect();
+    let mut out = Vec::<u8>::new();
+    let (id, reg) = register(&typed);
+    to_bytes_with_info(&mut out, &dynamic, Some((&reg, id)))?;
+    assert_eq!(out, typed.encode());
+    Ok(())
+}
+
+#[test]
+fn dynamic_variant_with_nested_newtype_sequence_of_tuples() -> Result<()> {
+    // pallet-pass's `DeviceFilter::Calls(BoundedBTreeSet<(u8, u8), _>)`:
+    // two newtypes around a sequence of tuples, given as a `{"Calls": [...]}` map.
+    #[derive(Debug, Encode, TypeInfo)]
+    struct Inner(Vec<(u8, u8)>);
+    #[derive(Debug, Encode, TypeInfo)]
+    struct Bounded(Inner);
+    #[derive(Debug, Encode, TypeInfo)]
+    #[allow(dead_code)] // the other variants fix `Calls` at index 2, as on-chain
+    enum Filter {
+        Admin,
+        Pallets(Vec<u8>),
+        Calls(Bounded),
+    }
+    let typed = Filter::Calls(Bounded(Inner(vec![(5, 0), (10, 3), (7, 1)])));
+    let mut dynamic = BTreeMap::new();
+    dynamic.insert("Calls", vec![SeqPair(5, 0), SeqPair(10, 3), SeqPair(7, 1)]);
+    let mut out = Vec::<u8>::new();
+    let (id, reg) = register(&typed);
+    to_bytes_with_info(&mut out, &dynamic, Some((&reg, id)))?;
+    assert_eq!(out, typed.encode());
+    Ok(())
+}
