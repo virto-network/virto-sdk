@@ -110,10 +110,9 @@ pub fn spawn(
             {
                 return;
             }
-            let mut prepared_transaction: Option<crate::workflow::PreparedTransaction> = None;
-            let mut prepared_artifact: Option<String> = None;
-            #[cfg(feature = "pass")]
-            let mut prepared_effect: Option<crate::workflow::PendingEffect> = None;
+            let mut staged: Option<crate::workflow::Staged> = None;
+            #[cfg(not(feature = "wallet"))]
+            let _ = &profile_path;
 
             loop {
                 while let Ok(cmd) = from_ui.try_recv() {
@@ -142,12 +141,7 @@ pub fn spawn(
                             }
                         }
                         ToChain::PrepareCall(path, body) => {
-                            prepared_transaction = None;
-                            prepared_artifact = None;
-                            #[cfg(feature = "pass")]
-                            {
-                                prepared_effect = None;
-                            }
+                            staged = None;
                             let prepared = match body {
                                 CallBody::Text(body) => {
                                     chain.prepare_call(&path, &sube::Text(&body))
@@ -158,65 +152,46 @@ pub fn spawn(
                                         .and_then(|body| chain.prepare_call(&path, &body))
                                 }
                             };
-                            match prepared {
-                                Ok(call) => {
-                                    #[cfg(feature = "wallet")]
-                                    match prepare_review(
-                                        &mut chain,
-                                        &chain_url,
-                                        &profile_path,
-                                        &call,
-                                    )
-                                    .await
-                                    {
-                                        Ok(Some((prepared, review, artifact))) => {
-                                            let call_hex = prepared.transaction.call.hex();
-                                            let extrinsic_hex = prepared.transaction.hex();
-                                            prepared_transaction = Some(prepared);
-                                            prepared_artifact = Some(artifact.clone());
-                                            let _ = to_ui
-                                                .send(FromChain::CallPrepared(CallReview {
-                                                    text: review,
-                                                    call_hex: Some(call_hex),
-                                                    extrinsic_hex: Some(extrinsic_hex),
-                                                    artifact: Some(artifact),
-                                                    submittable: true,
-                                                    requires_finalized: false,
-                                                }))
-                                                .await;
-                                        }
-                                        Ok(None) => {
-                                            let review = prepared_call_review(&call);
-                                            let _ = to_ui
-                                                .send(FromChain::CallPrepared(CallReview {
-                                                    text: review,
-                                                    call_hex: Some(call.hex()),
-                                                    extrinsic_hex: None,
-                                                    artifact: None,
-                                                    submittable: false,
-                                                    requires_finalized: false,
-                                                }))
-                                                .await;
-                                        }
-                                        Err(error) => {
-                                            let _ = to_ui.send(FromChain::CallError(error)).await;
-                                        }
-                                    }
-                                    #[cfg(not(feature = "wallet"))]
-                                    {
-                                        let _ = &profile_path;
-                                        let review = prepared_call_review(&call);
-                                        let _ = to_ui
-                                            .send(FromChain::CallPrepared(CallReview {
-                                                text: review,
-                                                call_hex: Some(call.hex()),
-                                                extrinsic_hex: None,
-                                                artifact: None,
-                                                submittable: false,
-                                                requires_finalized: false,
-                                            }))
-                                            .await;
-                                    }
+                            let call = match prepared {
+                                Ok(call) => call,
+                                Err(error) => {
+                                    let _ =
+                                        to_ui.send(FromChain::CallError(error.to_string())).await;
+                                    continue;
+                                }
+                            };
+                            #[cfg(feature = "wallet")]
+                            let signed = crate::workflow::prepare_with_active_profile(
+                                &mut chain,
+                                &chain_url,
+                                &profile_path,
+                                &call,
+                            )
+                            .await;
+                            #[cfg(not(feature = "wallet"))]
+                            let signed = anyhow::Result::<
+                                Option<crate::workflow::PreparedTransaction>,
+                            >::Ok(None);
+                            match signed {
+                                Ok(Some(prepared)) => {
+                                    let plain = crate::workflow::Staged {
+                                        prepared,
+                                        notes: Vec::new(),
+                                        effect: None,
+                                    };
+                                    stage(&to_ui, &mut staged, plain).await;
+                                }
+                                Ok(None) => {
+                                    let _ = to_ui
+                                        .send(FromChain::CallPrepared(CallReview {
+                                            text: prepared_call_review(&call),
+                                            call_hex: Some(call.hex()),
+                                            extrinsic_hex: None,
+                                            artifact: None,
+                                            submittable: false,
+                                            requires_finalized: false,
+                                        }))
+                                        .await;
                                 }
                                 Err(error) => {
                                     let _ =
@@ -225,7 +200,7 @@ pub fn spawn(
                             }
                         }
                         ToChain::SubmitPrepared(wait_for) => {
-                            let Some(transaction) = prepared_transaction.take() else {
+                            let Some(current) = staged.take() else {
                                 let _ = to_ui
                                     .send(FromChain::CallError(
                                         "No reviewed signed transaction is ready".into(),
@@ -233,54 +208,34 @@ pub fn spawn(
                                     .await;
                                 continue;
                             };
-                            #[cfg(feature = "pass")]
-                            let effect = prepared_effect.take();
                             match crate::workflow::submit_transaction(
                                 &mut chain,
-                                &transaction,
+                                &current.prepared,
                                 wait_for,
                             )
                             .await
                             {
                                 Ok(receipt) => {
-                                    prepared_artifact = None;
                                     #[cfg(feature = "pass")]
-                                    if let Some(effect) = effect {
+                                    if let Some(effect) = current.effect {
                                         let message = effect.finalized_message();
-                                        match crate::workflow::apply_finalized_effect(
+                                        let update = match crate::workflow::apply_finalized_effect(
                                             &profile_path,
                                             &receipt,
                                             effect,
                                         ) {
                                             Ok(profiles) => {
-                                                let _ = to_ui
-                                                    .send(FromChain::ProfilesUpdated(
-                                                        profiles,
-                                                        message.into(),
-                                                    ))
-                                                    .await;
+                                                FromChain::ProfilesUpdated(profiles, message.into())
                                             }
                                             Err(error) => {
-                                                let _ = to_ui
-                                                    .send(FromChain::ProfileError(
-                                                        error.to_string(),
-                                                    ))
-                                                    .await;
+                                                FromChain::ProfileError(error.to_string())
                                             }
-                                        }
+                                        };
+                                        let _ = to_ui.send(update).await;
                                     }
-                                    let text = serde_json::to_string_pretty(&serde_json::json!({
-                                        "finalizedBlockHash": receipt.finalized_block_hash,
-                                        "extrinsicIndex": receipt.extrinsic_index,
-                                        "dispatchOutcome": format!("{:?}", receipt.dispatch_outcome),
-                                        "events": receipt.events.iter().map(|event| {
-                                            serde_json::json!({
-                                                "pallet": event.pallet,
-                                                "variant": event.variant,
-                                                "decoded": event.decoded,
-                                            })
-                                        }).collect::<Vec<_>>(),
-                                    }))
+                                    let text = serde_json::to_string_pretty(
+                                        &crate::workflow::receipt_json(&receipt),
+                                    )
                                     .unwrap_or_else(|_| "transaction finalized".into());
                                     let _ = to_ui
                                         .send(FromChain::CallPrepared(CallReview {
@@ -294,27 +249,12 @@ pub fn spawn(
                                         .await;
                                 }
                                 Err(error) => {
-                                    prepared_transaction = Some(transaction);
-                                    #[cfg(feature = "pass")]
-                                    {
-                                        prepared_effect = effect;
-                                    }
-                                    let _ = to_ui
-                                        .send(FromChain::CallPrepared(CallReview {
-                                            text: format!(
-                                                "Submission failed; reviewed bytes retained: {error}\n\nPress s to retry."
-                                            ),
-                                            call_hex: prepared_transaction
-                                                .as_ref()
-                                                .map(|prepared| prepared.transaction.call.hex()),
-                                            extrinsic_hex: prepared_transaction
-                                                .as_ref()
-                                                .map(|prepared| prepared.transaction.hex()),
-                                            artifact: prepared_artifact.clone(),
-                                            submittable: true,
-                                            requires_finalized: false,
-                                        }))
-                                        .await;
+                                    let mut review = review_of(&current);
+                                    review.text = format!(
+                                        "Submission failed; reviewed bytes retained: {error}\n\nPress s to retry."
+                                    );
+                                    staged = Some(current);
+                                    let _ = to_ui.send(FromChain::CallPrepared(review)).await;
                                 }
                             }
                         }
@@ -327,30 +267,23 @@ pub fn spawn(
                         }
                         #[cfg(feature = "wallet")]
                         ToChain::ImportWallet { name, mnemonic } => {
-                            match crate::workflow::import_wallet_profile(
+                            let update = match crate::workflow::import_wallet_profile(
                                 &profile_path,
                                 genesis_hash,
                                 name,
                                 &mnemonic,
                             ) {
-                                Ok(profiles) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfilesUpdated(
-                                            profiles,
-                                            "Wallet profile imported; select it to connect.".into(),
-                                        ))
-                                        .await;
-                                }
-                                Err(error) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfileError(error.to_string()))
-                                        .await;
-                                }
-                            }
+                                Ok(profiles) => FromChain::ProfilesUpdated(
+                                    profiles,
+                                    "Wallet profile imported; select it to connect.".into(),
+                                ),
+                                Err(error) => FromChain::ProfileError(error.to_string()),
+                            };
+                            let _ = to_ui.send(update).await;
                         }
                         #[cfg(feature = "wallet")]
                         ToChain::ActivateProfile(name) => {
-                            match crate::workflow::activate_existing_profile(
+                            let update = match crate::workflow::activate_existing_profile(
                                 &mut chain,
                                 &profile_path,
                                 genesis_hash,
@@ -358,20 +291,13 @@ pub fn spawn(
                             )
                             .await
                             {
-                                Ok(profiles) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfilesUpdated(
-                                            profiles,
-                                            format!("Connected profile {name}."),
-                                        ))
-                                        .await;
-                                }
-                                Err(error) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfileError(error.to_string()))
-                                        .await;
-                                }
-                            }
+                                Ok(profiles) => FromChain::ProfilesUpdated(
+                                    profiles,
+                                    format!("Connected profile {name}."),
+                                ),
+                                Err(error) => FromChain::ProfileError(error.to_string()),
+                            };
+                            let _ = to_ui.send(update).await;
                         }
                         #[cfg(feature = "pass")]
                         ToChain::PreparePassSession {
@@ -379,9 +305,7 @@ pub fn spawn(
                             policy,
                             duration,
                         } => {
-                            prepared_transaction = None;
-                            prepared_artifact = None;
-                            prepared_effect = None;
+                            staged = None;
                             match crate::workflow::prepare_pass_session(
                                 &mut chain,
                                 &chain_url,
@@ -401,33 +325,8 @@ pub fn spawn(
                                         ))
                                         .await;
                                 }
-                                Ok(crate::workflow::SessionPreparation::Review {
-                                    prepared,
-                                    effect,
-                                }) => {
-                                    let prepared = *prepared;
-                                    let call_hex = prepared.transaction.call.hex();
-                                    let extrinsic_hex = prepared.transaction.hex();
-                                    let artifact =
-                                        serde_json::to_string_pretty(&prepared.artifact())
-                                            .unwrap_or_else(|_| "{}".into());
-                                    let mut review = prepared.review_text();
-                                    review.push_str(
-                                        "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
-                                    );
-                                    prepared_artifact = Some(artifact.clone());
-                                    prepared_effect = Some(*effect);
-                                    prepared_transaction = Some(prepared);
-                                    let _ = to_ui
-                                        .send(FromChain::CallPrepared(CallReview {
-                                            text: review,
-                                            call_hex: Some(call_hex),
-                                            extrinsic_hex: Some(extrinsic_hex),
-                                            artifact: Some(artifact),
-                                            submittable: true,
-                                            requires_finalized: true,
-                                        }))
-                                        .await;
+                                Ok(crate::workflow::SessionPreparation::Review(review)) => {
+                                    stage(&to_ui, &mut staged, *review).await;
                                 }
                                 Err(error) => {
                                     let _ = to_ui
@@ -438,170 +337,57 @@ pub fn spawn(
                         }
                         #[cfg(feature = "pass")]
                         ToChain::ForgetPassSession(profile) => {
-                            match crate::workflow::forget_pass_session(
+                            let update = match crate::workflow::forget_pass_session(
                                 &profile_path,
-                                genesis_hash,
+                                Some(genesis_hash),
                                 &profile,
                             ) {
-                                Ok(profiles) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfilesUpdated(
-                                            profiles,
-                                            pass::session::FORGET_SESSION_WARNING.into(),
-                                        ))
-                                        .await;
-                                }
-                                Err(error) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfileError(error.to_string()))
-                                        .await;
-                                }
-                            }
+                                Ok(profiles) => FromChain::ProfilesUpdated(
+                                    profiles,
+                                    pass::session::FORGET_SESSION_WARNING.into(),
+                                ),
+                                Err(error) => FromChain::ProfileError(error.to_string()),
+                            };
+                            let _ = to_ui.send(update).await;
                         }
                         #[cfg(feature = "pass")]
                         ToChain::PrepareEnrollment(request) => {
-                            prepared_transaction = None;
-                            prepared_artifact = None;
-                            prepared_effect = None;
-                            match crate::workflow::prepare_enrollment(
+                            staged = None;
+                            let result = crate::workflow::prepare_enrollment(
                                 &mut chain,
                                 &chain_url,
                                 &profile_path,
                                 genesis_hash,
                                 request,
                             )
-                            .await
-                            {
-                                Ok((prepared, effect, pass_account, valid_through)) => {
-                                    let call_hex = prepared.transaction.call.hex();
-                                    let extrinsic_hex = prepared.transaction.hex();
-                                    let artifact =
-                                        serde_json::to_string_pretty(&prepared.artifact())
-                                            .unwrap_or_else(|_| "{}".into());
-                                    let mut review = format!(
-                                        "Predicted pass account: 0x{}\nPending draft valid through #{}\n\n{}",
-                                        hex::encode(pass_account),
-                                        valid_through,
-                                        prepared.review_text()
-                                    );
-                                    review.push_str(
-                                        "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
-                                    );
-                                    prepared_artifact = Some(artifact.clone());
-                                    prepared_effect = Some(effect);
-                                    prepared_transaction = Some(prepared);
-                                    let _ = to_ui
-                                        .send(FromChain::CallPrepared(CallReview {
-                                            text: review,
-                                            call_hex: Some(call_hex),
-                                            extrinsic_hex: Some(extrinsic_hex),
-                                            artifact: Some(artifact),
-                                            submittable: true,
-                                            requires_finalized: true,
-                                        }))
-                                        .await;
-                                }
-                                Err(error) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfileError(error.to_string()))
-                                        .await;
-                                }
-                            }
+                            .await;
+                            stage_pass(&to_ui, &mut staged, result).await;
                         }
                         #[cfg(feature = "pass")]
                         ToChain::PrepareDeviceAddition(request) => {
-                            prepared_transaction = None;
-                            prepared_artifact = None;
-                            prepared_effect = None;
-                            match crate::workflow::prepare_device_addition(
+                            staged = None;
+                            let result = crate::workflow::prepare_device_addition(
                                 &mut chain,
                                 &chain_url,
                                 &profile_path,
                                 genesis_hash,
                                 request,
                             )
-                            .await
-                            {
-                                Ok((prepared, effect, device_id, valid_through)) => {
-                                    let call_hex = prepared.transaction.call.hex();
-                                    let extrinsic_hex = prepared.transaction.hex();
-                                    let artifact =
-                                        serde_json::to_string_pretty(&prepared.artifact())
-                                            .unwrap_or_else(|_| "{}".into());
-                                    let mut review = format!(
-                                        "New device ID: 0x{}\nPending draft valid through #{}\n\n{}",
-                                        hex::encode(device_id),
-                                        valid_through,
-                                        prepared.review_text()
-                                    );
-                                    review.push_str(
-                                        "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
-                                    );
-                                    prepared_artifact = Some(artifact.clone());
-                                    prepared_effect = Some(effect);
-                                    prepared_transaction = Some(prepared);
-                                    let _ = to_ui
-                                        .send(FromChain::CallPrepared(CallReview {
-                                            text: review,
-                                            call_hex: Some(call_hex),
-                                            extrinsic_hex: Some(extrinsic_hex),
-                                            artifact: Some(artifact),
-                                            submittable: true,
-                                            requires_finalized: true,
-                                        }))
-                                        .await;
-                                }
-                                Err(error) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfileError(error.to_string()))
-                                        .await;
-                                }
-                            }
+                            .await;
+                            stage_pass(&to_ui, &mut staged, result).await;
                         }
                         #[cfg(feature = "pass")]
                         ToChain::PrepareDeviceRemoval(request) => {
-                            prepared_transaction = None;
-                            prepared_artifact = None;
-                            prepared_effect = None;
-                            match crate::workflow::prepare_device_removal(
+                            staged = None;
+                            let result = crate::workflow::prepare_device_removal(
                                 &mut chain,
                                 &chain_url,
                                 &profile_path,
                                 genesis_hash,
                                 request,
                             )
-                            .await
-                            {
-                                Ok((prepared, effect)) => {
-                                    let call_hex = prepared.transaction.call.hex();
-                                    let extrinsic_hex = prepared.transaction.hex();
-                                    let artifact =
-                                        serde_json::to_string_pretty(&prepared.artifact())
-                                            .unwrap_or_else(|_| "{}".into());
-                                    let mut review = prepared.review_text();
-                                    review.push_str(
-                                        "\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit",
-                                    );
-                                    prepared_artifact = Some(artifact.clone());
-                                    prepared_effect = Some(effect);
-                                    prepared_transaction = Some(prepared);
-                                    let _ = to_ui
-                                        .send(FromChain::CallPrepared(CallReview {
-                                            text: review,
-                                            call_hex: Some(call_hex),
-                                            extrinsic_hex: Some(extrinsic_hex),
-                                            artifact: Some(artifact),
-                                            submittable: true,
-                                            requires_finalized: true,
-                                        }))
-                                        .await;
-                                }
-                                Err(error) => {
-                                    let _ = to_ui
-                                        .send(FromChain::ProfileError(error.to_string()))
-                                        .await;
-                                }
-                            }
+                            .await;
+                            stage_pass(&to_ui, &mut staged, result).await;
                         }
                     }
                 }
@@ -653,77 +439,46 @@ fn prepared_call_review(call: &sube::PreparedCall) -> String {
     )
 }
 
-#[cfg(feature = "wallet")]
-async fn prepare_review(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    profile_path: &std::path::Path,
-    call: &sube::PreparedCall,
-) -> Result<Option<(crate::workflow::PreparedTransaction, String, String)>, String> {
-    let profiles =
-        crate::profiles::Profiles::load(profile_path).map_err(|error| error.to_string())?;
-    let Some(profile) = profiles.active() else {
-        return Ok(None);
-    };
-    let genesis_hash = crate::workflow::chain_genesis(chain)
-        .await
-        .map_err(|error| error.to_string())?;
-    if profile.genesis_hash() != genesis_hash {
-        return Err("active profile genesis hash does not match the connected chain".into());
+/// The review screen of a signed transaction. Transactions that change the
+/// local profile must finalize before that change is applied.
+fn review_of(staged: &crate::workflow::Staged) -> CallReview {
+    CallReview {
+        text: staged.review_text(),
+        call_hex: Some(staged.prepared.transaction.call.hex()),
+        extrinsic_hex: Some(staged.prepared.transaction.hex()),
+        artifact: Some(
+            serde_json::to_string_pretty(&staged.prepared.artifact())
+                .unwrap_or_else(|_| "{}".into()),
+        ),
+        submittable: true,
+        requires_finalized: staged.effect.is_some(),
     }
+}
 
-    let (prepared, authorizer) = match profile {
-        crate::profiles::Profile::Wallet(profile) => {
-            let signer = crate::signers::wallet_signer(profile)
-                .await
-                .map_err(|error| error.to_string())?;
-            let prepared = crate::workflow::prepare_transaction(
-                chain,
-                chain_url,
-                call,
-                &profile.name,
-                &signer,
-                sube::TransactionOptions::default(),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            (prepared, profile.name.as_str())
+/// Show the review of `staged` and keep it for submission.
+async fn stage(
+    to_ui: &smol::channel::Sender<FromChain>,
+    slot: &mut Option<crate::workflow::Staged>,
+    staged: crate::workflow::Staged,
+) {
+    let review = review_of(&staged);
+    *slot = Some(staged);
+    let _ = to_ui.send(FromChain::CallPrepared(review)).await;
+}
+
+/// Stage a prepared pass operation, or report why it could not be prepared.
+#[cfg(feature = "pass")]
+async fn stage_pass(
+    to_ui: &smol::channel::Sender<FromChain>,
+    slot: &mut Option<crate::workflow::Staged>,
+    result: anyhow::Result<crate::workflow::Staged>,
+) {
+    match result {
+        Ok(staged) => stage(to_ui, slot, staged).await,
+        Err(error) => {
+            let _ = to_ui.send(FromChain::ProfileError(error.to_string())).await;
         }
-        #[cfg(feature = "pass")]
-        crate::profiles::Profile::Pass(profile) => {
-            let session = profile
-                .session
-                .as_ref()
-                .ok_or_else(|| "active pass profile has no finalized local session".to_string())?;
-            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)
-                .map_err(|error| error.to_string())?;
-            let signer =
-                crate::signers::load_session_signer(&session.secure_entry, session.account)
-                    .await
-                    .map_err(|error| error.to_string())?;
-            let authorizer =
-                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
-            let prepared = crate::workflow::prepare_transaction(
-                chain,
-                chain_url,
-                call,
-                &profile.name,
-                &authorizer,
-                sube::TransactionOptions::default(),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            (prepared, profile.name.as_str())
-        }
-    };
-    let _ = authorizer;
-    let artifact =
-        serde_json::to_string_pretty(&prepared.artifact()).map_err(|error| error.to_string())?;
-    let mut review = prepared.review_text();
-    review.push_str(
-        "\n\nEsc Back | c Copy call | x Copy extrinsic | e Export JSON | s Submit finalized",
-    );
-    Ok(Some((prepared, review, artifact)))
+    }
 }
 
 #[cfg(test)]

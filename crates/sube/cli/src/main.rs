@@ -393,19 +393,16 @@ async fn tx(
     };
 
     #[cfg(feature = "wallet")]
+    if let Some(signed) =
+        workflow::prepare_with_active_profile(&mut chain, chain_url, profile_path, &prepared)
+            .await?
     {
-        let profiles = profiles::Profiles::load(profile_path)?;
-        match profiles.active() {
-            Some(profiles::Profile::Wallet(profile)) => {
-                return tx_with_wallet(&mut chain, chain_url, &prepared, profile, behavior).await;
-            }
-            #[cfg(feature = "pass")]
-            Some(profiles::Profile::Pass(profile)) => {
-                return tx_with_pass_session(&mut chain, chain_url, &prepared, profile, behavior)
-                    .await;
-            }
-            _ => {}
-        }
+        let staged = workflow::Staged {
+            prepared: signed,
+            notes: Vec::new(),
+            effect: None,
+        };
+        return finish(&mut chain, profile_path, staged, behavior).await;
     }
 
     if behavior.submit {
@@ -433,103 +430,69 @@ fn print_call_artifact(chain_url: &str, prepared: &sube::PreparedCall, json: boo
     }
 }
 
+/// Print the review of `staged` to `out`, then decide whether to submit it:
+/// never for a dry run, never when the chain reports it invalid, and
+/// otherwise once `confirm` agrees (or `--yes` was given).
 #[cfg(feature = "wallet")]
-async fn tx_with_wallet(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    call: &sube::PreparedCall,
-    profile: &profiles::WalletProfile,
+fn review(
+    staged: &workflow::Staged,
     behavior: TxBehavior,
-) -> Result<()> {
-    let genesis_hash = workflow::chain_genesis(chain).await?;
-    if profile.genesis_hash != genesis_hash {
-        anyhow::bail!("active profile genesis hash does not match the connected chain");
-    }
-    let signer = signers::wallet_signer(profile).await?;
-    tx_with_assembler(
-        chain,
-        chain_url,
-        call,
-        profile.name.as_str(),
-        &signer,
-        behavior,
-    )
-    .await
-}
-
-#[cfg(feature = "pass")]
-async fn tx_with_pass_session(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    call: &sube::PreparedCall,
-    profile: &profiles::PassProfile,
-    behavior: TxBehavior,
-) -> Result<()> {
-    let genesis_hash = workflow::chain_genesis(chain).await?;
-    if profile.genesis_hash != genesis_hash {
-        anyhow::bail!("active profile genesis hash does not match the connected chain");
-    }
-    let session = profile
-        .session
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("active pass profile has no finalized local session"))?;
-    let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
-    let signer = signers::load_session_signer(&session.secure_entry, session.account).await?;
-    let authorizer =
-        pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
-    tx_with_assembler(
-        chain,
-        chain_url,
-        call,
-        profile.name.as_str(),
-        &authorizer,
-        behavior,
-    )
-    .await
-}
-
-#[cfg(feature = "wallet")]
-async fn tx_with_assembler(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    call: &sube::PreparedCall,
-    authorizer_name: &str,
-    authorizer: &(impl sube::ExtrinsicAssembler + ?Sized),
-    behavior: TxBehavior,
-) -> Result<()> {
-    let prepared = workflow::prepare_transaction(
-        chain,
-        chain_url,
-        call,
-        authorizer_name,
-        authorizer,
-        sube::TransactionOptions::default(),
-    )
-    .await?;
-
+    out: &mut impl Write,
+    confirm: impl FnOnce() -> Result<bool>,
+) -> Result<bool> {
     if behavior.json {
-        println!("{}", prepared.artifact());
+        for note in &staged.notes {
+            eprintln!("{note}");
+        }
+        writeln!(out, "{}", staged.prepared.artifact())?;
     } else {
-        print!("{}", prepared.review_text());
+        write!(out, "{}", staged.review_text())?;
     }
-
+    out.flush()?;
     if !behavior.submit {
-        return Ok(());
+        return Ok(false);
     }
-    if !behavior.yes && !confirm_submission()? {
+    if staged.prepared.known_invalid() {
+        anyhow::bail!("the chain reports this transaction invalid; no transaction was submitted");
+    }
+    if !behavior.yes && !confirm()? {
         anyhow::bail!("submission canceled; no transaction was submitted");
     }
-    let receipt = workflow::submit_transaction(
-        chain,
-        &prepared,
-        if behavior.best {
-            sube::WaitFor::BestBlock
-        } else {
-            sube::WaitFor::Finalized
-        },
-    )
-    .await?;
+    Ok(true)
+}
+
+/// Review `staged`, then submit it if asked and apply its local change once
+/// it finalizes.
+#[cfg(feature = "wallet")]
+async fn finish(
+    chain: &mut sube::Sube,
+    profile_path: &std::path::Path,
+    staged: workflow::Staged,
+    behavior: TxBehavior,
+) -> Result<()> {
+    if !review(
+        &staged,
+        behavior,
+        &mut std::io::stdout(),
+        confirm_submission,
+    )? {
+        return Ok(());
+    }
+    let wait_for = if behavior.best {
+        sube::WaitFor::BestBlock
+    } else {
+        sube::WaitFor::Finalized
+    };
+    let receipt = workflow::submit_transaction(chain, &staged.prepared, wait_for).await?;
     println!("{}", workflow::receipt_json(&receipt));
+    #[cfg(feature = "pass")]
+    if let Some(effect) = staged.effect {
+        let message = effect.finalized_message();
+        workflow::apply_finalized_effect(profile_path, &receipt, effect)?;
+        println!("{message}");
+    }
+    #[cfg(not(feature = "pass"))]
+    let _ = profile_path;
     Ok(())
 }
 
@@ -628,147 +591,60 @@ async fn connect_profile(
 ) -> Result<()> {
     let mut chain = sube::Sube::connect(chain_url).await?;
     let genesis_hash = workflow::chain_genesis(&mut chain).await?;
-    let mut store = profiles::Profiles::load(profile_path)?;
-    let selected = store
-        .find(name)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("profile {name:?} not found"))?;
-    if selected.genesis_hash() != genesis_hash {
-        anyhow::bail!("profile genesis hash does not match the connected chain");
-    }
-    #[cfg(feature = "wallet")]
-    if let profiles::Profile::Wallet(profile) = &selected {
-        let _ = signers::wallet_signer(profile).await?;
-    }
     #[cfg(feature = "pass")]
-    if let profiles::Profile::Pass(profile) = &selected {
-        connect_pass_session(
+    if let Some(profiles::Profile::Pass(profile)) =
+        profiles::Profiles::load(profile_path)?.find(name)
+    {
+        let policy = session_policy
+            .map(str::to_owned)
+            .or_else(|| {
+                profile
+                    .session
+                    .as_ref()
+                    .map(|session| session.policy.clone())
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("pass connect requires --session-policy calls:... or pallets:...")
+            })?;
+        let preparation = workflow::prepare_pass_session(
             &mut chain,
             chain_url,
-            &mut store,
-            profile.clone(),
-            session_policy,
+            profile_path,
+            genesis_hash,
+            name,
+            &policy,
             session_duration,
-            yes,
         )
         .await?;
+        if let workflow::SessionPreparation::Review(staged) = preparation {
+            let behavior = TxBehavior {
+                json: false,
+                submit: true,
+                yes,
+                best: false,
+            };
+            finish(&mut chain, profile_path, *staged, behavior).await?;
+        }
+        println!(
+            "Connected profile {name} to 0x{}",
+            hex::encode(genesis_hash)
+        );
+        return Ok(());
     }
     #[cfg(not(feature = "pass"))]
     let _ = (session_policy, session_duration, yes);
-    store.activate(name, genesis_hash)?;
-    store.save(profile_path)?;
+    #[cfg(feature = "wallet")]
+    workflow::activate_existing_profile(&mut chain, profile_path, genesis_hash, name).await?;
+    #[cfg(not(feature = "wallet"))]
+    {
+        let mut store = profiles::Profiles::load(profile_path)?;
+        store.activate(name, genesis_hash)?;
+        store.save(profile_path)?;
+    }
     println!(
         "Connected profile {name} to 0x{}",
         hex::encode(genesis_hash)
     );
-    Ok(())
-}
-
-#[cfg(feature = "pass")]
-async fn connect_pass_session(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    store: &mut profiles::Profiles,
-    mut profile: profiles::PassProfile,
-    requested_policy: Option<&str>,
-    requested_duration: Option<u32>,
-    yes: bool,
-) -> Result<()> {
-    use libwallet::MutableKeyStore;
-    use sube::Backend;
-
-    let policy_text = requested_policy
-        .map(str::to_owned)
-        .or_else(|| {
-            profile
-                .session
-                .as_ref()
-                .map(|session| session.policy.clone())
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!("pass connect requires --session-policy calls:... or pallets:...")
-        })?;
-    let policy = pass::DeviceFilter::parse(chain.metadata(), &policy_text)?;
-    let checkpoint = chain.backend().block_info(None).await?;
-
-    if let Some(session) = &profile.session
-        && session.policy == policy_text
-        && session.expires_at > checkpoint.number
-        && workflow::on_chain_session_matches(chain, &profile, session, &policy).await
-    {
-        return Ok(());
-    }
-
-    if !yes && !confirm_submission()? {
-        anyhow::bail!("session registration canceled; profile was not activated");
-    }
-
-    let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
-    let duration = pass::session::session_duration(&config, requested_duration)?;
-    let secure_entry =
-        libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account);
-
-    let existing_account = profile.session.as_ref().map(|session| session.account);
-    let (session_signer, pending_seed) = if let Some(expected) = existing_account {
-        match signers::load_session_signer(&secure_entry, expected).await {
-            Ok(signer) => (signer, None),
-            Err(error) => {
-                eprintln!(
-                    "Stored session key is unavailable or invalid ({error}); preparing a replacement"
-                );
-                let (signer, seed) = signers::generate_session_signer().await?;
-                (signer, Some(seed))
-            }
-        }
-    } else {
-        let (signer, seed) = signers::generate_session_signer().await?;
-        (signer, Some(seed))
-    };
-    let session_account = sube::Signer::account(&session_signer);
-    let call = pass::session::prepare_add_session_key(
-        chain.metadata(),
-        &config,
-        session_account,
-        &policy,
-        Some(duration),
-    )?;
-
-    let context = u32::try_from(checkpoint.number)
-        .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-    let receipt = review_profile_device_transaction(
-        chain,
-        chain_url,
-        store,
-        &profile,
-        &config,
-        context,
-        checkpoint.hash,
-        &call,
-        true,
-        true,
-    )
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("session registration returned no receipt"))?;
-    if receipt.finalized_block_hash.is_none()
-        || !matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
-    {
-        anyhow::bail!("session registration did not finalize successfully; profile unchanged");
-    }
-
-    if let Some(mut seed) = pending_seed {
-        let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
-        let result = keys.upsert(&seed);
-        seed.fill(0);
-        result?;
-    }
-
-    profile.session = Some(profiles::SessionProfile {
-        account: session_account,
-        secure_entry,
-        policy: policy_text,
-        expires_at: checkpoint.number.saturating_add(u64::from(duration)),
-    });
-    store.upsert(profiles::Profile::Pass(profile));
     Ok(())
 }
 
@@ -778,49 +654,18 @@ async fn pass_command(
     profile_path: &std::path::Path,
     command: PassCommand,
 ) -> Result<()> {
-    use pass::DeviceAuthenticator;
-    use sube::Backend;
-
     if let PassCommand::Session {
         command: SessionCommand::Forget { profile },
     } = &command
     {
-        use libwallet::MutableKeyStore;
-
-        let mut store = profiles::Profiles::load(profile_path)?;
-        let pass_profile = match store.find(profile).cloned() {
-            Some(profiles::Profile::Pass(profile)) => profile,
-            _ => anyhow::bail!("pass profile {profile:?} not found"),
-        };
-        let secure_entry = pass_profile
-            .session
-            .as_ref()
-            .map(|session| session.secure_entry.clone())
-            .unwrap_or_else(|| {
-                libwallet::pass_session_entry_id(
-                    &pass_profile.genesis_hash,
-                    &pass_profile.pass_account,
-                )
-            });
-        let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
-        keys.delete()?;
-        let mut updated = pass_profile;
-        updated.session = None;
-        store.upsert(profiles::Profile::Pass(updated));
-        store.save(profile_path)?;
+        workflow::forget_pass_session(profile_path, None, profile)?;
         println!("{}", pass::session::FORGET_SESSION_WARNING);
         return Ok(());
     }
 
     let mut chain = sube::Sube::connect(chain_url).await?;
     let genesis_hash = workflow::chain_genesis(&mut chain).await?;
-    let mut store = profiles::Profiles::load(profile_path)?;
-    let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
-    let checkpoint = chain.backend().block_info(None).await?;
-    let context = u32::try_from(checkpoint.number)
-        .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-
-    match command {
+    let (staged, submit, yes) = match command {
         PassCommand::Enroll {
             user_id,
             registrar,
@@ -829,609 +674,81 @@ async fn pass_command(
             submit,
             yes,
         } => {
-            let requested_device = requested_device(device)?;
-            let variant = workflow::device_variant(&requested_device);
-            if !config.supports_attestation(variant) {
-                anyhow::bail!("runtime does not advertise {variant} enrollment");
-            }
-            let user_id =
-                pass::HashedUserId::from_exact(&hex::decode(user_id.trim_start_matches("0x"))?)?;
-            if store.find(&name).is_some() {
-                anyhow::bail!("profile {name:?} already exists");
-            }
-            let registrar_profile =
-                workflow::wallet_profile(&store, &registrar, genesis_hash)?.clone();
-            let pending = store
-                .pending_enrollments
-                .iter()
-                .find(|pending| {
-                    pending.name == name
-                        && pending.genesis_hash == genesis_hash
-                        && pending.registrar == registrar
-                        && workflow::same_requested_device(
-                            &pending.device_profile(),
-                            &requested_device,
-                        )
-                        && pending.user_id == user_id.0
-                        && pending.valid_through >= checkpoint.number
-                })
-                .cloned();
-            let pending = if let Some(pending) = pending {
-                println!(
-                    "Reusing pending enrollment prepared at checkpoint #{}",
-                    pending.checkpoint_number
-                );
-                pending
-            } else {
-                let (draft, enrolled_device) = match requested_device.clone() {
-                    profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-                        let wallet_profile =
-                            workflow::wallet_profile(&store, &wallet, genesis_hash)?.clone();
-                        let signer = signers::wallet_signer(&wallet_profile).await?;
-                        let public = signer.inner().public();
-                        let device = pass::wallet::WalletDevice::new(
-                            signer.inner(),
-                            public.as_ref(),
-                            pass::wallet::SignatureType::Sr25519,
-                        );
-                        let draft = pass::workflow::prepare_enrollment(
-                            chain.metadata(),
-                            &config,
-                            user_id,
-                            context,
-                            checkpoint.hash,
-                            &device,
-                        )
-                        .await?;
-                        (
-                            draft,
-                            profiles::DeviceProviderProfile::SubstrateKey { wallet },
-                        )
-                    }
-                    profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
-                        #[cfg(feature = "desktop-webauthn")]
-                        {
-                            let device = pass::webauthn::WebAuthnDevice::for_enrollment(
-                                pass::webauthn::DesktopWebAuthnTransport,
-                                rp_id,
-                                origin,
-                            );
-                            let draft = pass::workflow::prepare_enrollment(
-                                chain.metadata(),
-                                &config,
-                                user_id,
-                                context,
-                                checkpoint.hash,
-                                &device,
-                            )
-                            .await?;
-                            let profile = device.profile().ok_or_else(|| {
-                                anyhow::anyhow!("WebAuthn authenticator returned no credential id")
-                            })?;
-                            (
-                                draft,
-                                profiles::DeviceProviderProfile::WebAuthn {
-                                    rp_id: profile.rp_id,
-                                    origin: profile.origin,
-                                    credential_id: profile.credential_id,
-                                },
-                            )
-                        }
-                        #[cfg(not(feature = "desktop-webauthn"))]
-                        {
-                            let _ = (rp_id, origin);
-                            anyhow::bail!("this build has no desktop WebAuthn support")
-                        }
-                    }
-                    profiles::DeviceProviderProfile::SshAgent {
-                        fingerprint,
-                        namespace,
-                    } => {
-                        #[cfg(all(feature = "ssh-agent", unix))]
-                        {
-                            let transport = pass::ssh_agent::UnixSshAgent::from_env()
-                                .map_err(anyhow::Error::msg)?;
-                            let device = pass::ssh_agent::SshAgentDevice::new(
-                                transport,
-                                fingerprint.clone(),
-                                namespace.clone(),
-                            );
-                            let draft = pass::workflow::prepare_enrollment(
-                                chain.metadata(),
-                                &config,
-                                user_id,
-                                context,
-                                checkpoint.hash,
-                                &device,
-                            )
-                            .await?;
-                            (
-                                draft,
-                                profiles::DeviceProviderProfile::SshAgent {
-                                    fingerprint,
-                                    namespace,
-                                },
-                            )
-                        }
-                        #[cfg(not(all(feature = "ssh-agent", unix)))]
-                        {
-                            let _ = (fingerprint, namespace);
-                            anyhow::bail!("this build has no native SSH-agent support")
-                        }
-                    }
-                };
-                let pending = profiles::PendingEnrollment {
-                    name: name.clone(),
-                    genesis_hash,
-                    registrar: registrar.clone(),
-                    device: enrolled_device,
-                    user_id: user_id.0,
-                    pass_account: draft.predicted_account.0,
-                    device_id: draft.attestation.device_id.0,
-                    call_hex: draft.call.hex(),
-                    pallet: draft.call.pallet,
-                    call: draft.call.call,
-                    call_bytes: draft.call.bytes,
-                    checkpoint_number: draft.checkpoint_number,
-                    checkpoint_hash: draft.checkpoint_hash,
-                    valid_through: draft.valid_through,
-                };
-                store.upsert_pending(pending.clone());
-                store.save(profile_path)?;
-                pending
+            let request = workflow::EnrollmentRequest {
+                name,
+                user_id,
+                registrar,
+                device: requested_device(device)?,
             };
-            let call = sube::PreparedCall {
-                pallet: pending.pallet.clone(),
-                call: pending.call.clone(),
-                bytes: pending.call_bytes.clone(),
-            };
-            let registrar_signer = signers::wallet_signer(&registrar_profile).await?;
-            let receipt = review_pass_transaction(
+            let staged = workflow::prepare_enrollment(
                 &mut chain,
                 chain_url,
-                &registrar,
-                &call,
-                &registrar_signer,
-                submit,
-                yes,
+                profile_path,
+                genesis_hash,
+                request,
             )
             .await?;
-            let Some(receipt) = receipt else {
-                println!(
-                    "Predicted pass account: 0x{}",
-                    hex::encode(pending.pass_account)
-                );
-                println!(
-                    "Pending enrollment retained until #{}",
-                    pending.valid_through
-                );
-                return Ok(());
-            };
-            if receipt.finalized_block_hash.is_none()
-                || !matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
-            {
-                anyhow::bail!(
-                    "registration was not finalized successfully; pending draft was retained"
-                );
-            }
-            store.upsert(profiles::Profile::Pass(profiles::PassProfile {
-                name: name.clone(),
-                genesis_hash,
-                pass_account: pending.pass_account,
-                user_id: user_id.0,
-                device_id: pending.device_id,
-                device: pending.device_profile(),
-                additional_devices: Vec::new(),
-                session: None,
-            }));
-            store.remove_pending(&name);
-            store.save(profile_path)?;
-            println!("Persisted finalized pass profile {name}");
-            Ok(())
+            (staged, submit, yes)
         }
-        PassCommand::Device { command } => match command {
-            DeviceCommand::Add {
+        PassCommand::Device {
+            command:
+                DeviceCommand::Add {
+                    profile,
+                    device,
+                    filter,
+                    admin_confirm,
+                    submit,
+                    yes,
+                },
+        } => {
+            let request = workflow::DeviceAdditionRequest {
                 profile,
-                device,
+                device: requested_device(device)?,
                 filter,
-                admin_confirm,
-                submit,
-                yes,
-            } => {
-                let mut pass_profile =
-                    workflow::pass_profile(&store, &profile, genesis_hash)?.clone();
-                let requested_device = requested_device(device)?;
-                let variant = workflow::device_variant(&requested_device);
-                if !config.supports_attestation(variant) {
-                    anyhow::bail!("runtime does not advertise {variant} device registration");
-                }
-                let pending = store
-                    .pending_devices
-                    .iter()
-                    .find(|pending| {
-                        pending.profile == profile
-                            && pending.genesis_hash == genesis_hash
-                            && pending.filter == filter
-                            && pending.admin_confirm == admin_confirm
-                            && pending.valid_through >= checkpoint.number
-                            && workflow::same_requested_device(&pending.device, &requested_device)
-                    })
-                    .cloned();
-                let pending = if let Some(pending) = pending {
-                    println!(
-                        "Reusing pending device addition prepared at checkpoint #{}",
-                        pending.checkpoint_number
-                    );
-                    pending
-                } else {
-                    let request = pass::workflow::ChallengeRequest::enrollment(
-                        pass::HashedUserId(pass_profile.user_id),
-                        pass::Account(pass_profile.pass_account),
-                        config.authority_id,
-                        context,
-                        &checkpoint.hash,
-                    );
-                    let (attestation, enrolled_device) = match requested_device {
-                        profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-                            let wallet_profile =
-                                workflow::wallet_profile(&store, &wallet, genesis_hash)?.clone();
-                            let signer = signers::wallet_signer(&wallet_profile).await?;
-                            let public = signer.inner().public();
-                            let device = pass::wallet::WalletDevice::new(
-                                signer.inner(),
-                                public.as_ref(),
-                                pass::wallet::SignatureType::Sr25519,
-                            );
-                            (
-                                device.attest(&request).await?,
-                                profiles::DeviceProviderProfile::SubstrateKey { wallet },
-                            )
-                        }
-                        profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
-                            #[cfg(feature = "desktop-webauthn")]
-                            {
-                                let device = pass::webauthn::WebAuthnDevice::for_enrollment(
-                                    pass::webauthn::DesktopWebAuthnTransport,
-                                    rp_id,
-                                    origin,
-                                );
-                                let attestation = device.attest(&request).await?;
-                                let profile = device.profile().ok_or_else(|| {
-                                    anyhow::anyhow!(
-                                        "WebAuthn authenticator returned no credential id"
-                                    )
-                                })?;
-                                (
-                                    attestation,
-                                    profiles::DeviceProviderProfile::WebAuthn {
-                                        rp_id: profile.rp_id,
-                                        origin: profile.origin,
-                                        credential_id: profile.credential_id,
-                                    },
-                                )
-                            }
-                            #[cfg(not(feature = "desktop-webauthn"))]
-                            {
-                                let _ = (rp_id, origin);
-                                anyhow::bail!("this build has no desktop WebAuthn support")
-                            }
-                        }
-                        profiles::DeviceProviderProfile::SshAgent {
-                            fingerprint,
-                            namespace,
-                        } => {
-                            #[cfg(all(feature = "ssh-agent", unix))]
-                            {
-                                let transport = pass::ssh_agent::UnixSshAgent::from_env()
-                                    .map_err(anyhow::Error::msg)?;
-                                let device = pass::ssh_agent::SshAgentDevice::new(
-                                    transport,
-                                    fingerprint.clone(),
-                                    namespace.clone(),
-                                );
-                                (
-                                    device.attest(&request).await?,
-                                    profiles::DeviceProviderProfile::SshAgent {
-                                        fingerprint,
-                                        namespace,
-                                    },
-                                )
-                            }
-                            #[cfg(not(all(feature = "ssh-agent", unix)))]
-                            {
-                                let _ = (fingerprint, namespace);
-                                anyhow::bail!("this build has no native SSH-agent support")
-                            }
-                        }
-                    };
-                    let resolved_filter = pass::DeviceFilter::parse(chain.metadata(), &filter)?;
-                    let call = pass::workflow::prepare_add_device(
-                        chain.metadata(),
-                        &config,
-                        &attestation,
-                        &resolved_filter,
-                        admin_confirm,
-                    )?;
-                    let pending = profiles::PendingDeviceAddition {
-                        profile: profile.clone(),
-                        genesis_hash,
-                        device_id: attestation.device_id.0,
-                        device: enrolled_device,
-                        filter: filter.clone(),
-                        admin_confirm,
-                        call_hex: call.hex(),
-                        pallet: call.pallet,
-                        call: call.call,
-                        call_bytes: call.bytes,
-                        checkpoint_number: checkpoint.number,
-                        checkpoint_hash: checkpoint.hash,
-                        valid_through: checkpoint.number.saturating_add(2),
-                    };
-                    store.upsert_pending_device(pending.clone());
-                    store.save(profile_path)?;
-                    pending
-                };
-                let call = sube::PreparedCall {
-                    pallet: pending.pallet.clone(),
-                    call: pending.call.clone(),
-                    bytes: pending.call_bytes.clone(),
-                };
-
-                let receipt = review_profile_device_transaction(
-                    &mut chain,
-                    chain_url,
-                    &store,
-                    &pass_profile,
-                    &config,
-                    context,
-                    checkpoint.hash,
-                    &call,
+                admin_confirmed: admin_confirm,
+            };
+            let staged = workflow::prepare_device_addition(
+                &mut chain,
+                chain_url,
+                profile_path,
+                genesis_hash,
+                request,
+            )
+            .await?;
+            (staged, submit, yes)
+        }
+        PassCommand::Device {
+            command:
+                DeviceCommand::Remove {
+                    profile,
+                    device_id,
                     submit,
                     yes,
-                )
-                .await?;
-                if let Some(receipt) = receipt
-                    && receipt.finalized_block_hash.is_some()
-                    && matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
-                {
-                    pass_profile
-                        .additional_devices
-                        .push(profiles::DeviceRecord {
-                            device_id: pending.device_id,
-                            device: pending.device,
-                        });
-                    store.remove_pending_device(&profile);
-                    store.upsert(profiles::Profile::Pass(pass_profile));
-                    store.save(profile_path)?;
-                    println!("Added device 0x{}", hex::encode(pending.device_id));
-                }
-                Ok(())
-            }
-            DeviceCommand::Remove {
+                },
+        } => {
+            let request = workflow::DeviceRemovalRequest {
                 profile,
-                device_id,
-                submit,
-                yes,
-            } => {
-                let mut pass_profile =
-                    workflow::pass_profile(&store, &profile, genesis_hash)?.clone();
-                let device_id = pass::DeviceId(profiles::parse_hash(&device_id, "device id")?);
-                if device_id.0 == pass_profile.device_id {
-                    eprintln!(
-                        "Warning: removing the locally configured device may leave this profile unusable."
-                    );
-                }
-                let call =
-                    pass::workflow::prepare_remove_device(chain.metadata(), &config, device_id)?;
-                let receipt = review_profile_device_transaction(
-                    &mut chain,
-                    chain_url,
-                    &store,
-                    &pass_profile,
-                    &config,
-                    context,
-                    checkpoint.hash,
-                    &call,
-                    submit,
-                    yes,
-                )
-                .await?;
-                if let Some(receipt) = receipt
-                    && receipt.finalized_block_hash.is_some()
-                    && matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
-                {
-                    pass_profile
-                        .additional_devices
-                        .retain(|device| device.device_id != device_id.0);
-                    store.upsert(profiles::Profile::Pass(pass_profile));
-                    store.save(profile_path)?;
-                }
-                Ok(())
-            }
-        },
+                device_id: profiles::parse_hash(&device_id, "device id")?,
+            };
+            let staged = workflow::prepare_device_removal(
+                &mut chain,
+                chain_url,
+                profile_path,
+                genesis_hash,
+                request,
+            )
+            .await?;
+            (staged, submit, yes)
+        }
         PassCommand::Session { .. } => unreachable!("handled before connecting"),
-    }
-}
-
-#[cfg(feature = "pass")]
-#[allow(clippy::too_many_arguments)]
-async fn review_device_authenticated_transaction<A: pass::DeviceAuthenticator>(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    authorizer_name: &str,
-    call: &sube::PreparedCall,
-    profile: &profiles::PassProfile,
-    config: &pass::PassRuntimeConfig,
-    context: u32,
-    block_hash: [u8; 32],
-    device: &A,
-    submit: bool,
-    yes: bool,
-) -> Result<Option<sube::TransactionReceipt>> {
-    let authorizer = pass::PassAuthenticator::new(
-        device,
-        pass::Account(profile.pass_account),
-        pass::DeviceId(profile.device_id),
-        pass::HashedUserId(profile.user_id),
-        config.authority_id,
-        context,
-        block_hash,
-    );
-    review_pass_transaction(
-        chain,
-        chain_url,
-        authorizer_name,
-        call,
-        &authorizer,
+    };
+    let behavior = TxBehavior {
+        json: false,
         submit,
         yes,
-    )
-    .await
-}
-
-#[cfg(feature = "pass")]
-#[allow(clippy::too_many_arguments)]
-async fn review_profile_device_transaction(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    store: &profiles::Profiles,
-    profile: &profiles::PassProfile,
-    config: &pass::PassRuntimeConfig,
-    context: u32,
-    block_hash: [u8; 32],
-    call: &sube::PreparedCall,
-    submit: bool,
-    yes: bool,
-) -> Result<Option<sube::TransactionReceipt>> {
-    let primary_device = profile.primary_device();
-    let variant = workflow::device_variant(&primary_device);
-    if !config.supports_credential(variant) {
-        anyhow::bail!("runtime does not advertise {variant} authentication");
-    }
-    match primary_device {
-        profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet = workflow::wallet_profile(store, &wallet, profile.genesis_hash)?.clone();
-            let signer = signers::wallet_signer(&wallet).await?;
-            let public = signer.inner().public();
-            let device = pass::wallet::WalletDevice::new(
-                signer.inner(),
-                public.as_ref(),
-                pass::wallet::SignatureType::Sr25519,
-            );
-            review_device_authenticated_transaction(
-                chain,
-                chain_url,
-                &profile.name,
-                call,
-                profile,
-                config,
-                context,
-                block_hash,
-                &device,
-                submit,
-                yes,
-            )
-            .await
-        }
-        profiles::DeviceProviderProfile::WebAuthn {
-            rp_id,
-            origin,
-            credential_id,
-        } => {
-            #[cfg(feature = "desktop-webauthn")]
-            {
-                let device = pass::webauthn::WebAuthnDevice::from_profile(
-                    pass::webauthn::DesktopWebAuthnTransport,
-                    pass::webauthn::WebAuthnProfile {
-                        rp_id,
-                        origin,
-                        credential_id,
-                    },
-                );
-                review_device_authenticated_transaction(
-                    chain,
-                    chain_url,
-                    &profile.name,
-                    call,
-                    profile,
-                    config,
-                    context,
-                    block_hash,
-                    &device,
-                    submit,
-                    yes,
-                )
-                .await
-            }
-            #[cfg(not(feature = "desktop-webauthn"))]
-            {
-                let _ = (rp_id, origin, credential_id);
-                anyhow::bail!("this build has no desktop WebAuthn support")
-            }
-        }
-        profiles::DeviceProviderProfile::SshAgent {
-            fingerprint,
-            namespace,
-        } => {
-            #[cfg(all(feature = "ssh-agent", unix))]
-            {
-                let transport =
-                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
-                let device =
-                    pass::ssh_agent::SshAgentDevice::new(transport, fingerprint, namespace);
-                review_device_authenticated_transaction(
-                    chain,
-                    chain_url,
-                    &profile.name,
-                    call,
-                    profile,
-                    config,
-                    context,
-                    block_hash,
-                    &device,
-                    submit,
-                    yes,
-                )
-                .await
-            }
-            #[cfg(not(all(feature = "ssh-agent", unix)))]
-            {
-                let _ = (fingerprint, namespace);
-                anyhow::bail!("this build has no native SSH-agent support")
-            }
-        }
-    }
-}
-
-#[cfg(feature = "pass")]
-async fn review_pass_transaction(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    authorizer_name: &str,
-    call: &sube::PreparedCall,
-    authorizer: &(impl sube::ExtrinsicAssembler + ?Sized),
-    submit: bool,
-    yes: bool,
-) -> Result<Option<sube::TransactionReceipt>> {
-    let prepared = workflow::prepare_transaction(
-        chain,
-        chain_url,
-        call,
-        authorizer_name,
-        authorizer,
-        sube::TransactionOptions::default(),
-    )
-    .await?;
-    print!("{}", prepared.review_text());
-    if !submit {
-        return Ok(None);
-    }
-    if !yes && !confirm_submission()? {
-        anyhow::bail!("submission canceled; no transaction was submitted");
-    }
-    workflow::submit_transaction(chain, &prepared, sube::WaitFor::Finalized)
-        .await
-        .map(Some)
+        best: false,
+    };
+    finish(&mut chain, profile_path, staged, behavior).await
 }
 
 fn print_response(response: &sube::Response) -> Result<()> {
@@ -1526,6 +843,117 @@ mod tests {
             }
             let _ = std::fs::remove_file(&self.profile_path);
         }
+    }
+
+    #[cfg(feature = "wallet")]
+    fn staged(validity: Option<sube::TransactionValidity>) -> workflow::Staged {
+        let transaction = sube::EncodedExtrinsic {
+            bytes: vec![1, 2],
+            call: sube::PreparedCall {
+                pallet: "System".into(),
+                call: "remark".into(),
+                bytes: vec![0, 0],
+            },
+            checkpoint_hash: [3; 32],
+            checkpoint_number: 10,
+            expires_at: Some(64),
+            genesis_hash: [4; 32],
+            spec_version: 5,
+            transaction_version: 6,
+            nonce: 7,
+            authorization: sube::AuthorizationSummary {
+                signing_account: vec![8; 32],
+                nonce_account: vec![9; 32],
+                scheme: Some("Sr25519".into()),
+            },
+            extensions: vec![],
+        };
+        workflow::Staged {
+            prepared: workflow::PreparedTransaction {
+                transaction,
+                report: sube::TransactionReport {
+                    validity,
+                    ..Default::default()
+                },
+                authorizer: "alice".into(),
+                chain_url: "wss://example.invalid".into(),
+            },
+            notes: vec!["Predicted pass account: 0x01".into()],
+            effect: None,
+        }
+    }
+
+    /// A writer the confirmation prompt can inspect while `review` holds it.
+    #[cfg(feature = "wallet")]
+    struct Shared<'a>(&'a std::cell::RefCell<Vec<u8>>);
+
+    #[cfg(feature = "wallet")]
+    impl std::io::Write for Shared<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().write(bytes)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "wallet")]
+    #[test]
+    fn the_review_is_printed_before_confirmation_is_asked() {
+        let output = std::cell::RefCell::new(Vec::new());
+        let behavior = TxBehavior {
+            json: false,
+            submit: true,
+            yes: false,
+            best: false,
+        };
+        let mut asked = false;
+        let error = review(
+            &staged(Some(sube::TransactionValidity::Valid)),
+            behavior,
+            &mut Shared(&output),
+            || {
+                asked = true;
+                let printed = String::from_utf8(output.borrow().clone()).unwrap();
+                assert!(printed.starts_with("Predicted pass account: 0x01\n\n"));
+                assert!(printed.contains("Call: System::remark"));
+                assert!(printed.contains("Extrinsic hex: 0x0102"));
+                Ok(false)
+            },
+        )
+        .unwrap_err();
+        assert!(asked);
+        assert!(error.to_string().contains("no transaction was submitted"));
+    }
+
+    #[cfg(feature = "wallet")]
+    #[test]
+    fn known_invalid_transactions_are_reviewed_but_never_submitted() {
+        let invalid = || staged(Some(sube::TransactionValidity::Invalid("0x0001".into())));
+        let mut behavior = TxBehavior {
+            json: false,
+            submit: false,
+            yes: false,
+            best: false,
+        };
+        let mut output = Vec::new();
+        let never = || -> Result<bool> { panic!("must not ask to submit") };
+        assert!(!review(&invalid(), behavior, &mut output, never).unwrap());
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("Invalid(\"0x0001\")")
+        );
+
+        behavior.submit = true;
+        behavior.yes = true;
+        let error = review(&invalid(), behavior, &mut Vec::new(), never).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("reports this transaction invalid")
+        );
     }
 
     #[test]
@@ -1834,7 +1262,7 @@ mod tests {
             let mut user_id = [0u8; 32];
             user_id[..16].copy_from_slice(&unique.to_le_bytes());
             user_id[16..].copy_from_slice(&genesis_hash[..16]);
-            let (enrollment, enrollment_effect, pass_account, _) = workflow::prepare_enrollment(
+            let enrollment = workflow::prepare_enrollment(
                 &mut chain,
                 &chain_url,
                 &profile_path,
@@ -1849,14 +1277,18 @@ mod tests {
                 },
             )
             .await?;
-            let receipt =
-                workflow::submit_transaction(&mut chain, &enrollment, sube::WaitFor::Finalized)
-                    .await?;
+            let receipt = workflow::submit_transaction(
+                &mut chain,
+                &enrollment.prepared,
+                sube::WaitFor::Finalized,
+            )
+            .await?;
             assert!(matches!(
                 receipt.dispatch_outcome,
                 sube::DispatchOutcome::Success
             ));
-            workflow::apply_finalized_effect(&profile_path, &receipt, enrollment_effect)?;
+            let effect = enrollment.effect.expect("enrollment changes the profile");
+            workflow::apply_finalized_effect(&profile_path, &receipt, effect)?;
 
             let session = workflow::prepare_pass_session(
                 &mut chain,
@@ -1868,17 +1300,21 @@ mod tests {
                 None,
             )
             .await?;
-            let workflow::SessionPreparation::Review { prepared, effect } = session else {
+            let workflow::SessionPreparation::Review(staged) = session else {
                 anyhow::bail!("new pass profile unexpectedly reused a session")
             };
-            let receipt =
-                workflow::submit_transaction(&mut chain, &prepared, sube::WaitFor::Finalized)
-                    .await?;
+            let receipt = workflow::submit_transaction(
+                &mut chain,
+                &staged.prepared,
+                sube::WaitFor::Finalized,
+            )
+            .await?;
             assert!(matches!(
                 receipt.dispatch_outcome,
                 sube::DispatchOutcome::Success
             ));
-            let stored = workflow::apply_finalized_effect(&profile_path, &receipt, *effect)?;
+            let effect = staged.effect.expect("a session changes the profile");
+            let stored = workflow::apply_finalized_effect(&profile_path, &receipt, effect)?;
             let profile = workflow::pass_profile(&stored, &pass_name, genesis_hash)?.clone();
             let session = profile
                 .session
@@ -1889,7 +1325,7 @@ mod tests {
                 signers::load_session_signer(&session.secure_entry, session.account).await?;
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             let authorizer =
-                pass::SessionAuthorizer::new(pass::Account(pass_account), signer, policy);
+                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
 
             let body = sube::Text("(remark:0x737562652d653265)");
             let disallowed = chain.prepare_call("System/remark_with_event", &body)?;

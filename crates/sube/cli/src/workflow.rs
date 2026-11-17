@@ -96,12 +96,10 @@ pub async fn activate_existing_profile(
 #[cfg(feature = "pass")]
 pub enum SessionPreparation {
     Reused(crate::profiles::Profiles),
-    Review {
-        prepared: Box<PreparedTransaction>,
-        effect: Box<PendingEffect>,
-    },
+    Review(Box<Staged>),
 }
 
+/// The local change a staged transaction makes once it finalizes.
 #[cfg(feature = "pass")]
 pub enum PendingEffect {
     Session {
@@ -124,6 +122,10 @@ pub enum PendingEffect {
         device_id: [u8; 32],
     },
 }
+
+/// Without pass support no transaction changes local state.
+#[cfg(not(feature = "pass"))]
+pub enum PendingEffect {}
 
 #[cfg(feature = "pass")]
 impl PendingEffect {
@@ -166,7 +168,7 @@ pub async fn prepare_enrollment(
     profile_path: &std::path::Path,
     genesis_hash: [u8; 32],
     request: EnrollmentRequest,
-) -> Result<(PreparedTransaction, PendingEffect, [u8; 32], u64)> {
+) -> Result<Staged> {
     use sube::Backend;
 
     let mut profiles = crate::profiles::Profiles::load(profile_path)?;
@@ -245,14 +247,19 @@ pub async fn prepare_enrollment(
         sube::TransactionOptions::default(),
     )
     .await?;
-    Ok((
+    Ok(Staged {
         prepared,
-        PendingEffect::Enrollment {
-            pending: Box::new(pending.clone()),
-        },
-        pending.pass_account,
-        pending.valid_through,
-    ))
+        notes: vec![
+            format!(
+                "Predicted pass account: 0x{}",
+                hex::encode(pending.pass_account)
+            ),
+            format!("Enrollment valid through #{}", pending.valid_through),
+        ],
+        effect: Some(PendingEffect::Enrollment {
+            pending: Box::new(pending),
+        }),
+    })
 }
 
 #[cfg(feature = "pass")]
@@ -375,7 +382,7 @@ pub async fn prepare_device_addition(
     profile_path: &std::path::Path,
     genesis_hash: [u8; 32],
     request: DeviceAdditionRequest,
-) -> Result<(PreparedTransaction, PendingEffect, [u8; 32], u64)> {
+) -> Result<Staged> {
     use sube::Backend;
 
     let mut profiles = crate::profiles::Profiles::load(profile_path)?;
@@ -460,15 +467,17 @@ pub async fn prepare_device_addition(
         &call,
     )
     .await?;
-    Ok((
+    Ok(Staged {
         prepared,
-        PendingEffect::DeviceAddition {
+        notes: vec![
+            format!("New device ID: 0x{}", hex::encode(pending.device_id)),
+            format!("Device addition valid through #{}", pending.valid_through),
+        ],
+        effect: Some(PendingEffect::DeviceAddition {
             profile: Box::new(profile),
-            pending: Box::new(pending.clone()),
-        },
-        pending.device_id,
-        pending.valid_through,
-    ))
+            pending: Box::new(pending),
+        }),
+    })
 }
 
 #[cfg(feature = "pass")]
@@ -562,7 +571,7 @@ pub async fn prepare_device_removal(
     profile_path: &std::path::Path,
     genesis_hash: [u8; 32],
     request: DeviceRemovalRequest,
-) -> Result<(PreparedTransaction, PendingEffect)> {
+) -> Result<Staged> {
     use sube::Backend;
 
     let profiles = crate::profiles::Profiles::load(profile_path)?;
@@ -595,13 +604,21 @@ pub async fn prepare_device_removal(
         &call,
     )
     .await?;
-    Ok((
+    let notes = if request.device_id == profile.device_id {
+        vec![
+            "Warning: this removes the primary device; the first additional device, if any, becomes primary. Without one the profile becomes unusable.".into(),
+        ]
+    } else {
+        Vec::new()
+    };
+    Ok(Staged {
         prepared,
-        PendingEffect::DeviceRemoval {
+        notes,
+        effect: Some(PendingEffect::DeviceRemoval {
             profile: Box::new(profile),
             device_id: request.device_id,
-        },
-    ))
+        }),
+    })
 }
 
 #[cfg(feature = "pass")]
@@ -648,10 +665,14 @@ pub async fn prepare_pass_session(
     let secure_entry =
         libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account);
     let existing_account = profile.session.as_ref().map(|session| session.account);
+    let mut notes = Vec::new();
     let (session_signer, pending_seed) = if let Some(expected) = existing_account {
         match crate::signers::load_session_signer(&secure_entry, expected).await {
             Ok(signer) => (signer, None),
-            Err(_) => {
+            Err(error) => {
+                notes.push(format!(
+                    "Stored session key is unavailable or invalid ({error}); registering a replacement"
+                ));
                 let (signer, seed) = crate::signers::generate_session_signer().await?;
                 (signer, Some(zeroize::Zeroizing::new(seed)))
             }
@@ -689,10 +710,11 @@ pub async fn prepare_pass_session(
         expires_at: checkpoint.number.saturating_add(u64::from(duration)),
         pending_seed,
     };
-    Ok(SessionPreparation::Review {
-        prepared: Box::new(prepared),
-        effect: Box::new(effect),
-    })
+    Ok(SessionPreparation::Review(Box::new(Staged {
+        prepared,
+        notes,
+        effect: Some(effect),
+    })))
 }
 
 #[cfg(feature = "pass")]
@@ -806,9 +828,11 @@ pub fn apply_finalized_effect(
 }
 
 #[cfg(feature = "pass")]
+/// Delete the local session secret of `name`. `genesis_hash`, when known,
+/// must match the profile's chain; forgetting needs no connection.
 pub fn forget_pass_session(
     profile_path: &std::path::Path,
-    genesis_hash: [u8; 32],
+    genesis_hash: Option<[u8; 32]>,
     name: &str,
 ) -> Result<crate::profiles::Profiles> {
     use libwallet::MutableKeyStore;
@@ -818,7 +842,7 @@ pub fn forget_pass_session(
         Some(crate::profiles::Profile::Pass(profile)) => profile,
         _ => anyhow::bail!("pass profile {name:?} not found"),
     };
-    if profile.genesis_hash != genesis_hash {
+    if genesis_hash.is_some_and(|genesis_hash| genesis_hash != profile.genesis_hash) {
         anyhow::bail!("profile genesis hash does not match the connected chain");
     }
     let secure_entry = profile
@@ -948,6 +972,67 @@ pub async fn prepare_profile_device_transaction(
             }
         }
     }
+}
+
+/// A signed transaction to review, with the notes shown above it and the
+/// local change to apply once it finalizes.
+pub struct Staged {
+    pub prepared: PreparedTransaction,
+    pub notes: Vec<String>,
+    pub effect: Option<PendingEffect>,
+}
+
+impl Staged {
+    pub fn review_text(&self) -> String {
+        let mut text = String::new();
+        for note in &self.notes {
+            text.push_str(note);
+            text.push('\n');
+        }
+        if !self.notes.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&self.prepared.review_text());
+        text
+    }
+}
+
+/// Sign `call` with the active profile: a wallet directly, or a pass
+/// profile through its local session. `None` when no profile is active.
+#[cfg(feature = "wallet")]
+pub async fn prepare_with_active_profile(
+    chain: &mut sube::Sube,
+    chain_url: &str,
+    profile_path: &std::path::Path,
+    call: &sube::PreparedCall,
+) -> Result<Option<PreparedTransaction>> {
+    let profiles = crate::profiles::Profiles::load(profile_path)?;
+    let Some(profile) = profiles.active() else {
+        return Ok(None);
+    };
+    if profile.genesis_hash() != chain_genesis(chain).await? {
+        anyhow::bail!("active profile genesis hash does not match the connected chain");
+    }
+    let options = sube::TransactionOptions::default();
+    let prepared = match profile {
+        crate::profiles::Profile::Wallet(profile) => {
+            let signer = crate::signers::wallet_signer(profile).await?;
+            prepare_transaction(chain, chain_url, call, &profile.name, &signer, options).await?
+        }
+        #[cfg(feature = "pass")]
+        crate::profiles::Profile::Pass(profile) => {
+            let session = profile.session.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("active pass profile has no finalized local session")
+            })?;
+            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
+            let signer =
+                crate::signers::load_session_signer(&session.secure_entry, session.account).await?;
+            let authorizer =
+                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
+            prepare_transaction(chain, chain_url, call, &profile.name, &authorizer, options).await?
+        }
+    };
+    Ok(Some(prepared))
 }
 
 /// One signed transaction together with the non-mutating diagnostics shown
