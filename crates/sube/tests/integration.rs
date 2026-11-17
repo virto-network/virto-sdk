@@ -278,3 +278,56 @@ fn query_after_finalization() {
         }
     });
 }
+
+/// Build a signed remark from an unfunded throwaway key and have the chain
+/// validate it without submitting. `InvalidTransaction::Payment` (`0x0001`)
+/// means the runtime decoded the transaction and accepted its signature.
+#[test]
+#[ignore]
+fn signed_transaction_decodes_and_verifies_on_chain() {
+    use libwallet::{
+        Signer as _, Substrate,
+        vault::{Simple, Vault as _, utils::DerivedSigner},
+    };
+    use sube::{SignerFn, Text, TransactionOptions, TransactionValidity};
+    block_on(async {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon \
+                      abandon abandon abandon abandon abandon abandon abandon abandon \
+                      abandon abandon abandon abandon abandon abandon abandon art";
+        let mut vault = Substrate::new(Simple::<()>::from_phrase(phrase).expect("phrase"));
+        let account: DerivedSigner = vault
+            .unlock(Some("//sube-unfunded-validation"), ())
+            .await
+            .unwrap_or_else(|_| panic!("unlock"));
+        let id: [u8; 32] = account.public().as_ref().try_into().unwrap();
+        let signer = SignerFn::new(id, |message: &[u8]| {
+            let message = message.to_vec();
+            let account = &account;
+            async move {
+                account
+                    .sign_msg(&message)
+                    .await
+                    .map(|signature| signature.as_ref().try_into().unwrap())
+                    .map_err(|_| sube::Error::Encode("signing failed".into()))
+            }
+        });
+
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
+        let call = chain
+            .prepare_call("system/remark", &Text("(remark:0x68656c6c6f)"))
+            .expect("call");
+        let extrinsic = chain
+            .build_transaction(&call, &signer, TransactionOptions::default())
+            .await
+            .expect("builds");
+        let report = chain
+            .inspect_transaction(&extrinsic)
+            .await
+            .expect("inspects");
+        assert_eq!(
+            report.validity,
+            Some(TransactionValidity::Invalid("0x0001".into())),
+            "{report:?}"
+        );
+    });
+}

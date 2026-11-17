@@ -531,48 +531,14 @@ pub async fn assemble_signed_v4(
     };
     let signature = signer.sign(payload).await?;
 
-    // Assemble the metadata-declared address and signature types. This supports
-    // AccountId/newtype addresses as well as MultiAddress, and any signature
-    // enum variant selected by the signer.
     let from_account = signer.account();
-    let address_ty = meta.address_ty.ok_or(Error::BadMetadata)?;
-    let signature_ty = meta.signature_ty.ok_or(Error::BadMetadata)?;
-
-    let address_value = match registry.resolve(address_ty) {
-        Some(scales::TypeDef::Variant(def)) => {
-            let id = def
-                .variants()
-                .find(|variant| variant.name().eq_ignore_ascii_case("Id"))
-                .ok_or_else(|| {
-                    Error::Encode("address enum has no metadata-declared Id variant".into())
-                })?;
-            DynValue::obj(&[(id.name(), DynValue::from(from_account.as_ref()))])
-        }
-        _ => DynValue::from(from_account.as_ref()),
-    };
-    let address_bytes = scales::to_vec_with_info(&address_value, Some((registry, address_ty)))
-        .map_err(|error| Error::Encode(format!("address: {error}")))?;
-
-    let signature_value = match registry.resolve(signature_ty) {
-        Some(scales::TypeDef::Variant(def)) => {
-            let requested = signer
-                .signature_variant()
-                .ok_or_else(|| Error::Encode("signer did not select a signature variant".into()))?;
-            let variant = def
-                .variants()
-                .find(|variant| variant.name().eq_ignore_ascii_case(requested))
-                .ok_or_else(|| {
-                    Error::Encode(format!(
-                        "signature variant {requested} is absent from runtime metadata"
-                    ))
-                })?;
-            DynValue::obj(&[(variant.name(), DynValue::from(signature.as_ref()))])
-        }
-        _ => DynValue::from(signature.as_ref()),
-    };
-    let signature_bytes =
-        scales::to_vec_with_info(&signature_value, Some((registry, signature_ty)))
-            .map_err(|error| Error::Encode(format!("signature: {error}")))?;
+    let address_bytes = encode_address(meta.address_ty, registry, from_account.as_ref())?;
+    let signature_bytes = encode_signature(
+        meta.signature_ty,
+        registry,
+        signer.signature_variant(),
+        signature.as_ref(),
+    )?;
 
     let bytes = [
         vec![0b10000000 | meta.version],
@@ -583,6 +549,78 @@ pub async fn assemble_signed_v4(
     ]
     .concat();
     Ok(AssembledExtrinsic { bytes, extensions })
+}
+
+/// Encode the signer's address as the metadata-declared address type. This
+/// supports AccountId/newtype addresses as well as `MultiAddress`. V14
+/// metadata declares no address type; Substrate runtimes then use
+/// `MultiAddress`, whose `Id` variant is index 0.
+fn encode_address(
+    address_ty: Option<TypeId>,
+    registry: &scales::Registry,
+    account: &[u8],
+) -> Result<Vec<u8>> {
+    let Some(address_ty) = address_ty else {
+        return Ok([&[0x00], account].concat());
+    };
+    let address_value = match registry.resolve(address_ty) {
+        Some(scales::TypeDef::Variant(def)) => {
+            let id = def
+                .variants()
+                .find(|variant| variant.name().eq_ignore_ascii_case("Id"))
+                .ok_or_else(|| {
+                    Error::Encode("address enum has no metadata-declared Id variant".into())
+                })?;
+            DynValue::obj(&[(id.name(), DynValue::from(account))])
+        }
+        _ => DynValue::from(account),
+    };
+    scales::to_vec_with_info(&address_value, Some((registry, address_ty)))
+        .map_err(|error| Error::Encode(format!("address: {error}")))
+}
+
+/// Encode a signature as the metadata-declared signature type, using the
+/// enum variant the signer selected. V14 metadata declares no signature type;
+/// Substrate runtimes then use `MultiSignature` (Ed25519 = 0, Sr25519 = 1,
+/// Ecdsa = 2).
+fn encode_signature(
+    signature_ty: Option<TypeId>,
+    registry: &scales::Registry,
+    requested: Option<&str>,
+    signature: &[u8],
+) -> Result<Vec<u8>> {
+    let requested = || {
+        requested.ok_or_else(|| Error::Encode("signer did not select a signature variant".into()))
+    };
+    let Some(signature_ty) = signature_ty else {
+        let requested = requested()?;
+        let index = ["Ed25519", "Sr25519", "Ecdsa"]
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(requested))
+            .ok_or_else(|| {
+                Error::Encode(format!(
+                    "signature variant {requested} is not a MultiSignature variant"
+                ))
+            })?;
+        return Ok([&[index as u8], signature].concat());
+    };
+    let signature_value = match registry.resolve(signature_ty) {
+        Some(scales::TypeDef::Variant(def)) => {
+            let requested = requested()?;
+            let variant = def
+                .variants()
+                .find(|variant| variant.name().eq_ignore_ascii_case(requested))
+                .ok_or_else(|| {
+                    Error::Encode(format!(
+                        "signature variant {requested} is absent from runtime metadata"
+                    ))
+                })?;
+            DynValue::obj(&[(variant.name(), DynValue::from(signature))])
+        }
+        _ => DynValue::from(signature),
+    };
+    scales::to_vec_with_info(&signature_value, Some((registry, signature_ty)))
+        .map_err(|error| Error::Encode(format!("signature: {error}")))
 }
 
 #[cfg(test)]
@@ -707,6 +745,47 @@ mod tests {
             option_none(extension.ty, &meta.registry),
             Some(DynValue::Null)
         );
+    }
+
+    /// `CheckNonce` is a newtype around `Compact<Nonce>`; a plain integer
+    /// here made every signed transaction undecodable.
+    #[test]
+    fn check_nonce_is_compact_encoded() {
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+        let nonce = meta
+            .extrinsic
+            .extensions
+            .iter()
+            .find(|extension| extension.identifier == "CheckNonce")
+            .unwrap();
+        let (extra, _) = encode_extensions(
+            core::slice::from_ref(nonce),
+            &meta.registry,
+            &test_ctx(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(extra, Compact(42u32).encode());
+    }
+
+    /// V14 metadata (what `Metadata_metadata` returns) declares no address or
+    /// signature type.
+    #[test]
+    fn v14_address_and_signature_fall_back_to_multi_types() {
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+        let registry = &meta.registry;
+        assert_eq!(
+            encode_address(None, registry, &[7; 32]).unwrap(),
+            [&[0x00][..], &[7; 32]].concat()
+        );
+        for (variant, index) in [("Ed25519", 0u8), ("Sr25519", 1), ("Ecdsa", 2)] {
+            assert_eq!(
+                encode_signature(None, registry, Some(variant), &[9; 64]).unwrap(),
+                [&[index][..], &[9; 64]].concat()
+            );
+        }
+        assert!(encode_signature(None, registry, Some("Eth"), &[9; 64]).is_err());
+        assert!(encode_signature(None, registry, None, &[9; 64]).is_err());
     }
 
     #[test]
