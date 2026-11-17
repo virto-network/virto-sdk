@@ -12,7 +12,8 @@ pub enum ToChain {
     Query(String),
     #[allow(dead_code)]
     QueryAtHash(String, String),
-    PrepareCall(String, CallBody),
+    /// Prepare `pallet/call` from its SCALE-text body.
+    PrepareCall(String, String),
     SubmitPrepared(sube::WaitFor),
     FetchBlockDetail(String),
     #[cfg(feature = "wallet")]
@@ -36,11 +37,6 @@ pub enum ToChain {
     PrepareDeviceAddition(crate::workflow::DeviceAdditionRequest),
     #[cfg(feature = "pass")]
     PrepareDeviceRemoval(crate::workflow::DeviceRemovalRequest),
-}
-
-pub enum CallBody {
-    Text(String),
-    Json(String),
 }
 
 pub enum FromChain {
@@ -142,17 +138,7 @@ pub fn spawn(
                         }
                         ToChain::PrepareCall(path, body) => {
                             staged = None;
-                            let prepared = match body {
-                                CallBody::Text(body) => {
-                                    chain.prepare_call(&path, &sube::Text(&body))
-                                }
-                                CallBody::Json(body) => {
-                                    serde_json::from_str::<serde_json::Value>(&body)
-                                        .map_err(|error| sube::Error::Encode(error.to_string()))
-                                        .and_then(|body| chain.prepare_call(&path, &body))
-                                }
-                            };
-                            let call = match prepared {
+                            let call = match chain.prepare_call(&path, &sube::Text(&body)) {
                                 Ok(call) => call,
                                 Err(error) => {
                                     let _ =

@@ -94,7 +94,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         (Focus::Form, _) => {
             " ↑↓ fields  ←→ enum  Space toggle  +/- list  Enter next/submit  Esc cancel"
         }
-        (Focus::BodyInput, _) => " Enter review  Esc cancel  Type JSON/text or a file path",
         (Focus::Profiles, _) => unreachable!(),
         #[cfg(feature = "wallet")]
         (Focus::WalletImport, _) => unreachable!(),
@@ -112,7 +111,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         (Focus::Review | Focus::ConfirmSubmit, _) => unreachable!(),
         (_, Panel::Pallets) => " ↑↓ navigate  Tab panel  / filter  p profiles  q quit",
         (_, Panel::Storage) => " ↑↓ navigate  Tab panel  Enter query  q quit",
-        (_, Panel::Calls) => " ↑↓ navigate  Tab panel  m input mode  Enter select  q quit",
+        (_, Panel::Calls) => " ↑↓ navigate  Tab panel  Enter select  q quit",
         (_, Panel::Blocks) => " Tab panel  Enter details  q quit",
     };
     if let Some(ref err) = app.error {
@@ -660,27 +659,6 @@ fn draw_storage(f: &mut Frame, app: &App, area: Rect) {
         let inner = block.inner(result_area);
         f.render_widget(block, result_area);
         form.render(f, inner);
-        return;
-    }
-    if matches!(app.focus, Focus::BodyInput) && app.panel == Panel::Calls {
-        let prompt = match app.call_input_mode {
-            super::CallInputMode::Json => "Whole-body JSON",
-            super::CallInputMode::ScaleText => "Whole-body SCALE text",
-            super::CallInputMode::JsonFile => "JSON file path",
-            super::CallInputMode::ScaleTextFile => "SCALE-text file path",
-            super::CallInputMode::Typed => "Typed parameters",
-        };
-        f.render_widget(
-            Paragraph::new(format!("{}█", app.call_body_input))
-                .wrap(Wrap { trim: false })
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(prompt)
-                        .border_style(Style::default().fg(Color::Yellow)),
-                ),
-            result_area,
-        );
         return;
     }
     f.render_widget(

@@ -16,7 +16,7 @@ mod form;
 mod format;
 mod types;
 
-use chain::{CallBody, FromChain, ToChain};
+use chain::{FromChain, ToChain};
 use form::{FormContext, FormState, field_from_type};
 use format::fuzzy_match;
 
@@ -70,7 +70,6 @@ enum Focus {
     BlockDetail,
     Review,
     ConfirmSubmit,
-    BodyInput,
     Profiles,
     #[cfg(feature = "wallet")]
     WalletImport,
@@ -175,31 +174,6 @@ struct PassDeviceRemovalState {
     confirmation: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CallInputMode {
-    Typed,
-    Json,
-    ScaleText,
-    JsonFile,
-    ScaleTextFile,
-}
-
-impl CallInputMode {
-    fn next(self) -> Self {
-        match self {
-            Self::Typed => Self::Json,
-            Self::Json => Self::ScaleText,
-            Self::ScaleText => Self::JsonFile,
-            Self::JsonFile => Self::ScaleTextFile,
-            Self::ScaleTextFile => Self::Typed,
-        }
-    }
-
-    fn is_typed(self) -> bool {
-        matches!(self, Self::Typed)
-    }
-}
-
 // --- App state ---
 
 struct App {
@@ -235,8 +209,6 @@ struct App {
     call_idx: usize,
     call_form: Option<FormState>,
     call_form_key: Option<(String, String)>,
-    call_input_mode: CallInputMode,
-    call_body_input: String,
     call_result: Option<String>,
     call_submittable: bool,
     call_hex: Option<String>,
@@ -276,7 +248,6 @@ impl App {
         self.call_idx = 0;
         self.call_form = None;
         self.call_form_key = None;
-        self.call_body_input.clear();
         self.call_result = None;
         self.call_submittable = false;
         self.call_hex = None;
@@ -357,9 +328,6 @@ impl App {
             self.artifact = None;
             self.error = None;
             return;
-        }
-        if self.call_form_key != key {
-            self.call_body_input.clear();
         }
         self.call_form = None;
         self.call_form_key = key;
@@ -478,50 +446,7 @@ impl App {
         };
         let path = format!("{}/{}", pallet.name, item_name);
         self.call_result = Some("validating call...".into());
-        let _ = self
-            .to_chain
-            .send(ToChain::PrepareCall(path, CallBody::Text(body)));
-    }
-
-    fn execute_call_body(&mut self) {
-        self.error = None;
-        self.review_returns_to_profiles = false;
-        let pallet = match self.current_pallet() {
-            Some(pallet) => pallet.name.clone(),
-            None => return,
-        };
-        let call = match self.call_items.get(self.call_idx) {
-            Some(call) => call.clone(),
-            None => return,
-        };
-        let body = match self.call_input_mode {
-            CallInputMode::Json | CallInputMode::ScaleText => self.call_body_input.clone(),
-            CallInputMode::JsonFile | CallInputMode::ScaleTextFile => {
-                match std::fs::read_to_string(&self.call_body_input) {
-                    Ok(body) => body,
-                    Err(error) => {
-                        self.error = Some(format!(
-                            "Could not read body file {:?}: {error}",
-                            self.call_body_input
-                        ));
-                        return;
-                    }
-                }
-            }
-            CallInputMode::Typed => return self.execute_call(),
-        };
-        let body = if matches!(
-            self.call_input_mode,
-            CallInputMode::Json | CallInputMode::JsonFile
-        ) {
-            CallBody::Json(body)
-        } else {
-            CallBody::Text(body)
-        };
-        self.call_result = Some("validating call...".into());
-        let _ = self
-            .to_chain
-            .send(ToChain::PrepareCall(format!("{pallet}/{call}"), body));
+        let _ = self.to_chain.send(ToChain::PrepareCall(path, body));
     }
 
     fn process_chain_message(&mut self, msg: FromChain) {
@@ -736,8 +661,6 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         call_idx: 0,
         call_form: None,
         call_form_key: None,
-        call_input_mode: CallInputMode::Typed,
-        call_body_input: String::new(),
         call_result: None,
         call_submittable: false,
         call_hex: None,
@@ -802,7 +725,6 @@ fn handle_key(app: &mut App, key: KeyCode) {
         Focus::BlockDetail => handle_block_detail(app, key),
         Focus::Review => handle_review(app, key),
         Focus::ConfirmSubmit => handle_submit_confirmation(app, key),
-        Focus::BodyInput => handle_body_input(app, key),
         Focus::Profiles => handle_profiles(app, key),
         #[cfg(feature = "wallet")]
         Focus::WalletImport => handle_wallet_import(app, key),
@@ -875,26 +797,18 @@ fn handle_navigate(app: &mut App, key: KeyCode) {
                 }
             }
             Panel::Calls => {
-                if app.call_input_mode.is_typed() {
-                    app.build_call_form();
-                    if let Some(ref f) = app.call_form {
-                        if f.is_empty() {
-                            app.execute_call();
-                        } else {
-                            app.focus = Focus::Form;
-                        }
+                app.build_call_form();
+                if let Some(ref f) = app.call_form {
+                    if f.is_empty() {
+                        app.execute_call();
+                    } else {
+                        app.focus = Focus::Form;
                     }
-                } else {
-                    app.focus = Focus::BodyInput;
                 }
             }
             Panel::Blocks => app.open_block_detail(),
             _ => {}
         },
-        KeyCode::Char('m') if app.panel == Panel::Calls => {
-            app.call_input_mode = app.call_input_mode.next();
-            app.error = Some(format!("Call input mode: {:?}", app.call_input_mode));
-        }
         KeyCode::Char('/') => {
             app.search_query.clear();
             app.focus = Focus::Search;
@@ -1461,10 +1375,8 @@ fn handle_review(app: &mut App, key: KeyCode) {
             app.review_scroll = 0;
             app.focus = if app.review_returns_to_profiles {
                 Focus::Profiles
-            } else if app.call_input_mode.is_typed() && app.call_form.is_some() {
+            } else if app.call_form.is_some() {
                 Focus::Form
-            } else if !app.call_input_mode.is_typed() {
-                Focus::BodyInput
             } else {
                 Focus::Navigate
             };
@@ -1510,21 +1422,6 @@ fn handle_review(app: &mut App, key: KeyCode) {
                 Err(error) => format!("Could not export artifact: {error}"),
             });
         }
-        _ => {}
-    }
-}
-
-fn handle_body_input(app: &mut App, key: KeyCode) {
-    match key {
-        KeyCode::Esc => app.focus = Focus::Navigate,
-        KeyCode::Enter => {
-            app.execute_call_body();
-            app.focus = Focus::Navigate;
-        }
-        KeyCode::Backspace => {
-            app.call_body_input.pop();
-        }
-        KeyCode::Char(c) => app.call_body_input.push(c),
         _ => {}
     }
 }
@@ -1691,18 +1588,7 @@ fn handle_block_detail(app: &mut App, key: KeyCode) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CallInputMode, base64_no_pad, export_artifact};
-
-    #[test]
-    fn call_input_modes_cycle_without_losing_the_selected_mode() {
-        let mut mode = CallInputMode::Typed;
-        mode = mode.next();
-        assert_eq!(mode, CallInputMode::Json);
-        mode = mode.next();
-        assert_eq!(mode, CallInputMode::ScaleText);
-        mode = mode.next().next().next();
-        assert_eq!(mode, CallInputMode::Typed);
-    }
+    use super::{base64_no_pad, export_artifact};
 
     #[test]
     fn osc52_payload_uses_unpadded_base64() {
