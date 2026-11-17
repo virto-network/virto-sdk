@@ -45,7 +45,7 @@ pub mod workflow;
 
 mod meta;
 mod newtypes;
-pub use config::{AccountDerivation, Challenger, PassRuntimeConfig, RuntimeOverrides};
+pub use config::PassRuntimeConfig;
 pub use meta::CredentialMeta;
 pub use newtypes::{Account, AuthorityId, DeviceId, HashedUserId, InvalidHashedUserId};
 pub use session::{SessionAuthorizer, SessionPolicy};

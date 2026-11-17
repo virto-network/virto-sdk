@@ -1625,8 +1625,7 @@ async fn review_device_authenticated_transaction<A: pass::DeviceAuthenticator>(
         config.authority_id,
         context,
         block_hash,
-    )
-    .with_challenger(config.challenger);
+    );
     let authorizer = pass::PassAuthenticator::new(
         pass::Account(profile.pass_account),
         pass::DeviceId(profile.device_id),

@@ -119,8 +119,7 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
             config.authority_id,
             session_context,
             session_checkpoint.hash,
-        )
-        .with_challenger(config.challenger);
+        );
         let direct = pass::PassAuthenticator::new(
             draft.predicted_account,
             draft.attestation.device_id,

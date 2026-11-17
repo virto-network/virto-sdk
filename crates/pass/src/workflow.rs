@@ -7,7 +7,9 @@ use alloc::{format, vec};
 use sube::{DynValue, Error, Metadata, PreparedCall, Result};
 
 use crate::config::{PassRuntimeConfig, body};
-use crate::{Account, AuthorityId, Challenge, DeviceId, HashedUserId, block_challenge};
+use crate::{
+    Account, AuthorityId, Challenge, DeviceId, HashedUserId, block_challenge, enrollment_challenge,
+};
 
 /// Enrollment data handed to a device provider.
 #[derive(Clone, Debug)]
@@ -72,7 +74,6 @@ pub struct PassAuthorizer<'a, A> {
     authority_id: AuthorityId,
     context: u32,
     block_hash: [u8; 32],
-    challenger: crate::config::Challenger,
 }
 
 impl<'a, A> PassAuthorizer<'a, A> {
@@ -89,13 +90,7 @@ impl<'a, A> PassAuthorizer<'a, A> {
             authority_id,
             context,
             block_hash,
-            challenger: block_challenge,
         }
-    }
-
-    pub fn with_challenger(mut self, challenger: crate::config::Challenger) -> Self {
-        self.challenger = challenger;
-        self
     }
 }
 
@@ -108,7 +103,7 @@ impl<A: DeviceAuthenticator> crate::CredentialProvider for PassAuthorizer<'_, A>
                 context: self.context,
                 block_hash: self.block_hash,
                 binding: *binding,
-                challenge: (self.challenger)(&self.block_hash, binding),
+                challenge: block_challenge(&self.block_hash, binding),
             })
             .await
     }
@@ -156,7 +151,7 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
         authority_id: config.authority_id,
         context,
         block_hash,
-        challenge: (config.challenger)(&block_hash, &predicted_account.0),
+        challenge: enrollment_challenge(&block_hash, predicted_account),
     };
     let attestation = authenticator.attest(&request).await?;
     if !config.supports_attestation(&attestation.variant) {
@@ -285,7 +280,7 @@ pub fn prepare_remove_device(
 ) -> Result<PreparedCall> {
     sube::extrinsic::prepare_call(
         metadata,
-        &format!("{}/{}", config.pallet, config.remove_device.name),
+        &format!("{}/{}", config.pallet, config.remove_device),
         &body(vec![("device_id", DynValue::from(device_id.0))]),
     )
 }

@@ -8,49 +8,12 @@ use sube::metadata::TypeId;
 use sube::scales::{Fields, TypeDef};
 use sube::{DynValue, Error, Metadata, Result, Value};
 
-use crate::{Account, AuthorityId, Challenge, HashedUserId, blake2b_256, block_challenge};
+use crate::{Account, AuthorityId, HashedUserId, PASS_AUTHENTICATE, blake2b_256};
 
-pub type AccountDerivation = fn([u8; 8], HashedUserId) -> Account;
-pub type Challenger = fn(&[u8; 32], &[u8]) -> Challenge;
-
-/// Names that may be overridden for runtimes that do not use Kreivo's
-/// standard pallet-pass naming.
-#[derive(Clone, Debug)]
-pub struct RuntimeOverrides {
-    pub pallet: String,
-    pub extension: String,
-    pub register: String,
-    pub add_device: String,
-    pub remove_device: String,
-    pub add_session_key: String,
-    pub remove_session_key: String,
-    pub pallet_id_constant: String,
-    pub max_session_duration_constant: String,
-    pub authority_id: Option<AuthorityId>,
-    pub account_derivation: AccountDerivation,
-    pub challenger: Challenger,
-}
-
-impl Default for RuntimeOverrides {
-    fn default() -> Self {
-        Self {
-            pallet: "Pass".into(),
-            extension: "PassAuthenticate".into(),
-            register: "register".into(),
-            add_device: "add_device".into(),
-            remove_device: "remove_device".into(),
-            // Plain `add_session_key` grants an Admin (unrestricted) session;
-            // scoped sessions must use the filtered variant.
-            add_session_key: "add_session_key_with_filter".into(),
-            remove_session_key: "remove_session_key".into(),
-            pallet_id_constant: "PalletId".into(),
-            max_session_duration_constant: "MaxSessionDuration".into(),
-            authority_id: None,
-            account_derivation: derive_account,
-            challenger: block_challenge,
-        }
-    }
-}
+const PALLET: &str = "Pass";
+/// Plain `add_session_key` grants an Admin (unrestricted) session; scoped
+/// sessions must use the filtered variant.
+const ADD_SESSION_KEY: &str = "add_session_key_with_filter";
 
 /// A metadata-resolved call and its named fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,7 +37,6 @@ impl RuntimeCall {
 pub struct PassRuntimeConfig {
     pub pallet: String,
     pub pallet_index: u8,
-    pub extension: String,
     pub pallet_id: [u8; 8],
     pub authority_id: AuthorityId,
     pub max_session_duration: u32,
@@ -82,38 +44,30 @@ pub struct PassRuntimeConfig {
     pub attestation_variants: Vec<String>,
     pub register: RuntimeCall,
     pub add_device: RuntimeCall,
-    pub remove_device: RuntimeCall,
+    /// Name of the device removal call.
+    pub remove_device: String,
     pub add_session_key: RuntimeCall,
-    pub remove_session_key: Option<RuntimeCall>,
-    pub account_derivation: AccountDerivation,
-    pub challenger: Challenger,
 }
 
 impl PassRuntimeConfig {
     pub fn discover(metadata: &Metadata) -> Result<Self> {
-        Self::discover_with(metadata, &RuntimeOverrides::default())
-    }
-
-    pub fn discover_with(metadata: &Metadata, names: &RuntimeOverrides) -> Result<Self> {
         let pallet = metadata
-            .pallet_by_name(&names.pallet)
-            .ok_or_else(|| Error::PalletNotFound(names.pallet.clone()))?;
+            .pallet_by_name(PALLET)
+            .ok_or_else(|| Error::PalletNotFound(PALLET.into()))?;
         let calls_ty = pallet.calls_ty.ok_or(Error::CallNotFound)?;
 
         let extension = metadata
             .extrinsic
             .extensions
             .iter()
-            .find(|extension| extension.identifier == names.extension)
-            .ok_or_else(|| Error::MissingExtensionValue(names.extension.clone()))?;
+            .find(|extension| extension.identifier == PASS_AUTHENTICATE)
+            .ok_or_else(|| Error::MissingExtensionValue(PASS_AUTHENTICATE.into()))?;
 
         let pallet_id_constant = pallet
             .constants
             .iter()
-            .find(|constant| constant.name == names.pallet_id_constant)
-            .ok_or_else(|| {
-                Error::ConstantNotFound(format!("{}_{}", pallet.name, names.pallet_id_constant))
-            })?;
+            .find(|constant| constant.name == "PalletId")
+            .ok_or_else(|| Error::ConstantNotFound(format!("{}_PalletId", pallet.name)))?;
         let pallet_id: [u8; 8] = pallet_id_constant
             .value
             .as_slice()
@@ -123,12 +77,9 @@ impl PassRuntimeConfig {
         let max_duration = pallet
             .constants
             .iter()
-            .find(|constant| constant.name == names.max_session_duration_constant)
+            .find(|constant| constant.name == "MaxSessionDuration")
             .ok_or_else(|| {
-                Error::ConstantNotFound(format!(
-                    "{}_{}",
-                    pallet.name, names.max_session_duration_constant
-                ))
+                Error::ConstantNotFound(format!("{}_MaxSessionDuration", pallet.name))
             })?;
         let max_session_duration =
             Value::new(&max_duration.value, max_duration.ty, &metadata.registry)
@@ -151,15 +102,14 @@ impl PassRuntimeConfig {
             })
         };
 
-        let register = resolve_call(&names.register)?;
-        let add_device = resolve_call(&names.add_device)?;
-        let remove_device = resolve_call(&names.remove_device)?;
+        let register = resolve_call("register")?;
+        let add_device = resolve_call("add_device")?;
+        let remove_device = resolve_call("remove_device")?.name;
         // Older runtimes only have the filterless call; it is still discovered
         // so the rest of the pass workflow works, and `prepare_add_session_key`
         // refuses it because it would grant an Admin session.
         let add_session_key =
-            resolve_call(&names.add_session_key).or_else(|_| resolve_call("add_session_key"))?;
-        let remove_session_key = resolve_call(&names.remove_session_key).ok();
+            resolve_call(ADD_SESSION_KEY).or_else(|_| resolve_call("add_session_key"))?;
 
         let attestation_ty =
             call_field_type(&metadata.registry, calls_ty, &register.name, "attestation")?;
@@ -184,11 +134,8 @@ impl PassRuntimeConfig {
         Ok(Self {
             pallet: pallet.name.clone(),
             pallet_index: pallet.index,
-            extension: extension.identifier.clone(),
             pallet_id,
-            authority_id: names
-                .authority_id
-                .unwrap_or_else(|| pallet_authority_id(pallet_id)),
+            authority_id: pallet_authority_id(pallet_id),
             max_session_duration,
             credential_variants,
             attestation_variants,
@@ -196,9 +143,6 @@ impl PassRuntimeConfig {
             add_device,
             remove_device,
             add_session_key,
-            remove_session_key,
-            account_derivation: names.account_derivation,
-            challenger: names.challenger,
         })
     }
 
@@ -216,7 +160,7 @@ impl PassRuntimeConfig {
 
     /// Default AccountId32 derivation used by `PalletId::into_sub_account_truncating`.
     pub fn derive_account(&self, user_id: HashedUserId) -> Account {
-        (self.account_derivation)(self.pallet_id, user_id)
+        derive_account(self.pallet_id, user_id)
     }
 }
 
@@ -384,31 +328,5 @@ mod tests {
             hex::encode(account.0),
             "57f6077d10a19211d718c5373d96e3efaa7c9cfa32c149b16ffe41a03ef9995c"
         );
-    }
-
-    #[test]
-    fn nonstandard_derivation_and_challenger_can_be_overridden() {
-        fn account(_: [u8; 8], _: HashedUserId) -> Account {
-            Account([7; 32])
-        }
-        fn challenger(_: &[u8; 32], _: &[u8]) -> Challenge {
-            [8; 32]
-        }
-
-        let metadata = Metadata::from_bytes(KREIVO_META).unwrap();
-        let config = PassRuntimeConfig::discover_with(
-            &metadata,
-            &RuntimeOverrides {
-                account_derivation: account,
-                challenger,
-                ..RuntimeOverrides::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            config.derive_account(HashedUserId([1; 32])),
-            Account([7; 32])
-        );
-        assert_eq!((config.challenger)(&[2; 32], &[3; 32]), [8; 32]);
     }
 }
