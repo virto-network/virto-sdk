@@ -180,6 +180,12 @@ impl EncodedExtension {
 pub struct AssembledExtrinsic {
     pub bytes: Vec<u8>,
     pub extensions: Vec<EncodedExtension>,
+    /// Identity whose authorization the bytes carry: the account encoded
+    /// with a signature, or e.g. a pass device id.
+    pub signing_account: Vec<u8>,
+    /// How that identity authorizes: a signature variant such as
+    /// `Sr25519`, or an authenticating extension such as `PassAuthenticate`.
+    pub scheme: String,
 }
 
 /// Cached identity and denomination properties reported by the chain.
@@ -525,7 +531,11 @@ pub async fn build_transaction(
         spec_version: ctx.spec_version,
         transaction_version: ctx.tx_version,
         nonce: ctx.account_nonce,
-        authorization: assembler.authorization(),
+        authorization: AuthorizationSummary {
+            signing_account: assembled.signing_account,
+            nonce_account: from_account.as_ref().to_vec(),
+            scheme: Some(assembled.scheme),
+        },
         extensions: assembled.extensions,
     })
 }
@@ -557,13 +567,10 @@ pub async fn assemble_signed_v4(
     let signature = signer.sign(payload).await?;
 
     let from_account = signer.account();
+    let scheme = signer.signature_variant();
     let address_bytes = encode_address(meta.address_ty, registry, from_account.as_ref())?;
-    let signature_bytes = encode_signature(
-        meta.signature_ty,
-        registry,
-        signer.signature_variant(),
-        signature.as_ref(),
-    )?;
+    let signature_bytes =
+        encode_signature(meta.signature_ty, registry, scheme, signature.as_ref())?;
 
     let bytes = [
         vec![0b10000000 | meta.version],
@@ -573,7 +580,12 @@ pub async fn assemble_signed_v4(
         encoded_call.to_vec(),
     ]
     .concat();
-    Ok(AssembledExtrinsic { bytes, extensions })
+    Ok(AssembledExtrinsic {
+        bytes,
+        extensions,
+        signing_account: from_account.as_ref().to_vec(),
+        scheme: scheme.into(),
+    })
 }
 
 /// Encode the signer's address as the metadata-declared address type. This

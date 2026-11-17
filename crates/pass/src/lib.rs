@@ -139,14 +139,6 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         self.account.0
     }
 
-    fn authorization(&self) -> sube::AuthorizationSummary {
-        sube::AuthorizationSummary {
-            signing_account: self.device_id.0.to_vec(),
-            nonce_account: self.account.0.to_vec(),
-            scheme: Some("PassAuthenticate".into()),
-        }
-    }
-
     async fn assemble(
         &self,
         encoded_call: &[u8],
@@ -191,6 +183,8 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         Ok(AssembledExtrinsic {
             bytes: inner,
             extensions,
+            signing_account: self.device_id.0.to_vec(),
+            scheme: PASS_AUTHENTICATE.into(),
         })
     }
 }

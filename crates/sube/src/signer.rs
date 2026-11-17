@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::extrinsic::{self, AssembledExtrinsic, AuthorizationSummary, ChainContext};
+use crate::extrinsic::{self, AssembledExtrinsic, ChainContext};
 use crate::metadata::ExtrinsicMeta;
 use crate::prelude::*;
 use crate::value::DynValue;
@@ -46,20 +46,9 @@ pub trait ExtrinsicAssembler {
     /// Account identifier used for nonce lookup.
     fn nonce_account(&self) -> Self::Account;
 
-    /// Human-readable authorization identities used by transaction review.
-    ///
-    /// A session assembler can override this so `signing_account` is the
-    /// session key while `nonce_account` remains the pass account.
-    fn authorization(&self) -> AuthorizationSummary {
-        let nonce_account = self.nonce_account().as_ref().to_vec();
-        AuthorizationSummary {
-            signing_account: nonce_account.clone(),
-            nonce_account,
-            scheme: None,
-        }
-    }
-
-    /// Assemble the extrinsic inner bytes (before the SCALE compact length prefix).
+    /// Assemble the extrinsic inner bytes (before the SCALE compact length prefix)
+    /// and report which identity and scheme authorize them, which transaction
+    /// review shows next to [`nonce_account`](Self::nonce_account).
     ///
     /// Receives the SCALE-encoded call, extrinsic metadata, type registry,
     /// chain context (spec version, genesis hash, nonce, etc.), and any
@@ -80,15 +69,6 @@ impl<T: Signer> ExtrinsicAssembler for T {
 
     fn nonce_account(&self) -> Self::Account {
         Signer::account(self)
-    }
-
-    fn authorization(&self) -> AuthorizationSummary {
-        let account = Signer::account(self).as_ref().to_vec();
-        AuthorizationSummary {
-            signing_account: account.clone(),
-            nonce_account: account,
-            scheme: Some(self.signature_variant().into()),
-        }
     }
 
     async fn assemble(

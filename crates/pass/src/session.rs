@@ -6,10 +6,7 @@ use alloc::{format, vec};
 
 use sube::extrinsic::{ChainContext, assemble_signed_v4};
 use sube::metadata::ExtrinsicMeta;
-use sube::{
-    AuthorizationSummary, DynValue, Error, ExtrinsicAssembler, Metadata, PreparedCall, Registry,
-    Result, Signer,
-};
+use sube::{DynValue, Error, ExtrinsicAssembler, Metadata, PreparedCall, Registry, Result, Signer};
 
 use crate::Account;
 use crate::config::{PassRuntimeConfig, body};
@@ -221,14 +218,6 @@ impl<S: Signer> ExtrinsicAssembler for SessionAuthorizer<S> {
 
     fn nonce_account(&self) -> Self::Account {
         self.pass_account.0
-    }
-
-    fn authorization(&self) -> AuthorizationSummary {
-        AuthorizationSummary {
-            signing_account: self.signer.account().as_ref().to_vec(),
-            nonce_account: self.pass_account.0.to_vec(),
-            scheme: Some(self.signer.signature_variant().into()),
-        }
     }
 
     async fn assemble(
@@ -487,11 +476,29 @@ mod tests {
 
     #[test]
     fn session_signer_and_nonce_identities_are_distinct() {
+        let (metadata, _) = kreivo();
         let authorizer = SessionAuthorizer::new(Account([2; 32]), MockSigner, call_policy());
         assert_eq!(authorizer.nonce_account(), [2; 32]);
-        let summary = authorizer.authorization();
-        assert_eq!(summary.nonce_account, vec![2; 32]);
-        assert_eq!(summary.signing_account, vec![3; 32]);
+        let ctx = ChainContext {
+            spec_version: 1,
+            tx_version: 1,
+            genesis_hash: [1; 32],
+            account_nonce: 0,
+            checkpoint_number: 0,
+            checkpoint_hash: [1; 32],
+            mortality: sube::Mortality::Immortal,
+            tip: 0,
+        };
+        let assembled = futures_lite::future::block_on(authorizer.assemble(
+            &[5, 2, 9],
+            &metadata.extrinsic,
+            &metadata.registry,
+            &ctx,
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(assembled.signing_account, vec![3; 32]);
+        assert_eq!(assembled.scheme, "Sr25519");
     }
 
     fn kreivo() -> (Metadata, PassRuntimeConfig) {

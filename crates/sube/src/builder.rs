@@ -664,6 +664,14 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(submissions.get(), 0);
+            assert_eq!(
+                encoded.authorization,
+                crate::AuthorizationSummary {
+                    signing_account: vec![7; 32],
+                    nonce_account: vec![7; 32],
+                    scheme: Some("Sr25519".into()),
+                }
+            );
             assert_eq!(encoded.checkpoint_number, 128);
             assert_eq!(encoded.expires_at, Some(192));
 

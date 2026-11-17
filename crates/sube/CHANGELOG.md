@@ -12,7 +12,10 @@
   signing identity. There is no `account` alias; implementors rename the
   method and callers use `nonce_account`.
 - `ExtrinsicAssembler::assemble` returns an `AssembledExtrinsic` instead of
-  `Vec<u8>`.
+  `Vec<u8>`. Besides the bytes it carries each extension's bytes and the
+  `signing_account` and `scheme` that `EncodedExtrinsic::authorization`
+  reports, so assemblers describe the identity they actually encoded rather
+  than implementing a separate summary method.
 - `OneShotCall`, `CallBuilder` and `Sube::call` were removed. Use
   `Sube::prepare_call(path, &body)` (with `Text(..)` for a text body) and
   pass signing and options to `build_transaction`.
