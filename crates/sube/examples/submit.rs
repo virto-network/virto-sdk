@@ -3,14 +3,15 @@
 //! Submissions are tracked via `transactionWatch_v1_submitAndWatch`
 //! and wait for finalization before returning.
 //!
-//! Run with: cargo run --example submit --features wss,examples -- [seed phrase]
+//! Run with: cargo run --example submit --features wss,libwallet -- [seed phrase]
 
 use libwallet::{
-    self, Signer as _, Substrate,
+    Substrate,
     vault::{Simple, Vault as _, utils::DerivedSigner},
 };
 use std::env;
-use sube::{SignerFn, Sube, Text, TransactionOptions, WaitFor};
+use sube::libwallet::{LibwalletSigner, SignatureScheme};
+use sube::{Sube, Text, TransactionOptions, WaitFor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     smol::block_on(async {
@@ -32,18 +33,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Account: 0x{}", hex::encode(account_id));
         println!("Phrase: \"{phrase}\"");
 
-        // Adapt libwallet::Signer into sube::SignerFn
-        let signer = SignerFn::new(account_id, |message: &[u8]| {
-            let msg = message.to_vec();
-            let account = &account;
-            async move {
-                account
-                    .sign_msg(&msg)
-                    .await
-                    .map(|sig| sig.as_ref().try_into().unwrap())
-                    .map_err(|_| sube::Error::Encode("signing failed".into()))
-            }
-        });
+        // Pair the libwallet signer with its on-chain account and scheme.
+        let signer = LibwalletSigner::new(account, account_id, SignatureScheme::Sr25519);
 
         let mut chain = Sube::connect("wss://kreivo.io").await?;
 

@@ -99,7 +99,7 @@ required-features = ["wss"]
 
 [[example]]
 name = "submit"
-required-features = ["wss"]
+required-features = ["wss", "libwallet"]
 
 [[example]]
 name = "subscribe"
