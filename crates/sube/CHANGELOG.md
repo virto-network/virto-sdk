@@ -12,9 +12,9 @@
   alias that returns it.
 - `ExtrinsicAssembler::assemble` returns an `AssembledExtrinsic` instead of
   `Vec<u8>`.
-- `OneShotCall` and `CallBuilder::{signer, nonce, with_extension, finalize}`
-  were removed, and `CallBuilder` lost its signer type parameter; signing and
-  options go through the staged transaction API.
+- `OneShotCall`, `CallBuilder` and `Sube::call` were removed. Use
+  `Sube::prepare_call(path, &body)` (with `Text(..)` for a text body) and
+  pass signing and options to `build_transaction`.
 - Transactions are mortal by default (64 blocks) instead of immortal.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.

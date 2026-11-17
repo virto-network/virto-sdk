@@ -46,9 +46,9 @@ pub use alloc::rc::Rc;
 pub use scales::{self, Registry, Value};
 pub use value::DynValue;
 
-pub use builder::{CallBuilder, Sube, SubeBuilder};
 #[cfg(feature = "ws-edge")]
 pub use builder::{EdgeResources, EdgeSube, connect_edge, connect_edge_with_meta};
+pub use builder::{Sube, SubeBuilder};
 pub use extrinsic::{
     AssembledExtrinsic, AuthorizationSummary, ChainProperties, DispatchOutcome, EncodeCall,
     EncodedExtension, EncodedExtrinsic, Mortality, PreparedCall, Text, TransactionEvent,

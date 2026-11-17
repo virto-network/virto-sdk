@@ -18,22 +18,6 @@ use crate::backend::{AnyBackend, chain_string_to_url, connect, get_metadata};
 #[cfg(any(feature = "ws", feature = "smoldot-std"))]
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-// --- Call configuration ---
-
-struct CallData<Body> {
-    path: String,
-    body: Body,
-}
-
-impl CallData<()> {
-    fn body<B>(self, body: B) -> CallData<B> {
-        CallData {
-            body,
-            path: self.path,
-        }
-    }
-}
-
 // --- SubeBuilder: entry point ---
 
 /// Lazy handle returned by [`sube()`](crate::sube).
@@ -193,17 +177,6 @@ impl<B: Backend> Sube<B> {
     pub async fn query_at(&mut self, path: &str, block: u32) -> SubeResult<Response> {
         let path = path.trim_matches('/');
         crate::query(&mut self.backend, &self.metadata, path, Some(block)).await
-    }
-
-    /// Build an extrinsic call for the given pallet/method path.
-    pub fn call(&mut self, path: &str) -> CallBuilder<'_, B, ()> {
-        CallBuilder {
-            sube: self,
-            call: CallData {
-                path: path.trim_matches('/').into(),
-                body: (),
-            },
-        }
     }
 
     /// Access the chain's metadata.
@@ -602,44 +575,6 @@ impl Sube {
         self.backend = connect(&url, self.timeout).await?;
         self.chain_properties = None;
         Ok(())
-    }
-}
-
-// --- CallBuilder (for reusable handle) ---
-
-/// Builder for an extrinsic submission via a reusable [`Sube`] handle.
-pub struct CallBuilder<'a, Bk: Backend, Body = ()> {
-    sube: &'a mut Sube<Bk>,
-    call: CallData<Body>,
-}
-
-impl<'a, Bk: Backend> CallBuilder<'a, Bk, ()> {
-    pub fn body<B>(self, body: B) -> CallBuilder<'a, Bk, B> {
-        CallBuilder {
-            sube: self.sube,
-            call: self.call.body(body),
-        }
-    }
-
-    /// Set the call body using scales text format.
-    ///
-    /// ```rust,ignore
-    /// let call = chain.call("balances/transfer_keep_alive")
-    ///     .body_text("(dest:MultiAddress::Id(0xd435...);value:1000000)")
-    ///     .prepare()?;
-    /// ```
-    pub fn body_text(self, text: &'a str) -> CallBuilder<'a, Bk, crate::Text<'a>> {
-        self.body(crate::Text(text))
-    }
-}
-
-impl<'a, Bk: Backend, B> CallBuilder<'a, Bk, B>
-where
-    B: EncodeCall,
-{
-    /// Prepare the call without signing or submitting it.
-    pub fn prepare(self) -> SubeResult<PreparedCall> {
-        self.sube.prepare_call(&self.call.path, &self.call.body)
     }
 }
 
