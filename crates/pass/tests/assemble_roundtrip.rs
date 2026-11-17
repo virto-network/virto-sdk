@@ -79,7 +79,7 @@ fn encode_pass_credential_against_kreivo_metadata() {
         &overrides,
     );
 
-    let (extra, _additional) = result.expect("encode_extensions should succeed");
+    let (extra, _additional, _) = result.expect("encode_extensions should succeed");
 
     // PassAuthenticate is the first extension: Some | device_id |
     // PassCredential::WebAuthn | meta | compact-prefixed byte fields.
@@ -112,7 +112,7 @@ fn kreivo_v5_inherited_implication_golden_vector() {
             pass::workflow::prepare_remove_device(&meta, &config, pass::DeviceId([0x11; 32]))
         })
         .expect("remove_device call");
-    let (after_extra, after_additional) = encode_extensions(
+    let (after_extra, after_additional, _) = encode_extensions(
         &meta.extrinsic.extensions[pass_index + 1..],
         &meta.registry,
         &ctx(),

@@ -53,8 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let extrinsic = chain
             .build_transaction(&call, &signer, TransactionOptions::default())
             .await?;
-        println!("Call: {}", call.hex);
-        println!("Extrinsic: {}", extrinsic.hex);
+        println!("Call: {}", call.hex());
+        println!("Extrinsic: {}", extrinsic.hex());
         let receipt = chain
             .submit_transaction(&extrinsic, WaitFor::Finalized)
             .await?;

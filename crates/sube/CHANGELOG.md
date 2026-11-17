@@ -21,6 +21,14 @@
   implements; `metadata` decodes the inclusion block's events into the
   receipt. Applications should call `Sube::submit_transaction`, which also
   checks the runtime version and genesis hash the bytes were built for.
+- `extrinsic::encode_extensions` returns `(extra, additional_signed,
+  extensions)` instead of `(extra, additional_signed)`; the third item holds
+  each extension's exact bytes. There is no separate
+  `encode_extensions_detailed`.
+- Transaction artifacts hold bytes only: `PreparedCall::hex` and
+  `EncodedExtrinsic::hex` are methods instead of fields, and
+  `EncodedExtension` has `extra`/`additional_signed` byte fields with
+  `extra_hex()`/`additional_signed_hex()` methods.
 - Transactions are mortal by default (64 blocks) instead of immortal.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.

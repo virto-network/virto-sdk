@@ -467,12 +467,12 @@ fn print_call_artifact(chain_url: &str, prepared: &sube::PreparedCall, json: boo
                 "chain": chain_url,
                 "pallet": prepared.pallet,
                 "call": prepared.call,
-                "callHex": prepared.hex,
+                "callHex": prepared.hex(),
                 "submitted": false,
             })
         );
     } else {
-        println!("{}", prepared.hex);
+        println!("{}", prepared.hex());
     }
 }
 
@@ -1203,10 +1203,10 @@ async fn pass_command(
                     user_id: user_id.0,
                     pass_account: draft.predicted_account.0,
                     device_id: draft.attestation.device_id.0,
+                    call_hex: draft.call.hex(),
                     pallet: draft.call.pallet,
                     call: draft.call.call,
                     call_bytes: draft.call.bytes,
-                    call_hex: draft.call.hex,
                     checkpoint_number: draft.checkpoint_number,
                     checkpoint_hash: draft.checkpoint_hash,
                     valid_through: draft.valid_through,
@@ -1219,7 +1219,6 @@ async fn pass_command(
                 pallet: pending.pallet.clone(),
                 call: pending.call.clone(),
                 bytes: pending.call_bytes.clone(),
-                hex: pending.call_hex.clone(),
             };
             let registrar_signer = wallet_signer(&registrar_profile).await?;
             let receipt = review_pass_transaction(
@@ -1397,10 +1396,10 @@ async fn pass_command(
                         device: enrolled_device,
                         filter: filter.clone(),
                         admin_confirm,
+                        call_hex: call.hex(),
                         pallet: call.pallet,
                         call: call.call,
                         call_bytes: call.bytes,
-                        call_hex: call.hex,
                         checkpoint_number: checkpoint.number,
                         checkpoint_hash: checkpoint.hash,
                         valid_through: checkpoint.number.saturating_add(2),
@@ -1413,7 +1412,6 @@ async fn pass_command(
                     pallet: pending.pallet.clone(),
                     call: pending.call.clone(),
                     bytes: pending.call_bytes.clone(),
-                    hex: pending.call_hex.clone(),
                 };
 
                 let receipt = review_profile_device_transaction(
@@ -1949,12 +1947,10 @@ mod tests {
     fn review_artifact_contains_both_identities_and_no_secret_fields() {
         let extrinsic = sube::EncodedExtrinsic {
             bytes: vec![1, 2],
-            hex: "0x0102".into(),
             call: sube::PreparedCall {
                 pallet: "Balances".into(),
                 call: "transfer".into(),
                 bytes: vec![5, 0],
-                hex: "0x0500".into(),
             },
             checkpoint_hash: [3; 32],
             checkpoint_number: 10,
@@ -2210,7 +2206,7 @@ mod tests {
                 assert!(
                     call.bytes.ends_with(&expected.filter),
                     "{policy:?}: call {} does not end with {}",
-                    call.hex,
+                    call.hex(),
                     hex::encode(&expected.filter)
                 );
             }

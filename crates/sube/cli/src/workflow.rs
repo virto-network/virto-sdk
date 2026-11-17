@@ -217,10 +217,10 @@ pub async fn prepare_enrollment(
             user_id: user_id.0,
             pass_account: draft.predicted_account.0,
             device_id: draft.attestation.device_id.0,
+            call_hex: draft.call.hex(),
             pallet: draft.call.pallet,
             call: draft.call.call,
             call_bytes: draft.call.bytes,
-            call_hex: draft.call.hex,
             checkpoint_number: draft.checkpoint_number,
             checkpoint_hash: draft.checkpoint_hash,
             valid_through: draft.valid_through,
@@ -233,7 +233,6 @@ pub async fn prepare_enrollment(
         pallet: pending.pallet.clone(),
         call: pending.call.clone(),
         bytes: pending.call_bytes.clone(),
-        hex: pending.call_hex.clone(),
     };
     let registrar = crate::wallet_signer(&registrar_profile).await?;
     let prepared = prepare_transaction(
@@ -444,10 +443,10 @@ pub async fn prepare_device_addition(
             device: enrolled_device,
             filter: request.filter,
             admin_confirm: request.admin_confirmed,
+            call_hex: call.hex(),
             pallet: call.pallet,
             call: call.call,
             call_bytes: call.bytes,
-            call_hex: call.hex,
             checkpoint_number: checkpoint.number,
             checkpoint_hash: checkpoint.hash,
             valid_through: checkpoint.number.saturating_add(2),
@@ -460,7 +459,6 @@ pub async fn prepare_device_addition(
         pallet: pending.pallet.clone(),
         call: pending.call.clone(),
         bytes: pending.call_bytes.clone(),
-        hex: pending.call_hex.clone(),
     };
     let prepared = prepare_profile_device_transaction(
         chain,
@@ -1061,14 +1059,14 @@ pub fn transaction_artifact(
         "call": {
             "pallet": extrinsic.call.pallet,
             "name": extrinsic.call.call,
-            "hex": extrinsic.call.hex,
+            "hex": extrinsic.call.hex(),
         },
         "extensions": extrinsic.extensions.iter().map(|extension| serde_json::json!({
             "identifier": extension.identifier,
-            "extraHex": extension.extra_hex,
-            "additionalSignedHex": extension.additional_signed_hex,
+            "extraHex": extension.extra_hex(),
+            "additionalSignedHex": extension.additional_signed_hex(),
         })).collect::<Vec<_>>(),
-        "extrinsicHex": extrinsic.hex,
+        "extrinsicHex": extrinsic.hex(),
         "fee": report.partial_fee.map(|fee| fee.to_string()),
         "weight": report.weight.as_ref().map(|weight| serde_json::json!({
             "refTime": weight.ref_time,
@@ -1123,11 +1121,13 @@ pub fn review_text(
         let _ = writeln!(
             output,
             "  {} extra={} additional={}",
-            extension.identifier, extension.extra_hex, extension.additional_signed_hex
+            extension.identifier,
+            extension.extra_hex(),
+            extension.additional_signed_hex()
         );
     }
-    let _ = writeln!(output, "Call hex: {}", extrinsic.call.hex);
-    let _ = writeln!(output, "Extrinsic hex: {}", extrinsic.hex);
+    let _ = writeln!(output, "Call hex: {}", extrinsic.call.hex());
+    let _ = writeln!(output, "Extrinsic hex: {}", extrinsic.hex());
     for warning in &report.warnings {
         let _ = writeln!(output, "Warning: {warning}");
     }
@@ -1190,12 +1190,10 @@ mod tests {
     fn artifact_contains_extensions_and_no_secret_fields() {
         let extrinsic = sube::EncodedExtrinsic {
             bytes: vec![1, 2],
-            hex: "0x0102".into(),
             call: sube::PreparedCall {
                 pallet: "Balances".into(),
                 call: "transfer".into(),
                 bytes: vec![5, 0],
-                hex: "0x0500".into(),
             },
             checkpoint_hash: [3; 32],
             checkpoint_number: 10,
@@ -1211,8 +1209,8 @@ mod tests {
             },
             extensions: vec![sube::EncodedExtension {
                 identifier: "CheckNonce".into(),
-                extra_hex: "0x1c".into(),
-                additional_signed_hex: "0x".into(),
+                extra: vec![0x1c],
+                additional_signed: vec![],
             }],
         };
         let artifact = transaction_artifact(

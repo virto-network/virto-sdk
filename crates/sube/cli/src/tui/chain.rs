@@ -170,8 +170,8 @@ pub fn spawn(
                                     .await
                                     {
                                         Ok(Some((prepared, review, artifact))) => {
-                                            let call_hex = prepared.transaction.call.hex.clone();
-                                            let extrinsic_hex = prepared.transaction.hex.clone();
+                                            let call_hex = prepared.transaction.call.hex();
+                                            let extrinsic_hex = prepared.transaction.hex();
                                             prepared_transaction = Some(prepared);
                                             prepared_artifact = Some(artifact.clone());
                                             let _ = to_ui
@@ -190,7 +190,7 @@ pub fn spawn(
                                             let _ = to_ui
                                                 .send(FromChain::CallPrepared(CallReview {
                                                     text: review,
-                                                    call_hex: Some(call.hex.clone()),
+                                                    call_hex: Some(call.hex()),
                                                     extrinsic_hex: None,
                                                     artifact: None,
                                                     submittable: false,
@@ -209,7 +209,7 @@ pub fn spawn(
                                         let _ = to_ui
                                             .send(FromChain::CallPrepared(CallReview {
                                                 text: review,
-                                                call_hex: Some(call.hex.clone()),
+                                                call_hex: Some(call.hex()),
                                                 extrinsic_hex: None,
                                                 artifact: None,
                                                 submittable: false,
@@ -306,10 +306,10 @@ pub fn spawn(
                                             ),
                                             call_hex: prepared_transaction
                                                 .as_ref()
-                                                .map(|prepared| prepared.transaction.call.hex.clone()),
+                                                .map(|prepared| prepared.transaction.call.hex()),
                                             extrinsic_hex: prepared_transaction
                                                 .as_ref()
-                                                .map(|prepared| prepared.transaction.hex.clone()),
+                                                .map(|prepared| prepared.transaction.hex()),
                                             artifact: prepared_artifact.clone(),
                                             submittable: true,
                                             requires_finalized: false,
@@ -406,8 +406,8 @@ pub fn spawn(
                                     effect,
                                 }) => {
                                     let prepared = *prepared;
-                                    let call_hex = prepared.transaction.call.hex.clone();
-                                    let extrinsic_hex = prepared.transaction.hex.clone();
+                                    let call_hex = prepared.transaction.call.hex();
+                                    let extrinsic_hex = prepared.transaction.hex();
                                     let artifact =
                                         serde_json::to_string_pretty(&prepared.artifact())
                                             .unwrap_or_else(|_| "{}".into());
@@ -473,8 +473,8 @@ pub fn spawn(
                             .await
                             {
                                 Ok((prepared, effect, pass_account, valid_through)) => {
-                                    let call_hex = prepared.transaction.call.hex.clone();
-                                    let extrinsic_hex = prepared.transaction.hex.clone();
+                                    let call_hex = prepared.transaction.call.hex();
+                                    let extrinsic_hex = prepared.transaction.hex();
                                     let artifact =
                                         serde_json::to_string_pretty(&prepared.artifact())
                                             .unwrap_or_else(|_| "{}".into());
@@ -523,8 +523,8 @@ pub fn spawn(
                             .await
                             {
                                 Ok((prepared, effect, device_id, valid_through)) => {
-                                    let call_hex = prepared.transaction.call.hex.clone();
-                                    let extrinsic_hex = prepared.transaction.hex.clone();
+                                    let call_hex = prepared.transaction.call.hex();
+                                    let extrinsic_hex = prepared.transaction.hex();
                                     let artifact =
                                         serde_json::to_string_pretty(&prepared.artifact())
                                             .unwrap_or_else(|_| "{}".into());
@@ -573,8 +573,8 @@ pub fn spawn(
                             .await
                             {
                                 Ok((prepared, effect)) => {
-                                    let call_hex = prepared.transaction.call.hex.clone();
-                                    let extrinsic_hex = prepared.transaction.hex.clone();
+                                    let call_hex = prepared.transaction.call.hex();
+                                    let extrinsic_hex = prepared.transaction.hex();
                                     let artifact =
                                         serde_json::to_string_pretty(&prepared.artifact())
                                             .unwrap_or_else(|_| "{}".into());
@@ -647,7 +647,9 @@ pub fn spawn(
 fn prepared_call_review(call: &sube::PreparedCall) -> String {
     format!(
         "Prepared call (not submitted)\n\n{}::{}\n{}",
-        call.pallet, call.call, call.hex
+        call.pallet,
+        call.call,
+        call.hex()
     )
 }
 

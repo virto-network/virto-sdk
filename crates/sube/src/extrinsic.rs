@@ -78,7 +78,17 @@ pub struct PreparedCall {
     pub pallet: String,
     pub call: String,
     pub bytes: Vec<u8>,
-    pub hex: String,
+}
+
+impl PreparedCall {
+    /// `0x`-prefixed hex of the encoded call.
+    pub fn hex(&self) -> String {
+        to_hex(&self.bytes)
+    }
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
 }
 
 /// Transaction lifetime.
@@ -149,8 +159,20 @@ pub struct AuthorizationSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncodedExtension {
     pub identifier: String,
-    pub extra_hex: String,
-    pub additional_signed_hex: String,
+    pub extra: Vec<u8>,
+    pub additional_signed: Vec<u8>,
+}
+
+impl EncodedExtension {
+    /// `0x`-prefixed hex of the bytes this extension adds to the extrinsic.
+    pub fn extra_hex(&self) -> String {
+        to_hex(&self.extra)
+    }
+
+    /// `0x`-prefixed hex of the bytes this extension adds to the signed payload.
+    pub fn additional_signed_hex(&self) -> String {
+        to_hex(&self.additional_signed)
+    }
 }
 
 /// Inner extrinsic bytes and the extension bytes used to assemble them.
@@ -172,7 +194,6 @@ pub struct ChainProperties {
 #[derive(Clone, Debug)]
 pub struct EncodedExtrinsic {
     pub bytes: Vec<u8>,
-    pub hex: String,
     pub call: PreparedCall,
     pub checkpoint_hash: [u8; 32],
     pub checkpoint_number: u64,
@@ -183,6 +204,13 @@ pub struct EncodedExtrinsic {
     pub nonce: u64,
     pub authorization: AuthorizationSummary,
     pub extensions: Vec<EncodedExtension>,
+}
+
+impl EncodedExtrinsic {
+    /// `0x`-prefixed hex of the length-prefixed extrinsic.
+    pub fn hex(&self) -> String {
+        to_hex(&self.bytes)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -272,7 +300,7 @@ fn find_override(extensions: &[(String, DynValue)], id: &str) -> Option<DynValue
 }
 
 /// Default value for a well-known extension's "extra" data.
-/// `CheckMortality` is encoded by [`encode_extensions_detailed`] itself.
+/// `CheckMortality` is encoded by [`encode_extensions`] itself.
 fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
         "CheckNonce" => Some(DynValue::from(ctx.account_nonce)),
@@ -354,21 +382,11 @@ pub fn encode_mortal_era(period: u64, current: u64) -> [u8; 2] {
     encoded.to_le_bytes()
 }
 
-/// Encode extra and additional_signed bytes from extension metadata.
+/// Encode the extra and additional_signed bytes of all extensions in
+/// metadata order, along with the exact bytes each one contributed.
 ///
 /// Pure and sync — no I/O needed, so it's testable in isolation.
 pub fn encode_extensions(
-    extensions: &[SignedExtensionMeta],
-    registry: &scales::Registry,
-    ctx: &ChainContext,
-    overrides: &[(String, DynValue)],
-) -> Result<(Vec<u8>, Vec<u8>)> {
-    let (extra, additional, _) = encode_extensions_detailed(extensions, registry, ctx, overrides)?;
-    Ok((extra, additional))
-}
-
-/// Encode extensions and retain the exact bytes contributed by each entry.
-pub fn encode_extensions_detailed(
     extensions: &[SignedExtensionMeta],
     registry: &scales::Registry,
     ctx: &ChainContext,
@@ -422,13 +440,13 @@ pub fn encode_extensions_detailed(
             )?;
         }
 
-        summaries.push(EncodedExtension {
-            identifier: ext.identifier.clone(),
-            extra_hex: format!("0x{}", hex::encode(&extension_extra)),
-            additional_signed_hex: format!("0x{}", hex::encode(&extension_additional)),
-        });
         extra.extend_from_slice(&extension_extra);
         additional.extend_from_slice(&extension_additional);
+        summaries.push(EncodedExtension {
+            identifier: ext.identifier.clone(),
+            extra: extension_extra,
+            additional_signed: extension_additional,
+        });
     }
 
     Ok((extra, additional, summaries))
@@ -462,7 +480,6 @@ where
     Ok(PreparedCall {
         pallet: pallet.name.clone(),
         call: call_name,
-        hex: format!("0x{}", hex::encode(&bytes)),
         bytes,
     })
 }
@@ -499,7 +516,6 @@ pub async fn build_transaction(
     let bytes = [len, assembled.bytes].concat();
     let expires_at = expiry(ctx.checkpoint_number, ctx.mortality);
     Ok(EncodedExtrinsic {
-        hex: format!("0x{}", hex::encode(&bytes)),
         bytes,
         call: call.clone(),
         checkpoint_hash: ctx.checkpoint_hash,
@@ -528,7 +544,7 @@ pub async fn assemble_signed_v4(
 ) -> Result<AssembledExtrinsic> {
     // Encode extensions
     let (extra_bytes, additional_signed, extensions) =
-        encode_extensions_detailed(&meta.extensions, registry, ctx, overrides)?;
+        encode_extensions(&meta.extensions, registry, ctx, overrides)?;
 
     // Sign
     let signature_payload = [encoded_call, &extra_bytes, &additional_signed].concat();
@@ -659,7 +675,7 @@ mod tests {
             .iter()
             .find(|extension| extension.identifier == "CheckMortality")
             .unwrap();
-        let (extra, additional) = encode_extensions(
+        let (extra, additional, _) = encode_extensions(
             core::slice::from_ref(mortality),
             &meta.registry,
             &test_ctx(),
@@ -783,7 +799,7 @@ mod tests {
             .iter()
             .find(|extension| extension.identifier == "CheckNonce")
             .unwrap();
-        let (extra, _) = encode_extensions(
+        let (extra, _, _) = encode_extensions(
             core::slice::from_ref(nonce),
             &meta.registry,
             &test_ctx(),
@@ -816,26 +832,26 @@ mod tests {
     #[test]
     fn detailed_extension_summary_uses_exact_encoded_bytes() {
         let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
-        let (extra, additional, summaries) = encode_extensions_detailed(
-            &meta.extrinsic.extensions,
-            &meta.registry,
-            &test_ctx(),
-            &[],
-        )
-        .unwrap();
+        let (extra, additional, summaries) =
+            encode_extensions(&meta.extrinsic.extensions, &meta.registry, &test_ctx(), &[])
+                .unwrap();
 
         let summarized_extra = summaries
             .iter()
-            .flat_map(|summary| hex::decode(summary.extra_hex.trim_start_matches("0x")).unwrap())
+            .flat_map(|summary| summary.extra.iter().copied())
             .collect::<Vec<_>>();
         let summarized_additional = summaries
             .iter()
-            .flat_map(|summary| {
-                hex::decode(summary.additional_signed_hex.trim_start_matches("0x")).unwrap()
-            })
+            .flat_map(|summary| summary.additional_signed.iter().copied())
             .collect::<Vec<_>>();
         assert_eq!(summarized_extra, extra);
         assert_eq!(summarized_additional, additional);
+        let nonce = summaries
+            .iter()
+            .find(|summary| summary.identifier == "CheckNonce")
+            .unwrap();
+        assert_eq!(nonce.extra_hex(), "0xa8");
+        assert_eq!(nonce.additional_signed_hex(), "0x");
         assert_eq!(
             summaries
                 .iter()

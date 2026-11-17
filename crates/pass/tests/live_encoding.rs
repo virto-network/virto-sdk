@@ -36,7 +36,7 @@ fn session_call_carries_the_filter_and_an_optional_duration() {
         // DeviceFilter::Calls (variant 2) with two pairs, sorted as the
         // runtime's BTreeSet stores them.
         expected.extend([0x02, 2 << 2, 5, 0, 10, 3]);
-        assert_eq!(call.hex, format!("0x{}", hex::encode(&expected)));
+        assert_eq!(call.hex(), format!("0x{}", hex::encode(&expected)));
     })
 }
 
