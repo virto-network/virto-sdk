@@ -1204,16 +1204,6 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .collect()
     }
 
-    async fn submit(
-        &mut self,
-        ext: &[u8],
-        wait_for: crate::WaitFor,
-        metadata: &Metadata,
-    ) -> crate::Result<crate::TransactionReceipt> {
-        let receipt = self.watch_transaction(ext, wait_for).await?;
-        self.enrich_receipt(receipt, metadata).await
-    }
-
     async fn inspect_transaction(
         &mut self,
         ext: &crate::EncodedExtrinsic,
@@ -1279,6 +1269,95 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         }
 
         Ok(report)
+    }
+
+    async fn submit(
+        &mut self,
+        ext: &[u8],
+        wait_for: crate::WaitFor,
+        metadata: &Metadata,
+    ) -> crate::Result<crate::TransactionReceipt> {
+        let mut receipt = self.watch_transaction(ext, wait_for).await?;
+        let Some(block_hash) = receipt
+            .finalized_block_hash
+            .as_deref()
+            .or(receipt.best_block_hash.as_deref())
+        else {
+            return Ok(receipt);
+        };
+        let Some(extrinsic_index) = receipt.extrinsic_index else {
+            return Ok(receipt);
+        };
+
+        // Transaction-watch blocks are not guaranteed to be pinned by the
+        // chainHead subscription, so fetch events through archive storage.
+        let key = match crate::resolve_query(metadata, "system/events") {
+            Ok(crate::ResolvedQuery::Storage(key)) => key,
+            _ => return Ok(receipt),
+        };
+        let key_bytes = key.key();
+        let items = match self
+            .archive_storage(block_hash, &[to_hex(&key_bytes)])
+            .await
+        {
+            Ok(items) => items,
+            Err(_) => return Ok(receipt),
+        };
+        let Some(raw) = items
+            .iter()
+            .find(|item| item.key.trim_start_matches("0x") == hex::encode(&key_bytes))
+            .and_then(|item| item.value.as_deref())
+            .and_then(|value| hex::decode(value.trim_start_matches("0x")).ok())
+        else {
+            return Ok(receipt);
+        };
+
+        let records = scales::Value::new(&raw, key.ty, &metadata.registry);
+        let Some(records) = records.sequence_iter() else {
+            return Ok(receipt);
+        };
+        for record in records {
+            let Some(phase) = record.field("phase") else {
+                continue;
+            };
+            if phase.variant_name() != Some("ApplyExtrinsic")
+                || phase.variant_data().and_then(|value| value.as_u32()) != Some(extrinsic_index)
+            {
+                continue;
+            }
+
+            let Some(event) = record.field("event") else {
+                continue;
+            };
+            let Some(pallet) = event.variant_name() else {
+                continue;
+            };
+            let Some(pallet_event) = event.variant_data() else {
+                continue;
+            };
+            let Some(variant) = pallet_event.variant_name() else {
+                continue;
+            };
+
+            if pallet.eq_ignore_ascii_case("System") && variant == "ExtrinsicSuccess" {
+                receipt.dispatch_outcome = crate::DispatchOutcome::Success;
+            } else if pallet.eq_ignore_ascii_case("System") && variant == "ExtrinsicFailed" {
+                let error = resolve_dispatch_error(&pallet_event, metadata).unwrap_or_else(|| {
+                    scales::to_text(&pallet_event)
+                        .ok()
+                        .unwrap_or_else(|| "runtime dispatch error".into())
+                });
+                receipt.dispatch_outcome = crate::DispatchOutcome::Failed(error);
+            }
+
+            receipt.events.push(crate::TransactionEvent {
+                pallet: pallet.into(),
+                variant: variant.into(),
+                decoded: scales::to_text(&pallet_event).ok(),
+            });
+        }
+
+        Ok(receipt)
     }
 
     async fn chain_properties(&mut self) -> crate::Result<crate::ChainProperties> {
@@ -1398,96 +1477,6 @@ fn resolve_module_error(metadata: &Metadata, pallet_index: u8, error_index: u8) 
     };
     let error = errors.variant(error_index).ok()?;
     Some(format!("{}::{}", pallet.name, error.name()))
-}
-
-impl<R: Rpc + RpcSubscription> ChainHead<R> {
-    /// Populate metadata-decoded events and dispatch outcome for a receipt.
-    async fn enrich_receipt(
-        &mut self,
-        mut receipt: crate::TransactionReceipt,
-        metadata: &Metadata,
-    ) -> crate::Result<crate::TransactionReceipt> {
-        let Some(block_hash) = receipt
-            .finalized_block_hash
-            .as_deref()
-            .or(receipt.best_block_hash.as_deref())
-        else {
-            return Ok(receipt);
-        };
-        let Some(extrinsic_index) = receipt.extrinsic_index else {
-            return Ok(receipt);
-        };
-
-        // Transaction-watch blocks are not guaranteed to be pinned by the
-        // chainHead subscription, so fetch events through archive storage.
-        let key = match crate::resolve_query(metadata, "system/events") {
-            Ok(crate::ResolvedQuery::Storage(key)) => key,
-            _ => return Ok(receipt),
-        };
-        let key_bytes = key.key();
-        let items = match self
-            .archive_storage(block_hash, &[to_hex(&key_bytes)])
-            .await
-        {
-            Ok(items) => items,
-            Err(_) => return Ok(receipt),
-        };
-        let Some(raw) = items
-            .iter()
-            .find(|item| item.key.trim_start_matches("0x") == hex::encode(&key_bytes))
-            .and_then(|item| item.value.as_deref())
-            .and_then(|value| hex::decode(value.trim_start_matches("0x")).ok())
-        else {
-            return Ok(receipt);
-        };
-
-        let records = scales::Value::new(&raw, key.ty, &metadata.registry);
-        let Some(records) = records.sequence_iter() else {
-            return Ok(receipt);
-        };
-        for record in records {
-            let Some(phase) = record.field("phase") else {
-                continue;
-            };
-            if phase.variant_name() != Some("ApplyExtrinsic")
-                || phase.variant_data().and_then(|value| value.as_u32()) != Some(extrinsic_index)
-            {
-                continue;
-            }
-
-            let Some(event) = record.field("event") else {
-                continue;
-            };
-            let Some(pallet) = event.variant_name() else {
-                continue;
-            };
-            let Some(pallet_event) = event.variant_data() else {
-                continue;
-            };
-            let Some(variant) = pallet_event.variant_name() else {
-                continue;
-            };
-
-            if pallet.eq_ignore_ascii_case("System") && variant == "ExtrinsicSuccess" {
-                receipt.dispatch_outcome = crate::DispatchOutcome::Success;
-            } else if pallet.eq_ignore_ascii_case("System") && variant == "ExtrinsicFailed" {
-                let error = resolve_dispatch_error(&pallet_event, metadata).unwrap_or_else(|| {
-                    scales::to_text(&pallet_event)
-                        .ok()
-                        .unwrap_or_else(|| "runtime dispatch error".into())
-                });
-                receipt.dispatch_outcome = crate::DispatchOutcome::Failed(error);
-            }
-
-            receipt.events.push(crate::TransactionEvent {
-                pallet: pallet.into(),
-                variant: variant.into(),
-                decoded: scales::to_text(&pallet_event).ok(),
-            });
-        }
-
-        Ok(receipt)
-    }
 }
 
 // --- Two-request metadata fetch helpers ---
