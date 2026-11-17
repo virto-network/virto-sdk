@@ -688,7 +688,6 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         .map_err(anyhow::Error::msg)?;
     let form_context = FormContext {
         ss58_format: ready.properties.ss58_format,
-        token_decimals: ready.properties.token_decimals.first().copied(),
     };
     let meta = sube::Rc::new(ready.metadata);
     let profiles = crate::profiles::Profiles::load(profile_path)?;

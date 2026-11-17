@@ -62,14 +62,6 @@ impl Field {
                     return encode_bytes(input).map_err(|error| format!("{name}: {error}"));
                 }
 
-                if input.contains('.')
-                    && is_amount_name(name)
-                    && let Some(decimals) = context.token_decimals
-                {
-                    return decimal_to_integer(input, decimals)
-                        .map_err(|error| format!("{name}: {error}"));
-                }
-
                 if looks_like_ss58(input) {
                     return decode_ss58_account(input, context.ss58_format)
                         .map(|account| format!("0x{}", hex::encode(account)))
@@ -142,7 +134,6 @@ impl Field {
 #[derive(Clone, Copy, Default)]
 pub struct FormContext {
     pub ss58_format: Option<u16>,
-    pub token_decimals: Option<u32>,
 }
 
 fn encode_bytes(input: &str) -> Result<String, String> {
@@ -162,41 +153,6 @@ fn encode_bytes(input: &str) -> Result<String, String> {
 
     let value = input.strip_prefix("utf8:").unwrap_or(input);
     Ok(format!("0x{}", hex::encode(value.as_bytes())))
-}
-
-fn is_amount_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    ["amount", "balance", "value", "tip", "fee", "deposit"]
-        .iter()
-        .any(|candidate| name == *candidate || name.ends_with(&format!("_{candidate}")))
-}
-
-fn decimal_to_integer(input: &str, decimals: u32) -> Result<String, String> {
-    let (whole, fractional) = input
-        .split_once('.')
-        .ok_or_else(|| "expected a decimal amount".to_string())?;
-    if whole.is_empty()
-        || !whole.bytes().all(|byte| byte.is_ascii_digit())
-        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return Err("amount must contain only decimal digits".into());
-    }
-    if fractional.len() > decimals as usize {
-        return Err(format!(
-            "amount has {} fractional digits, but the chain supports {decimals}",
-            fractional.len()
-        ));
-    }
-
-    let mut value = String::with_capacity(whole.len() + decimals as usize);
-    value.push_str(whole);
-    value.push_str(fractional);
-    value.extend(std::iter::repeat_n(
-        '0',
-        decimals as usize - fractional.len(),
-    ));
-    let value = value.trim_start_matches('0');
-    Ok(if value.is_empty() { "0" } else { value }.into())
 }
 
 fn looks_like_ss58(input: &str) -> bool {
@@ -815,15 +771,6 @@ mod tests {
     }
 
     #[test]
-    fn decimal_amounts_convert_without_floating_point() {
-        assert_eq!(decimal_to_integer("1.230000", 6).unwrap(), "1230000");
-        assert_eq!(decimal_to_integer("0.000001", 6).unwrap(), "1");
-        assert_eq!(decimal_to_integer("000.000000", 6).unwrap(), "0");
-        assert!(decimal_to_integer("0.0000001", 6).is_err());
-        assert!(decimal_to_integer("1e3.0", 6).is_err());
-    }
-
-    #[test]
     fn ss58_account_decoding_checks_network_and_checksum() {
         let alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
         assert_eq!(
@@ -864,18 +811,21 @@ mod tests {
                 .unwrap();
         let form = FormState::new(
             vec![Field::Text {
-                name: "amount".into(),
-                type_desc: "u128".into(),
-                input: "1.0000001".into(),
+                name: "dest".into(),
+                type_desc: "AccountId32".into(),
+                input: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY".into(),
                 is_bytes: false,
             }],
             sube::Rc::new(metadata.registry.clone()),
             FormContext {
-                token_decimals: Some(6),
                 ss58_format: Some(2),
             },
         );
 
-        assert!(form.values().unwrap_err().contains("fractional digits"));
+        assert!(
+            form.values()
+                .unwrap_err()
+                .starts_with("dest: SS58 network prefix 42")
+        );
     }
 }
