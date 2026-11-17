@@ -65,7 +65,7 @@ impl<S: WalletSigner> Signer for LibwalletSigner<S> {
         self.account
     }
 
-    fn signature_variant(&self) -> Option<&str> {
-        Some(self.scheme.metadata_name())
+    fn signature_variant(&self) -> &str {
+        self.scheme.metadata_name()
     }
 }

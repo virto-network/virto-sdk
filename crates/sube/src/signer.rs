@@ -26,8 +26,8 @@ pub trait Signer {
     /// Ordinary Substrate signers default to `Sr25519`. Ed25519 and ECDSA
     /// adapters should override this instead of relying on a hard-coded
     /// discriminant in the extrinsic encoder.
-    fn signature_variant(&self) -> Option<&str> {
-        Some("Sr25519")
+    fn signature_variant(&self) -> &str {
+        "Sr25519"
     }
 }
 
@@ -87,7 +87,7 @@ impl<T: Signer> ExtrinsicAssembler for T {
         AuthorizationSummary {
             signing_account: account.clone(),
             nonce_account: account,
-            scheme: self.signature_variant().map(Into::into),
+            scheme: Some(self.signature_variant().into()),
         }
     }
 
@@ -140,7 +140,7 @@ impl<T: Signer> Signer for &T {
         (*self).account()
     }
 
-    fn signature_variant(&self) -> Option<&str> {
+    fn signature_variant(&self) -> &str {
         (*self).signature_variant()
     }
 }

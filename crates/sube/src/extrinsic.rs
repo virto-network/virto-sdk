@@ -611,14 +611,10 @@ fn encode_address(
 fn encode_signature(
     signature_ty: Option<TypeId>,
     registry: &scales::Registry,
-    requested: Option<&str>,
+    requested: &str,
     signature: &[u8],
 ) -> Result<Vec<u8>> {
-    let requested = || {
-        requested.ok_or_else(|| Error::Encode("signer did not select a signature variant".into()))
-    };
     let Some(signature_ty) = signature_ty else {
-        let requested = requested()?;
         let index = ["Ed25519", "Sr25519", "Ecdsa"]
             .iter()
             .position(|name| name.eq_ignore_ascii_case(requested))
@@ -631,7 +627,6 @@ fn encode_signature(
     };
     let signature_value = match registry.resolve(signature_ty) {
         Some(scales::TypeDef::Variant(def)) => {
-            let requested = requested()?;
             let variant = def
                 .variants()
                 .find(|variant| variant.name().eq_ignore_ascii_case(requested))
@@ -821,12 +816,11 @@ mod tests {
         );
         for (variant, index) in [("Ed25519", 0u8), ("Sr25519", 1), ("Ecdsa", 2)] {
             assert_eq!(
-                encode_signature(None, registry, Some(variant), &[9; 64]).unwrap(),
+                encode_signature(None, registry, variant, &[9; 64]).unwrap(),
                 [&[index][..], &[9; 64]].concat()
             );
         }
-        assert!(encode_signature(None, registry, Some("Eth"), &[9; 64]).is_err());
-        assert!(encode_signature(None, registry, None, &[9; 64]).is_err());
+        assert!(encode_signature(None, registry, "Eth", &[9; 64]).is_err());
     }
 
     #[test]

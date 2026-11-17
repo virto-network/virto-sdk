@@ -1,6 +1,6 @@
 //! Scoped session resolution, authorization, and persistence.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
@@ -227,7 +227,7 @@ impl<S: Signer> ExtrinsicAssembler for SessionAuthorizer<S> {
         AuthorizationSummary {
             signing_account: self.signer.account().as_ref().to_vec(),
             nonce_account: self.pass_account.0.to_vec(),
-            scheme: self.signer.signature_variant().map(ToString::to_string),
+            scheme: Some(self.signer.signature_variant().into()),
         }
     }
 

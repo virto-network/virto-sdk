@@ -41,6 +41,8 @@
 
 - Metadata-driven V4 address/signature encoding, 64-block mortal checkpoints,
   optional-extension `None` defaults, transaction diagnostics and receipts.
+- `Signer::signature_variant` names the metadata signature variant a signer
+  produces (`&str`, default `"Sr25519"`).
 - Optional `libwallet` adapter for ordinary wallet signers.
 - Non-mutating `sube query` and `sube tx` CLI commands.
 
