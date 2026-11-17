@@ -1011,10 +1011,9 @@ pub async fn prepare_transaction(
     options: sube::TransactionOptions,
 ) -> Result<PreparedTransaction> {
     let transaction = chain.build_transaction(call, authorizer, options).await?;
+    // A known-invalid transaction is still reviewed; `submit_transaction`
+    // refuses to send it.
     let report = chain.inspect_transaction(&transaction).await?;
-    if matches!(report.validity, Some(sube::TransactionValidity::Invalid(_))) {
-        anyhow::bail!("transaction validation reports known-invalid; submission blocked");
-    }
     Ok(PreparedTransaction {
         transaction,
         report,
