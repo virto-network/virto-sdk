@@ -111,7 +111,10 @@ fn substrate_key_attestation_encodes_against_the_runtime_type() {
         let phrase = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo \
                       zoo zoo zoo zoo zoo vote";
         let mut vault = libwallet::Substrate::new(Simple::<()>::from_phrase(phrase).unwrap());
-        let signer = vault.unlock(None, ()).await.ok().expect("unlock");
+        let signer = vault
+            .unlock(None, ())
+            .await
+            .unwrap_or_else(|_| panic!("unlock"));
         let public = signer.public();
         let device = pass::wallet::WalletDevice::new(
             &signer,
