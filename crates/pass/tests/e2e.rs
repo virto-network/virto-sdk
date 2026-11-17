@@ -140,7 +140,8 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
             "registered session was not found in Pass storage"
         );
 
-        let session = pass::SessionAuthorizer::new(draft.predicted_account, session_signer, filter);
+        let session = pass::SessionAuthorizer::new(draft.predicted_account, session_signer, filter)
+            .expect("a scoped session authorizer");
         assert_eq!(session.nonce_account(), draft.predicted_account.0);
         let allowed_transaction = chain
             .build_transaction(&allowed, &session, sube::TransactionOptions::default())

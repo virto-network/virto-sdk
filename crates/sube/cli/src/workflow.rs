@@ -617,7 +617,7 @@ pub async fn prepare_with_active_profile(
                 crate::signers::load_session_signer(&profile.session_entry(), session.account)
                     .await?;
             let authorizer =
-                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
+                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy)?;
             prepare_transaction(chain, chain_url, call, &profile.name, &authorizer, options).await?
         }
     };

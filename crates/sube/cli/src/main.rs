@@ -1297,7 +1297,7 @@ mod tests {
                 signers::load_session_signer(&profile.session_entry(), session.account).await?;
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             let authorizer =
-                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
+                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy)?;
 
             let body = sube::Text("(remark:0x737562652d653265)");
             let disallowed = chain.prepare_call("System/remark_with_event", &body)?;

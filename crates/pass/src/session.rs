@@ -13,7 +13,8 @@ use crate::{Account, DeviceFilter};
 /// V4 session authorization: the pass account supplies the nonce while the
 /// session account is encoded and signs the extrinsic.
 ///
-/// Calls outside the session's filter are refused before signing.
+/// Calls outside the session's filter are refused before signing, and an
+/// `Admin` filter, which would allow every call, is refused outright.
 pub struct SessionAuthorizer<S> {
     pass_account: Account,
     signer: S,
@@ -21,12 +22,17 @@ pub struct SessionAuthorizer<S> {
 }
 
 impl<S> SessionAuthorizer<S> {
-    pub fn new(pass_account: Account, signer: S, filter: DeviceFilter) -> Self {
-        Self {
+    pub fn new(pass_account: Account, signer: S, filter: DeviceFilter) -> Result<Self> {
+        if matches!(filter, DeviceFilter::Admin) {
+            return Err(Error::OperationFailed(
+                "Admin sessions are not permitted".into(),
+            ));
+        }
+        Ok(Self {
             pass_account,
             signer,
             filter,
-        }
+        })
     }
 }
 
@@ -176,9 +182,24 @@ mod tests {
     }
 
     #[test]
+    fn admin_session_authorizers_are_refused() {
+        // A hand-edited stored policy must not yield an allow-all signer.
+        let error = SessionAuthorizer::new(Account([2; 32]), MockSigner, DeviceFilter::Admin)
+            .err()
+            .expect("an Admin session authorizer");
+        assert!(
+            error
+                .to_string()
+                .contains("Admin sessions are not permitted"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn session_authorizer_refuses_calls_outside_its_filter() {
         let (metadata, _) = kreivo();
-        let authorizer = SessionAuthorizer::new(Account([2; 32]), MockSigner, call_filter());
+        let authorizer =
+            SessionAuthorizer::new(Account([2; 32]), MockSigner, call_filter()).unwrap();
         let error = futures_lite::future::block_on(authorizer.assemble(
             &[5, 3, 9],
             &metadata.extrinsic,
@@ -198,7 +219,8 @@ mod tests {
     #[test]
     fn session_signer_and_nonce_identities_are_distinct() {
         let (metadata, _) = kreivo();
-        let authorizer = SessionAuthorizer::new(Account([2; 32]), MockSigner, call_filter());
+        let authorizer =
+            SessionAuthorizer::new(Account([2; 32]), MockSigner, call_filter()).unwrap();
         assert_eq!(authorizer.nonce_account(), [2; 32]);
         let assembled = futures_lite::future::block_on(authorizer.assemble(
             &[5, 2, 9],
