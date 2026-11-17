@@ -39,7 +39,9 @@ impl Default for RuntimeOverrides {
             register: "register".into(),
             add_device: "add_device".into(),
             remove_device: "remove_device".into(),
-            add_session_key: "add_session_key".into(),
+            // Plain `add_session_key` grants an Admin (unrestricted) session;
+            // scoped sessions must use the filtered variant.
+            add_session_key: "add_session_key_with_filter".into(),
             remove_session_key: "remove_session_key".into(),
             pallet_id_constant: "PalletId".into(),
             max_session_duration_constant: "MaxSessionDuration".into(),
@@ -152,7 +154,11 @@ impl PassRuntimeConfig {
         let register = resolve_call(&names.register)?;
         let add_device = resolve_call(&names.add_device)?;
         let remove_device = resolve_call(&names.remove_device)?;
-        let add_session_key = resolve_call(&names.add_session_key)?;
+        // Older runtimes only have the filterless call; it is still discovered
+        // so the rest of the pass workflow works, and `prepare_add_session_key`
+        // refuses it because it would grant an Admin session.
+        let add_session_key =
+            resolve_call(&names.add_session_key).or_else(|_| resolve_call("add_session_key"))?;
         let remove_session_key = resolve_call(&names.remove_session_key).ok();
 
         let attestation_ty =
@@ -365,7 +371,10 @@ mod tests {
         assert_eq!(config.pallet_id, *b"kreivo_p");
         assert!(config.supports_credential("WebAuthn"));
         assert!(config.supports_attestation("WebAuthn"));
+        // This fixture predates `add_session_key_with_filter`.
+        assert_eq!(config.add_session_key.name, "add_session_key");
         assert!(config.add_session_key.has_field("duration"));
+        assert!(!config.add_session_key.has_field("filter"));
     }
 
     #[test]

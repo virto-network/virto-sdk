@@ -76,25 +76,13 @@ impl SessionPolicy {
                 pallets.dedup();
                 Ok(Self::Pallets(pallets))
             }
-            SessionPolicyRequest::Spend {
-                pallet,
-                calls,
-                limit,
-            } => {
-                if calls.is_empty() || limit == 0 {
-                    return Err(Error::BadInput);
-                }
-                let mut resolved = Vec::with_capacity(calls.len());
-                for call in calls {
-                    resolved.push(resolve_call(metadata, &format!("{pallet}/{call}"))?);
-                }
-                resolved.sort();
-                resolved.dedup();
-                Ok(Self::Spend {
-                    calls: resolved,
-                    limit,
-                })
-            }
+            // pallet-pass's Spend filter holds per-asset limits
+            // (`{ asset, max_amount }`), which this policy cannot express;
+            // refuse rather than encode a filter the runtime would misread.
+            SessionPolicyRequest::Spend { .. } => Err(Error::Mapping(
+                "Spend sessions are not supported yet: the runtime's Spend filter takes per-asset limits"
+                    .into(),
+            )),
         }
     }
 
@@ -129,10 +117,12 @@ impl SessionPolicy {
 
     pub fn runtime_value(&self) -> DynValue {
         match self {
+            // The runtime stores these as `BTreeSet`s, so encode them sorted
+            // and deduplicated, exactly as they will be stored.
             Self::Calls(calls) => DynValue::obj(&[(
                 "Calls",
                 DynValue::Seq(
-                    calls
+                    sorted(calls)
                         .iter()
                         .map(|call| {
                             DynValue::Seq(vec![
@@ -146,7 +136,7 @@ impl SessionPolicy {
             Self::Pallets(pallets) => DynValue::obj(&[(
                 "Pallets",
                 DynValue::Seq(
-                    pallets
+                    sorted(pallets)
                         .iter()
                         .map(|pallet| DynValue::from(*pallet))
                         .collect(),
@@ -346,6 +336,13 @@ pub fn session_duration(config: &PassRuntimeConfig, requested: Option<u32>) -> R
     }
 }
 
+fn sorted<T: Clone + Ord>(items: &[T]) -> Vec<T> {
+    let mut items = items.to_vec();
+    items.sort_unstable();
+    items.dedup();
+    items
+}
+
 pub fn prepare_add_session_key(
     metadata: &Metadata,
     config: &PassRuntimeConfig,
@@ -353,22 +350,33 @@ pub fn prepare_add_session_key(
     policy: &SessionPolicy,
     requested_duration: Option<u32>,
 ) -> Result<PreparedCall> {
+    // Without a filter argument pallet-pass grants an Admin session key, so
+    // never fall back to a filterless call.
+    let Some(filter_field) = ["filter", "policy"]
+        .into_iter()
+        .find(|field| config.add_session_key.has_field(field))
+    else {
+        return Err(Error::Mapping(format!(
+            "{}::{} takes no session filter; refusing to create an unrestricted session",
+            config.pallet, config.add_session_key.name
+        )));
+    };
+    if matches!(policy, SessionPolicy::Spend { .. }) {
+        return Err(Error::Mapping(
+            "Spend sessions are not supported yet: the runtime's Spend filter takes per-asset limits"
+                .into(),
+        ));
+    }
     let duration = session_duration(config, requested_duration)?;
-    let mut fields = vec![
+    let fields = vec![
         (
             "session",
             DynValue::obj(&[("Id", DynValue::from(session_account))]),
         ),
-        (
-            "duration",
-            DynValue::obj(&[("Some", DynValue::from(duration))]),
-        ),
+        // A bare value for an `Option` field is encoded as `Some(value)`.
+        ("duration", DynValue::from(duration)),
+        (filter_field, policy.runtime_value()),
     ];
-    if config.add_session_key.has_field("filter") {
-        fields.push(("filter", policy.runtime_value()));
-    } else if config.add_session_key.has_field("policy") {
-        fields.push(("policy", policy.runtime_value()));
-    }
     sube::extrinsic::prepare_call(
         metadata,
         &format!("{}/{}", config.pallet, config.add_session_key.name),
@@ -484,5 +492,42 @@ mod tests {
         let summary = authorizer.authorization();
         assert_eq!(summary.nonce_account, vec![2; 32]);
         assert_eq!(summary.signing_account, vec![3; 32]);
+    }
+
+    fn kreivo() -> (Metadata, PassRuntimeConfig) {
+        let metadata =
+            Metadata::from_bytes(include_bytes!("../../sube/tests/fixtures/kreivo.scale")).unwrap();
+        let config = PassRuntimeConfig::discover(&metadata).unwrap();
+        (metadata, config)
+    }
+
+    #[test]
+    fn session_call_without_a_filter_argument_is_refused() {
+        let (metadata, mut config) = kreivo();
+        config
+            .add_session_key
+            .fields
+            .retain(|field| field != "filter");
+        let policy = SessionPolicy::Pallets(vec![10]);
+        assert!(prepare_add_session_key(&metadata, &config, [1; 32], &policy, None).is_err());
+    }
+
+    #[test]
+    fn spend_sessions_are_refused() {
+        let (metadata, config) = kreivo();
+        let request = SessionPolicyRequest::Spend {
+            pallet: "Balances".into(),
+            calls: vec!["transfer_keep_alive".into()],
+            limit: 1,
+        };
+        assert!(SessionPolicy::resolve(&metadata, request).is_err());
+        let policy = SessionPolicy::Spend {
+            calls: vec![CallIndex {
+                pallet: 10,
+                call: 3,
+            }],
+            limit: 1,
+        };
+        assert!(prepare_add_session_key(&metadata, &config, [1; 32], &policy, None).is_err());
     }
 }
