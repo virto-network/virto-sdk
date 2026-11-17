@@ -85,6 +85,10 @@ impl DeviceAttestation {
 /// Providers implement both enrollment and authentication without leaking
 /// provider-specific types into enrollment or session APIs.
 pub trait DeviceAuthenticator {
+    /// Variant name of the device's attestation and credential in the
+    /// runtime's enums.
+    const VARIANT: &'static str;
+
     async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation>;
 
     async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue>;
@@ -112,6 +116,14 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
     block_hash: [u8; 32],
     authenticator: &A,
 ) -> Result<EnrollmentDraft> {
+    // Check before prompting the device for an attestation the runtime
+    // would reject.
+    if !config.supports_attestation(A::VARIANT) {
+        return Err(Error::Mapping(format!(
+            "runtime does not advertise {} attestations",
+            A::VARIANT
+        )));
+    }
     let predicted_account = config.derive_account(user_id);
     let request = ChallengeRequest::enrollment(
         user_id,
@@ -121,12 +133,6 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
         &block_hash,
     );
     let attestation = authenticator.attest(&request).await?;
-    if !config.supports_attestation(&attestation.variant) {
-        return Err(Error::Mapping(format!(
-            "runtime does not advertise {} attestations",
-            attestation.variant
-        )));
-    }
 
     let call = sube::extrinsic::prepare_call(
         metadata,
@@ -210,6 +216,38 @@ mod tests {
         expected.extend([2; 32]);
         expected.extend([3; 32]);
         assert_eq!(request.signed_message(), expected);
+    }
+
+    /// Fails the test if prompted.
+    struct Unprompted;
+
+    impl DeviceAuthenticator for Unprompted {
+        const VARIANT: &'static str = "Nostr";
+
+        async fn attest(&self, _: &ChallengeRequest) -> Result<DeviceAttestation> {
+            panic!("the device must not be prompted")
+        }
+
+        async fn assert(&self, _: &ChallengeRequest) -> Result<DynValue> {
+            panic!("the device must not be prompted")
+        }
+    }
+
+    #[test]
+    fn unsupported_devices_are_refused_before_prompting() {
+        let metadata =
+            Metadata::from_bytes(include_bytes!("../../sube/tests/fixtures/kreivo.scale")).unwrap();
+        let config = PassRuntimeConfig::discover(&metadata).unwrap();
+        let error = futures_lite::future::block_on(prepare_enrollment(
+            &metadata,
+            &config,
+            HashedUserId([1; 32]),
+            42,
+            [2; 32],
+            &Unprompted,
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("Nostr"), "{error}");
     }
 
     #[test]

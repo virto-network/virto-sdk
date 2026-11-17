@@ -142,6 +142,8 @@ struct RecordingDevice {
 }
 
 impl pass::DeviceAuthenticator for RecordingDevice {
+    const VARIANT: &'static str = "WebAuthn";
+
     async fn attest(&self, _: &ChallengeRequest) -> Result<DeviceAttestation> {
         unreachable!("assembling never attests")
     }

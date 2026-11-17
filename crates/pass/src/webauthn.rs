@@ -492,6 +492,8 @@ impl<T> WebAuthnDevice<T> {
 }
 
 impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
+    const VARIANT: &'static str = "WebAuthn";
+
     async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
         let response = self
             .transport
@@ -507,7 +509,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
         let device_id = DeviceId(blake2b_256(&response.credential_id));
         Ok(DeviceAttestation {
             device_id,
-            variant: "WebAuthn".into(),
+            variant: Self::VARIANT.into(),
             payload: DynValue::obj(&[
                 ("meta", request.registration_meta(device_id)),
                 (
@@ -536,7 +538,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
             .await
             .map_err(authenticator_error)?;
         Ok(DynValue::obj(&[(
-            "WebAuthn",
+            Self::VARIANT,
             DynValue::obj(&[
                 (
                     "meta",
