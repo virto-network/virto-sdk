@@ -44,13 +44,10 @@ pub trait ExtrinsicAssembler {
     type Account: AsRef<[u8]>;
 
     /// Account identifier used for nonce lookup.
-    fn nonce_account(&self) -> Self::Account {
-        #[allow(deprecated)]
-        self.account()
-    }
+    fn nonce_account(&self) -> Self::Account;
 
-    /// Compatibility alias for assemblers written before the nonce/signing
-    /// identities were separated. New implementations should override
+    /// Compatibility alias for callers written before the nonce/signing
+    /// identities were separated; it returns
     /// [`nonce_account`](Self::nonce_account).
     #[deprecated(note = "use nonce_account; signing identity may be different")]
     fn account(&self) -> Self::Account {
@@ -174,5 +171,41 @@ impl<S, SF> SignerFn<S, SF> {
 impl<S, SF> From<(Bytes<32>, S)> for SignerFn<S, SF> {
     fn from((account, signer): (Bytes<32>, S)) -> Self {
         Self::new(account, signer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct OnlyNonceAccount;
+
+    impl ExtrinsicAssembler for OnlyNonceAccount {
+        type Account = [u8; 32];
+
+        fn nonce_account(&self) -> Self::Account {
+            [7; 32]
+        }
+
+        async fn assemble(
+            &self,
+            _encoded_call: &[u8],
+            _meta: &ExtrinsicMeta,
+            _registry: &scales::Registry,
+            _ctx: &ChainContext,
+            _overrides: &[(String, DynValue)],
+        ) -> Result<AssembledExtrinsic> {
+            unreachable!()
+        }
+    }
+
+    /// The deprecated alias must resolve to `nonce_account` rather than
+    /// recursing (it used to default to `nonce_account`, which defaulted back).
+    #[test]
+    #[allow(deprecated)]
+    fn account_alias_returns_nonce_account() {
+        let a = OnlyNonceAccount;
+        assert_eq!(a.account(), [7; 32]);
+        assert_eq!(a.authorization().nonce_account, vec![7; 32]);
     }
 }
