@@ -285,8 +285,7 @@ impl<B: Backend> Sube<B> {
         wait_for: WaitFor,
     ) -> SubeResult<TransactionReceipt> {
         // Never silently re-sign stale bytes after a runtime upgrade.
-        let live_metadata = self.backend.metadata().await?;
-        let current = crate::extrinsic::runtime_versions(&live_metadata)?;
+        let current = self.backend.runtime_version().await?;
         if current != (extrinsic.spec_version, extrinsic.transaction_version) {
             return Err(crate::Error::RuntimeUpgrade {
                 built_spec: extrinsic.spec_version,

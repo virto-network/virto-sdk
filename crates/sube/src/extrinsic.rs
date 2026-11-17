@@ -337,6 +337,16 @@ fn option_none(ty: TypeId, registry: &scales::Registry) -> Option<DynValue> {
     is_option(ty, registry, 0).then_some(DynValue::Null)
 }
 
+/// Last block (exclusive) at which a transaction built at `checkpoint` is
+/// valid: a mortal era is born at the checkpoint and dies `period` blocks
+/// later.
+fn expiry(checkpoint: u64, mortality: Mortality) -> Option<u64> {
+    match mortality {
+        Mortality::Immortal => None,
+        Mortality::Mortal { period } => Some(checkpoint + normalize_period(period)),
+    }
+}
+
 fn normalize_period(period: u64) -> u64 {
     period
         .checked_next_power_of_two()
@@ -482,13 +492,7 @@ pub async fn build_transaction(
     .encode();
 
     let bytes = [len, assembled.bytes].concat();
-    let expires_at = match ctx.mortality {
-        Mortality::Immortal => None,
-        Mortality::Mortal { period } => {
-            let period = normalize_period(period);
-            Some(ctx.checkpoint_number - (ctx.checkpoint_number % period) + period)
-        }
-    };
+    let expires_at = expiry(ctx.checkpoint_number, ctx.mortality);
     Ok(EncodedExtrinsic {
         hex: format!("0x{}", hex::encode(&bytes)),
         bytes,
@@ -749,6 +753,14 @@ mod tests {
 
     /// `CheckNonce` is a newtype around `Compact<Nonce>`; a plain integer
     /// here made every signed transaction undecodable.
+    #[test]
+    fn mortal_transactions_expire_one_period_after_the_checkpoint() {
+        assert_eq!(expiry(130, Mortality::Mortal { period: 64 }), Some(194));
+        // Periods are rounded up to a power of two.
+        assert_eq!(expiry(130, Mortality::Mortal { period: 50 }), Some(194));
+        assert_eq!(expiry(130, Mortality::Immortal), None);
+    }
+
     #[test]
     fn check_nonce_is_compact_encoded() {
         let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();

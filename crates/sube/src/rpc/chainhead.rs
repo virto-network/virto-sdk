@@ -1161,6 +1161,12 @@ fn decode_storage_items(
 // --- Backend implementation ---
 
 impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
+    async fn runtime_version(&mut self) -> crate::Result<(u32, u32)> {
+        let output = self.runtime_call("Core_version", "0x").await?;
+        decode_runtime_version(&output)
+            .ok_or_else(|| crate::Error::Decode("Core_version result".into()))
+    }
+
     async fn get_storage_items(
         &mut self,
         keys: Vec<crate::RawKey>,
@@ -1234,32 +1240,15 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .runtime_call("TransactionPaymentApi_query_info", &to_hex(&payment_input))
             .await
         {
-            Ok(output) if output.len() >= 33 => {
-                let ref_time = u64::from_le_bytes(
-                    output[0..8]
-                        .try_into()
-                        .map_err(|_| crate::Error::Decode("weight ref_time".into()))?,
-                );
-                let proof_size = u64::from_le_bytes(
-                    output[8..16]
-                        .try_into()
-                        .map_err(|_| crate::Error::Decode("weight proof_size".into()))?,
-                );
-                let fee_offset = output.len() - 16;
-                let partial_fee = u128::from_le_bytes(
-                    output[fee_offset..]
-                        .try_into()
-                        .map_err(|_| crate::Error::Decode("partial fee".into()))?,
-                );
-                report.weight = Some(crate::TransactionWeight {
-                    ref_time,
-                    proof_size,
-                });
-                report.partial_fee = Some(partial_fee);
-            }
-            Ok(_) => report
-                .warnings
-                .push("transaction-payment API returned an unknown result shape".into()),
+            Ok(output) => match decode_dispatch_info(&output) {
+                Some((weight, partial_fee)) => {
+                    report.weight = Some(weight);
+                    report.partial_fee = Some(partial_fee);
+                }
+                None => report
+                    .warnings
+                    .push("transaction-payment API returned an unknown result shape".into()),
+            },
             Err(error) => report
                 .warnings
                 .push(format!("transaction-payment API unavailable: {error}")),
@@ -1765,9 +1754,65 @@ impl<R: Rpc + RpcSubscription> ChainSession for ChainHead<R> {
     }
 }
 
+/// `(spec_version, transaction_version)` from a SCALE `RuntimeVersion`:
+/// `spec_name, impl_name: String, authoring_version, spec_version,
+/// impl_version: u32, apis: Vec<([u8; 8], u32)>, transaction_version: u32, ..`.
+fn decode_runtime_version(mut input: &[u8]) -> Option<(u32, u32)> {
+    let input = &mut input;
+    String::decode(input).ok()?;
+    String::decode(input).ok()?;
+    u32::decode(input).ok()?;
+    let spec_version = u32::decode(input).ok()?;
+    u32::decode(input).ok()?;
+    Vec::<([u8; 8], u32)>::decode(input).ok()?;
+    let transaction_version = u32::decode(input).ok()?;
+    Some((spec_version, transaction_version))
+}
+
+/// Weight and partial fee from a SCALE `RuntimeDispatchInfo`:
+/// `weight: { ref_time, proof_size: Compact<u64> }, class: u8, partial_fee: u128`.
+fn decode_dispatch_info(mut input: &[u8]) -> Option<(crate::TransactionWeight, u128)> {
+    let input = &mut input;
+    let ref_time = codec::Compact::<u64>::decode(input).ok()?.0;
+    let proof_size = codec::Compact::<u64>::decode(input).ok()?.0;
+    u8::decode(input).ok()?;
+    let partial_fee = u128::decode(input).ok()?;
+    input.is_empty().then_some((
+        crate::TransactionWeight {
+            ref_time,
+            proof_size,
+        },
+        partial_fee,
+    ))
+}
+
 #[cfg(test)]
 mod transaction_watch_tests {
     use super::*;
+
+    #[test]
+    fn decodes_runtime_version() {
+        use codec::Encode;
+        let mut bytes = ("kreivo", "kreivo-impl", 1u32, 1_007u32, 0u32).encode();
+        bytes.extend(vec![([7u8; 8], 2u32)].encode());
+        bytes.extend((3u32, 1u8).encode()); // transaction_version, state_version
+        assert_eq!(decode_runtime_version(&bytes), Some((1_007, 3)));
+        assert_eq!(decode_runtime_version(&bytes[..10]), None);
+    }
+
+    #[test]
+    fn decodes_compact_dispatch_info() {
+        use codec::{Compact, Encode};
+        let bytes = (Compact(123_456_789u64), Compact(3_593u64), 0u8, 42_000u128).encode();
+        let (weight, fee) = decode_dispatch_info(&bytes).unwrap();
+        assert_eq!(
+            (weight.ref_time, weight.proof_size, fee),
+            (123_456_789, 3_593, 42_000)
+        );
+        // The old fixed-width reading would need at least 33 bytes.
+        assert!(bytes.len() < 33);
+        assert_eq!(decode_dispatch_info(&bytes[..bytes.len() - 1]), None);
+    }
 
     #[test]
     fn parses_best_inclusion_and_retraction() {

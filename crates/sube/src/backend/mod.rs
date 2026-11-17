@@ -92,6 +92,10 @@ impl Backend for AnyBackend {
         dispatch!(self, metadata())
     }
 
+    async fn runtime_version(&mut self) -> SubeResult<(u32, u32)> {
+        dispatch!(self, runtime_version())
+    }
+
     async fn block_info(&mut self, at: Option<u32>) -> SubeResult<crate::meta::BlockInfo> {
         dispatch!(self, block_info(at))
     }

@@ -396,6 +396,11 @@ pub trait Backend {
 
     async fn metadata(&mut self) -> Result<Metadata>;
 
+    /// `(spec_version, transaction_version)` of the current runtime.
+    async fn runtime_version(&mut self) -> Result<(u32, u32)> {
+        extrinsic::runtime_versions(&self.metadata().await?)
+    }
+
     async fn block_info(&mut self, at: Option<u32>) -> Result<meta::BlockInfo>;
 }
 

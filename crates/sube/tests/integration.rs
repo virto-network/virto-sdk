@@ -329,5 +329,26 @@ fn signed_transaction_decodes_and_verifies_on_chain() {
             Some(TransactionValidity::Invalid("0x0001".into())),
             "{report:?}"
         );
+        assert!(report.partial_fee.is_some_and(|fee| fee > 0), "{report:?}");
+        assert!(report.warnings.is_empty(), "{report:?}");
+    });
+}
+
+/// `Core_version` (used before submitting) must agree with the metadata's
+/// `System::Version`.
+#[test]
+#[ignore]
+fn runtime_version_matches_metadata() {
+    use sube::Backend;
+    block_on(async {
+        let mut chain = Sube::connect(&chain_url()).await.expect("connects");
+        let from_metadata =
+            sube::extrinsic::runtime_versions(chain.metadata()).expect("metadata version");
+        let live = chain
+            .backend()
+            .runtime_version()
+            .await
+            .expect("Core_version");
+        assert_eq!(live, from_metadata);
     });
 }
