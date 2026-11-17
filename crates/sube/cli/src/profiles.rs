@@ -38,9 +38,16 @@ impl Profile {
 pub struct WalletProfile {
     pub name: String,
     pub genesis_hash: [u8; 32],
+    /// The sr25519 account derived at `//default`.
     pub account: [u8; 32],
-    pub secure_entry: String,
-    pub scheme: String,
+}
+
+#[cfg(feature = "wallet")]
+impl WalletProfile {
+    /// The OS secure-store entry holding the mnemonic.
+    pub fn secure_entry(&self) -> String {
+        format!("wallet-profile-v1-{}", self.name)
+    }
 }
 
 #[cfg(feature = "pass")]
@@ -59,8 +66,21 @@ pub struct PassProfile {
 
 #[cfg(feature = "pass")]
 impl PassProfile {
-    pub fn primary_device(&self) -> DeviceProviderProfile {
-        self.device.clone()
+    /// The OS secure-store entry holding the session key.
+    pub fn session_entry(&self) -> String {
+        libwallet::pass_session_entry_id(&self.genesis_hash, &self.pass_account)
+    }
+
+    /// Forget `device_id`. Removing the primary device promotes the first
+    /// additional one, if any.
+    pub fn remove_device(&mut self, device_id: [u8; 32]) {
+        self.additional_devices
+            .retain(|device| device.device_id != device_id);
+        if self.device_id == device_id && !self.additional_devices.is_empty() {
+            let promoted = self.additional_devices.remove(0);
+            self.device_id = promoted.device_id;
+            self.device = promoted.device;
+        }
     }
 }
 
@@ -93,7 +113,6 @@ pub struct DeviceRecord {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionProfile {
     pub account: [u8; 32],
-    pub secure_entry: String,
     pub policy: String,
     pub expires_at: u64,
 }
@@ -148,6 +167,18 @@ impl Profiles {
     #[cfg(feature = "wallet")]
     pub fn active(&self) -> Option<&Profile> {
         self.active.as_deref().and_then(|name| self.find(name))
+    }
+
+    #[cfg(feature = "pass")]
+    pub fn pass_mut(&mut self, name: &str) -> Result<&mut PassProfile> {
+        match self
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.name() == name)
+        {
+            Some(Profile::Pass(profile)) => Ok(profile),
+            _ => anyhow::bail!("pass profile {name:?} not found"),
+        }
     }
 
     pub fn upsert(&mut self, profile: Profile) {
@@ -211,8 +242,6 @@ mod tests {
             name: "alice".into(),
             genesis_hash: [1; 32],
             account: [2; 32],
-            secure_entry: "alice".into(),
-            scheme: "sr25519".into(),
         }));
         assert!(profiles.activate("alice", [3; 32]).is_err());
         assert_eq!(profiles.active, None);
@@ -226,17 +255,15 @@ mod tests {
                 name: "alice".into(),
                 genesis_hash: [1; 32],
                 account,
-                secure_entry: "alice".into(),
-                scheme: "sr25519".into(),
             }));
         }
         assert_eq!(profiles.profiles.len(), 1);
     }
 
-    /// Drafts used to be persisted next to the profiles; such a store still
+    /// Drafts and derivable fields used to be persisted; such a store still
     /// loads and is saved without them.
     #[test]
-    fn stores_with_persisted_drafts_still_load() {
+    fn stores_with_dropped_fields_still_load() {
         let stored = r#"{
             "version": 1,
             "active": "alice",
@@ -253,11 +280,34 @@ mod tests {
         }"#;
         let profiles: Profiles = serde_json::from_str(stored).unwrap();
         assert_eq!(profiles.find("alice").unwrap().genesis_hash(), [1; 32]);
-        assert!(
-            !serde_json::to_string(&profiles)
-                .unwrap()
-                .contains("pending")
-        );
+        let saved = serde_json::to_string(&profiles).unwrap();
+        for dropped in ["pending", "secure_entry", "scheme"] {
+            assert!(!saved.contains(dropped), "{dropped}");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "pass")]
+    fn pass_sessions_with_a_stored_entry_name_still_load() {
+        let stored = r#"{
+            "type": "pass",
+            "name": "pass",
+            "genesis_hash": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            "pass_account": [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+            "user_id": [3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
+            "device_id": [4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
+            "device": {"provider": "substrate-key", "wallet": "alice"},
+            "session": {
+                "account": [5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+                "secure_entry": "pass-session-v1-old",
+                "policy": "calls:System/remark",
+                "expires_at": 99
+            }
+        }"#;
+        let Profile::Pass(profile) = serde_json::from_str(stored).unwrap() else {
+            panic!("expected a pass profile");
+        };
+        assert_eq!(profile.session.unwrap().expires_at, 99);
     }
 
     #[test]

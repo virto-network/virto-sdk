@@ -1034,10 +1034,7 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
             };
             let mut devices = vec![(
                 profile.device_id,
-                format!(
-                    "primary · {}",
-                    device_provider_label(&profile.primary_device())
-                ),
+                format!("primary · {}", device_provider_label(&profile.device)),
                 true,
             )];
             devices.extend(profile.additional_devices.iter().map(|record| {

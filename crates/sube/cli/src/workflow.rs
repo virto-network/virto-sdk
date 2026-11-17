@@ -29,18 +29,14 @@ pub fn import_wallet_profile(
     if profiles.find(&name).is_some() {
         anyhow::bail!("profile {name:?} already exists");
     }
-    let secure_entry = format!("wallet-profile-v1-{name}");
-    let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
+    let profile = crate::profiles::WalletProfile {
+        name,
+        genesis_hash,
+        account,
+    };
+    let mut keys = libwallet::vault::OSKeyring::<()>::new(&profile.secure_entry(), None);
     keys.update(mnemonic.phrase())?;
-    profiles.upsert(crate::profiles::Profile::Wallet(
-        crate::profiles::WalletProfile {
-            name,
-            genesis_hash,
-            account,
-            secure_entry,
-            scheme: "sr25519".into(),
-        },
-    ));
+    profiles.upsert(crate::profiles::Profile::Wallet(profile));
     if let Err(error) = profiles.save(profile_path) {
         let _ = keys.delete();
         return Err(error);
@@ -84,8 +80,8 @@ pub async fn activate_existing_profile(
                     "local pass session does not exactly match on-chain storage; register or update it before activation"
                 );
             }
-            let _ =
-                crate::signers::load_session_signer(&session.secure_entry, session.account).await?;
+            let _ = crate::signers::load_session_signer(&profile.session_entry(), session.account)
+                .await?;
         }
     }
     profiles.activate(name, genesis_hash)?;
@@ -99,25 +95,25 @@ pub enum SessionPreparation {
     Review(Box<Staged>),
 }
 
-/// The local change a staged transaction makes once it finalizes.
+/// The local change a staged transaction makes once it finalizes, applied
+/// to the named profile as stored at that time.
 #[cfg(feature = "pass")]
 pub enum PendingEffect {
+    /// Record `session` and connect the profile; `new_seed` is the session
+    /// key to store when it is not stored yet.
     Session {
-        profile: Box<crate::profiles::PassProfile>,
-        session_account: [u8; 32],
-        secure_entry: String,
-        policy: String,
-        expires_at: u64,
-        pending_seed: Option<zeroize::Zeroizing<[u8; 32]>>,
+        profile: String,
+        session: crate::profiles::SessionProfile,
+        new_seed: Option<zeroize::Zeroizing<[u8; 32]>>,
     },
     /// The new pass profile.
     Enrollment(Box<crate::profiles::PassProfile>),
     DeviceAddition {
-        profile: Box<crate::profiles::PassProfile>,
+        profile: String,
         device: crate::profiles::DeviceRecord,
     },
     DeviceRemoval {
-        profile: Box<crate::profiles::PassProfile>,
+        profile: String,
         device_id: [u8; 32],
     },
 }
@@ -286,7 +282,7 @@ pub async fn prepare_device_addition(
             ),
         ],
         effect: Some(PendingEffect::DeviceAddition {
-            profile: Box::new(profile),
+            profile: profile.name,
             device: crate::profiles::DeviceRecord {
                 device_id: attestation.device_id.0,
                 device: device.stored_profile()?,
@@ -346,7 +342,7 @@ pub async fn prepare_device_removal(
         prepared,
         notes,
         effect: Some(PendingEffect::DeviceRemoval {
-            profile: Box::new(profile),
+            profile: profile.name,
             device_id: request.device_id,
         }),
     })
@@ -381,7 +377,7 @@ pub async fn prepare_pass_session(
         if local_policy.runtime_value() == policy.runtime_value()
             && session.expires_at > checkpoint.number
             && on_chain_session_matches(chain, &profile, session, &policy).await
-            && crate::signers::load_session_signer(&session.secure_entry, session.account)
+            && crate::signers::load_session_signer(&profile.session_entry(), session.account)
                 .await
                 .is_ok()
         {
@@ -393,12 +389,10 @@ pub async fn prepare_pass_session(
 
     let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
     let duration = pass::session::session_duration(&config, requested_duration)?;
-    let secure_entry =
-        libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account);
     let existing_account = profile.session.as_ref().map(|session| session.account);
     let mut notes = Vec::new();
-    let (session_signer, pending_seed) = if let Some(expected) = existing_account {
-        match crate::signers::load_session_signer(&secure_entry, expected).await {
+    let (session_signer, new_seed) = if let Some(expected) = existing_account {
+        match crate::signers::load_session_signer(&profile.session_entry(), expected).await {
             Ok(signer) => (signer, None),
             Err(error) => {
                 notes.push(format!(
@@ -434,12 +428,13 @@ pub async fn prepare_pass_session(
     )
     .await?;
     let effect = PendingEffect::Session {
-        profile: Box::new(profile),
-        session_account,
-        secure_entry,
-        policy: policy_text.into(),
-        expires_at: checkpoint.number.saturating_add(u64::from(duration)),
-        pending_seed,
+        profile: profile.name,
+        session: crate::profiles::SessionProfile {
+            account: session_account,
+            policy: policy_text.into(),
+            expires_at: checkpoint.number.saturating_add(u64::from(duration)),
+        },
+        new_seed,
     };
     Ok(SessionPreparation::Review(Box::new(Staged {
         prepared,
@@ -461,83 +456,47 @@ pub fn apply_finalized_effect(
     {
         anyhow::bail!("operation did not finalize successfully; local profile remains unchanged");
     }
+    let mut profiles = crate::profiles::Profiles::load(profile_path)?;
     match effect {
         PendingEffect::Session {
-            mut profile,
-            session_account,
-            secure_entry,
-            policy,
-            expires_at,
-            mut pending_seed,
+            profile: name,
+            session,
+            new_seed,
         } => {
-            if let Some(seed) = pending_seed.as_deref_mut() {
-                let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
-                keys.upsert(seed)?;
-            }
-            profile.session = Some(crate::profiles::SessionProfile {
-                account: session_account,
-                secure_entry: secure_entry.clone(),
-                policy,
-                expires_at,
-            });
-            let name = profile.name.clone();
-            let genesis_hash = profile.genesis_hash;
-            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
-            profiles.upsert(crate::profiles::Profile::Pass(*profile));
+            let profile = profiles.pass_mut(&name)?;
+            profile.session = Some(session);
+            let (genesis_hash, entry) = (profile.genesis_hash, profile.session_entry());
             profiles.activate(&name, genesis_hash)?;
+            let mut keys = libwallet::vault::OSKeyring::<()>::new(&entry, None);
+            if let Some(seed) = &new_seed {
+                keys.upsert(seed.as_slice())?;
+            }
             if let Err(error) = profiles.save(profile_path) {
-                if pending_seed.is_some() {
-                    let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
+                // Do not keep a key the profile does not refer to.
+                if new_seed.is_some() {
                     let _ = keys.delete();
                 }
                 return Err(error);
             }
-            Ok(profiles)
         }
         PendingEffect::Enrollment(profile) => {
-            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
             profiles.upsert(crate::profiles::Profile::Pass(*profile));
             profiles.save(profile_path)?;
-            Ok(profiles)
         }
-        PendingEffect::DeviceAddition {
-            mut profile,
-            device,
-        } => {
+        PendingEffect::DeviceAddition { profile, device } => {
+            let profile = profiles.pass_mut(&profile)?;
             profile
                 .additional_devices
                 .retain(|known| known.device_id != device.device_id);
             profile.additional_devices.push(device);
-            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
-            profiles.upsert(crate::profiles::Profile::Pass(*profile));
             profiles.save(profile_path)?;
-            Ok(profiles)
         }
-        PendingEffect::DeviceRemoval {
-            mut profile,
-            device_id,
-        } => {
-            let mut promoted = None;
-            if profile.device_id == device_id
-                && let Some(replacement) = profile
-                    .additional_devices
-                    .iter()
-                    .find(|device| device.device_id != device_id)
-                    .cloned()
-            {
-                promoted = Some(replacement.device_id);
-                profile.device_id = replacement.device_id;
-                profile.device = replacement.device.clone();
-            }
-            profile.additional_devices.retain(|device| {
-                device.device_id != device_id && Some(device.device_id) != promoted
-            });
-            let mut profiles = crate::profiles::Profiles::load(profile_path)?;
-            profiles.upsert(crate::profiles::Profile::Pass(*profile));
+        PendingEffect::DeviceRemoval { profile, device_id } => {
+            profiles.pass_mut(&profile)?.remove_device(device_id);
             profiles.save(profile_path)?;
-            Ok(profiles)
         }
     }
+    Ok(profiles)
 }
 
 #[cfg(feature = "pass")]
@@ -551,24 +510,13 @@ pub fn forget_pass_session(
     use libwallet::MutableKeyStore;
 
     let mut profiles = crate::profiles::Profiles::load(profile_path)?;
-    let mut profile = match profiles.find(name).cloned() {
-        Some(crate::profiles::Profile::Pass(profile)) => profile,
-        _ => anyhow::bail!("pass profile {name:?} not found"),
-    };
+    let profile = profiles.pass_mut(name)?;
     if genesis_hash.is_some_and(|genesis_hash| genesis_hash != profile.genesis_hash) {
         anyhow::bail!("profile genesis hash does not match the connected chain");
     }
-    let secure_entry = profile
-        .session
-        .as_ref()
-        .map(|session| session.secure_entry.clone())
-        .unwrap_or_else(|| {
-            libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account)
-        });
-    let mut keys = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
+    let mut keys = libwallet::vault::OSKeyring::<()>::new(&profile.session_entry(), None);
     keys.delete()?;
     profile.session = None;
-    profiles.upsert(crate::profiles::Profile::Pass(profile));
     profiles.save(profile_path)?;
     Ok(profiles)
 }
@@ -666,7 +614,8 @@ pub async fn prepare_with_active_profile(
             })?;
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             let signer =
-                crate::signers::load_session_signer(&session.secure_entry, session.account).await?;
+                crate::signers::load_session_signer(&profile.session_entry(), session.account)
+                    .await?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
             prepare_transaction(chain, chain_url, call, &profile.name, &authorizer, options).await?
@@ -1068,7 +1017,7 @@ mod tests {
             &path,
             &sube::TransactionReceipt::default(),
             PendingEffect::DeviceAddition {
-                profile: Box::new(profile.clone()),
+                profile: "pass".into(),
                 device: device.clone(),
             },
         )
@@ -1084,7 +1033,7 @@ mod tests {
             &path,
             &finalized_receipt(),
             PendingEffect::DeviceAddition {
-                profile: Box::new(profile.clone()),
+                profile: "pass".into(),
                 device: device.clone(),
             },
         )
@@ -1105,7 +1054,7 @@ mod tests {
             &path,
             &finalized_receipt(),
             PendingEffect::DeviceAddition {
-                profile: Box::new(changed.clone()),
+                profile: "pass".into(),
                 device,
             },
         )
@@ -1114,6 +1063,45 @@ mod tests {
             panic!("expected pass profile")
         };
         assert_eq!(again.additional_devices.len(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// An effect names its profile, so changes stored while the transaction
+    /// was pending survive it.
+    #[cfg(feature = "pass")]
+    #[test]
+    fn effects_apply_to_the_profile_as_stored_when_they_finalize() {
+        let path = test_profile_path("effect-current");
+        let record = |id, wallet: &str| crate::profiles::DeviceRecord {
+            device_id: [id; 32],
+            device: crate::profiles::DeviceProviderProfile::SubstrateKey {
+                wallet: wallet.into(),
+            },
+        };
+        let mut profile = test_profile();
+        profile
+            .additional_devices
+            .push(record(6, "added-meanwhile"));
+        let mut profiles = crate::profiles::Profiles::default();
+        profiles.upsert(crate::profiles::Profile::Pass(profile));
+        profiles.save(&path).unwrap();
+
+        let changed = apply_finalized_effect(
+            &path,
+            &finalized_receipt(),
+            PendingEffect::DeviceAddition {
+                profile: "pass".into(),
+                device: record(5, "additional"),
+            },
+        )
+        .unwrap();
+        let crate::profiles::Profile::Pass(changed) = changed.find("pass").unwrap() else {
+            panic!("expected pass profile")
+        };
+        assert_eq!(
+            changed.additional_devices,
+            [record(6, "added-meanwhile"), record(5, "additional")]
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -1137,7 +1125,7 @@ mod tests {
             &path,
             &finalized_receipt(),
             PendingEffect::DeviceRemoval {
-                profile: Box::new(profile),
+                profile: "pass".into(),
                 device_id: [4; 32],
             },
         )

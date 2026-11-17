@@ -28,10 +28,7 @@ where
 }
 
 pub async fn wallet_signer(profile: &profiles::WalletProfile) -> Result<WalletSigner> {
-    if !profile.scheme.eq_ignore_ascii_case("sr25519") {
-        anyhow::bail!("unsupported wallet profile scheme {}", profile.scheme);
-    }
-    let signer = unlock(OSKeyring::<()>::new(&profile.secure_entry, None)).await?;
+    let signer = unlock(OSKeyring::<()>::new(&profile.secure_entry(), None)).await?;
     if sube::Signer::account(&signer) != profile.account {
         anyhow::bail!("wallet secure entry does not match the profile account");
     }

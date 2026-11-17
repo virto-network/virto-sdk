@@ -1292,9 +1292,9 @@ mod tests {
                 .session
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("finalized session was not persisted"))?;
-            cleanup.secure_entries.push(session.secure_entry.clone());
+            cleanup.secure_entries.push(profile.session_entry());
             let signer =
-                signers::load_session_signer(&session.secure_entry, session.account).await?;
+                signers::load_session_signer(&profile.session_entry(), session.account).await?;
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
