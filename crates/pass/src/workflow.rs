@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
-use sube::{DispatchOutcome, DynValue, Error, Metadata, PreparedCall, Result, TransactionReceipt};
+use sube::{DynValue, Error, Metadata, PreparedCall, Result};
 
 use crate::config::{PassRuntimeConfig, body};
 use crate::{Account, AuthorityId, Challenge, DeviceId, HashedUserId, block_challenge};
@@ -132,54 +132,6 @@ impl EnrollmentDraft {
     pub fn is_valid_at(&self, finalized_number: u64) -> bool {
         finalized_number <= self.valid_through
     }
-
-    pub fn profile(&self, genesis_hash: [u8; 32]) -> PassProfile {
-        PassProfile {
-            genesis_hash,
-            pass_account: self.predicted_account,
-            user_id: self.user_id,
-            devices: vec![self.attestation.device_id],
-        }
-    }
-
-    /// Persist only a finalized successful registration.
-    pub fn persist_finalized<S: PassProfileStore>(
-        &self,
-        genesis_hash: [u8; 32],
-        receipt: &TransactionReceipt,
-        store: &mut S,
-    ) -> core::result::Result<(), EnrollmentCommitError<S::Error>> {
-        if receipt.finalized_block_hash.is_none() {
-            return Err(EnrollmentCommitError::NotFinalized);
-        }
-        if !matches!(receipt.dispatch_outcome, DispatchOutcome::Success) {
-            return Err(EnrollmentCommitError::DispatchFailed);
-        }
-        store
-            .upsert(self.profile(genesis_hash))
-            .map_err(EnrollmentCommitError::Store)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PassProfile {
-    pub genesis_hash: [u8; 32],
-    pub pass_account: Account,
-    pub user_id: HashedUserId,
-    pub devices: Vec<DeviceId>,
-}
-
-pub trait PassProfileStore {
-    type Error;
-
-    fn upsert(&mut self, profile: PassProfile) -> core::result::Result<(), Self::Error>;
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum EnrollmentCommitError<E> {
-    NotFinalized,
-    DispatchFailed,
-    Store(E),
 }
 
 /// Build the registration draft locally. The selected registrar is explicit;

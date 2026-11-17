@@ -7,8 +7,8 @@ use alloc::{format, vec};
 use sube::extrinsic::{ChainContext, assemble_signed_v4};
 use sube::metadata::ExtrinsicMeta;
 use sube::{
-    AuthorizationSummary, DispatchOutcome, DynValue, Error, ExtrinsicAssembler, Metadata,
-    PreparedCall, Registry, Result, Signer, TransactionReceipt,
+    AuthorizationSummary, DynValue, Error, ExtrinsicAssembler, Metadata, PreparedCall, Registry,
+    Result, Signer,
 };
 
 use crate::Account;
@@ -376,48 +376,7 @@ pub fn prepare_add_session_key(
     )
 }
 
-pub trait SessionStore {
-    type Error;
-
-    fn upsert(&mut self, session: LocalSession) -> core::result::Result<(), Self::Error>;
-    fn delete(
-        &mut self,
-        genesis_hash: [u8; 32],
-        pass_account: Account,
-    ) -> core::result::Result<(), Self::Error>;
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum SessionCommitError<E> {
-    NotFinalized,
-    DispatchFailed,
-    Store(E),
-}
-
-pub fn persist_finalized_session<S: SessionStore>(
-    pending: LocalSession,
-    receipt: &TransactionReceipt,
-    store: &mut S,
-) -> core::result::Result<(), SessionCommitError<S::Error>> {
-    if receipt.finalized_block_hash.is_none() {
-        return Err(SessionCommitError::NotFinalized);
-    }
-    if !matches!(receipt.dispatch_outcome, DispatchOutcome::Success) {
-        return Err(SessionCommitError::DispatchFailed);
-    }
-    store.upsert(pending).map_err(SessionCommitError::Store)
-}
-
 pub const FORGET_SESSION_WARNING: &str = "The local session secret was deleted. pallet-pass currently leaves the on-chain session present until its scheduled expiry.";
-
-pub fn forget_session<S: SessionStore>(
-    store: &mut S,
-    genesis_hash: [u8; 32],
-    pass_account: Account,
-) -> core::result::Result<&'static str, S::Error> {
-    store.delete(genesis_hash, pass_account)?;
-    Ok(FORGET_SESSION_WARNING)
-}
 
 #[cfg(test)]
 mod tests {
@@ -435,27 +394,6 @@ mod tests {
 
         fn account(&self) -> Self::Account {
             [3; 32]
-        }
-    }
-
-    #[derive(Default)]
-    struct MemoryStore {
-        value: Option<LocalSession>,
-        deletes: usize,
-    }
-
-    impl SessionStore for MemoryStore {
-        type Error = ();
-
-        fn upsert(&mut self, session: LocalSession) -> core::result::Result<(), Self::Error> {
-            self.value = Some(session);
-            Ok(())
-        }
-
-        fn delete(&mut self, _: [u8; 32], _: Account) -> core::result::Result<(), Self::Error> {
-            self.value = None;
-            self.deletes += 1;
-            Ok(())
         }
     }
 
@@ -546,38 +484,5 @@ mod tests {
         let summary = authorizer.authorization();
         assert_eq!(summary.nonce_account, vec![2; 32]);
         assert_eq!(summary.signing_account, vec![3; 32]);
-    }
-
-    #[test]
-    fn session_is_persisted_only_after_finalized_success_and_delete_is_explicit() {
-        let pending = LocalSession {
-            genesis_hash: [1; 32],
-            pass_account: Account([2; 32]),
-            session_account: [3; 32],
-            policy: call_policy(),
-            expires_at: 100,
-        };
-        let mut store = MemoryStore::default();
-        let best_only = TransactionReceipt {
-            best_block_hash: Some("0x01".into()),
-            dispatch_outcome: DispatchOutcome::Success,
-            ..TransactionReceipt::default()
-        };
-        assert!(persist_finalized_session(pending.clone(), &best_only, &mut store).is_err());
-        assert!(store.value.is_none());
-
-        let finalized = TransactionReceipt {
-            finalized_block_hash: Some("0x02".into()),
-            dispatch_outcome: DispatchOutcome::Success,
-            ..TransactionReceipt::default()
-        };
-        persist_finalized_session(pending.clone(), &finalized, &mut store).unwrap();
-        assert_eq!(store.value, Some(pending.clone()));
-        assert_eq!(
-            forget_session(&mut store, pending.genesis_hash, pending.pass_account).unwrap(),
-            FORGET_SESSION_WARNING
-        );
-        assert!(store.value.is_none());
-        assert_eq!(store.deletes, 1);
     }
 }

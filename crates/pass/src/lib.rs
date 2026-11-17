@@ -49,7 +49,7 @@ pub use config::{AccountDerivation, Challenger, PassRuntimeConfig, RuntimeOverri
 pub use meta::CredentialMeta;
 pub use newtypes::{Account, AuthorityId, DeviceId, HashedUserId, InvalidHashedUserId};
 pub use session::{SessionAuthorizer, SessionManager, SessionPolicy};
-pub use workflow::{DeviceAuthenticator, EnrollmentDraft, PassAuthorizer, PassProfile};
+pub use workflow::{DeviceAuthenticator, EnrollmentDraft, PassAuthorizer};
 
 use alloc::string::String;
 use alloc::vec::Vec;
