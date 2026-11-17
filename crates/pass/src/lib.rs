@@ -57,7 +57,6 @@ pub use workflow::{DeviceAuthenticator, EnrollmentDraft};
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use codec::Encode;
 
 use sube::extrinsic::{AssembledExtrinsic, ChainContext, encode_extensions};
 use sube::metadata::{ExtrinsicMeta, SignedExtensionMeta};
@@ -94,9 +93,10 @@ pub fn block_challenge(block_hash: &[u8; 32], binding: &[u8]) -> Challenge {
     blake2b_256(&input)
 }
 
-/// Enrollment binds the challenge to the SCALE-encoded derived AccountId32.
+/// Enrollment binds the challenge to the derived AccountId32 (whose SCALE
+/// encoding is its 32 bytes).
 pub fn enrollment_challenge(block_hash: &[u8; 32], account: Account) -> Challenge {
-    block_challenge(block_hash, &account.0.encode())
+    block_challenge(block_hash, &account.0)
 }
 
 /// V5 General extrinsic version prefix (bit 6 set).
@@ -162,7 +162,7 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
         ctx: &ChainContext,
         overrides: &[(String, DynValue)],
     ) -> Result<AssembledExtrinsic> {
-        let (_before, _pass_ext, after) = locate_pass_authenticate(&meta.extensions)?;
+        let after = extensions_after_pass_authenticate(&meta.extensions)?;
 
         // Encode extensions AFTER PassAuthenticate to compute the inherited implication.
         let (after_extra, after_additional, _) =
@@ -212,23 +212,17 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
     }
 }
 
-/// Split the extension list at `PassAuthenticate`.
-fn locate_pass_authenticate(
+/// The extensions after `PassAuthenticate`, which its credential binds to.
+fn extensions_after_pass_authenticate(
     exts: &[SignedExtensionMeta],
-) -> Result<(
-    &[SignedExtensionMeta],
-    &SignedExtensionMeta,
-    &[SignedExtensionMeta],
-)> {
+) -> Result<&[SignedExtensionMeta]> {
     let idx = exts
         .iter()
         .position(|e| e.identifier == PASS_AUTHENTICATE)
         .ok_or_else(|| {
             Error::MissingExtensionValue("PassAuthenticate not found in metadata".into())
         })?;
-    let (before, rest) = exts.split_at(idx);
-    let (pass_ext, after) = rest.split_first().expect("idx came from position()");
-    Ok((before, pass_ext, after))
+    Ok(&exts[idx + 1..])
 }
 
 /// Compute the inherited implication that the signer binds to:
@@ -304,6 +298,14 @@ mod blake2b_tests {
     fn kreivo_challenge_golden_vector() {
         assert_eq!(
             hex::encode(block_challenge(&[0x11; 32], &[0x22; 32])),
+            "428d37d6b34f605a8ff32b6a04c95d9c7d2aead9ecde193b2f5019b7f13ced23"
+        );
+    }
+
+    #[test]
+    fn enrollment_challenge_binds_the_account_bytes() {
+        assert_eq!(
+            hex::encode(enrollment_challenge(&[0x11; 32], Account([0x22; 32]))),
             "428d37d6b34f605a8ff32b6a04c95d9c7d2aead9ecde193b2f5019b7f13ced23"
         );
     }
