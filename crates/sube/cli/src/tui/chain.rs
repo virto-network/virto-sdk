@@ -55,7 +55,6 @@ pub enum FromChain {
 
 pub struct CallReview {
     pub text: String,
-    pub artifact: Option<String>,
     pub submittable: bool,
     pub requires_finalized: bool,
 }
@@ -169,7 +168,6 @@ pub fn spawn(
                                     let _ = to_ui
                                         .send(FromChain::CallPrepared(CallReview {
                                             text: prepared_call_review(&call),
-                                            artifact: None,
                                             submittable: false,
                                             requires_finalized: false,
                                         }))
@@ -222,7 +220,6 @@ pub fn spawn(
                                     let _ = to_ui
                                         .send(FromChain::CallPrepared(CallReview {
                                             text,
-                                            artifact: None,
                                             submittable: false,
                                             requires_finalized: false,
                                         }))
@@ -424,10 +421,6 @@ fn prepared_call_review(call: &sube::PreparedCall) -> String {
 fn review_of(staged: &crate::workflow::Staged) -> CallReview {
     CallReview {
         text: staged.review_text(),
-        artifact: Some(
-            serde_json::to_string_pretty(&staged.prepared.artifact())
-                .unwrap_or_else(|_| "{}".into()),
-        ),
         submittable: true,
         requires_finalized: staged.effect.is_some(),
     }

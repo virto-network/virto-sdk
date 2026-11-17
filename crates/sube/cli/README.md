@@ -84,8 +84,8 @@ Only an owned metadata snapshot and formatted results cross into the UI thread.
 Completing a call form prepares and validates the typed call and shows its hex;
 it does not generate or execute a shell command. With an active signing
 profile, the result panel shows the signed transaction review and `s` submits
-those reviewed bytes for finalization, while `e` writes a collision-safe JSON
-artifact beside the profile store.
+those reviewed bytes for finalization. `sube tx --json` prints the same review
+as a JSON artifact.
 
 Press `p` in the TUI to manage chain-bound profiles. From the profile dialog,
 `a` imports an ordinary wallet, `e` enrolls a pass account, `s` registers or

@@ -519,9 +519,9 @@ fn draw_review(f: &mut Frame, app: &App) {
     );
     let help = if app.call_submittable {
         if app.review_requires_finalized {
-            " Esc Back  ↑↓ Scroll  e Export  s Submit finalized"
+            " Esc Back  ↑↓ Scroll  s Submit finalized"
         } else {
-            " Esc Back  ↑↓ Scroll  e Export  w Best/Finalized  s Submit"
+            " Esc Back  ↑↓ Scroll  w Best/Finalized  s Submit"
         }
     } else {
         " Esc Back  ↑↓ Scroll"

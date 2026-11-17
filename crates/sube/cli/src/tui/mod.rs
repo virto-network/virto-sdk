@@ -211,8 +211,6 @@ struct App {
     call_form_key: Option<(String, String)>,
     call_result: Option<String>,
     call_submittable: bool,
-    artifact: Option<String>,
-    artifact_dir: std::path::PathBuf,
     review_scroll: u16,
     wait_for: sube::WaitFor,
     review_returns_to_profiles: bool,
@@ -248,7 +246,6 @@ impl App {
         self.call_form_key = None;
         self.call_result = None;
         self.call_submittable = false;
-        self.artifact = None;
         self.error = None;
 
         let name = match self.pallets.get(self.pallet_idx) {
@@ -319,7 +316,6 @@ impl App {
         if self.call_form.is_some() && self.call_form_key == key {
             self.call_result = None;
             self.call_submittable = false;
-            self.artifact = None;
             self.error = None;
             return;
         }
@@ -327,7 +323,6 @@ impl App {
         self.call_form_key = key;
         self.call_result = None;
         self.call_submittable = false;
-        self.artifact = None;
         self.error = None;
 
         let pallet = match self.current_pallet() {
@@ -401,7 +396,6 @@ impl App {
         self.review_returns_to_profiles = false;
         self.call_result = None;
         self.call_submittable = false;
-        self.artifact = None;
 
         let pallet = match self.current_pallet() {
             Some(p) => p,
@@ -465,7 +459,6 @@ impl App {
             FromChain::CallPrepared(review) => {
                 self.call_result = Some(review.text);
                 self.call_submittable = review.submittable;
-                self.artifact = review.artifact;
                 self.review_requires_finalized = review.requires_finalized;
                 if review.requires_finalized {
                     self.wait_for = sube::WaitFor::Finalized;
@@ -476,7 +469,6 @@ impl App {
             FromChain::CallError(error) => {
                 self.error = Some(error);
                 self.call_submittable = false;
-                self.artifact = None;
             }
             FromChain::BlockDetail(hash, events) => {
                 if let Some(ref mut d) = self.block_detail
@@ -611,11 +603,6 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
     let mut all_pallets: Vec<String> = meta.pallets.iter().map(|p| p.name.clone()).collect();
     all_pallets.sort();
     let pallets = all_pallets.clone();
-    let artifact_dir = profile_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("artifacts");
 
     let mut app = App {
         chain_url: chain_url.into(),
@@ -649,8 +636,6 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         call_form_key: None,
         call_result: None,
         call_submittable: false,
-        artifact: None,
-        artifact_dir,
         review_scroll: 0,
         wait_for: sube::WaitFor::Finalized,
         review_returns_to_profiles: false,
@@ -1352,7 +1337,6 @@ fn handle_review(app: &mut App, key: KeyCode) {
         KeyCode::Esc => {
             app.call_result = None;
             app.call_submittable = false;
-            app.artifact = None;
             app.error = None;
             app.review_scroll = 0;
             app.focus = if app.review_returns_to_profiles {
@@ -1380,16 +1364,6 @@ fn handle_review(app: &mut App, key: KeyCode) {
         KeyCode::Char('s') if app.call_submittable => {
             app.focus = Focus::ConfirmSubmit;
         }
-        KeyCode::Char('e') if app.artifact.is_some() => {
-            let result = export_artifact(
-                &app.artifact_dir,
-                app.artifact.as_deref().unwrap_or_default(),
-            );
-            app.error = Some(match result {
-                Ok(path) => format!("Exported {}", path.display()),
-                Err(error) => format!("Could not export artifact: {error}"),
-            });
-        }
         _ => {}
     }
 }
@@ -1407,44 +1381,6 @@ fn handle_submit_confirmation(app: &mut App, key: KeyCode) {
         }
         _ => {}
     }
-}
-
-fn export_artifact(
-    directory: &std::path::Path,
-    artifact: &str,
-) -> std::io::Result<std::path::PathBuf> {
-    use std::io::Write;
-
-    std::fs::create_dir_all(directory)?;
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    for suffix in 0..100u8 {
-        let filename = if suffix == 0 {
-            format!("sube-transaction-{timestamp}.json")
-        } else {
-            format!("sube-transaction-{timestamp}-{suffix}.json")
-        };
-        let path = directory.join(filename);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                file.write_all(artifact.as_bytes())?;
-                file.sync_all()?;
-                return Ok(path);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not allocate a unique artifact filename",
-    ))
 }
 
 fn handle_form(app: &mut App, key: KeyCode) {
@@ -1523,34 +1459,5 @@ fn handle_block_detail(app: &mut App, key: KeyCode) {
         KeyCode::Up | KeyCode::Char('k') => app.navigate_block_detail(1),
         KeyCode::Down | KeyCode::Char('j') => app.navigate_block_detail(-1),
         _ => {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::export_artifact;
-
-    #[test]
-    fn artifact_export_never_overwrites_an_existing_file() {
-        let directory = std::env::temp_dir().join(format!(
-            "sube-artifact-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let first = export_artifact(&directory, r#"{"version":1}"#).unwrap();
-        let second = export_artifact(&directory, r#"{"version":2}"#).unwrap();
-        assert_ne!(first, second);
-        assert_eq!(std::fs::read_to_string(&first).unwrap(), r#"{"version":1}"#);
-        assert_eq!(
-            std::fs::read_to_string(&second).unwrap(),
-            r#"{"version":2}"#
-        );
-
-        std::fs::remove_file(first).unwrap();
-        std::fs::remove_file(second).unwrap();
-        std::fs::remove_dir(directory).unwrap();
     }
 }
