@@ -57,16 +57,13 @@ impl Backend for AnyBackend {
         dispatch!(self, get_keys_paged(from, size, to))
     }
 
-    async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> SubeResult<()> {
-        dispatch!(self, submit(ext, wait_for_finalization))
-    }
-
-    async fn submit_transaction(
+    async fn submit(
         &mut self,
-        ext: &crate::EncodedExtrinsic,
+        ext: &[u8],
         wait_for: crate::WaitFor,
+        metadata: &Metadata,
     ) -> SubeResult<crate::TransactionReceipt> {
-        dispatch!(self, submit_transaction(ext, wait_for))
+        dispatch!(self, submit(ext, wait_for, metadata))
     }
 
     async fn inspect_transaction(
@@ -74,14 +71,6 @@ impl Backend for AnyBackend {
         ext: &crate::EncodedExtrinsic,
     ) -> SubeResult<crate::TransactionReport> {
         dispatch!(self, inspect_transaction(ext))
-    }
-
-    async fn enrich_receipt(
-        &mut self,
-        receipt: crate::TransactionReceipt,
-        metadata: &Metadata,
-    ) -> SubeResult<crate::TransactionReceipt> {
-        dispatch!(self, enrich_receipt(receipt, metadata))
     }
 
     async fn chain_properties(&mut self) -> SubeResult<crate::ChainProperties> {

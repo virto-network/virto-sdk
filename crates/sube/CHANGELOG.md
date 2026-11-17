@@ -15,6 +15,12 @@
 - `OneShotCall`, `CallBuilder` and `Sube::call` were removed. Use
   `Sube::prepare_call(path, &body)` (with `Text(..)` for a text body) and
   pass signing and options to `build_transaction`.
+- `Backend::submit(ext, wait_for_finalization: bool) -> Result<()>` is now
+  `Backend::submit(ext, wait_for: WaitFor, metadata: &Metadata) ->
+  Result<TransactionReceipt>` and is the only submission method a backend
+  implements; `metadata` decodes the inclusion block's events into the
+  receipt. Applications should call `Sube::submit_transaction`, which also
+  checks the runtime version and genesis hash the bytes were built for.
 - Transactions are mortal by default (64 blocks) instead of immortal.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.

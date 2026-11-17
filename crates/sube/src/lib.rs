@@ -347,9 +347,19 @@ pub trait Backend {
         to: Option<RawKey>,
     ) -> crate::Result<Vec<RawValue>>;
 
-    /// Submit an extrinsic. If `wait_for_finalization` is true, waits for
-    /// full finalization; otherwise returns after best-chain inclusion.
-    async fn submit(&mut self, ext: &[u8], wait_for_finalization: bool) -> Result<()>;
+    /// Submit an encoded extrinsic and wait for its best-chain inclusion or
+    /// finalization, as `wait_for` asks.
+    ///
+    /// `metadata` decodes the inclusion block's events into the receipt;
+    /// backends that cannot read them return only the inclusion location.
+    /// Prefer [`Sube::submit_transaction`], which also refuses bytes built
+    /// for another runtime or chain.
+    async fn submit(
+        &mut self,
+        ext: &[u8],
+        wait_for: WaitFor,
+        metadata: &Metadata,
+    ) -> Result<TransactionReceipt>;
 
     /// Inspect an encoded extrinsic without submitting it.
     ///
@@ -363,29 +373,6 @@ pub trait Backend {
             ],
             ..TransactionReport::default()
         })
-    }
-
-    /// Submit an already-built extrinsic and return its inclusion location.
-    ///
-    /// The default preserves compatibility with simple backends. Transaction
-    /// watch backends override it to return block hash and extrinsic index.
-    async fn submit_transaction(
-        &mut self,
-        ext: &EncodedExtrinsic,
-        wait_for: WaitFor,
-    ) -> Result<TransactionReceipt> {
-        self.submit(&ext.bytes, matches!(wait_for, WaitFor::Finalized))
-            .await?;
-        Ok(TransactionReceipt::default())
-    }
-
-    /// Populate metadata-decoded events and dispatch outcome for a receipt.
-    async fn enrich_receipt(
-        &mut self,
-        receipt: TransactionReceipt,
-        _metadata: &Metadata,
-    ) -> Result<TransactionReceipt> {
-        Ok(receipt)
     }
 
     /// Chain identity and denomination properties. Backends without a
@@ -425,7 +412,12 @@ impl Backend for Offline {
         Err(Error::ChainUnavailable)
     }
 
-    async fn submit(&mut self, _ext: &[u8], _wait_for_finalization: bool) -> Result<()> {
+    async fn submit(
+        &mut self,
+        _ext: &[u8],
+        _wait_for: WaitFor,
+        _metadata: &Metadata,
+    ) -> Result<TransactionReceipt> {
         Err(Error::ChainUnavailable)
     }
 
@@ -548,7 +540,12 @@ mod tests {
             Ok(self.keys.clone())
         }
 
-        async fn submit(&mut self, _ext: &[u8], _wait_for_finalization: bool) -> Result<()> {
+        async fn submit(
+            &mut self,
+            _ext: &[u8],
+            _wait_for: WaitFor,
+            _metadata: &Metadata,
+        ) -> Result<TransactionReceipt> {
             Err(Error::ChainUnavailable)
         }
 

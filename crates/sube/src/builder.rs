@@ -269,8 +269,9 @@ impl<B: Backend> Sube<B> {
         if genesis != extrinsic.genesis_hash {
             return Err(crate::Error::GenesisMismatch);
         }
-        let receipt = self.backend.submit_transaction(extrinsic, wait_for).await?;
-        self.backend.enrich_receipt(receipt, &self.metadata).await
+        self.backend
+            .submit(&extrinsic.bytes, wait_for, &self.metadata)
+            .await
     }
 }
 
@@ -607,9 +608,14 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn submit(&mut self, _ext: &[u8], _wait_for_finalization: bool) -> SubeResult<()> {
+        async fn submit(
+            &mut self,
+            _ext: &[u8],
+            _wait_for: WaitFor,
+            _metadata: &Metadata,
+        ) -> SubeResult<TransactionReceipt> {
             self.submissions.set(self.submissions.get() + 1);
-            Ok(())
+            Ok(TransactionReceipt::default())
         }
 
         async fn metadata(&mut self) -> SubeResult<Metadata> {
