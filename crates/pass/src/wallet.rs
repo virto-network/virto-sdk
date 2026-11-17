@@ -183,8 +183,14 @@ impl<'a, S: libwallet::Signer> WalletDevice<'a, S> {
         self
     }
 
+    /// The device's `AccountId32`, which the substrate-keys authenticator
+    /// uses as its device id: the public key itself for sr25519/ed25519, its
+    /// blake2-256 hash for a 33-byte ECDSA key.
     pub fn device_id(&self) -> DeviceId {
-        DeviceId(blake2b_256(&self.public_key))
+        DeviceId(match <[u8; 32]>::try_from(self.public_key.as_slice()) {
+            Ok(public) => public,
+            Err(_) => blake2b_256(&self.public_key),
+        })
     }
 
     fn signature_value(&self, signature: impl AsRef<[u8]>) -> DynValue {
@@ -208,21 +214,16 @@ impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
         Ok(DeviceAttestation {
             device_id,
             variant: self.attestation_variant.into(),
+            // substrate-keys `KeyRegistration { public, message, signature }`.
             payload: DynValue::obj(&[
+                ("public", DynValue::from(device_id.0)),
                 (
-                    "meta",
+                    "message",
                     DynValue::obj(&[
-                        ("authority_id", DynValue::from(request.authority_id.0)),
-                        ("device_id", DynValue::from(device_id.0)),
                         ("context", DynValue::from(request.context)),
+                        ("challenge", DynValue::from(request.challenge)),
+                        ("authority_id", DynValue::from(request.authority_id.0)),
                     ]),
-                ),
-                (
-                    "public_key",
-                    DynValue::obj(&[(
-                        self.signature_type.variant_name(),
-                        DynValue::from(self.public_key.clone()),
-                    )]),
                 ),
                 ("signature", self.signature_value(signature)),
             ]),

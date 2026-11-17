@@ -1,7 +1,7 @@
-//! Read-only live check of the session call encoding against a current
+//! Read-only live checks of pass call and extension encodings against a current
 //! pallet-pass runtime (Kreivo by default; override with `SUBE_E2E_URL`).
 //!
-//! cargo test -p pass --test live_session_call -- --ignored
+//! cargo test -p pass --test live_encoding -- --ignored
 
 use pass::session::{CallIndex, prepare_add_session_key};
 use pass::{PassRuntimeConfig, SessionPolicy};
@@ -91,5 +91,67 @@ fn pass_authenticate_extension_encodes_against_the_runtime_type() {
         expected.push(0x01); // MultiSignature::Sr25519
         expected.extend([0x33; 64]);
         assert_eq!(hex::encode(encoded), hex::encode(expected));
+    })
+}
+
+/// A substrate-key device registers with substrate-keys'
+/// `KeyRegistration { public, message, signature }`, and its device id is the
+/// device account.
+#[test]
+#[ignore = "requires network access to a chain with pallet-pass"]
+fn substrate_key_attestation_encodes_against_the_runtime_type() {
+    use libwallet::vault::{Simple, Vault};
+    use pass::DeviceAuthenticator as _;
+    futures_lite::future::block_on(async {
+        let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
+        let chain = sube::Sube::connect(&url).await.expect("connect");
+        let metadata = chain.metadata();
+        let config = PassRuntimeConfig::discover(metadata).expect("pass config");
+
+        let phrase = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo \
+                      zoo zoo zoo zoo zoo vote";
+        let mut vault = libwallet::Substrate::new(Simple::<()>::from_phrase(phrase).unwrap());
+        let signer = vault.unlock(None, ()).await.ok().expect("unlock");
+        let public = signer.public();
+        let device = pass::wallet::WalletDevice::new(
+            &signer,
+            public.as_ref(),
+            pass::wallet::SignatureType::Sr25519,
+        );
+        let request = pass::workflow::AttestationRequest {
+            user_id: pass::HashedUserId([0x11; 32]),
+            pass_account: pass::Account([0x55; 32]),
+            authority_id: pass::AuthorityId([0x22; 32]),
+            context: 42,
+            block_hash: [0x66; 32],
+            challenge: [0x33; 32],
+        };
+        let attestation = device.attest(&request).await.expect("attest");
+        assert_eq!(attestation.device_id.0[..], public.as_ref()[..]);
+
+        let call = sube::extrinsic::prepare_call(
+            metadata,
+            &format!("{}/{}", config.pallet, config.register.name),
+            &sube::DynValue::obj(&[
+                ("user", sube::DynValue::from([0x11u8; 32])),
+                ("attestation", attestation.runtime_value()),
+            ]),
+        )
+        .expect("register call");
+
+        let mut expected = vec![config.pallet_index, config.register.index];
+        expected.extend([0x11; 32]); // user
+        expected.push(0x01); // attestation: SubstrateKey
+        expected.extend(public.as_ref()); // public
+        expected.extend(42u32.to_le_bytes()); // message.context
+        expected.extend([0x33; 32]); // message.challenge
+        expected.extend([0x22; 32]); // message.authority_id
+        expected.push(0x01); // MultiSignature::Sr25519
+        // The sr25519 signature itself is randomized; check the layout.
+        assert_eq!(call.bytes.len(), expected.len() + 64);
+        assert_eq!(
+            hex::encode(&call.bytes[..expected.len()]),
+            hex::encode(&expected)
+        );
     })
 }

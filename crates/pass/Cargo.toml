@@ -23,7 +23,7 @@ webauthn-authenticator-rs = { version = "=0.6.1-dev", default-features = false, 
 
 [dev-dependencies]
 futures-lite = "2"
-libwallet = { path = "../libwallet", default-features = false, features = ["substrate", "mnemonic", "std"] }
+libwallet = { path = "../libwallet", default-features = false, features = ["substrate", "mnemonic", "std", "rand"] }
 passkey = "0.5"
 sube = { path = "../sube", default-features = false, features = ["wss", "libwallet"] }
 
