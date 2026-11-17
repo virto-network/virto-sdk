@@ -36,6 +36,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
       - name: Formatting
         run: cargo fmt -p scale-serialization -p sube -p sube-cli -p pass -- --check
 
@@ -104,12 +107,17 @@ jobs:
 
   desktop-providers:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install libudev
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
 
       - name: Generic explorer
         run: cargo check -p sube-cli --no-default-features
@@ -123,11 +131,18 @@ jobs:
 
   msrv:
     runs-on: ubuntu-latest
+    env:
+      # Cargo.lock isn't tracked: resolve the newest dependencies that
+      # still support the declared rust-version.
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88"
+
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
 
       - name: Check declared MSRV
         run: |
