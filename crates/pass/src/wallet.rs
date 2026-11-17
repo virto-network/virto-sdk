@@ -161,6 +161,27 @@ mod tests {
             context: attestation_request.context,
             challenge: [9; 32],
         };
-        assert!(futures_lite::future::block_on(device.assert(&assertion_request)).is_ok());
+        // substrate-keys `KeySignature { user_id, message, signature }`.
+        assert_eq!(
+            futures_lite::future::block_on(device.assert(&assertion_request)).unwrap(),
+            DynValue::obj(&[(
+                "SubstrateKey",
+                DynValue::obj(&[
+                    ("user_id", DynValue::from([1u8; 32])),
+                    (
+                        "message",
+                        DynValue::obj(&[
+                            ("context", DynValue::from(4u32)),
+                            ("challenge", DynValue::from([9u8; 32])),
+                            ("authority_id", DynValue::from([3u8; 32])),
+                        ])
+                    ),
+                    (
+                        "signature",
+                        DynValue::obj(&[("Sr25519", DynValue::from([9u8; 64].as_slice()))])
+                    ),
+                ])
+            )])
+        );
     }
 }

@@ -624,6 +624,25 @@ mod tests {
         let attestation =
             futures_lite::future::block_on(device.attest(&attestation_request())).unwrap();
         assert_eq!(attestation.variant, "WebAuthn");
+        assert_eq!(
+            attestation.payload,
+            DynValue::obj(&[
+                (
+                    "meta",
+                    DynValue::obj(&[
+                        ("authority_id", DynValue::from([3u8; 32])),
+                        ("device_id", DynValue::from(blake2b_256(&[1, 2, 3]))),
+                        ("context", DynValue::from(4u32)),
+                    ])
+                ),
+                ("authenticator_data", DynValue::from(vec![4u8; 37])),
+                (
+                    "client_data",
+                    DynValue::from(br#"{"type":"webauthn.create"}"#.to_vec())
+                ),
+                ("public_key", DynValue::from(vec![5u8; 91])),
+            ])
+        );
         let profile = device.profile().unwrap();
         assert_eq!(profile.credential_id, vec![1, 2, 3]);
 
