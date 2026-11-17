@@ -64,6 +64,7 @@ impl PassProfile {
     }
 }
 
+#[cfg(feature = "pass")]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "provider", rename_all = "kebab-case")]
 pub enum DeviceProviderProfile {
@@ -97,59 +98,11 @@ pub struct SessionProfile {
     pub expires_at: u64,
 }
 
-/// Non-secret enrollment material that can be retried while its checkpoint is
-/// accepted by the runtime challenger.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PendingEnrollment {
-    pub name: String,
-    pub genesis_hash: [u8; 32],
-    pub registrar: String,
-    pub device: DeviceProviderProfile,
-    pub user_id: [u8; 32],
-    pub pass_account: [u8; 32],
-    pub device_id: [u8; 32],
-    pub pallet: String,
-    pub call: String,
-    pub call_bytes: Vec<u8>,
-    pub call_hex: String,
-    pub checkpoint_number: u64,
-    pub checkpoint_hash: [u8; 32],
-    pub valid_through: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PendingDeviceAddition {
-    pub profile: String,
-    pub genesis_hash: [u8; 32],
-    pub device_id: [u8; 32],
-    pub device: DeviceProviderProfile,
-    pub filter: String,
-    pub admin_confirm: bool,
-    pub pallet: String,
-    pub call: String,
-    pub call_bytes: Vec<u8>,
-    pub call_hex: String,
-    pub checkpoint_number: u64,
-    pub checkpoint_hash: [u8; 32],
-    pub valid_through: u64,
-}
-
-#[cfg(feature = "pass")]
-impl PendingEnrollment {
-    pub fn device_profile(&self) -> DeviceProviderProfile {
-        self.device.clone()
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Profiles {
     pub version: u32,
     pub active: Option<String>,
     pub profiles: Vec<Profile>,
-    #[serde(default)]
-    pub pending_enrollments: Vec<PendingEnrollment>,
-    #[serde(default)]
-    pub pending_devices: Vec<PendingDeviceAddition>,
 }
 
 impl Default for Profiles {
@@ -158,8 +111,6 @@ impl Default for Profiles {
             version: PROFILE_VERSION,
             active: None,
             profiles: Vec::new(),
-            pending_enrollments: Vec::new(),
-            pending_devices: Vec::new(),
         }
     }
 }
@@ -209,44 +160,6 @@ impl Profiles {
         } else {
             self.profiles.push(profile);
         }
-    }
-
-    #[cfg(feature = "pass")]
-    pub fn upsert_pending(&mut self, pending: PendingEnrollment) {
-        if let Some(existing) = self
-            .pending_enrollments
-            .iter_mut()
-            .find(|existing| existing.name == pending.name)
-        {
-            *existing = pending;
-        } else {
-            self.pending_enrollments.push(pending);
-        }
-    }
-
-    #[cfg(feature = "pass")]
-    pub fn remove_pending(&mut self, name: &str) {
-        self.pending_enrollments
-            .retain(|pending| pending.name != name);
-    }
-
-    #[cfg(feature = "pass")]
-    pub fn upsert_pending_device(&mut self, pending: PendingDeviceAddition) {
-        if let Some(existing) = self
-            .pending_devices
-            .iter_mut()
-            .find(|existing| existing.profile == pending.profile)
-        {
-            *existing = pending;
-        } else {
-            self.pending_devices.push(pending);
-        }
-    }
-
-    #[cfg(feature = "pass")]
-    pub fn remove_pending_device(&mut self, profile: &str) {
-        self.pending_devices
-            .retain(|pending| pending.profile != profile);
     }
 
     pub fn activate(&mut self, name: &str, genesis_hash: [u8; 32]) -> Result<()> {
@@ -319,37 +232,31 @@ mod tests {
         assert_eq!(profiles.profiles.len(), 1);
     }
 
+    /// Drafts used to be persisted next to the profiles; such a store still
+    /// loads and is saved without them.
     #[test]
-    #[cfg(feature = "pass")]
-    fn pending_enrollment_is_replaced_and_removed_by_name() {
-        let pending = PendingEnrollment {
-            name: "pass".into(),
-            genesis_hash: [1; 32],
-            registrar: "alice".into(),
-            device: DeviceProviderProfile::SubstrateKey {
-                wallet: "device".into(),
-            },
-            user_id: [2; 32],
-            pass_account: [3; 32],
-            device_id: [4; 32],
-            pallet: "Pass".into(),
-            call: "register".into(),
-            call_bytes: vec![1],
-            call_hex: "0x01".into(),
-            checkpoint_number: 10,
-            checkpoint_hash: [5; 32],
-            valid_through: 12,
-        };
-        let mut profiles = Profiles::default();
-        profiles.upsert_pending(pending.clone());
-        let mut replacement = pending;
-        replacement.valid_through = 13;
-        profiles.upsert_pending(replacement);
-        assert_eq!(profiles.pending_enrollments.len(), 1);
-        assert_eq!(profiles.pending_enrollments[0].valid_through, 13);
-
-        profiles.remove_pending("pass");
-        assert!(profiles.pending_enrollments.is_empty());
+    fn stores_with_persisted_drafts_still_load() {
+        let stored = r#"{
+            "version": 1,
+            "active": "alice",
+            "profiles": [{
+                "type": "wallet",
+                "name": "alice",
+                "genesis_hash": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                "account": [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+                "secure_entry": "wallet-profile-v1-alice",
+                "scheme": "sr25519"
+            }],
+            "pending_enrollments": [{"name": "pass", "valid_through": 12}],
+            "pending_devices": [{"profile": "pass", "valid_through": 12}]
+        }"#;
+        let profiles: Profiles = serde_json::from_str(stored).unwrap();
+        assert_eq!(profiles.find("alice").unwrap().genesis_hash(), [1; 32]);
+        assert!(
+            !serde_json::to_string(&profiles)
+                .unwrap()
+                .contains("pending")
+        );
     }
 
     #[test]

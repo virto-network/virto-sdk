@@ -65,10 +65,11 @@ cargo run -p sube-cli --features ssh-agent -- \
   --ssh-fingerprint SHA256:... --ssh-namespace virto-pass --submit
 ```
 
-Enrollment and device-add calls retain a retryable non-secret draft while
-their checkpoint remains valid. Profiles are persisted only after successful
-finalization. Connecting a pass profile requires an explicit session policy
-unless the exact stored policy can be reused:
+Without `--submit`, enrollment and device commands only print the review;
+nothing is stored, so a later `--submit` prompts the device again. Profiles
+change only after the transaction finalizes successfully. Connecting a pass
+profile requires an explicit session policy unless the exact stored policy can
+be reused:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io connect alice-pass \

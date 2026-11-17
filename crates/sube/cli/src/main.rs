@@ -524,22 +524,6 @@ fn profile_command(path: &std::path::Path, command: Option<ProfileCommand>) -> R
                     hex::encode(profile.genesis_hash())
                 );
             }
-            for pending in &store.pending_enrollments {
-                println!(
-                    "~ {} pending enrollment through #{} 0x{}",
-                    pending.name,
-                    pending.valid_through,
-                    hex::encode(pending.genesis_hash)
-                );
-            }
-            for pending in &store.pending_devices {
-                println!(
-                    "~ {} pending device 0x{} through #{}",
-                    pending.profile,
-                    hex::encode(pending.device_id),
-                    pending.valid_through
-                );
-            }
             Ok(())
         }
         ProfileCommand::AddWallet {
