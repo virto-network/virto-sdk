@@ -103,6 +103,8 @@ pub enum Mortality {
 pub struct TransactionOptions {
     pub nonce: Option<u64>,
     pub tip: u64,
+    /// Extension "extra" values by identifier, overriding the defaults; the
+    /// first entry for an identifier is used.
     pub extensions: Vec<(String, DynValue)>,
     pub mortality: Mortality,
 }
@@ -124,25 +126,8 @@ impl TransactionOptions {
         self
     }
 
-    pub fn tip(mut self, tip: u64) -> Self {
-        self.tip = tip;
-        self
-    }
-
     pub fn immortal(mut self) -> Self {
         self.mortality = Mortality::Immortal;
-        self
-    }
-
-    pub fn mortal(mut self, period: u64) -> Self {
-        self.mortality = Mortality::Mortal { period };
-        self
-    }
-
-    pub fn with_extension(mut self, identifier: impl Into<String>, value: DynValue) -> Self {
-        let identifier = identifier.into();
-        self.extensions.retain(|(id, _)| id != &identifier);
-        self.extensions.push((identifier, value));
         self
     }
 }

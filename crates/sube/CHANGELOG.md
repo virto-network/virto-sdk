@@ -41,6 +41,9 @@
 - `TransactionValidity` has no `Unknown` variant. An undecodable validation
   result leaves `TransactionReport::validity` as `None` with a warning, as an
   unavailable validation API already did.
+- `TransactionOptions` keeps only the `nonce` and `immortal` builder
+  methods; `tip`, `mortal` and `with_extension` were removed. Set the public
+  `tip`, `mortality` and `extensions` fields directly.
 - Transactions are mortal by default (64 blocks) instead of immortal.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.
