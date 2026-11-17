@@ -123,8 +123,11 @@ where
     B: BufMut + Debug,
 {
     pub fn new(out: B, registry_type: Option<(&'reg Registry, TypeId)>) -> Self {
+        // A newtype encodes as its inner type; unwrap the root like field
+        // types, or e.g. a newtype around an `Option` would be serialized
+        // without type information.
         let (registry, ty_id) = match registry_type {
-            Some((reg, ty_id)) => (Some(reg), Some(ty_id)),
+            Some((reg, ty_id)) => (Some(reg), Some(unwrap_newtype(reg, ty_id))),
             None => (None, None),
         };
         Serializer {

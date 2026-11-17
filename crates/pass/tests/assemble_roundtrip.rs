@@ -29,27 +29,28 @@ fn ctx() -> ChainContext {
     }
 }
 
-/// Build a mock PassAuthenticate value shaped like a SubstrateKey credential.
+/// Build a mock PassAuthenticate value shaped like the fixture runtime's
+/// WebAuthn credential (the fixture predates `SubstrateKey`).
 fn mock_pass_authenticate() -> DynValue {
-    let message = DynValue::obj(&[
-        ("context", DynValue::U32(42)),
-        ("challenge", DynValue::from([0x11u8; 32])),
+    let meta = DynValue::obj(&[
         ("authority_id", DynValue::from([0x22u8; 32])),
-    ]);
-    let signature = DynValue::obj(&[("Sr25519", DynValue::from([0x33u8; 64]))]);
-    let key_sig = DynValue::obj(&[
         ("user_id", DynValue::from([0x44u8; 32])),
-        ("message", message),
-        ("signature", signature),
+        ("context", DynValue::U32(42)),
     ]);
-    let credential = DynValue::obj(&[("SubstrateKey", key_sig)]);
-    DynValue::obj(&[(
-        "Some",
+    let credential = DynValue::obj(&[(
+        "WebAuthn",
         DynValue::obj(&[
-            ("device_id", DynValue::from([0x02u8; 32])),
-            ("credential", credential),
+            ("meta", meta),
+            ("authenticator_data", DynValue::Bytes(vec![0x55; 3])),
+            ("client_data", DynValue::Bytes(vec![0x66; 2])),
+            ("signature", DynValue::Bytes(vec![0x77; 4])),
         ]),
-    )])
+    )]);
+    // A bare value for the `Option` is encoded as `Some`.
+    DynValue::obj(&[
+        ("device_id", DynValue::from([0x02u8; 32])),
+        ("credential", credential),
+    ])
 }
 
 #[test]
@@ -80,8 +81,21 @@ fn encode_pass_credential_against_kreivo_metadata() {
 
     let (extra, _additional) = result.expect("encode_extensions should succeed");
 
-    // Sanity: the body contains the PassAuthenticate extension value.
-    assert!(!extra.is_empty(), "extra bytes should be populated");
+    // PassAuthenticate is the first extension: Some | device_id |
+    // PassCredential::WebAuthn | meta | compact-prefixed byte fields.
+    let mut expected = vec![0x01];
+    expected.extend([0x02; 32]);
+    expected.push(0x00);
+    expected.extend([0x22; 32]);
+    expected.extend([0x44; 32]);
+    expected.extend(42u32.to_le_bytes());
+    expected.extend([3 << 2, 0x55, 0x55, 0x55]);
+    expected.extend([2 << 2, 0x66, 0x66]);
+    expected.extend([4 << 2, 0x77, 0x77, 0x77, 0x77]);
+    assert_eq!(
+        hex::encode(&extra[..expected.len()]),
+        hex::encode(&expected)
+    );
 }
 
 #[test]
@@ -114,6 +128,6 @@ fn kreivo_v5_inherited_implication_golden_vector() {
 
     assert_eq!(
         hex::encode(implication),
-        "58f30f4f6ba5ebebdaad7dcddfc4275d3e051c00ea5088b122b7f570202123ef"
+        "93480035c8de934618faa5bde6a36f593fc3f5c422a5e12694d572628a84e61d"
     );
 }

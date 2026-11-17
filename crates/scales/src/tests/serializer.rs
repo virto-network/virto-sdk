@@ -821,3 +821,46 @@ fn dynamic_variant_with_nested_newtype_sequence_of_tuples() -> Result<()> {
     assert_eq!(out, typed.encode());
     Ok(())
 }
+
+#[test]
+fn dynamic_root_newtype_around_option() -> Result<()> {
+    // The shape of pallet-pass's `PassAuthenticate(Option<AuthenticateParams>)`
+    // transaction extension.
+    #[derive(Debug, Serialize, Encode, TypeInfo)]
+    struct Params {
+        device_id: [u8; 2],
+        n: u8,
+    }
+    #[derive(Debug, Encode, TypeInfo)]
+    struct Extension(Option<Params>);
+    let typed = Extension(Some(Params {
+        device_id: [7, 8],
+        n: 5,
+    }));
+    let (id, reg) = register(&typed);
+
+    let mut wrapped = BTreeMap::new();
+    wrapped.insert(
+        "Some",
+        Params {
+            device_id: [7, 8],
+            n: 5,
+        },
+    );
+    let mut out = Vec::<u8>::new();
+    to_bytes_with_info(&mut out, &wrapped, Some((&reg, id)))?;
+    assert_eq!(out, typed.encode());
+
+    // A bare value for an `Option` is taken as `Some`.
+    let mut out = Vec::<u8>::new();
+    to_bytes_with_info(
+        &mut out,
+        &Params {
+            device_id: [7, 8],
+            n: 5,
+        },
+        Some((&reg, id)),
+    )?;
+    assert_eq!(out, typed.encode());
+    Ok(())
+}
