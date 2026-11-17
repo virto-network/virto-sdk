@@ -903,130 +903,112 @@ async fn on_chain_session_matches(
     session: &profiles::SessionProfile,
     policy: &pass::SessionPolicy,
 ) -> bool {
-    let candidates: Vec<(String, usize)> = chain
-        .metadata()
-        .pallet_by_name("Pass")
-        .and_then(|pallet| pallet.storage.as_ref().map(|storage| (pallet, storage)))
-        .map(|(pallet, storage)| {
-            storage
-                .entries
-                .iter()
-                .filter(|entry| entry.name.to_ascii_lowercase().contains("session"))
-                .map(|entry| {
-                    let keys = match &entry.ty {
-                        sube::metadata::StorageEntryType::Plain(_) => 0,
-                        sube::metadata::StorageEntryType::Map { hashers, key, .. } => {
-                            match chain.metadata().registry.resolve(*key) {
-                                Some(
-                                    sube::scales::TypeDef::Tuple(keys)
-                                    | sube::scales::TypeDef::StructTuple(keys),
-                                ) => keys.len(),
-                                _ => hashers.len(),
-                            }
-                        }
-                    };
-                    (format!("{}/{}", pallet.name, entry.name), keys)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let pass_hex = format!("0x{}", hex::encode(profile.pass_account));
-    let session_hex = format!("0x{}", hex::encode(session.account));
-    for (base, key_count) in candidates {
-        let path = match key_count {
-            0 => base,
-            1 => format!("{base}/{session_hex}"),
-            _ => format!("{base}/{pass_hex}/{session_hex}"),
-        };
-        let Ok(response) = chain.query(&path).await else {
-            continue;
-        };
-        if response.is_none() {
-            continue;
-        }
-        let Ok(Some(text)) = response.to_text() else {
-            continue;
-        };
-        if policy_text_matches(&text, policy) {
-            return true;
-        }
-    }
-    false
+    let Some(expected) = expected_session_value(chain.metadata(), policy) else {
+        return false;
+    };
+    let path = format!("Pass/SessionKeys/0x{}", hex::encode(session.account));
+    let Ok(sube::Response::Value(entry, _)) = chain.query(&path).await else {
+        return false;
+    };
+    expected.matches(&entry.data, &profile.pass_account)
+}
+
+/// The expected `Pass::SessionKeys` value, which pallet-pass stores as
+/// `(pass_account, expires_at, DeviceFilter)`.
+#[cfg(feature = "pass")]
+#[derive(Debug, PartialEq, Eq)]
+struct ExpectedSessionValue {
+    expiry_len: usize,
+    filter: Vec<u8>,
 }
 
 #[cfg(feature = "pass")]
-fn policy_text_matches(text: &str, policy: &pass::SessionPolicy) -> bool {
+impl ExpectedSessionValue {
+    /// Compares the owner and the SCALE-encoded filter exactly; the expiry
+    /// is set by the runtime and only its width is checked.
+    fn matches(&self, data: &[u8], pass_account: &[u8; 32]) -> bool {
+        data.len() == 32 + self.expiry_len + self.filter.len()
+            && data[..32] == pass_account[..]
+            && data[32 + self.expiry_len..] == self.filter[..]
+    }
+}
+
+/// Encode `policy` as the runtime's `DeviceFilter`, taking variant indices and
+/// the block-number width from metadata. `None` when the layout is not the
+/// expected one, or for `Spend`: the runtime's `Spend` holds per-asset limits,
+/// which `SessionPolicy::Spend` cannot express.
+#[cfg(feature = "pass")]
+fn expected_session_value(
+    metadata: &sube::Metadata,
+    policy: &pass::SessionPolicy,
+) -> Option<ExpectedSessionValue> {
+    use sube::scales::TypeDef;
+    let entry = metadata
+        .pallet_by_name("Pass")?
+        .storage
+        .as_ref()?
+        .entries
+        .iter()
+        .find(|entry| entry.name == "SessionKeys")?;
+    let sube::metadata::StorageEntryType::Map { value, .. } = &entry.ty else {
+        return None;
+    };
+    let registry = &metadata.registry;
+    let Some(TypeDef::Tuple(fields)) = registry.resolve(*value) else {
+        return None;
+    };
+    let expiry_len = match registry.resolve(*fields.get(1)?)? {
+        TypeDef::U32 => 4,
+        TypeDef::U64 => 8,
+        _ => return None,
+    };
+    let Some(TypeDef::Variant(filter)) = registry.resolve(*fields.get(2)?) else {
+        return None;
+    };
+    let index = |name: &str| {
+        filter
+            .variants()
+            .find(|variant| variant.name() == name)
+            .map(|variant| variant.index())
+    };
+    let mut out = Vec::new();
     match policy {
-        pass::SessionPolicy::Calls(calls) => policy_numbers(text, "Calls").is_some_and(|actual| {
-            actual
-                == calls
-                    .iter()
-                    .flat_map(|call| [u128::from(call.pallet), u128::from(call.call)])
-                    .collect::<Vec<_>>()
-        }),
+        pass::SessionPolicy::Calls(calls) => {
+            let mut pairs: Vec<(u8, u8)> = calls.iter().map(|c| (c.pallet, c.call)).collect();
+            pairs.sort_unstable();
+            pairs.dedup();
+            out.push(index("Calls")?);
+            push_compact_len(&mut out, pairs.len());
+            for (pallet, call) in pairs {
+                out.extend([pallet, call]);
+            }
+        }
         pass::SessionPolicy::Pallets(pallets) => {
-            policy_numbers(text, "Pallets").is_some_and(|actual| {
-                actual
-                    == pallets
-                        .iter()
-                        .map(|pallet| u128::from(*pallet))
-                        .collect::<Vec<_>>()
-            })
+            let mut pallets = pallets.clone();
+            pallets.sort_unstable();
+            pallets.dedup();
+            out.push(index("Pallets")?);
+            push_compact_len(&mut out, pallets.len());
+            out.extend(pallets);
         }
-        pass::SessionPolicy::Spend { calls, limit } => {
-            let mut calls_then_limit = calls
-                .iter()
-                .flat_map(|call| [u128::from(call.pallet), u128::from(call.call)])
-                .collect::<Vec<_>>();
-            calls_then_limit.push(*limit);
-            let mut limit_then_calls = vec![*limit];
-            limit_then_calls.extend(
-                calls
-                    .iter()
-                    .flat_map(|call| [u128::from(call.pallet), u128::from(call.call)]),
-            );
-            policy_numbers(text, "Spend")
-                .is_some_and(|actual| actual == calls_then_limit || actual == limit_then_calls)
-        }
+        pass::SessionPolicy::Spend { .. } => return None,
     }
+    Some(ExpectedSessionValue {
+        expiry_len,
+        filter: out,
+    })
 }
 
+/// SCALE compact encoding of a collection length (`BTreeSet`/`Vec` prefix).
 #[cfg(feature = "pass")]
-fn policy_numbers(text: &str, variant: &str) -> Option<Vec<u128>> {
-    let start = text.find(variant)? + variant.len();
-    let tail = text.get(start..)?;
-    let opening = tail.find(['(', '[', '{'])?;
-    let segment = tail.get(opening..)?;
-    let mut depth = 0usize;
-    let mut end = None;
-    for (index, ch) in segment.char_indices() {
-        match ch {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    end = Some(index);
-                    break;
-                }
-            }
-            _ => {}
-        }
+fn push_compact_len(out: &mut Vec<u8>, len: usize) {
+    if len < 1 << 6 {
+        out.push((len as u8) << 2);
+    } else if len < 1 << 14 {
+        out.extend(((len as u16) << 2 | 0b01).to_le_bytes());
+    } else {
+        out.extend(((len as u32) << 2 | 0b10).to_le_bytes());
     }
-    let segment = segment.get(..=end?)?;
-    let mut numbers = Vec::new();
-    let mut current = String::new();
-    for ch in segment.chars() {
-        if ch.is_ascii_digit() {
-            current.push(ch);
-        } else if !current.is_empty() {
-            numbers.push(current.parse().ok()?);
-            current.clear();
-        }
-    }
-    if !current.is_empty() {
-        numbers.push(current.parse().ok()?);
-    }
-    Some(numbers)
 }
 
 #[cfg(feature = "pass")]
@@ -2166,19 +2148,77 @@ mod tests {
 
     #[cfg(feature = "pass")]
     #[test]
-    fn on_chain_policy_comparison_is_structurally_exact() {
-        let policy = pass::SessionPolicy::Calls(vec![pass::session::CallIndex {
-            pallet: 5,
-            call: 12,
-        }]);
-        assert!(policy_text_matches(
-            "Session { filter: Filter::Calls([(5, 12)]), expires: 99 }",
-            &policy
-        ));
-        assert!(!policy_text_matches(
-            "Session { filter: Filter::Calls([(5, 1), (2, 9)]), expires: 99 }",
-            &policy
-        ));
+    fn session_value_comparison_is_exact() {
+        let expected = ExpectedSessionValue {
+            expiry_len: 4,
+            // Calls variant (index 2) with one (5, 12) pair.
+            filter: vec![2, 1 << 2, 5, 12],
+        };
+        let owner = [9u8; 32];
+        let mut stored = owner.to_vec();
+        stored.extend(99u32.to_le_bytes());
+        stored.extend([2, 1 << 2, 5, 12]);
+        assert!(expected.matches(&stored, &owner));
+        // Different owner, different filter, or trailing bytes never match.
+        assert!(!expected.matches(&stored, &[8u8; 32]));
+        let mut other_filter = stored.clone();
+        *other_filter.last_mut().unwrap() = 1;
+        assert!(!expected.matches(&other_filter, &owner));
+        let mut longer = stored.clone();
+        longer.push(0);
+        assert!(!expected.matches(&longer, &owner));
+    }
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn compact_length_prefixes_match_scale() {
+        let encode = |len| {
+            let mut out = Vec::new();
+            push_compact_len(&mut out, len);
+            out
+        };
+        assert_eq!(encode(0), [0x00]);
+        assert_eq!(encode(1), [0x04]);
+        assert_eq!(encode(63), [0xfc]);
+        assert_eq!(encode(64), [0x01, 0x01]);
+        assert_eq!(encode(16383), [0xfd, 0xff]);
+        assert_eq!(encode(16384), [0x02, 0x00, 0x01, 0x00]);
+    }
+
+    /// Read-only live check that the expected `SessionKeys` filter encodes
+    /// the same bytes the runtime receives in `add_session_key`.
+    #[cfg(feature = "pass")]
+    #[test]
+    #[ignore = "requires network access to a chain with pallet-pass (SUBE_E2E_URL, default kreivo)"]
+    fn live_session_filter_encoding_matches_add_session_key() {
+        smol::block_on(async {
+            let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
+            let chain = sube::Sube::connect(&url).await.expect("connects");
+            let metadata = chain.metadata();
+            let config = pass::PassRuntimeConfig::discover(metadata).expect("pass config");
+            for policy in [
+                pass::SessionPolicy::Calls(vec![
+                    pass::session::CallIndex {
+                        pallet: 10,
+                        call: 3,
+                    },
+                    pass::session::CallIndex { pallet: 5, call: 0 },
+                ]),
+                pass::SessionPolicy::Pallets(vec![31, 10]),
+            ] {
+                let expected = expected_session_value(metadata, &policy).expect("layout");
+                let call = pass::session::prepare_add_session_key(
+                    metadata, &config, [1; 32], &policy, None,
+                )
+                .expect("call");
+                assert!(
+                    call.bytes.ends_with(&expected.filter),
+                    "{policy:?}: call {} does not end with {}",
+                    call.hex,
+                    hex::encode(&expected.filter)
+                );
+            }
+        })
     }
 
     /// Destructive live-chain smoke test. The registrar mnemonic must fund the
