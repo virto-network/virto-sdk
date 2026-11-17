@@ -438,9 +438,7 @@ fn draw_pass_session(f: &mut Frame, app: &App) {
         Line::styled(format!("Policy: {}", session.policy), policy_style),
         Line::styled(format!("Duration: {duration}"), duration_style),
         Line::raw(""),
-        Line::raw(
-            "Policy: calls:pallet/call,... | pallets:pallet,... | spend:pallet:limit:call,...",
-        ),
+        Line::raw("Policy: calls:pallet/call,... | pallets:pallet,..."),
         Line::raw("t This call  l This pallet  Tab fields  Enter continue  Esc cancel"),
         Line::raw("Exact on-chain sessions are reused; updates always open transaction review."),
         Line::styled(

@@ -757,9 +757,7 @@ async fn connect_pass_session(
                 .map(|session| session.policy.clone())
         })
         .ok_or_else(|| {
-            anyhow::anyhow!(
-                "pass connect requires --session-policy calls:..., pallets:..., or spend:..."
-            )
+            anyhow::anyhow!("pass connect requires --session-policy calls:... or pallets:...")
         })?;
     let policy = parse_session_policy(chain.metadata(), &policy_text)?;
     let checkpoint = chain.backend().block_info(None).await?;
@@ -1605,9 +1603,7 @@ fn parse_session_policy(metadata: &sube::Metadata, value: &str) -> Result<pass::
             },
         )?);
     }
-    anyhow::bail!(
-        "session policy must be calls:pallet/call,..., pallets:pallet,..., or spend:pallet:limit:call,..."
-    )
+    anyhow::bail!("session policy must be calls:pallet/call,... or pallets:pallet,...")
 }
 
 #[cfg(feature = "pass")]

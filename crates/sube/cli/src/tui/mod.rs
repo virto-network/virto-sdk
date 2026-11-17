@@ -1389,7 +1389,7 @@ fn handle_pass_session(app: &mut App, key: KeyCode) {
         KeyCode::Enter if session.field == 0 => session.field = 1,
         KeyCode::Enter => {
             if session.policy.trim().is_empty() {
-                app.error = Some("An explicit Calls, Pallets, or Spend policy is required.".into());
+                app.error = Some("An explicit Calls or Pallets policy is required.".into());
                 return;
             }
             let duration = if session.duration.trim().is_empty() {
