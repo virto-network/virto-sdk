@@ -5,6 +5,8 @@ use std::io::Read;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
+#[cfg(feature = "pass")]
+mod device;
 mod profiles;
 #[cfg(feature = "wallet")]
 mod signers;

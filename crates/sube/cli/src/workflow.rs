@@ -175,25 +175,21 @@ pub async fn prepare_enrollment(
     let checkpoint = chain.backend().block_info(None).await?;
     let context = u32::try_from(checkpoint.number)
         .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-    let variant = device_variant(&request.device);
-    if !config.supports_attestation(variant) {
-        anyhow::bail!("runtime does not advertise {variant} enrollment");
-    }
     let user_id =
         pass::HashedUserId::from_exact(&hex::decode(request.user_id.trim_start_matches("0x"))?)?;
     if profiles.find(&request.name).is_some() {
         anyhow::bail!("profile {:?} already exists", request.name);
     }
     let registrar_profile = wallet_profile(&profiles, &request.registrar, genesis_hash)?.clone();
-    let (draft, device) = prepare_enrollment_device(
-        chain,
+    // Checks the runtime accepts the device before prompting it.
+    let device = crate::device::Device::open(&profiles, genesis_hash, &request.device).await?;
+    let draft = pass::workflow::prepare_enrollment(
+        chain.metadata(),
         &config,
-        &profiles,
         user_id,
         context,
         checkpoint.hash,
-        request.device,
-        genesis_hash,
+        &device,
     )
     .await?;
     let registrar = crate::signers::wallet_signer(&registrar_profile).await?;
@@ -222,125 +218,12 @@ pub async fn prepare_enrollment(
                 pass_account: draft.predicted_account.0,
                 user_id: user_id.0,
                 device_id: draft.attestation.device_id.0,
-                device,
+                device: device.stored_profile()?,
                 additional_devices: Vec::new(),
                 session: None,
             },
         ))),
     })
-}
-
-#[cfg(feature = "pass")]
-#[allow(clippy::too_many_arguments)]
-async fn prepare_enrollment_device(
-    chain: &mut sube::Sube,
-    config: &pass::PassRuntimeConfig,
-    profiles: &crate::profiles::Profiles,
-    user_id: pass::HashedUserId,
-    context: u32,
-    block_hash: [u8; 32],
-    device: crate::profiles::DeviceProviderProfile,
-    genesis_hash: [u8; 32],
-) -> Result<(
-    pass::EnrollmentDraft,
-    crate::profiles::DeviceProviderProfile,
-)> {
-    match device {
-        crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet_profile = wallet_profile(profiles, &wallet, genesis_hash)?.clone();
-            let signer = crate::signers::wallet_signer(&wallet_profile).await?;
-            let public = signer.inner().public();
-            let device = pass::wallet::WalletDevice::new(
-                signer.inner(),
-                public.as_ref(),
-                pass::wallet::SignatureType::Sr25519,
-            );
-            let draft = pass::workflow::prepare_enrollment(
-                chain.metadata(),
-                config,
-                user_id,
-                context,
-                block_hash,
-                &device,
-            )
-            .await?;
-            Ok((
-                draft,
-                crate::profiles::DeviceProviderProfile::SubstrateKey { wallet },
-            ))
-        }
-        crate::profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
-            #[cfg(feature = "desktop-webauthn")]
-            {
-                let device = pass::webauthn::WebAuthnDevice::for_enrollment(
-                    pass::webauthn::DesktopWebAuthnTransport,
-                    rp_id,
-                    origin,
-                );
-                let draft = pass::workflow::prepare_enrollment(
-                    chain.metadata(),
-                    config,
-                    user_id,
-                    context,
-                    block_hash,
-                    &device,
-                )
-                .await?;
-                let profile = device.profile().ok_or_else(|| {
-                    anyhow::anyhow!("WebAuthn authenticator returned no credential id")
-                })?;
-                Ok((
-                    draft,
-                    crate::profiles::DeviceProviderProfile::WebAuthn {
-                        rp_id: profile.rp_id,
-                        origin: profile.origin,
-                        credential_id: profile.credential_id,
-                    },
-                ))
-            }
-            #[cfg(not(feature = "desktop-webauthn"))]
-            {
-                let _ = (rp_id, origin);
-                anyhow::bail!("this build has no desktop WebAuthn support")
-            }
-        }
-        crate::profiles::DeviceProviderProfile::SshAgent {
-            fingerprint,
-            namespace,
-        } => {
-            #[cfg(all(feature = "ssh-agent", unix))]
-            {
-                let transport =
-                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
-                let device = pass::ssh_agent::SshAgentDevice::new(
-                    transport,
-                    fingerprint.clone(),
-                    namespace.clone(),
-                );
-                let draft = pass::workflow::prepare_enrollment(
-                    chain.metadata(),
-                    config,
-                    user_id,
-                    context,
-                    block_hash,
-                    &device,
-                )
-                .await?;
-                Ok((
-                    draft,
-                    crate::profiles::DeviceProviderProfile::SshAgent {
-                        fingerprint,
-                        namespace,
-                    },
-                ))
-            }
-            #[cfg(not(all(feature = "ssh-agent", unix)))]
-            {
-                let _ = (fingerprint, namespace);
-                anyhow::bail!("this build has no native SSH-agent support")
-            }
-        }
-    }
 }
 
 #[cfg(feature = "pass")]
@@ -351,6 +234,7 @@ pub async fn prepare_device_addition(
     genesis_hash: [u8; 32],
     request: DeviceAdditionRequest,
 ) -> Result<Staged> {
+    use pass::DeviceAuthenticator;
     use sube::Backend;
 
     let profiles = crate::profiles::Profiles::load(profile_path)?;
@@ -359,11 +243,12 @@ pub async fn prepare_device_addition(
     let checkpoint = chain.backend().block_info(None).await?;
     let context = u32::try_from(checkpoint.number)
         .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-    let variant = device_variant(&request.device);
+    let filter = pass::DeviceFilter::parse(chain.metadata(), &request.filter)?;
+    let device = crate::device::Device::open(&profiles, genesis_hash, &request.device).await?;
+    let variant = device.variant();
     if !config.supports_attestation(variant) {
         anyhow::bail!("runtime does not advertise {variant} device registration");
     }
-    let filter = pass::DeviceFilter::parse(chain.metadata(), &request.filter)?;
     let attestation_request = pass::workflow::ChallengeRequest::enrollment(
         pass::HashedUserId(profile.user_id),
         pass::Account(profile.pass_account),
@@ -371,13 +256,7 @@ pub async fn prepare_device_addition(
         context,
         &checkpoint.hash,
     );
-    let (attestation, device) = prepare_added_device(
-        &profiles,
-        genesis_hash,
-        request.device,
-        &attestation_request,
-    )
-    .await?;
+    let attestation = device.attest(&attestation_request).await?;
     let call = pass::workflow::prepare_add_device(
         chain.metadata(),
         &config,
@@ -410,94 +289,10 @@ pub async fn prepare_device_addition(
             profile: Box::new(profile),
             device: crate::profiles::DeviceRecord {
                 device_id: attestation.device_id.0,
-                device,
+                device: device.stored_profile()?,
             },
         }),
     })
-}
-
-#[cfg(feature = "pass")]
-async fn prepare_added_device(
-    profiles: &crate::profiles::Profiles,
-    genesis_hash: [u8; 32],
-    device: crate::profiles::DeviceProviderProfile,
-    request: &pass::workflow::ChallengeRequest,
-) -> Result<(
-    pass::workflow::DeviceAttestation,
-    crate::profiles::DeviceProviderProfile,
-)> {
-    use pass::DeviceAuthenticator;
-
-    match device {
-        crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet_profile = wallet_profile(profiles, &wallet, genesis_hash)?.clone();
-            let signer = crate::signers::wallet_signer(&wallet_profile).await?;
-            let public = signer.inner().public();
-            let device = pass::wallet::WalletDevice::new(
-                signer.inner(),
-                public.as_ref(),
-                pass::wallet::SignatureType::Sr25519,
-            );
-            Ok((
-                device.attest(request).await?,
-                crate::profiles::DeviceProviderProfile::SubstrateKey { wallet },
-            ))
-        }
-        crate::profiles::DeviceProviderProfile::WebAuthn { rp_id, origin, .. } => {
-            #[cfg(feature = "desktop-webauthn")]
-            {
-                let device = pass::webauthn::WebAuthnDevice::for_enrollment(
-                    pass::webauthn::DesktopWebAuthnTransport,
-                    rp_id,
-                    origin,
-                );
-                let attestation = device.attest(request).await?;
-                let stored = device.profile().ok_or_else(|| {
-                    anyhow::anyhow!("WebAuthn authenticator returned no credential id")
-                })?;
-                Ok((
-                    attestation,
-                    crate::profiles::DeviceProviderProfile::WebAuthn {
-                        rp_id: stored.rp_id,
-                        origin: stored.origin,
-                        credential_id: stored.credential_id,
-                    },
-                ))
-            }
-            #[cfg(not(feature = "desktop-webauthn"))]
-            {
-                let _ = (rp_id, origin, request);
-                anyhow::bail!("this build has no desktop WebAuthn support")
-            }
-        }
-        crate::profiles::DeviceProviderProfile::SshAgent {
-            fingerprint,
-            namespace,
-        } => {
-            #[cfg(all(feature = "ssh-agent", unix))]
-            {
-                let transport =
-                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
-                let device = pass::ssh_agent::SshAgentDevice::new(
-                    transport,
-                    fingerprint.clone(),
-                    namespace.clone(),
-                );
-                Ok((
-                    device.attest(request).await?,
-                    crate::profiles::DeviceProviderProfile::SshAgent {
-                        fingerprint,
-                        namespace,
-                    },
-                ))
-            }
-            #[cfg(not(all(feature = "ssh-agent", unix)))]
-            {
-                let _ = (fingerprint, namespace, request);
-                anyhow::bail!("this build has no native SSH-agent support")
-            }
-        }
-    }
 }
 
 #[cfg(feature = "pass")]
@@ -778,20 +573,29 @@ pub fn forget_pass_session(
     Ok(profiles)
 }
 
+/// Sign `call` as `profile` through its primary device.
 #[cfg(feature = "pass")]
 #[allow(clippy::too_many_arguments)]
-async fn prepare_device_authenticated<A: pass::DeviceAuthenticator>(
+pub async fn prepare_profile_device_transaction(
     chain: &mut sube::Sube,
     chain_url: &str,
+    profiles: &crate::profiles::Profiles,
     profile: &crate::profiles::PassProfile,
     config: &pass::PassRuntimeConfig,
     context: u32,
     block_hash: [u8; 32],
     call: &sube::PreparedCall,
-    device: &A,
 ) -> Result<PreparedTransaction> {
+    use pass::DeviceAuthenticator;
+
+    let device =
+        crate::device::Device::open(profiles, profile.genesis_hash, &profile.device).await?;
+    let variant = device.variant();
+    if !config.supports_credential(variant) {
+        anyhow::bail!("runtime does not advertise {variant} authentication");
+    }
     let authorizer = pass::PassAuthenticator::new(
-        device,
+        &device,
         pass::Account(profile.pass_account),
         pass::DeviceId(profile.device_id),
         pass::HashedUserId(profile.user_id),
@@ -808,88 +612,6 @@ async fn prepare_device_authenticated<A: pass::DeviceAuthenticator>(
         sube::TransactionOptions::default(),
     )
     .await
-}
-
-#[cfg(feature = "pass")]
-#[allow(clippy::too_many_arguments)]
-pub async fn prepare_profile_device_transaction(
-    chain: &mut sube::Sube,
-    chain_url: &str,
-    profiles: &crate::profiles::Profiles,
-    profile: &crate::profiles::PassProfile,
-    config: &pass::PassRuntimeConfig,
-    context: u32,
-    block_hash: [u8; 32],
-    call: &sube::PreparedCall,
-) -> Result<PreparedTransaction> {
-    let primary_device = profile.primary_device();
-    let variant = device_variant(&primary_device);
-    if !config.supports_credential(variant) {
-        anyhow::bail!("runtime does not advertise {variant} authentication");
-    }
-    match primary_device {
-        crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet = wallet_profile(profiles, &wallet, profile.genesis_hash)?.clone();
-            let signer = crate::signers::wallet_signer(&wallet).await?;
-            let public = signer.inner().public();
-            let device = pass::wallet::WalletDevice::new(
-                signer.inner(),
-                public.as_ref(),
-                pass::wallet::SignatureType::Sr25519,
-            );
-            prepare_device_authenticated(
-                chain, chain_url, profile, config, context, block_hash, call, &device,
-            )
-            .await
-        }
-        crate::profiles::DeviceProviderProfile::WebAuthn {
-            rp_id,
-            origin,
-            credential_id,
-        } => {
-            #[cfg(feature = "desktop-webauthn")]
-            {
-                let device = pass::webauthn::WebAuthnDevice::from_profile(
-                    pass::webauthn::DesktopWebAuthnTransport,
-                    pass::webauthn::WebAuthnProfile {
-                        rp_id,
-                        origin,
-                        credential_id,
-                    },
-                );
-                prepare_device_authenticated(
-                    chain, chain_url, profile, config, context, block_hash, call, &device,
-                )
-                .await
-            }
-            #[cfg(not(feature = "desktop-webauthn"))]
-            {
-                let _ = (rp_id, origin, credential_id);
-                anyhow::bail!("this build has no desktop WebAuthn support")
-            }
-        }
-        crate::profiles::DeviceProviderProfile::SshAgent {
-            fingerprint,
-            namespace,
-        } => {
-            #[cfg(all(feature = "ssh-agent", unix))]
-            {
-                let transport =
-                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
-                let device =
-                    pass::ssh_agent::SshAgentDevice::new(transport, fingerprint, namespace);
-                prepare_device_authenticated(
-                    chain, chain_url, profile, config, context, block_hash, call, &device,
-                )
-                .await
-            }
-            #[cfg(not(all(feature = "ssh-agent", unix)))]
-            {
-                let _ = (fingerprint, namespace);
-                anyhow::bail!("this build has no native SSH-agent support")
-            }
-        }
-    }
 }
 
 /// A signed transaction to review, with the notes shown above it and the
@@ -1135,15 +857,6 @@ pub fn receipt_json(receipt: &sube::TransactionReceipt) -> serde_json::Value {
             "decoded": event.decoded,
         })).collect::<Vec<_>>(),
     })
-}
-
-#[cfg(feature = "pass")]
-pub fn device_variant(device: &profiles::DeviceProviderProfile) -> &'static str {
-    match device {
-        profiles::DeviceProviderProfile::SubstrateKey { .. } => "SubstrateKey",
-        profiles::DeviceProviderProfile::WebAuthn { .. } => "WebAuthn",
-        profiles::DeviceProviderProfile::SshAgent { .. } => "Ssh",
-    }
 }
 
 pub async fn chain_genesis(chain: &mut sube::Sube) -> Result<[u8; 32]> {
