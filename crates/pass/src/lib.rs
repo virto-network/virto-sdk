@@ -48,7 +48,7 @@ mod newtypes;
 pub use config::{AccountDerivation, Challenger, PassRuntimeConfig, RuntimeOverrides};
 pub use meta::CredentialMeta;
 pub use newtypes::{Account, AuthorityId, DeviceId, HashedUserId, InvalidHashedUserId};
-pub use session::{SessionAuthorizer, SessionManager, SessionPolicy};
+pub use session::{SessionAuthorizer, SessionPolicy};
 pub use workflow::{DeviceAuthenticator, EnrollmentDraft, PassAuthorizer};
 
 use alloc::string::String;

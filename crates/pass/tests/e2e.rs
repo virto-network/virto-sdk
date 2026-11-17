@@ -29,12 +29,6 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
         let mut chain = sube::Sube::connect(&url).await.expect("connect E2E chain");
         let config =
             pass::PassRuntimeConfig::discover(chain.metadata()).expect("discover Pass runtime");
-        let genesis_hash = chain
-            .backend()
-            .block_info(Some(0))
-            .await
-            .expect("genesis")
-            .hash;
 
         let (registrar_inner, registrar_account) =
             derived_signer(&registrar_phrase, "//default").await;
@@ -151,30 +145,6 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
             session_exists(&mut chain, draft.predicted_account.0, session_account).await,
             "registered session was not found in Pass storage"
         );
-
-        let local = pass::session::LocalSession {
-            genesis_hash,
-            pass_account: draft.predicted_account,
-            session_account,
-            policy: policy.clone(),
-            expires_at: session_checkpoint.number + u64::from(duration),
-        };
-        let on_chain = pass::session::OnChainSession {
-            pass_account: draft.predicted_account,
-            session_account,
-            policy: policy.clone(),
-            expires_at: local.expires_at,
-        };
-        assert!(matches!(
-            pass::SessionManager::plan(
-                Some(local),
-                Some(&on_chain),
-                draft.predicted_account,
-                &policy,
-                session_checkpoint.number
-            ),
-            pass::session::SessionPlan::Reuse(_)
-        ));
 
         let session =
             pass::SessionAuthorizer::new(draft.predicted_account, session_signer, policy.clone());
