@@ -386,15 +386,12 @@ pub fn encode_extensions(
             // zero bytes, nothing to encode
         } else if ext.identifier == "CheckMortality" && override_value.is_none() {
             match ctx.mortality {
-                // `Era`'s compact two-byte mortal form is encoded directly.
+                // `Era` is encoded directly: the two-byte mortal form, or the
+                // single byte 0x00 for `Era::Immortal`. Serializing
+                // `{"Immortal": null}` added a stray `None` byte.
                 Mortality::Mortal { period } => extension_extra
                     .extend_from_slice(&encode_mortal_era(period, ctx.checkpoint_number)),
-                Mortality::Immortal => encode_typed(
-                    &mut extension_extra,
-                    &DynValue::obj(&[("Immortal", DynValue::Null)]),
-                    ext.ty,
-                    registry,
-                )?,
+                Mortality::Immortal => extension_extra.push(0x00),
             }
         } else {
             let value = override_value
@@ -646,6 +643,25 @@ mod tests {
             mortality: Mortality::Mortal { period: 64 },
             tip: 0,
         }
+    }
+
+    #[test]
+    fn immortal_check_mortality_is_one_byte() {
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+        let mortality = meta
+            .extrinsic
+            .extensions
+            .iter()
+            .find(|extension| extension.identifier == "CheckMortality")
+            .unwrap();
+        let ctx = ChainContext {
+            mortality: Mortality::Immortal,
+            ..test_ctx()
+        };
+        let (extra, additional, _) =
+            encode_extensions(core::slice::from_ref(mortality), &meta.registry, &ctx, &[]).unwrap();
+        assert_eq!(extra, [0x00]);
+        assert_eq!(additional, ctx.genesis_hash);
     }
 
     #[test]

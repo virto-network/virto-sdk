@@ -316,21 +316,30 @@ fn signed_transaction_decodes_and_verifies_on_chain() {
         let call = chain
             .prepare_call("system/remark", &Text("(remark:0x68656c6c6f)"))
             .expect("call");
-        let extrinsic = chain
-            .build_transaction(&call, &signer, TransactionOptions::default())
-            .await
-            .expect("builds");
-        let report = chain
-            .inspect_transaction(&extrinsic)
-            .await
-            .expect("inspects");
-        assert_eq!(
-            report.validity,
-            Some(TransactionValidity::Invalid("0x0001".into())),
-            "{report:?}"
-        );
-        assert!(report.partial_fee.is_some_and(|fee| fee > 0), "{report:?}");
-        assert!(report.warnings.is_empty(), "{report:?}");
+        for options in [
+            TransactionOptions::default(),
+            TransactionOptions::default().immortal(),
+        ] {
+            let mortality = options.mortality;
+            let extrinsic = chain
+                .build_transaction(&call, &signer, options)
+                .await
+                .expect("builds");
+            let report = chain
+                .inspect_transaction(&extrinsic)
+                .await
+                .expect("inspects");
+            assert_eq!(
+                report.validity,
+                Some(TransactionValidity::Invalid("0x0001".into())),
+                "{mortality:?}: {report:?}"
+            );
+            assert!(
+                report.partial_fee.is_some_and(|fee| fee > 0),
+                "{mortality:?}: {report:?}"
+            );
+            assert!(report.warnings.is_empty(), "{mortality:?}: {report:?}");
+        }
     });
 }
 
