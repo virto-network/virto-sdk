@@ -11,6 +11,8 @@ use sube::Metadata;
 use sube::metadata::{PalletMeta, StorageEntryType};
 
 mod chain;
+#[cfg(feature = "wallet")]
+mod dialog;
 mod draw;
 mod form;
 mod format;
@@ -72,106 +74,7 @@ enum Focus {
     ConfirmSubmit,
     Profiles,
     #[cfg(feature = "wallet")]
-    WalletImport,
-    #[cfg(feature = "pass")]
-    PassSession,
-    #[cfg(feature = "pass")]
-    ConfirmForgetSession,
-    #[cfg(feature = "pass")]
-    PassEnrollment,
-    #[cfg(feature = "pass")]
-    PassDeviceAddition,
-    #[cfg(feature = "pass")]
-    PassDeviceRemoval,
-}
-
-#[cfg(feature = "wallet")]
-struct WalletImportState {
-    field: u8,
-    name: String,
-    mnemonic: zeroize::Zeroizing<String>,
-}
-
-#[cfg(feature = "pass")]
-struct PassSessionState {
-    profile: String,
-    field: u8,
-    policy: String,
-    duration: String,
-}
-
-#[cfg(feature = "pass")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DeviceProviderKind {
-    SubstrateKey,
-    #[cfg(feature = "desktop-webauthn")]
-    WebAuthn,
-    #[cfg(all(feature = "ssh-agent", unix))]
-    SshAgent,
-}
-
-#[cfg(feature = "pass")]
-impl DeviceProviderKind {
-    fn available(metadata: &Metadata) -> Vec<Self> {
-        let Ok(config) = pass::PassRuntimeConfig::discover(metadata) else {
-            return Vec::new();
-        };
-        let mut providers = Vec::new();
-        if config.supports_attestation("SubstrateKey") {
-            providers.push(Self::SubstrateKey);
-        }
-        #[cfg(feature = "desktop-webauthn")]
-        if config.supports_attestation("WebAuthn") {
-            providers.push(Self::WebAuthn);
-        }
-        #[cfg(all(feature = "ssh-agent", unix))]
-        if config.supports_attestation("Ssh") {
-            providers.push(Self::SshAgent);
-        }
-        providers
-    }
-
-    fn next(self, metadata: &Metadata) -> Self {
-        let providers = Self::available(metadata);
-        if providers.is_empty() {
-            return self;
-        }
-        let index = providers
-            .iter()
-            .position(|provider| *provider == self)
-            .unwrap_or(0);
-        providers[(index + 1) % providers.len()]
-    }
-}
-
-#[cfg(feature = "pass")]
-struct PassEnrollmentState {
-    field: u8,
-    name: String,
-    user_id: String,
-    registrar: String,
-    provider: DeviceProviderKind,
-    provider_primary: String,
-    provider_secondary: String,
-}
-
-#[cfg(feature = "pass")]
-struct PassDeviceAdditionState {
-    profile: String,
-    field: u8,
-    provider: DeviceProviderKind,
-    provider_primary: String,
-    provider_secondary: String,
-    filter: String,
-    admin_confirmation: String,
-}
-
-#[cfg(feature = "pass")]
-struct PassDeviceRemovalState {
-    profile: String,
-    devices: Vec<([u8; 32], String, bool)>,
-    device_idx: usize,
-    confirmation: String,
+    Dialog,
 }
 
 // --- App state ---
@@ -184,17 +87,7 @@ struct App {
     profiles: crate::profiles::Profiles,
     profile_idx: usize,
     #[cfg(feature = "wallet")]
-    wallet_import: Option<WalletImportState>,
-    #[cfg(feature = "pass")]
-    pass_session: Option<PassSessionState>,
-    #[cfg(feature = "pass")]
-    forget_session_profile: Option<String>,
-    #[cfg(feature = "pass")]
-    pass_enrollment: Option<PassEnrollmentState>,
-    #[cfg(feature = "pass")]
-    pass_device_addition: Option<PassDeviceAdditionState>,
-    #[cfg(feature = "pass")]
-    pass_device_removal: Option<PassDeviceRemovalState>,
+    dialog: Option<dialog::Dialog>,
 
     all_pallets: Vec<String>,
     pallets: Vec<String>,
@@ -486,17 +379,7 @@ impl App {
                     .min(self.profiles.profiles.len().saturating_sub(1));
                 self.error = Some(message);
                 self.focus = Focus::Profiles;
-                #[cfg(feature = "wallet")]
-                {
-                    self.wallet_import = None;
-                }
-                #[cfg(feature = "pass")]
-                {
-                    self.pass_session = None;
-                    self.pass_enrollment = None;
-                    self.pass_device_addition = None;
-                    self.pass_device_removal = None;
-                }
+                self.dialog = None;
             }
             #[cfg(feature = "wallet")]
             FromChain::ProfileError(error) => self.error = Some(error),
@@ -612,17 +495,7 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         profiles,
         profile_idx: 0,
         #[cfg(feature = "wallet")]
-        wallet_import: None,
-        #[cfg(feature = "pass")]
-        pass_session: None,
-        #[cfg(feature = "pass")]
-        forget_session_profile: None,
-        #[cfg(feature = "pass")]
-        pass_enrollment: None,
-        #[cfg(feature = "pass")]
-        pass_device_addition: None,
-        #[cfg(feature = "pass")]
-        pass_device_removal: None,
+        dialog: None,
         all_pallets,
         pallets,
         pallet_idx: 0,
@@ -696,17 +569,7 @@ fn handle_key(app: &mut App, key: KeyCode) {
         Focus::ConfirmSubmit => handle_submit_confirmation(app, key),
         Focus::Profiles => handle_profiles(app, key),
         #[cfg(feature = "wallet")]
-        Focus::WalletImport => handle_wallet_import(app, key),
-        #[cfg(feature = "pass")]
-        Focus::PassSession => handle_pass_session(app, key),
-        #[cfg(feature = "pass")]
-        Focus::ConfirmForgetSession => handle_forget_session_confirmation(app, key),
-        #[cfg(feature = "pass")]
-        Focus::PassEnrollment => handle_pass_enrollment(app, key),
-        #[cfg(feature = "pass")]
-        Focus::PassDeviceAddition => handle_pass_device_addition(app, key),
-        #[cfg(feature = "pass")]
-        Focus::PassDeviceRemoval => handle_pass_device_removal(app, key),
+        Focus::Dialog => dialog::handle_key(app, key),
     }
 }
 
@@ -805,135 +668,11 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
             }
         }
         #[cfg(feature = "wallet")]
-        KeyCode::Char('a') => {
-            app.wallet_import = Some(WalletImportState {
-                field: 0,
-                name: String::new(),
-                mnemonic: zeroize::Zeroizing::new(String::new()),
-            });
-            app.error = None;
-            app.focus = Focus::WalletImport;
-        }
+        KeyCode::Char('a') => open_dialog(app, Ok(dialog::Dialog::import_wallet())),
         #[cfg(feature = "pass")]
-        KeyCode::Char('s') => {
-            let profile = match app.profiles.profiles.get(app.profile_idx).cloned() {
-                Some(crate::profiles::Profile::Pass(profile)) => profile,
-                _ => {
-                    app.error = Some("Select a pass profile to manage its session.".into());
-                    return;
-                }
-            };
-            let selected_call = app.current_pallet().and_then(|pallet| {
-                app.call_items
-                    .get(app.call_idx)
-                    .map(|call| format!("calls:{}/{}", pallet.name, call))
-            });
-            app.pass_session = Some(PassSessionState {
-                profile: profile.name,
-                field: 0,
-                policy: profile
-                    .session
-                    .map(|session| session.policy)
-                    .or(selected_call)
-                    .unwrap_or_default(),
-                duration: String::new(),
-            });
-            app.error = None;
-            app.focus = Focus::PassSession;
-        }
-        #[cfg(feature = "pass")]
-        KeyCode::Char('f') => {
-            let profile = match app.profiles.profiles.get(app.profile_idx) {
-                Some(crate::profiles::Profile::Pass(profile)) if profile.session.is_some() => {
-                    profile.name.clone()
-                }
-                _ => {
-                    app.error = Some("Select a pass profile with a local session.".into());
-                    return;
-                }
-            };
-            app.forget_session_profile = Some(profile);
-            app.error = None;
-            app.focus = Focus::ConfirmForgetSession;
-        }
-        #[cfg(feature = "pass")]
-        KeyCode::Char('e') => {
-            let Some(provider) = DeviceProviderKind::available(&app.meta).into_iter().next() else {
-                app.error = Some(
-                    "The connected runtime advertises no authenticator supported by this build."
-                        .into(),
-                );
-                return;
-            };
-            app.pass_enrollment = Some(PassEnrollmentState {
-                field: 0,
-                name: String::new(),
-                user_id: String::new(),
-                registrar: String::new(),
-                provider,
-                provider_primary: String::new(),
-                provider_secondary: String::new(),
-            });
-            app.error = None;
-            app.focus = Focus::PassEnrollment;
-        }
-        #[cfg(feature = "pass")]
-        KeyCode::Char('d') => {
-            let profile = match app.profiles.profiles.get(app.profile_idx) {
-                Some(crate::profiles::Profile::Pass(profile)) => profile.name.clone(),
-                _ => {
-                    app.error = Some("Select a pass profile to add a device.".into());
-                    return;
-                }
-            };
-            let Some(provider) = DeviceProviderKind::available(&app.meta).into_iter().next() else {
-                app.error = Some(
-                    "The connected runtime advertises no authenticator supported by this build."
-                        .into(),
-                );
-                return;
-            };
-            app.pass_device_addition = Some(PassDeviceAdditionState {
-                profile,
-                field: 0,
-                provider,
-                provider_primary: String::new(),
-                provider_secondary: String::new(),
-                filter: String::new(),
-                admin_confirmation: String::new(),
-            });
-            app.error = None;
-            app.focus = Focus::PassDeviceAddition;
-        }
-        #[cfg(feature = "pass")]
-        KeyCode::Char('r') => {
-            let profile = match app.profiles.profiles.get(app.profile_idx) {
-                Some(crate::profiles::Profile::Pass(profile)) => profile,
-                _ => {
-                    app.error = Some("Select a pass profile to remove a device.".into());
-                    return;
-                }
-            };
-            let mut devices = vec![(
-                profile.device_id,
-                format!("primary · {}", device_provider_label(&profile.device)),
-                true,
-            )];
-            devices.extend(profile.additional_devices.iter().map(|record| {
-                (
-                    record.device_id,
-                    format!("additional · {}", device_provider_label(&record.device)),
-                    false,
-                )
-            }));
-            app.pass_device_removal = Some(PassDeviceRemovalState {
-                profile: profile.name.clone(),
-                devices,
-                device_idx: 0,
-                confirmation: String::new(),
-            });
-            app.error = None;
-            app.focus = Focus::PassDeviceRemoval;
+        KeyCode::Char(key @ ('s' | 'f' | 'e' | 'd' | 'r')) => {
+            let opened = pass_dialog(app, key);
+            open_dialog(app, opened);
         }
         #[cfg(feature = "wallet")]
         KeyCode::Enter => {
@@ -948,387 +687,54 @@ fn handle_profiles(app: &mut App, key: KeyCode) {
     }
 }
 
-#[cfg(feature = "pass")]
-fn device_provider_label(device: &crate::profiles::DeviceProviderProfile) -> &'static str {
-    match device {
-        crate::profiles::DeviceProviderProfile::SubstrateKey { .. } => "Substrate key",
-        crate::profiles::DeviceProviderProfile::WebAuthn { .. } => "WebAuthn",
-        crate::profiles::DeviceProviderProfile::SshAgent { .. } => "SSH agent",
-    }
-}
-
-#[cfg(feature = "pass")]
-fn handle_pass_device_addition(app: &mut App, key: KeyCode) {
-    let metadata = app.meta.clone();
-    let Some(device) = app.pass_device_addition.as_mut() else {
-        app.focus = Focus::Profiles;
-        return;
-    };
-    match key {
-        KeyCode::Esc => {
-            app.pass_device_addition = None;
-            app.error = None;
-            app.focus = Focus::Profiles;
-        }
-        KeyCode::Tab | KeyCode::Down => device.field = (device.field + 1).min(4),
-        KeyCode::BackTab | KeyCode::Up => device.field = device.field.saturating_sub(1),
-        KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if device.field == 0 => {
-            device.provider = device.provider.next(&metadata);
-            device.provider_primary.clear();
-            device.provider_secondary.clear();
-            #[cfg(all(feature = "ssh-agent", unix))]
-            if matches!(device.provider, DeviceProviderKind::SshAgent) {
-                device.provider_secondary = "sube".into();
-            }
-        }
-        KeyCode::Backspace => match device.field {
-            1 => {
-                device.provider_primary.pop();
-            }
-            2 => {
-                device.provider_secondary.pop();
-            }
-            3 => {
-                device.filter.pop();
-                device.admin_confirmation.clear();
-            }
-            4 => {
-                device.admin_confirmation.pop();
-            }
-            _ => {}
-        },
-        KeyCode::Char(c) => match device.field {
-            1 => device.provider_primary.push(c),
-            2 => device.provider_secondary.push(c),
-            3 => {
-                device.filter.push(c);
-                device.admin_confirmation.clear();
-            }
-            4 => device.admin_confirmation.push(c),
-            _ => {}
-        },
-        KeyCode::Enter if device.field < 4 => device.field += 1,
-        KeyCode::Enter => {
-            if device.provider_primary.trim().is_empty() || device.filter.trim().is_empty() {
-                app.error =
-                    Some("Provider selection and an explicit device filter are required.".into());
-                return;
-            }
-            let admin = device.filter.trim().eq_ignore_ascii_case("admin");
-            if admin && device.admin_confirmation != "ADMIN" {
-                app.error = Some("Type ADMIN in the separate confirmation field.".into());
-                return;
-            }
-            let provider = match device.provider {
-                DeviceProviderKind::SubstrateKey => {
-                    crate::profiles::DeviceProviderProfile::SubstrateKey {
-                        wallet: device.provider_primary.trim().into(),
-                    }
-                }
-                #[cfg(feature = "desktop-webauthn")]
-                DeviceProviderKind::WebAuthn => {
-                    if device.provider_secondary.trim().is_empty() {
-                        app.error = Some("WebAuthn origin is required.".into());
-                        return;
-                    }
-                    crate::profiles::DeviceProviderProfile::WebAuthn {
-                        rp_id: device.provider_primary.trim().into(),
-                        origin: device.provider_secondary.trim().into(),
-                        credential_id: Vec::new(),
-                    }
-                }
-                #[cfg(all(feature = "ssh-agent", unix))]
-                DeviceProviderKind::SshAgent => {
-                    if device.provider_secondary.trim().is_empty() {
-                        app.error = Some("SSHSIG namespace is required.".into());
-                        return;
-                    }
-                    crate::profiles::DeviceProviderProfile::SshAgent {
-                        fingerprint: device.provider_primary.trim().into(),
-                        namespace: device.provider_secondary.trim().into(),
-                    }
-                }
-            };
-            app.review_returns_to_profiles = true;
-            app.error = Some("Creating the new device attestation...".into());
-            let _ = app.to_chain.send(ToChain::PrepareDeviceAddition(
-                crate::workflow::DeviceAdditionRequest {
-                    profile: device.profile.clone(),
-                    device: provider,
-                    filter: device.filter.trim().into(),
-                    admin_confirmed: admin,
-                },
-            ));
-        }
-        _ => {}
-    }
-}
-
-#[cfg(feature = "pass")]
-fn handle_pass_device_removal(app: &mut App, key: KeyCode) {
-    let Some(removal) = app.pass_device_removal.as_mut() else {
-        app.focus = Focus::Profiles;
-        return;
-    };
-    match key {
-        KeyCode::Esc => {
-            app.pass_device_removal = None;
-            app.error = None;
-            app.focus = Focus::Profiles;
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            removal.device_idx = removal.device_idx.saturating_sub(1);
-            removal.confirmation.clear();
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if removal.device_idx + 1 < removal.devices.len() {
-                removal.device_idx += 1;
-                removal.confirmation.clear();
-            }
-        }
-        KeyCode::Backspace => {
-            removal.confirmation.pop();
-        }
-        KeyCode::Char(c) => removal.confirmation.push(c),
-        KeyCode::Enter => {
-            if removal.confirmation != "REMOVE" {
-                app.error = Some("Type REMOVE to prepare this device removal.".into());
-                return;
-            }
-            let Some((device_id, _, _)) = removal.devices.get(removal.device_idx) else {
-                return;
-            };
-            app.review_returns_to_profiles = true;
-            app.error = Some("Authenticating and preparing device removal...".into());
-            let _ = app.to_chain.send(ToChain::PrepareDeviceRemoval(
-                crate::workflow::DeviceRemovalRequest {
-                    profile: removal.profile.clone(),
-                    device_id: *device_id,
-                },
-            ));
-        }
-        _ => {}
-    }
-}
-
-#[cfg(feature = "pass")]
-fn handle_pass_enrollment(app: &mut App, key: KeyCode) {
-    let metadata = app.meta.clone();
-    let Some(enrollment) = app.pass_enrollment.as_mut() else {
-        app.focus = Focus::Profiles;
-        return;
-    };
-    match key {
-        KeyCode::Esc => {
-            app.pass_enrollment = None;
-            app.error = None;
-            app.focus = Focus::Profiles;
-        }
-        KeyCode::Tab | KeyCode::Down => enrollment.field = (enrollment.field + 1).min(5),
-        KeyCode::BackTab | KeyCode::Up => enrollment.field = enrollment.field.saturating_sub(1),
-        KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if enrollment.field == 3 => {
-            enrollment.provider = enrollment.provider.next(&metadata);
-            enrollment.provider_primary.clear();
-            enrollment.provider_secondary.clear();
-            #[cfg(all(feature = "ssh-agent", unix))]
-            if matches!(enrollment.provider, DeviceProviderKind::SshAgent) {
-                enrollment.provider_secondary = "sube".into();
-            }
-        }
-        KeyCode::Backspace => match enrollment.field {
-            0 => {
-                enrollment.name.pop();
-            }
-            1 => {
-                enrollment.user_id.pop();
-            }
-            2 => {
-                enrollment.registrar.pop();
-            }
-            4 => {
-                enrollment.provider_primary.pop();
-            }
-            5 => {
-                enrollment.provider_secondary.pop();
-            }
-            _ => {}
-        },
-        KeyCode::Char(c) => match enrollment.field {
-            0 => enrollment.name.push(c),
-            1 => enrollment.user_id.push(c),
-            2 => enrollment.registrar.push(c),
-            4 => enrollment.provider_primary.push(c),
-            5 => enrollment.provider_secondary.push(c),
-            _ => {}
-        },
-        KeyCode::Enter if enrollment.field < 5 => enrollment.field += 1,
-        KeyCode::Enter => {
-            let device = match enrollment.provider {
-                DeviceProviderKind::SubstrateKey => {
-                    crate::profiles::DeviceProviderProfile::SubstrateKey {
-                        wallet: enrollment.provider_primary.trim().into(),
-                    }
-                }
-                #[cfg(feature = "desktop-webauthn")]
-                DeviceProviderKind::WebAuthn => crate::profiles::DeviceProviderProfile::WebAuthn {
-                    rp_id: enrollment.provider_primary.trim().into(),
-                    origin: enrollment.provider_secondary.trim().into(),
-                    credential_id: Vec::new(),
-                },
-                #[cfg(all(feature = "ssh-agent", unix))]
-                DeviceProviderKind::SshAgent => crate::profiles::DeviceProviderProfile::SshAgent {
-                    fingerprint: enrollment.provider_primary.trim().into(),
-                    namespace: enrollment.provider_secondary.trim().into(),
-                },
-            };
-            if enrollment.name.trim().is_empty()
-                || enrollment.user_id.trim().is_empty()
-                || enrollment.registrar.trim().is_empty()
-                || enrollment.provider_primary.trim().is_empty()
-            {
-                app.error = Some(
-                    "Name, exact user ID, registrar, and provider selection are required.".into(),
-                );
-                return;
-            }
-            app.review_returns_to_profiles = true;
-            app.error = Some("Creating device attestation and enrollment draft...".into());
-            let _ = app.to_chain.send(ToChain::PrepareEnrollment(
-                crate::workflow::EnrollmentRequest {
-                    name: enrollment.name.trim().into(),
-                    user_id: enrollment.user_id.trim().into(),
-                    registrar: enrollment.registrar.trim().into(),
-                    device,
-                },
-            ));
-        }
-        _ => {}
-    }
-}
-
-#[cfg(feature = "pass")]
-fn handle_forget_session_confirmation(app: &mut App, key: KeyCode) {
-    match key {
-        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-            if let Some(profile) = app.forget_session_profile.take() {
-                app.error = Some("Deleting the local session secret...".into());
-                let _ = app.to_chain.send(ToChain::ForgetPassSession(profile));
-                app.focus = Focus::Profiles;
-            }
-        }
-        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-            app.forget_session_profile = None;
-            app.focus = Focus::Profiles;
-        }
-        _ => {}
-    }
-}
-
-#[cfg(feature = "pass")]
-fn handle_pass_session(app: &mut App, key: KeyCode) {
-    let selected_call = app.current_pallet().and_then(|pallet| {
-        app.call_items
-            .get(app.call_idx)
-            .map(|call| (pallet.name.clone(), call.clone()))
-    });
-    let Some(session) = app.pass_session.as_mut() else {
-        app.focus = Focus::Profiles;
-        return;
-    };
-    match key {
-        KeyCode::Esc => {
-            app.pass_session = None;
-            app.error = None;
-            app.focus = Focus::Profiles;
-        }
-        KeyCode::Tab | KeyCode::Down => session.field = (session.field + 1).min(1),
-        KeyCode::BackTab | KeyCode::Up => session.field = session.field.saturating_sub(1),
-        KeyCode::Char('t') if session.field == 0 => {
-            if let Some((pallet, call)) = &selected_call {
-                session.policy = format!("calls:{pallet}/{call}");
-            } else {
-                app.error = Some("Select a call before using the this-call preset.".into());
-            }
-        }
-        KeyCode::Char('l') if session.field == 0 => {
-            if let Some((pallet, _)) = &selected_call {
-                session.policy = format!("pallets:{pallet}");
-            } else {
-                app.error = Some("Select a pallet before using the this-pallet preset.".into());
-            }
-        }
-        KeyCode::Backspace if session.field == 0 => {
-            session.policy.pop();
-        }
-        KeyCode::Backspace => {
-            session.duration.pop();
-        }
-        KeyCode::Char(c) if session.field == 0 => session.policy.push(c),
-        KeyCode::Char(c) if c.is_ascii_digit() => session.duration.push(c),
-        KeyCode::Enter if session.field == 0 => session.field = 1,
-        KeyCode::Enter => {
-            if session.policy.trim().is_empty() {
-                app.error = Some("An explicit Calls or Pallets policy is required.".into());
-                return;
-            }
-            let duration = if session.duration.trim().is_empty() {
-                None
-            } else {
-                match session.duration.parse::<u32>() {
-                    Ok(duration) => Some(duration),
-                    Err(_) => {
-                        app.error = Some("Session duration must be a u32 block count.".into());
-                        return;
-                    }
-                }
-            };
-            app.review_returns_to_profiles = true;
-            app.error = Some("Checking session and preparing registration...".into());
-            let _ = app.to_chain.send(ToChain::PreparePassSession {
-                profile: session.profile.clone(),
-                policy: session.policy.trim().into(),
-                duration,
-            });
-        }
-        _ => {}
-    }
-}
-
 #[cfg(feature = "wallet")]
-fn handle_wallet_import(app: &mut App, key: KeyCode) {
-    let Some(import) = app.wallet_import.as_mut() else {
-        app.focus = Focus::Profiles;
-        return;
+fn open_dialog(app: &mut App, dialog: Result<dialog::Dialog, &str>) {
+    match dialog {
+        Ok(dialog) => {
+            app.dialog = Some(dialog);
+            app.error = None;
+            app.focus = Focus::Dialog;
+        }
+        Err(error) => app.error = Some(error.into()),
+    }
+}
+
+/// The pass dialog `key` opens for the selected profile.
+#[cfg(feature = "pass")]
+fn pass_dialog(app: &App, key: char) -> Result<dialog::Dialog, &'static str> {
+    let profile = match app.profiles.profiles.get(app.profile_idx) {
+        Some(crate::profiles::Profile::Pass(profile)) => Some(profile),
+        _ => None,
+    };
+    let devices = || match dialog::device_presets(&app.meta) {
+        devices if devices.is_empty() => {
+            Err("The connected runtime advertises no authenticator supported by this build.")
+        }
+        devices => Ok(devices),
     };
     match key {
-        KeyCode::Esc => {
-            app.wallet_import = None;
-            app.error = None;
-            app.focus = Focus::Profiles;
+        'e' => Ok(dialog::Dialog::enroll(devices()?)),
+        's' => {
+            let profile = profile.ok_or("Select a pass profile to manage its session.")?;
+            let selected = app.current_pallet().and_then(|pallet| {
+                let call = app.call_items.get(app.call_idx)?;
+                Some((pallet.name.clone(), call.clone()))
+            });
+            Ok(dialog::Dialog::session(profile, selected))
         }
-        KeyCode::Tab | KeyCode::Down => import.field = (import.field + 1).min(1),
-        KeyCode::BackTab | KeyCode::Up => import.field = import.field.saturating_sub(1),
-        KeyCode::Backspace if import.field == 0 => {
-            import.name.pop();
-        }
-        KeyCode::Backspace => {
-            import.mnemonic.pop();
-        }
-        KeyCode::Char(c) if import.field == 0 => import.name.push(c),
-        KeyCode::Char(c) => import.mnemonic.push(c),
-        KeyCode::Enter if import.field == 0 => import.field = 1,
-        KeyCode::Enter => {
-            if import.name.trim().is_empty() || import.mnemonic.trim().is_empty() {
-                app.error = Some("Profile name and mnemonic are required.".into());
-                return;
+        'f' => match profile {
+            Some(profile) if profile.session.is_some() => {
+                Ok(dialog::Dialog::forget_session(&profile.name))
             }
-            let name = import.name.trim().to_owned();
-            let mnemonic = core::mem::take(&mut import.mnemonic);
-            import.name.clear();
-            app.error = Some("Validating and importing wallet profile...".into());
-            let _ = app.to_chain.send(ToChain::ImportWallet { name, mnemonic });
+            _ => Err("Select a pass profile with a local session."),
+        },
+        'd' => {
+            let profile = profile.ok_or("Select a pass profile to add a device.")?;
+            Ok(dialog::Dialog::add_device(&profile.name, devices()?))
         }
-        _ => {}
+        _ => Ok(dialog::Dialog::remove_device(
+            profile.ok_or("Select a pass profile to remove a device.")?,
+        )),
     }
 }
 

@@ -89,8 +89,10 @@ as a JSON artifact.
 
 Press `p` in the TUI to manage chain-bound profiles. From the profile dialog,
 `a` imports an ordinary wallet, `e` enrolls a pass account, `s` registers or
-reuses an explicitly scoped session, and `d`/`r` add or remove devices. Pass
-enrollment, session, and device mutations always enter the same full-screen
+reuses an explicitly scoped session, `f` forgets it, and `d`/`r` add or remove
+devices. Devices are entered as for `--device`; `←`/`→` cycles a field's
+presets (device kinds the chain accepts, the stored or selected session
+policy, known devices to remove). Pass enrollment, session, and device mutations always enter the same full-screen
 review and require a successful finalized receipt before changing the local
 profile. Adding an Admin device requires typing `ADMIN`; removal requires
 typing `REMOVE` after reviewing the last-device warning.
