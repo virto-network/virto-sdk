@@ -209,16 +209,11 @@ pub async fn prepare_enrollment(
             genesis_hash,
         )
         .await?;
-        let legacy_device_wallet = match &enrolled_device {
-            crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => wallet.clone(),
-            _ => String::new(),
-        };
         let pending = crate::profiles::PendingEnrollment {
             name: request.name,
             genesis_hash,
             registrar: request.registrar,
-            device_wallet: legacy_device_wallet,
-            device: Some(enrolled_device),
+            device: enrolled_device,
             user_id: user_id.0,
             pass_account: draft.predicted_account.0,
             device_id: draft.attestation.device_id.0,
@@ -767,8 +762,7 @@ pub fn apply_finalized_effect(
                     pass_account: pending.pass_account,
                     user_id: pending.user_id,
                     device_id: pending.device_id,
-                    device_wallet: pending.device_wallet.clone(),
-                    device: Some(pending.device_profile()),
+                    device: pending.device_profile(),
                     additional_devices: Vec::new(),
                     session: None,
                 },
@@ -810,11 +804,7 @@ pub fn apply_finalized_effect(
             {
                 promoted = Some(replacement.device_id);
                 profile.device_id = replacement.device_id;
-                profile.device = Some(replacement.device.clone());
-                profile.device_wallet = match replacement.device {
-                    crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => wallet,
-                    _ => String::new(),
-                };
+                profile.device = replacement.device.clone();
             }
             profile.additional_devices.retain(|device| {
                 device.device_id != device_id && Some(device.device_id) != promoted
@@ -1180,10 +1170,9 @@ mod tests {
             pass_account: [2; 32],
             user_id: [3; 32],
             device_id: [4; 32],
-            device_wallet: "primary".into(),
-            device: Some(crate::profiles::DeviceProviderProfile::SubstrateKey {
+            device: crate::profiles::DeviceProviderProfile::SubstrateKey {
                 wallet: "primary".into(),
-            }),
+            },
             additional_devices: Vec::new(),
             session: None,
         }
@@ -1344,7 +1333,12 @@ mod tests {
             panic!("expected pass profile")
         };
         assert_eq!(changed.device_id, [5; 32]);
-        assert_eq!(changed.device_wallet, "replacement");
+        assert_eq!(
+            changed.device,
+            crate::profiles::DeviceProviderProfile::SubstrateKey {
+                wallet: "replacement".into()
+            }
+        );
         assert!(changed.additional_devices.is_empty());
         let _ = std::fs::remove_file(path);
     }

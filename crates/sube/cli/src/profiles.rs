@@ -51,11 +51,7 @@ pub struct PassProfile {
     pub pass_account: [u8; 32],
     pub user_id: [u8; 32],
     pub device_id: [u8; 32],
-    /// Legacy Substrate-key provider field retained for profile compatibility.
-    #[serde(default)]
-    pub device_wallet: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<DeviceProviderProfile>,
+    pub device: DeviceProviderProfile,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_devices: Vec<DeviceRecord>,
     pub session: Option<SessionProfile>,
@@ -64,11 +60,7 @@ pub struct PassProfile {
 #[cfg(feature = "pass")]
 impl PassProfile {
     pub fn primary_device(&self) -> DeviceProviderProfile {
-        self.device
-            .clone()
-            .unwrap_or_else(|| DeviceProviderProfile::SubstrateKey {
-                wallet: self.device_wallet.clone(),
-            })
+        self.device.clone()
     }
 }
 
@@ -112,11 +104,7 @@ pub struct PendingEnrollment {
     pub name: String,
     pub genesis_hash: [u8; 32],
     pub registrar: String,
-    /// Legacy Substrate-key provider field retained for retry compatibility.
-    #[serde(default)]
-    pub device_wallet: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<DeviceProviderProfile>,
+    pub device: DeviceProviderProfile,
     pub user_id: [u8; 32],
     pub pass_account: [u8; 32],
     pub device_id: [u8; 32],
@@ -149,11 +137,7 @@ pub struct PendingDeviceAddition {
 #[cfg(feature = "pass")]
 impl PendingEnrollment {
     pub fn device_profile(&self) -> DeviceProviderProfile {
-        self.device
-            .clone()
-            .unwrap_or_else(|| DeviceProviderProfile::SubstrateKey {
-                wallet: self.device_wallet.clone(),
-            })
+        self.device.clone()
     }
 }
 
@@ -342,8 +326,9 @@ mod tests {
             name: "pass".into(),
             genesis_hash: [1; 32],
             registrar: "alice".into(),
-            device_wallet: "device".into(),
-            device: None,
+            device: DeviceProviderProfile::SubstrateKey {
+                wallet: "device".into(),
+            },
             user_id: [2; 32],
             pass_account: [3; 32],
             device_id: [4; 32],
@@ -369,27 +354,6 @@ mod tests {
 
     #[test]
     #[cfg(feature = "pass")]
-    fn legacy_pass_profiles_resolve_their_device_wallet() {
-        let profile: PassProfile = serde_json::from_value(serde_json::json!({
-            "name": "legacy",
-            "genesis_hash": (vec![1; 32]),
-            "pass_account": (vec![2; 32]),
-            "user_id": (vec![3; 32]),
-            "device_id": (vec![4; 32]),
-            "device_wallet": "device",
-            "session": null
-        }))
-        .unwrap();
-        assert_eq!(
-            profile.primary_device(),
-            DeviceProviderProfile::SubstrateKey {
-                wallet: "device".into()
-            }
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "pass")]
     fn webauthn_profiles_store_only_public_identifiers() {
         let profile = PassProfile {
             name: "passkey".into(),
@@ -397,12 +361,11 @@ mod tests {
             pass_account: [2; 32],
             user_id: [3; 32],
             device_id: [4; 32],
-            device_wallet: String::new(),
-            device: Some(DeviceProviderProfile::WebAuthn {
+            device: DeviceProviderProfile::WebAuthn {
                 rp_id: "example.com".into(),
                 origin: "https://example.com".into(),
                 credential_id: vec![5, 6, 7],
-            }),
+            },
             additional_devices: Vec::new(),
             session: None,
         };

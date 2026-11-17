@@ -1215,17 +1215,11 @@ async fn pass_command(
                         }
                     }
                 };
-                let legacy_device_wallet = match &enrolled_device {
-                    profiles::DeviceProviderProfile::SubstrateKey { wallet } => wallet.clone(),
-                    profiles::DeviceProviderProfile::WebAuthn { .. }
-                    | profiles::DeviceProviderProfile::SshAgent { .. } => String::new(),
-                };
                 let pending = profiles::PendingEnrollment {
                     name: name.clone(),
                     genesis_hash,
                     registrar: registrar.clone(),
-                    device_wallet: legacy_device_wallet,
-                    device: Some(enrolled_device),
+                    device: enrolled_device,
                     user_id: user_id.0,
                     pass_account: draft.predicted_account.0,
                     device_id: draft.attestation.device_id.0,
@@ -1282,8 +1276,7 @@ async fn pass_command(
                 pass_account: pending.pass_account,
                 user_id: user_id.0,
                 device_id: pending.device_id,
-                device_wallet: pending.device_wallet.clone(),
-                device: Some(pending.device_profile()),
+                device: pending.device_profile(),
                 additional_devices: Vec::new(),
                 session: None,
             }));
