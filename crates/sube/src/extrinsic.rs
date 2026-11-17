@@ -271,19 +271,10 @@ fn find_override(extensions: &[(String, DynValue)], id: &str) -> Option<DynValue
         .map(|(_, v)| v.clone())
 }
 
-/// Default JSON value for a well-known extension's "extra" data.
+/// Default value for a well-known extension's "extra" data.
+/// `CheckMortality` is encoded by [`encode_extensions_detailed`] itself.
 fn default_extra(identifier: &str, ctx: &ChainContext) -> Option<DynValue> {
     match identifier {
-        "CheckMortality" => match ctx.mortality {
-            Mortality::Immortal => Some(DynValue::obj(&[("Immortal", DynValue::Null)])),
-            Mortality::Mortal { period } => Some(DynValue::obj(&[(
-                "Mortal",
-                DynValue::Seq(vec![
-                    DynValue::from(period),
-                    DynValue::from(ctx.checkpoint_number % normalize_period(period)),
-                ]),
-            )])),
-        },
         "CheckNonce" => Some(DynValue::from(ctx.account_nonce)),
         "ChargeTransactionPayment" => Some(DynValue::from(ctx.tip)),
         "ChargeAssetTxPayment" => Some(DynValue::obj(&[
@@ -390,24 +381,28 @@ pub fn encode_extensions_detailed(
     for ext in extensions {
         let mut extension_extra = Vec::new();
         let mut extension_additional = Vec::new();
+        let override_value = find_override(overrides, &ext.identifier);
         // "extra" bytes — included in extrinsic body
         if meta::is_zero_size_type(ext.ty, registry) {
             // zero bytes, nothing to encode
-        } else if ext.identifier == "CheckMortality"
-            && find_override(overrides, &ext.identifier).is_none()
-            && matches!(ctx.mortality, Mortality::Mortal { .. })
-        {
-            let Mortality::Mortal { period } = ctx.mortality else {
-                unreachable!()
-            };
-            extension_extra.extend_from_slice(&encode_mortal_era(period, ctx.checkpoint_number));
+        } else if ext.identifier == "CheckMortality" && override_value.is_none() {
+            match ctx.mortality {
+                // `Era`'s compact two-byte mortal form is encoded directly.
+                Mortality::Mortal { period } => extension_extra
+                    .extend_from_slice(&encode_mortal_era(period, ctx.checkpoint_number)),
+                Mortality::Immortal => encode_typed(
+                    &mut extension_extra,
+                    &DynValue::obj(&[("Immortal", DynValue::Null)]),
+                    ext.ty,
+                    registry,
+                )?,
+            }
         } else {
-            let value = find_override(overrides, &ext.identifier)
+            let value = override_value
                 .or_else(|| default_extra(&ext.identifier, ctx))
                 .or_else(|| option_none(ext.ty, registry))
                 .ok_or_else(|| Error::MissingExtensionValue(ext.identifier.clone()))?;
-            scales::to_bytes_with_info(&mut extension_extra, &value, Some((registry, ext.ty)))
-                .map_err(|e| Error::Encode(e.to_string()))?;
+            encode_typed(&mut extension_extra, &value, ext.ty, registry)?;
         }
 
         // "additional_signed" bytes — signing payload only
@@ -419,12 +414,12 @@ pub fn encode_extensions_detailed(
                 .ok_or_else(|| {
                     Error::MissingExtensionValue(format!("{} (additional_signed)", ext.identifier))
                 })?;
-            scales::to_bytes_with_info(
+            encode_typed(
                 &mut extension_additional,
                 &value,
-                Some((registry, ext.additional_signed)),
-            )
-            .map_err(|e| Error::Encode(e.to_string()))?;
+                ext.additional_signed,
+                registry,
+            )?;
         }
 
         summaries.push(EncodedExtension {
@@ -437,6 +432,16 @@ pub fn encode_extensions_detailed(
     }
 
     Ok((extra, additional, summaries))
+}
+
+fn encode_typed(
+    out: &mut Vec<u8>,
+    value: &DynValue,
+    ty: TypeId,
+    registry: &scales::Registry,
+) -> Result<()> {
+    scales::to_bytes_with_info(out, value, Some((registry, ty)))
+        .map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// Metadata-validate and encode a call without signing it.
@@ -646,15 +651,23 @@ mod tests {
     }
 
     #[test]
-    fn default_extra_check_mortality() {
-        let ctx = test_ctx();
-        assert_eq!(
-            default_extra("CheckMortality", &ctx),
-            Some(DynValue::obj(&[(
-                "Mortal",
-                DynValue::Seq(vec![DynValue::from(64u64), DynValue::from(0u64)])
-            )]))
-        );
+    fn mortal_check_mortality_encodes_the_checkpoint_era() {
+        let meta = Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
+        let mortality = meta
+            .extrinsic
+            .extensions
+            .iter()
+            .find(|extension| extension.identifier == "CheckMortality")
+            .unwrap();
+        let (extra, additional) = encode_extensions(
+            core::slice::from_ref(mortality),
+            &meta.registry,
+            &test_ctx(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(extra, encode_mortal_era(64, 128));
+        assert_eq!(additional, [0xcd; 32]);
     }
 
     #[test]
