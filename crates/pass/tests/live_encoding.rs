@@ -121,7 +121,7 @@ fn substrate_key_attestation_encodes_against_the_runtime_type() {
             public.as_ref(),
             pass::wallet::SignatureType::Sr25519,
         );
-        let request = pass::workflow::AttestationRequest {
+        let request = pass::workflow::ChallengeRequest {
             user_id: pass::HashedUserId([0x11; 32]),
             authority_id: pass::AuthorityId([0x22; 32]),
             context: 42,

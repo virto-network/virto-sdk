@@ -4,12 +4,9 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use codec::Encode;
 use sha2::{Digest, Sha256};
 
-use crate::workflow::{
-    AssertionRequest, AttestationRequest, DeviceAttestation, DeviceAuthenticator,
-};
+use crate::workflow::{ChallengeRequest, DeviceAttestation, DeviceAuthenticator};
 use crate::{DeviceId, blake2b_256};
 use sube::{DynValue, Error, Result};
 
@@ -66,15 +63,8 @@ impl<T: SshAgentTransport> SshAgentDevice<T> {
         Ok(key)
     }
 
-    async fn sign_challenge(
-        &self,
-        key: &AgentKey,
-        context: u32,
-        challenge: [u8; 32],
-        authority: [u8; 32],
-    ) -> Result<Vec<u8>> {
-        let message = (context, challenge, authority).encode();
-        let signed = sshsig_signed_data(&self.namespace, &message);
+    async fn sign(&self, key: &AgentKey, request: &ChallengeRequest) -> Result<Vec<u8>> {
+        let signed = sshsig_signed_data(&self.namespace, &request.signed_message());
         self.transport
             .sign(&key.public_key, &signed)
             .await
@@ -83,57 +73,29 @@ impl<T: SshAgentTransport> SshAgentDevice<T> {
 }
 
 impl<T: SshAgentTransport> DeviceAuthenticator for SshAgentDevice<T> {
-    async fn attest(&self, request: &AttestationRequest) -> Result<DeviceAttestation> {
+    async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
         let key = self.selected_key().await?;
-        let signature = self
-            .sign_challenge(
-                &key,
-                request.context,
-                request.challenge,
-                request.authority_id.0,
-            )
-            .await?;
+        let signature = self.sign(&key, request).await?;
         let device_id = DeviceId(blake2b_256(&key.public_key));
         Ok(DeviceAttestation {
             device_id,
             variant: "Ssh".into(),
             payload: DynValue::obj(&[
-                (
-                    "meta",
-                    DynValue::obj(&[
-                        ("authority_id", DynValue::from(request.authority_id.0)),
-                        ("device_id", DynValue::from(device_id.0)),
-                        ("context", DynValue::from(request.context)),
-                    ]),
-                ),
+                ("meta", request.registration_meta(device_id)),
                 ("public_key", DynValue::from(key.public_key)),
                 ("signature", DynValue::from(signature)),
             ]),
         })
     }
 
-    async fn assert(&self, request: &AssertionRequest) -> Result<DynValue> {
+    async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue> {
         let key = self.selected_key().await?;
-        let signature = self
-            .sign_challenge(
-                &key,
-                request.context,
-                request.challenge,
-                request.authority_id.0,
-            )
-            .await?;
+        let signature = self.sign(&key, request).await?;
         Ok(DynValue::obj(&[(
             "Ssh",
             DynValue::obj(&[
                 ("user_id", DynValue::from(request.user_id.0)),
-                (
-                    "message",
-                    DynValue::obj(&[
-                        ("context", DynValue::from(request.context)),
-                        ("challenge", DynValue::from(request.challenge)),
-                        ("authority_id", DynValue::from(request.authority_id.0)),
-                    ]),
-                ),
+                ("message", request.message_value()),
                 ("public_key", DynValue::from(key.public_key)),
                 ("signature", DynValue::from(signature)),
             ]),
@@ -466,7 +428,7 @@ mod tests {
             signed: RefCell::new(Vec::new()),
         };
         let device = SshAgentDevice::new(agent, "SHA256:test", "pallet-pass");
-        let request = AssertionRequest {
+        let request = ChallengeRequest {
             user_id: crate::HashedUserId([1; 32]),
             authority_id: crate::AuthorityId([2; 32]),
             context: 3,

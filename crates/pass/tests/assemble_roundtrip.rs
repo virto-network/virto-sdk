@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 
-use pass::workflow::{AssertionRequest, AttestationRequest, DeviceAttestation};
+use pass::workflow::{ChallengeRequest, DeviceAttestation};
 use sube::extrinsic::{ChainContext, encode_extensions};
 use sube::{DynValue, ExtrinsicAssembler, Metadata, Mortality, Result};
 
@@ -142,11 +142,11 @@ struct RecordingDevice {
 }
 
 impl pass::DeviceAuthenticator for RecordingDevice {
-    async fn attest(&self, _: &AttestationRequest) -> Result<DeviceAttestation> {
+    async fn attest(&self, _: &ChallengeRequest) -> Result<DeviceAttestation> {
         unreachable!("assembling never attests")
     }
 
-    async fn assert(&self, request: &AssertionRequest) -> Result<DynValue> {
+    async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue> {
         *self.challenge.borrow_mut() = Some(request.challenge);
         Ok(DynValue::obj(&[(
             "WebAuthn",

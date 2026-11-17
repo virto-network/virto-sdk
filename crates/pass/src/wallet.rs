@@ -15,12 +15,9 @@
 //! ```
 
 use alloc::vec::Vec;
-use codec::Encode;
 
-use crate::workflow::{
-    AssertionRequest, AttestationRequest, DeviceAttestation, DeviceAuthenticator,
-};
-use crate::{AuthorityId, Challenge, DeviceId, blake2b_256};
+use crate::workflow::{ChallengeRequest, DeviceAttestation, DeviceAuthenticator};
+use crate::{DeviceId, blake2b_256};
 use sube::{DynValue, Error, Result};
 
 /// Substrate `MultiSignature` variant.
@@ -46,19 +43,6 @@ impl SignatureType {
             Self::Ecdsa => "Ecdsa",
         }
     }
-}
-
-/// SCALE-encode `SignedMessage { context, challenge, authority_id }`.
-fn encode_signed_message<Cx: Encode>(
-    context: &Cx,
-    challenge: &Challenge,
-    authority_id: &AuthorityId,
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    context.encode_to(&mut out);
-    challenge.encode_to(&mut out);
-    authority_id.0.encode_to(&mut out);
-    out
 }
 
 /// Substrate-key device provider used for both registration and direct
@@ -89,23 +73,22 @@ impl<'a, S: libwallet::Signer> WalletDevice<'a, S> {
         })
     }
 
-    fn signature_value(&self, signature: impl AsRef<[u8]>) -> DynValue {
-        DynValue::obj(&[(
+    /// Sign the request's `SignedMessage` as a `MultiSignature` value.
+    async fn sign(&self, request: &ChallengeRequest) -> Result<DynValue> {
+        let signature = self
+            .signer
+            .sign_msg(request.signed_message())
+            .await
+            .map_err(|error| Error::Signing(alloc::format!("{error}")))?;
+        Ok(DynValue::obj(&[(
             self.signature_type.variant_name(),
             DynValue::from(signature.as_ref()),
-        )])
+        )]))
     }
 }
 
 impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
-    async fn attest(&self, request: &AttestationRequest) -> Result<DeviceAttestation> {
-        let message =
-            encode_signed_message(&request.context, &request.challenge, &request.authority_id);
-        let signature = self
-            .signer
-            .sign_msg(&message)
-            .await
-            .map_err(|error| Error::Signing(alloc::format!("{error}")))?;
+    async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
         let device_id = self.device_id();
         Ok(DeviceAttestation {
             device_id,
@@ -113,40 +96,19 @@ impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
             // substrate-keys `KeyRegistration { public, message, signature }`.
             payload: DynValue::obj(&[
                 ("public", DynValue::from(device_id.0)),
-                (
-                    "message",
-                    DynValue::obj(&[
-                        ("context", DynValue::from(request.context)),
-                        ("challenge", DynValue::from(request.challenge)),
-                        ("authority_id", DynValue::from(request.authority_id.0)),
-                    ]),
-                ),
-                ("signature", self.signature_value(signature)),
+                ("message", request.message_value()),
+                ("signature", self.sign(request).await?),
             ]),
         })
     }
 
-    async fn assert(&self, request: &AssertionRequest) -> Result<DynValue> {
-        let message =
-            encode_signed_message(&request.context, &request.challenge, &request.authority_id);
-        let signature = self
-            .signer
-            .sign_msg(&message)
-            .await
-            .map_err(|error| Error::Signing(alloc::format!("{error}")))?;
+    async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue> {
         Ok(DynValue::obj(&[(
             "SubstrateKey",
             DynValue::obj(&[
                 ("user_id", DynValue::from(request.user_id.0)),
-                (
-                    "message",
-                    DynValue::obj(&[
-                        ("context", DynValue::from(request.context)),
-                        ("challenge", DynValue::from(request.challenge)),
-                        ("authority_id", DynValue::from(request.authority_id.0)),
-                    ]),
-                ),
-                ("signature", self.signature_value(signature)),
+                ("message", request.message_value()),
+                ("signature", self.sign(request).await?),
             ]),
         )]))
     }
@@ -155,7 +117,6 @@ impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::{AssertionRequest, AttestationRequest, DeviceAuthenticator};
 
     struct MockSigner;
 
@@ -179,16 +140,9 @@ mod tests {
     }
 
     #[test]
-    fn signed_message_layout_is_68_bytes_for_u32() {
-        let authority = AuthorityId([0u8; 32]);
-        let msg = encode_signed_message(&0u32, &[0; 32], &authority);
-        assert_eq!(msg.len(), 68); // 4 + 32 + 32
-    }
-
-    #[test]
     fn substrate_key_enrollment_and_assertion_use_one_device_identity() {
         let device = WalletDevice::new(&MockSigner, [7; 32], SignatureType::Sr25519);
-        let attestation_request = AttestationRequest {
+        let attestation_request = ChallengeRequest {
             user_id: crate::HashedUserId([1; 32]),
             authority_id: crate::AuthorityId([3; 32]),
             context: 4,
@@ -199,7 +153,7 @@ mod tests {
         assert_eq!(attestation.device_id, device.device_id());
         assert_eq!(attestation.variant, "SubstrateKey");
 
-        let assertion_request = AssertionRequest {
+        let assertion_request = ChallengeRequest {
             user_id: attestation_request.user_id,
             authority_id: attestation_request.authority_id,
             context: attestation_request.context,

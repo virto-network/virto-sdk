@@ -402,7 +402,7 @@ pub async fn prepare_device_addition(
     let pending = if let Some(pending) = pending {
         pending
     } else {
-        let attestation_request = pass::workflow::AttestationRequest::new(
+        let attestation_request = pass::workflow::ChallengeRequest::enrollment(
             pass::HashedUserId(profile.user_id),
             pass::Account(profile.pass_account),
             config.authority_id,
@@ -474,7 +474,7 @@ async fn prepare_added_device(
     profiles: &crate::profiles::Profiles,
     genesis_hash: [u8; 32],
     device: crate::profiles::DeviceProviderProfile,
-    request: &pass::workflow::AttestationRequest,
+    request: &pass::workflow::ChallengeRequest,
 ) -> Result<(
     pass::workflow::DeviceAttestation,
     crate::profiles::DeviceProviderProfile,

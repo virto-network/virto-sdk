@@ -1,7 +1,10 @@
 //! Provider-neutral enrollment and device-management workflows.
 
 use alloc::string::String;
+use alloc::vec::Vec;
 use alloc::{format, vec};
+
+use codec::Encode;
 
 use sube::{DynValue, Error, Metadata, PreparedCall, Result};
 
@@ -10,19 +13,21 @@ use crate::{
     Account, AuthorityId, Challenge, DeviceFilter, DeviceId, HashedUserId, enrollment_challenge,
 };
 
-/// Enrollment data handed to a device provider.
+/// What a device provider is asked to sign, for enrollment and for
+/// authentication alike: a challenge bound to the `context` block, for a user
+/// of the runtime's authority.
 #[derive(Clone, Debug)]
-pub struct AttestationRequest {
+pub struct ChallengeRequest {
     pub user_id: HashedUserId,
     pub authority_id: AuthorityId,
     pub context: u32,
     pub challenge: Challenge,
 }
 
-impl AttestationRequest {
+impl ChallengeRequest {
     /// Challenge a device to register for `pass_account` at `context`, whose
     /// block hash is `block_hash`.
-    pub fn new(
+    pub fn enrollment(
         user_id: HashedUserId,
         pass_account: Account,
         authority_id: AuthorityId,
@@ -36,15 +41,30 @@ impl AttestationRequest {
             challenge: enrollment_challenge(block_hash, pass_account),
         }
     }
-}
 
-/// Authentication data handed to a device provider.
-#[derive(Clone, Debug)]
-pub struct AssertionRequest {
-    pub user_id: HashedUserId,
-    pub authority_id: AuthorityId,
-    pub context: u32,
-    pub challenge: Challenge,
+    /// The SCALE-encoded `SignedMessage { context, challenge, authority_id }`
+    /// that key-based devices sign.
+    pub fn signed_message(&self) -> Vec<u8> {
+        (self.context, self.challenge, self.authority_id.0).encode()
+    }
+
+    /// `SignedMessage { context, challenge, authority_id }` as a runtime value.
+    pub fn message_value(&self) -> DynValue {
+        DynValue::obj(&[
+            ("context", DynValue::from(self.context)),
+            ("challenge", DynValue::from(self.challenge)),
+            ("authority_id", DynValue::from(self.authority_id.0)),
+        ])
+    }
+
+    /// Registration metadata `{ authority_id, device_id, context }`.
+    pub fn registration_meta(&self, device_id: DeviceId) -> DynValue {
+        DynValue::obj(&[
+            ("authority_id", DynValue::from(self.authority_id.0)),
+            ("device_id", DynValue::from(device_id.0)),
+            ("context", DynValue::from(self.context)),
+        ])
+    }
 }
 
 /// Provider-neutral registration output.
@@ -65,9 +85,9 @@ impl DeviceAttestation {
 /// Providers implement both enrollment and authentication without leaking
 /// provider-specific types into enrollment or session APIs.
 pub trait DeviceAuthenticator {
-    async fn attest(&self, request: &AttestationRequest) -> Result<DeviceAttestation>;
+    async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation>;
 
-    async fn assert(&self, request: &AssertionRequest) -> Result<DynValue>;
+    async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue>;
 }
 
 /// Non-secret enrollment state. It remains retryable until the challenge
@@ -93,7 +113,7 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
     authenticator: &A,
 ) -> Result<EnrollmentDraft> {
     let predicted_account = config.derive_account(user_id);
-    let request = AttestationRequest::new(
+    let request = ChallengeRequest::enrollment(
         user_id,
         predicted_account,
         config.authority_id,
@@ -177,6 +197,20 @@ pub fn prepare_remove_device(
 mod tests {
     use super::*;
     use alloc::string::ToString;
+
+    #[test]
+    fn signed_message_is_context_challenge_authority() {
+        let request = ChallengeRequest {
+            user_id: HashedUserId([1; 32]),
+            authority_id: AuthorityId([3; 32]),
+            context: 0x0403_0201,
+            challenge: [2; 32],
+        };
+        let mut expected = vec![1, 2, 3, 4];
+        expected.extend([2; 32]);
+        expected.extend([3; 32]);
+        assert_eq!(request.signed_message(), expected);
+    }
 
     #[test]
     fn admin_device_needs_separate_confirmation() {

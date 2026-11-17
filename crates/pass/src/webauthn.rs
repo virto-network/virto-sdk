@@ -11,9 +11,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use crate::workflow::{
-    AssertionRequest, AttestationRequest, DeviceAttestation, DeviceAuthenticator,
-};
+use crate::workflow::{ChallengeRequest, DeviceAttestation, DeviceAuthenticator};
 use crate::{DeviceId, blake2b_256};
 use sube::{DynValue, Result};
 
@@ -500,7 +498,7 @@ impl<T> WebAuthnDevice<T> {
 }
 
 impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
-    async fn attest(&self, request: &AttestationRequest) -> Result<DeviceAttestation> {
+    async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
         let response = self
             .transport
             .create(&CreateRequest {
@@ -517,14 +515,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
             device_id,
             variant: "WebAuthn".into(),
             payload: DynValue::obj(&[
-                (
-                    "meta",
-                    DynValue::obj(&[
-                        ("authority_id", DynValue::from(request.authority_id.0)),
-                        ("device_id", DynValue::from(device_id.0)),
-                        ("context", DynValue::from(request.context)),
-                    ]),
-                ),
+                ("meta", request.registration_meta(device_id)),
                 (
                     "authenticator_data",
                     DynValue::from(response.authenticator_data),
@@ -535,7 +526,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
         })
     }
 
-    async fn assert(&self, request: &AssertionRequest) -> Result<DynValue> {
+    async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue> {
         let credential_id =
             self.credential_id.borrow().clone().ok_or_else(|| {
                 sube::Error::Signing("WebAuthn profile has no credential id".into())
@@ -579,7 +570,7 @@ fn authenticator_error(error: AuthenticatorError) -> sube::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::{AssertionRequest, AttestationRequest};
+    use crate::workflow::ChallengeRequest;
     use crate::{AuthorityId, HashedUserId};
     use alloc::{string::ToString, vec};
 
@@ -618,8 +609,8 @@ mod tests {
         }
     }
 
-    fn attestation_request() -> AttestationRequest {
-        AttestationRequest {
+    fn attestation_request() -> ChallengeRequest {
+        ChallengeRequest {
             user_id: HashedUserId([1; 32]),
             authority_id: AuthorityId([3; 32]),
             context: 4,
@@ -640,7 +631,7 @@ mod tests {
         let profile = device.profile().unwrap();
         assert_eq!(profile.credential_id, vec![1, 2, 3]);
 
-        let request = AssertionRequest {
+        let request = ChallengeRequest {
             user_id: HashedUserId([1; 32]),
             authority_id: AuthorityId([3; 32]),
             context: 4,

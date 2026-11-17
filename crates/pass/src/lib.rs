@@ -62,7 +62,7 @@ use codec::Encode;
 use sube::extrinsic::{AssembledExtrinsic, ChainContext, encode_extensions};
 use sube::metadata::{ExtrinsicMeta, SignedExtensionMeta};
 use sube::{DynValue, Error, ExtrinsicAssembler, Registry, Result};
-use workflow::AssertionRequest;
+use workflow::ChallengeRequest;
 
 /// Fixed-size challenge produced by pallet-pass challengers.
 pub type Challenge = [u8; 32];
@@ -175,7 +175,7 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
         // Ask the device for the credential bound to this implication.
         let credential_value = self
             .device
-            .assert(&AssertionRequest {
+            .assert(&ChallengeRequest {
                 user_id: self.user_id,
                 authority_id: self.authority_id,
                 context: self.context,

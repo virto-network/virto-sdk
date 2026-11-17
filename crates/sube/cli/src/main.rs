@@ -1251,7 +1251,7 @@ async fn pass_command(
                     );
                     pending
                 } else {
-                    let request = pass::workflow::AttestationRequest::new(
+                    let request = pass::workflow::ChallengeRequest::enrollment(
                         pass::HashedUserId(pass_profile.user_id),
                         pass::Account(pass_profile.pass_account),
                         config.authority_id,
