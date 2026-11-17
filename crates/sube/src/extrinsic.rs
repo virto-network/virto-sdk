@@ -249,10 +249,11 @@ pub enum WaitFor {
     Finalized,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum DispatchOutcome {
     Success,
     Failed(String),
+    #[default]
     Unknown,
 }
 
@@ -265,25 +266,13 @@ pub struct TransactionEvent {
 }
 
 /// Inclusion/finalization information returned by transaction watch.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TransactionReceipt {
     pub best_block_hash: Option<String>,
     pub finalized_block_hash: Option<String>,
     pub extrinsic_index: Option<u32>,
     pub dispatch_outcome: DispatchOutcome,
     pub events: Vec<TransactionEvent>,
-}
-
-impl Default for TransactionReceipt {
-    fn default() -> Self {
-        Self {
-            best_block_hash: None,
-            finalized_block_hash: None,
-            extrinsic_index: None,
-            dispatch_outcome: DispatchOutcome::Unknown,
-            events: Vec::new(),
-        }
-    }
 }
 
 /// Chain context fetched once for extension defaults.
