@@ -1295,7 +1295,7 @@ mod tests {
             cleanup.secure_entries.push(profile.session_entry());
             let signer =
                 signers::load_session_signer(&profile.session_entry(), session.account).await?;
-            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
+            let policy = workflow::parse_session_policy(chain.metadata(), &session.policy)?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy)?;
 

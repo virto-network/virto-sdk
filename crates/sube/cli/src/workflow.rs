@@ -74,7 +74,7 @@ pub async fn activate_existing_profile(
             if session.expires_at <= checkpoint.number {
                 anyhow::bail!("pass session expired; register or update it before activation");
             }
-            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
+            let policy = parse_session_policy(chain.metadata(), &session.policy)?;
             if !on_chain_session_matches(chain, &profile, session, &policy).await {
                 anyhow::bail!(
                     "local pass session does not exactly match on-chain storage; register or update it before activation"
@@ -87,6 +87,18 @@ pub async fn activate_existing_profile(
     profiles.activate(name, genesis_hash)?;
     profiles.save(profile_path)?;
     Ok(profiles)
+}
+
+/// Parse a session policy. Sessions are always scoped, so `admin` is refused
+/// here, before anything is prompted or signed.
+#[cfg(feature = "pass")]
+pub fn parse_session_policy(metadata: &sube::Metadata, text: &str) -> Result<pass::DeviceFilter> {
+    match pass::DeviceFilter::parse(metadata, text)? {
+        pass::DeviceFilter::Admin => {
+            anyhow::bail!("Admin sessions are not permitted; use calls:... or pallets:...")
+        }
+        policy => Ok(policy),
+    }
 }
 
 #[cfg(feature = "pass")]
@@ -368,13 +380,15 @@ pub async fn prepare_pass_session(
     if profile.genesis_hash != genesis_hash {
         anyhow::bail!("profile genesis hash does not match the connected chain");
     }
-    let policy = pass::DeviceFilter::parse(chain.metadata(), policy_text)?;
+    let policy = parse_session_policy(chain.metadata(), policy_text)?;
     let checkpoint = chain.backend().block_info(None).await?;
 
     if let Some(session) = &profile.session {
-        let local_policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
         // The runtime stores the filter as sets, so compare it in that form.
-        if local_policy.runtime_value() == policy.runtime_value()
+        // A stored policy that no longer parses is simply not reused.
+        let same_policy = parse_session_policy(chain.metadata(), &session.policy)
+            .is_ok_and(|local| local.runtime_value() == policy.runtime_value());
+        if same_policy
             && session.expires_at > checkpoint.number
             && on_chain_session_matches(chain, &profile, session, &policy).await
             && crate::signers::load_session_signer(&profile.session_entry(), session.account)
@@ -612,7 +626,7 @@ pub async fn prepare_with_active_profile(
             let session = profile.session.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("active pass profile has no finalized local session")
             })?;
-            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
+            let policy = parse_session_policy(chain.metadata(), &session.policy)?;
             let signer =
                 crate::signers::load_session_signer(&profile.session_entry(), session.account)
                     .await?;
@@ -1142,6 +1156,22 @@ mod tests {
         );
         assert!(changed.additional_devices.is_empty());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn session_policies_are_never_admin() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        for admin in ["admin", "ADMIN"] {
+            let error = parse_session_policy(&metadata, admin).unwrap_err();
+            assert!(error.to_string().contains("Admin sessions"), "{error}");
+        }
+        assert!(matches!(
+            parse_session_policy(&metadata, "calls:System/remark").unwrap(),
+            pass::DeviceFilter::Calls(_)
+        ));
     }
 
     #[cfg(feature = "pass")]
