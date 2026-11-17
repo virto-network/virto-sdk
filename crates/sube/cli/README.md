@@ -97,8 +97,8 @@ profile. Adding an Admin device requires typing `ADMIN`; removal requires
 typing `REMOVE` after reviewing the last-device warning.
 
 Typed forms accept SS58 or hex AccountId32 values; amounts are entered in the
-chain's smallest unit. `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:`, `hex:`, and
-`file:` modes. Conversion errors stay inline and do not reach the chain
+chain's smallest unit. `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:` and `hex:`
+modes. Conversion errors stay inline and do not reach the chain
 worker.
 
 Profiles contain no secrets and are bound to a genesis hash. Wallet and session

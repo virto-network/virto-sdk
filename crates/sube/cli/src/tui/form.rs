@@ -13,7 +13,7 @@ pub enum Field {
         name: String,
         type_desc: String,
         input: String,
-        /// If true, the input supports `utf8:`, `hex:`, and `file:` byte modes.
+        /// If true, the input is UTF-8 text, or hex with a `hex:` or `0x` prefix.
         is_bytes: bool,
     },
     /// Boolean toggle.
@@ -137,12 +137,6 @@ pub struct FormContext {
 }
 
 fn encode_bytes(input: &str) -> Result<String, String> {
-    if let Some(value) = input.strip_prefix("file:") {
-        let bytes =
-            std::fs::read(value).map_err(|error| format!("cannot read {value:?}: {error}"))?;
-        return Ok(format!("0x{}", hex::encode(bytes)));
-    }
-
     if let Some(value) = input
         .strip_prefix("hex:")
         .or_else(|| input.strip_prefix("0x"))
@@ -256,7 +250,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
         }
         Some(TypeDef::Bytes) => Field::Text {
             name: name.into(),
-            type_desc: "Vec<u8> (utf8:, hex:, or file:)".into(),
+            type_desc: "Vec<u8> (utf8: or hex:)".into(),
             input: String::new(),
             is_bytes: true,
         },
@@ -265,7 +259,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             if matches!(registry.resolve(inner), Some(TypeDef::U8)) {
                 Field::Text {
                     name: name.into(),
-                    type_desc: "Vec<u8> (utf8:, hex:, or file:)".into(),
+                    type_desc: "Vec<u8> (utf8: or hex:)".into(),
                     input: String::new(),
                     is_bytes: true,
                 }
@@ -785,23 +779,11 @@ mod tests {
     }
 
     #[test]
-    fn byte_inputs_support_utf8_hex_and_file_modes() {
+    fn byte_inputs_support_utf8_and_hex_modes() {
         assert_eq!(encode_bytes("hello").unwrap(), "0x68656c6c6f");
         assert_eq!(encode_bytes("utf8:hello").unwrap(), "0x68656c6c6f");
         assert_eq!(encode_bytes("hex:CAFE").unwrap(), "0xcafe");
         assert!(encode_bytes("hex:xyz").is_err());
-
-        let path = std::env::temp_dir().join(format!(
-            "sube-form-bytes-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
-        ));
-        std::fs::write(&path, [0, 1, 255]).unwrap();
-        assert_eq!(
-            encode_bytes(&format!("file:{}", path.display())).unwrap(),
-            "0x0001ff"
-        );
-        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
