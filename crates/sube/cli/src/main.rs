@@ -288,6 +288,7 @@ async fn tx(
 ) -> Result<()> {
     #[cfg(not(feature = "wallet"))]
     let _ = (profile_path, behavior.yes, behavior.best);
+    ensure_confirmable(behavior.submit, behavior.yes)?;
     if behavior.submit {
         #[cfg(feature = "wallet")]
         {
@@ -423,6 +424,15 @@ async fn finish(
     Ok(())
 }
 
+/// Fail before anything is built or any device is prompted when a
+/// submission would need an interactive confirmation that cannot happen.
+fn ensure_confirmable(submit: bool, yes: bool) -> Result<()> {
+    if submit && !yes && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        anyhow::bail!("interactive confirmation requires a terminal; use --yes");
+    }
+    Ok(())
+}
+
 #[cfg(feature = "wallet")]
 fn confirm_submission() -> Result<bool> {
     if !std::io::stdin().is_terminal() {
@@ -503,6 +513,7 @@ async fn connect_profile(
             .ok_or_else(|| {
                 anyhow::anyhow!("pass connect requires --session-policy calls:... or pallets:...")
             })?;
+        ensure_confirmable(true, yes)?;
         let preparation = workflow::prepare_pass_session(
             &mut chain,
             chain_url,
@@ -559,6 +570,16 @@ async fn pass_command(
         println!("{}", pass::session::FORGET_SESSION_WARNING);
         return Ok(());
     }
+
+    let (submit, yes) = match &command {
+        PassCommand::Enroll { submit, yes, .. }
+        | PassCommand::Device {
+            command:
+                DeviceCommand::Add { submit, yes, .. } | DeviceCommand::Remove { submit, yes, .. },
+        } => (*submit, *yes),
+        PassCommand::Session { .. } => (false, false),
+    };
+    ensure_confirmable(submit, yes)?;
 
     let mut chain = sube::Sube::connect(chain_url).await?;
     let genesis_hash = workflow::chain_genesis(&mut chain).await?;
