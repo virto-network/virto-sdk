@@ -191,6 +191,7 @@ pub fn default_path() -> PathBuf {
         .join("profiles.json")
 }
 
+#[cfg(feature = "wallet")]
 pub fn parse_hash(value: &str, what: &str) -> Result<[u8; 32]> {
     let bytes = hex::decode(value.trim_start_matches("0x"))
         .with_context(|| format!("{what} must be 32-byte hex"))?;

@@ -26,12 +26,12 @@ cargo run -p sube-cli -- --chain wss://kreivo.io
 ```
 
 Create an ordinary wallet profile by piping its mnemonic to the secure store.
-The profile file contains only the account, genesis hash, secure-store entry,
-and signing scheme:
+The profile file contains only the derived `//default` sr25519 account and the
+genesis hash:
 
 ```sh
 printf '%s\n' "$MNEMONIC" | cargo run -p sube-cli -- profile add-wallet alice \
-  --genesis 0x... --account 0x... --mnemonic-stdin
+  --genesis 0x...
 ```
 
 Pass enrollment always requires an exact 32-byte hashed user ID and an

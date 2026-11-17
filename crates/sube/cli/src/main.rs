@@ -103,15 +103,15 @@ enum Command {
 #[derive(Subcommand)]
 enum ProfileCommand {
     List,
+    /// Import a wallet from the mnemonic read on stdin. Its //default
+    /// sr25519 account is derived and the mnemonic kept in the OS secure
+    /// store.
+    #[cfg(feature = "wallet")]
     AddWallet {
         name: String,
+        /// Genesis hash of the chain the profile signs for.
         #[arg(long)]
         genesis: String,
-        #[arg(long)]
-        account: String,
-        /// Read a mnemonic from stdin and write it to the OS secure store.
-        #[arg(long)]
-        mnemonic_stdin: bool,
     },
     Use {
         name: String,
@@ -528,34 +528,20 @@ fn profile_command(path: &std::path::Path, command: Option<ProfileCommand>) -> R
             }
             Ok(())
         }
-        ProfileCommand::AddWallet {
-            name,
-            genesis,
-            account,
-            mnemonic_stdin,
-        } => {
+        #[cfg(feature = "wallet")]
+        ProfileCommand::AddWallet { name, genesis } => {
             let genesis_hash = profiles::parse_hash(&genesis, "genesis hash")?;
-            let account = profiles::parse_hash(&account, "account")?;
-            let secure_entry = format!("wallet-profile-v1-{name}");
-            #[cfg(feature = "wallet")]
-            if mnemonic_stdin {
-                let mut mnemonic = String::new();
-                std::io::stdin().read_to_string(&mut mnemonic)?;
-                let keyring = libwallet::vault::OSKeyring::<()>::new(&secure_entry, None);
-                keyring.update(mnemonic.trim())?;
+            let mut mnemonic = zeroize::Zeroizing::new(String::new());
+            std::io::stdin().read_to_string(&mut mnemonic)?;
+            let store =
+                workflow::import_wallet_profile(path, genesis_hash, name.clone(), mnemonic.trim())?;
+            if let Some(profiles::Profile::Wallet(profile)) = store.find(&name) {
+                println!(
+                    "Added wallet profile {name} 0x{}",
+                    hex::encode(profile.account)
+                );
             }
-            #[cfg(not(feature = "wallet"))]
-            if mnemonic_stdin {
-                anyhow::bail!("this build has no wallet secure-store support");
-            }
-            store.upsert(profiles::Profile::Wallet(profiles::WalletProfile {
-                name,
-                genesis_hash,
-                account,
-                secure_entry,
-                scheme: "sr25519".into(),
-            }));
-            store.save(path)
+            Ok(())
         }
         ProfileCommand::Use { name } => {
             if store.find(&name).is_none() {
