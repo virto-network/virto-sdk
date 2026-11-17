@@ -7,9 +7,10 @@
 - Awaiting a call builder no longer submits. Transactions now use explicit
   `prepare_call`, `build_transaction`, `inspect_transaction`, and
   `submit_transaction` stages.
-- `ExtrinsicAssembler::nonce_account` separates nonce identity from signing
-  identity and is required. The old `account` method remains as a deprecated
-  alias that returns it.
+- `ExtrinsicAssembler::account` was replaced by the required
+  `ExtrinsicAssembler::nonce_account`, which separates nonce identity from
+  signing identity. There is no `account` alias; implementors rename the
+  method and callers use `nonce_account`.
 - `ExtrinsicAssembler::assemble` returns an `AssembledExtrinsic` instead of
   `Vec<u8>`.
 - `OneShotCall`, `CallBuilder` and `Sube::call` were removed. Use
