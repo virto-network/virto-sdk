@@ -912,49 +912,6 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "wallet")]
-    #[test]
-    fn review_artifact_contains_both_identities_and_no_secret_fields() {
-        let extrinsic = sube::EncodedExtrinsic {
-            bytes: vec![1, 2],
-            call: sube::PreparedCall {
-                pallet: "Balances".into(),
-                call: "transfer".into(),
-                bytes: vec![5, 0],
-            },
-            checkpoint_hash: [3; 32],
-            checkpoint_number: 10,
-            expires_at: Some(64),
-            genesis_hash: [4; 32],
-            spec_version: 5,
-            transaction_version: 6,
-            nonce: 7,
-            authorization: sube::AuthorizationSummary {
-                signing_account: vec![8; 32],
-                nonce_account: vec![9; 32],
-                scheme: Some("Sr25519".into()),
-            },
-            extensions: vec![],
-        };
-        let artifact = workflow::transaction_artifact(
-            "wss://example.invalid",
-            "alice",
-            &extrinsic,
-            &sube::TransactionReport::default(),
-        );
-        assert_eq!(
-            artifact["signingAccount"],
-            format!("0x{}", hex::encode([8; 32]))
-        );
-        assert_eq!(
-            artifact["nonceAccount"],
-            format!("0x{}", hex::encode([9; 32]))
-        );
-        let encoded = artifact.to_string();
-        assert!(!encoded.contains("mnemonic"));
-        assert!(!encoded.contains("secret"));
-    }
-
     #[cfg(feature = "pass")]
     #[test]
     fn pass_commands_require_explicit_user_and_device_profiles() {

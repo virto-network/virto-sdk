@@ -970,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_contains_extensions_and_no_secret_fields() {
+    fn artifact_contains_both_identities_extensions_and_no_secret_fields() {
         let extrinsic = sube::EncodedExtrinsic {
             bytes: vec![1, 2],
             call: sube::PreparedCall {
@@ -1006,6 +1006,10 @@ mod tests {
         assert_eq!(
             artifact["signingAccount"],
             format!("0x{}", hex::encode([8; 32]))
+        );
+        assert_eq!(
+            artifact["nonceAccount"],
+            format!("0x{}", hex::encode([9; 32]))
         );
         let encoded = artifact.to_string();
         assert!(!encoded.contains("mnemonic"));
@@ -1197,37 +1201,37 @@ mod tests {
         assert!(!expected.matches(&longer, &owner));
     }
 
-    /// Read-only live check that the expected `SessionKeys` filter encodes
-    /// the same bytes the runtime receives in `add_session_key`.
+    /// Read-only live check of how the CLI expects the runtime to store a
+    /// session: the `SessionKeys` value layout it reads from metadata, against
+    /// hand-written bytes.
     #[cfg(feature = "pass")]
     #[test]
     #[ignore = "requires network access to a chain with pallet-pass (SUBE_E2E_URL, default kreivo)"]
-    fn live_session_filter_encoding_matches_add_session_key() {
+    fn live_session_keys_layout_matches_the_runtime() {
         smol::block_on(async {
             let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
             let chain = sube::Sube::connect(&url).await.expect("connects");
-            let metadata = chain.metadata();
-            let config = pass::PassRuntimeConfig::discover(metadata).expect("pass config");
-            for policy in [
-                pass::DeviceFilter::Calls(vec![
-                    pass::CallIndex {
-                        pallet: 10,
-                        call: 3,
-                    },
-                    pass::CallIndex { pallet: 5, call: 0 },
-                ]),
-                pass::DeviceFilter::Pallets(vec![31, 10]),
+            let calls = pass::DeviceFilter::Calls(vec![
+                pass::CallIndex {
+                    pallet: 10,
+                    call: 3,
+                },
+                pass::CallIndex { pallet: 5, call: 0 },
+            ]);
+            let pallets = pass::DeviceFilter::Pallets(vec![31, 10, 31]);
+            // (pass account, u32 expiry, DeviceFilter); the filter's sets
+            // are stored sorted and deduplicated.
+            for (filter, encoded) in [
+                (calls, vec![0x02, 2 << 2, 5, 0, 10, 3]),
+                (pallets, vec![0x01, 2 << 2, 10, 31]),
             ] {
-                let expected = expected_session_value(metadata, &policy).expect("layout");
-                let call = pass::session::prepare_add_session_key(
-                    metadata, &config, [1; 32], &policy, None,
-                )
-                .expect("call");
-                assert!(
-                    call.bytes.ends_with(&expected.filter),
-                    "{policy:?}: call {} does not end with {}",
-                    call.hex(),
-                    hex::encode(&expected.filter)
+                assert_eq!(
+                    expected_session_value(chain.metadata(), &filter),
+                    Some(ExpectedSessionValue {
+                        expiry_len: 4,
+                        filter: encoded,
+                    }),
+                    "{filter:?}"
                 );
             }
         })
