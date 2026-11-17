@@ -34,7 +34,7 @@ required-features = ["std", "compress"]
 anyhow = "1"
 hex = "0.4"
 codec = { version = "3.7", package = "parity-scale-codec", default-features = false, features = ["derive"] }
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 scale-info = { version = "2.11", default-features = false, features = ["derive"] }
 scale-value = { version = "0.18", features = ["serde"] }
 serde = { version = "1", default-features = false, features = ["derive"] }

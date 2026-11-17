@@ -390,7 +390,7 @@ pub mod sr25519 {
         #[test]
         #[cfg(all(feature = "substrate", feature = "mnemonic"))]
         fn derive_keypair_from_phrase() {
-            use mnemonic::Mnemonic;
+            use crate::Mnemonic;
             let phrase =
                 "rotate increase color sustain print future moon rigid hunt wild diagram online";
 
@@ -529,7 +529,7 @@ pub mod secp256k1 {
 
         fn public(&self) -> Self::Public {
             let vk = self.secret.verifying_key();
-            let compressed = vk.to_encoded_point(true);
+            let compressed = vk.to_sec1_point(true);
             let mut key = [0u8; 33];
             key.copy_from_slice(compressed.as_bytes());
             key
@@ -544,9 +544,13 @@ pub mod secp256k1 {
         }
 
         async fn sign_msg(&self, msg: impl AsRef<[u8]>) -> Result<Self::Signature, super::SigningError> {
-            let (sig, recid) = self.secret
-                .sign_prehash_recoverable(msg.as_ref())
-                .map_err(|_| super::SigningError::Locked)?;
+            let prehash = msg.as_ref();
+            // A prehash this short is almost always a raw message passed
+            // instead of a digest, which would otherwise be signed zero-padded.
+            if prehash.len() < SEED_LEN / 2 {
+                return Err(super::SigningError::Locked);
+            }
+            let (sig, recid) = self.secret.sign_prehash_recoverable(prehash);
             let mut out = [0u8; SIG_LEN];
             out[..64].copy_from_slice(&sig.to_bytes());
             out[64] = recid.to_byte();

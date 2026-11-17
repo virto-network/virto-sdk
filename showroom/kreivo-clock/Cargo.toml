@@ -1,7 +1,7 @@
 [package]
 edition      = "2024"
 name         = "kreivo-clock"
-rust-version = "1.88"
+rust-version = "1.91"
 version      = "0.1.0"
 
 [[bin]]
@@ -33,7 +33,7 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
 ] }
 
 # TLS
-mbedtls-rs = { version = "0.1", features = ["embassy-time", "log", "use-gcc"] }
+mbedtls-rs = { version = "0.3", features = ["embassy-time", "log", "use-gcc"] }
 tinyrlibc  = { version = "0.5", default-features = false, features = ["memchr"] }
 
 # Display (T-Watch S3: ST7789 240x240 via SPI)

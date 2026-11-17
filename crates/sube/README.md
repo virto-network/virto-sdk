@@ -159,5 +159,5 @@ disposable funded registrar and device mnemonic; see
 [`cli/README.md`](cli/README.md) for the exact environment variables and
 warning.
 
-The crate requires Rust 1.88 or newer. See [CHANGELOG.md](CHANGELOG.md) for the
+The crate requires Rust 1.91 or newer. See [CHANGELOG.md](CHANGELOG.md) for the
 1.0 migration notes.

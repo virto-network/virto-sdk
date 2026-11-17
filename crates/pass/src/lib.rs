@@ -55,6 +55,7 @@ pub use workflow::{DeviceAuthenticator, EnrollmentDraft};
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use blake2::{Blake2b256, Digest};
 use sube::extrinsic::{AssembledExtrinsic, ChainContext, encode_extensions};
 use sube::metadata::{ExtrinsicMeta, SignedExtensionMeta};
 use sube::{DynValue, Error, ExtrinsicAssembler, Registry, Result};
@@ -62,21 +63,6 @@ use workflow::ChallengeRequest;
 
 /// Fixed-size challenge produced by pallet-pass challengers.
 pub type Challenge = [u8; 32];
-
-/// Blake2b-256 — matches Substrate's `sp_core::hashing::blake2_256`.
-///
-/// Uses Blake2b (not Blake2s) with a 32-byte output to produce bit-identical
-/// results to the runtime's hashing host function.
-pub(crate) fn blake2b_256(data: &[u8]) -> [u8; 32] {
-    use blake2::digest::{Update, VariableOutput};
-    let mut hasher = blake2::Blake2bVar::new(32).expect("32 is a valid output size");
-    hasher.update(data);
-    let mut out = [0u8; 32];
-    hasher
-        .finalize_variable(&mut out)
-        .expect("32 is a valid output size");
-    out
-}
 
 /// Compute Kreivo's block challenger:
 /// `blake2_256(block_hash(context) || binding)`.
@@ -87,7 +73,7 @@ pub fn block_challenge(block_hash: &[u8; 32], binding: &[u8]) -> Challenge {
     let mut input = Vec::with_capacity(64);
     input.extend_from_slice(block_hash);
     input.extend_from_slice(binding);
-    blake2b_256(&input)
+    Blake2b256::digest(&input).into()
 }
 
 /// Enrollment binds the challenge to the derived AccountId32 (whose SCALE
@@ -231,7 +217,7 @@ fn extensions_after_pass_authenticate(
 }
 
 /// Compute the inherited implication that the signer binds to:
-/// `blake2b_256(extension_version || encoded_call || after_extras || after_additionals)`.
+/// `blake2_256(extension_version || encoded_call || after_extras || after_additionals)`.
 ///
 /// This is Substrate's `TxBaseImplication((extension_version, call))`
 /// followed by the extensions after `PassAuthenticate`, which pallet-pass
@@ -248,34 +234,12 @@ pub fn inherited_implication(
     raw.extend_from_slice(encoded_call);
     raw.extend_from_slice(after_extra);
     raw.extend_from_slice(after_additional);
-    blake2b_256(&raw)
+    Blake2b256::digest(&raw).into()
 }
 
 #[cfg(test)]
-mod blake2b_tests {
+mod challenge_tests {
     use super::*;
-
-    /// Known-answer test: Blake2b-256 of b"abc".
-    /// Matches `sp_core::hashing::blake2_256(b"abc")`.
-    #[test]
-    fn blake2b_256_matches_sp_core_vector() {
-        let expected: [u8; 32] = [
-            0xbd, 0xdd, 0x81, 0x3c, 0x63, 0x42, 0x39, 0x72, 0x31, 0x71, 0xef, 0x3f, 0xee, 0x98,
-            0x57, 0x9b, 0x94, 0x96, 0x4e, 0x3b, 0xb1, 0xcb, 0x3e, 0x42, 0x72, 0x62, 0xc8, 0xc0,
-            0x68, 0xd5, 0x23, 0x19,
-        ];
-        assert_eq!(blake2b_256(b"abc"), expected);
-    }
-
-    #[test]
-    fn blake2b_256_empty_input() {
-        let expected: [u8; 32] = [
-            0x0e, 0x57, 0x51, 0xc0, 0x26, 0xe5, 0x43, 0xb2, 0xe8, 0xab, 0x2e, 0xb0, 0x60, 0x99,
-            0xda, 0xa1, 0xd1, 0xe5, 0xdf, 0x47, 0x77, 0x8f, 0x77, 0x87, 0xfa, 0xab, 0x45, 0xcd,
-            0xf1, 0x2f, 0xe3, 0xa8,
-        ];
-        assert_eq!(blake2b_256(b""), expected);
-    }
 
     #[test]
     fn block_challenge_deterministic() {

@@ -25,18 +25,18 @@ impl<S, const N: usize> Simple<S, N> {
     }
 
     #[cfg(all(feature = "rand", feature = "mnemonic"))]
-    pub fn generate_with_phrase<R>(rng: &mut R) -> Result<(Self, mnemonic::Mnemonic), Error>
+    pub fn generate_with_phrase<R>(rng: &mut R) -> Result<(Self, crate::Mnemonic), Error>
     where
         R: rand_core::CryptoRng + rand_core::RngCore,
     {
-        let phrase = crate::util::gen_phrase(rng, Default::default());
-        Ok((Self::from_phrase(&phrase)?, phrase))
+        let entropy = zeroize::Zeroizing::new(crate::util::random_bytes::<_, 32>(rng));
+        let phrase = crate::Mnemonic::from_entropy(entropy.as_slice()).map_err(|_| Error)?;
+        Ok((Self::from_phrase(phrase.phrase())?, phrase))
     }
 
     #[cfg(feature = "mnemonic")]
     pub fn from_phrase(phrase: impl AsRef<str>) -> Result<Self, Error> {
-        mnemonic::Mnemonic::validate(phrase.as_ref()).map_err(|_| Error)?;
-        let mnemonic = mnemonic::Mnemonic::from_phrase(phrase.as_ref()).map_err(|_| Error)?;
+        let mnemonic = crate::Mnemonic::from_phrase(phrase.as_ref()).map_err(|_| Error)?;
         let raw_entropy = mnemonic.entropy();
 
         Ok(Simple {

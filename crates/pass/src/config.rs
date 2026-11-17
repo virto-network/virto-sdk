@@ -8,7 +8,8 @@ use sube::metadata::TypeId;
 use sube::scales::{Fields, TypeDef};
 use sube::{DynValue, Error, Metadata, Result, Value};
 
-use crate::{Account, AuthorityId, HashedUserId, PASS_AUTHENTICATE, blake2b_256};
+use crate::{Account, AuthorityId, HashedUserId, PASS_AUTHENTICATE};
+use blake2::{Blake2b256, Digest};
 
 const PALLET: &str = "Pass";
 /// Plain `add_session_key` grants an Admin (unrestricted) session; scoped
@@ -293,7 +294,7 @@ pub fn pallet_authority_id(pallet_id: [u8; 8]) -> AuthorityId {
 pub fn derive_account(user_id: HashedUserId) -> Account {
     let mut input = [0u8; 64];
     input[32..].copy_from_slice(&user_id.0);
-    Account(blake2b_256(&input))
+    Account(Blake2b256::digest(input).into())
 }
 
 /// Build a dynamic call body from metadata-resolved fields.

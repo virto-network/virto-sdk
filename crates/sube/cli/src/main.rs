@@ -1192,9 +1192,8 @@ mod tests {
             let scoped_name = format!("e2e-scoped-{unique}");
             let mut entropy = [0u8; 32];
             rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut entropy);
-            let scoped_mnemonic: libwallet::Mnemonic =
-                libwallet::Mnemonic::from_entropy(entropy.to_vec())
-                    .map_err(|_| anyhow::anyhow!("mnemonic"))?;
+            let scoped_mnemonic = libwallet::Mnemonic::from_entropy(entropy.to_vec())
+                .map_err(|_| anyhow::anyhow!("mnemonic"))?;
             let stored = workflow::import_wallet_profile(
                 &profile_path,
                 genesis_hash,

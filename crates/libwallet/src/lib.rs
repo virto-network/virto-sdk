@@ -38,7 +38,10 @@ use core::fmt;
 
 pub use key_pair::{any, Derive, Pair, Public, Signature, Signer, SigningError};
 #[cfg(feature = "mnemonic")]
-pub use mnemonic::{Language, Mnemonic};
+pub use mnemonic::{AnyMnemonic, BuiltInLanguage as Language};
+/// An English BIP39 mnemonic.
+#[cfg(feature = "mnemonic")]
+pub type Mnemonic = mnemonic::Mnemonic;
 pub mod proxy;
 pub mod transport;
 pub mod vault;

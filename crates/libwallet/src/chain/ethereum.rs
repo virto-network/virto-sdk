@@ -28,7 +28,7 @@ impl<K> Ethereum<K> {
 /// Derive an Ethereum address (last 20 bytes of keccak256(uncompressed_pubkey))
 pub fn eth_address(pubkey: &k256::ecdsa::VerifyingKey) -> [u8; 20] {
     use sha3::{Keccak256, Digest};
-    let uncompressed = pubkey.to_encoded_point(false);
+    let uncompressed = pubkey.to_sec1_point(false);
     let mut hasher = Keccak256::new();
     hasher.update(&uncompressed.as_bytes()[1..]); // skip 0x04 prefix
     let hash = hasher.finalize();

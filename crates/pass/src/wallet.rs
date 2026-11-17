@@ -16,8 +16,9 @@
 
 use alloc::vec::Vec;
 
+use crate::DeviceId;
 use crate::workflow::{ChallengeRequest, DeviceAttestation, DeviceAuthenticator};
-use crate::{DeviceId, blake2b_256};
+use blake2::{Blake2b256, Digest};
 use sube::{DynValue, Error, Result};
 
 /// Substrate `MultiSignature` variant.
@@ -69,7 +70,7 @@ impl<'a, S: libwallet::Signer> WalletDevice<'a, S> {
     pub fn device_id(&self) -> DeviceId {
         DeviceId(match <[u8; 32]>::try_from(self.public_key.as_slice()) {
             Ok(public) => public,
-            Err(_) => blake2b_256(&self.public_key),
+            Err(_) => Blake2b256::digest(&self.public_key).into(),
         })
     }
 

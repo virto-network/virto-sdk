@@ -125,9 +125,6 @@ impl<S, const N: usize> MutableKeyStore for crate::vault::Simple<S, N> {
 
 /// Derive a 64-byte seed from mnemonic entropy using BIP39-compatible
 /// PBKDF2-HMAC-SHA512 key derivation (2048 rounds, salt = "mnemonic" + passphrase).
-///
-/// This is the standard BIP39 seed derivation shared by Substrate, Ethereum,
-/// Bitcoin, Solana, and Cosmos wallets.
 #[cfg(all(feature = "pbkdf2", feature = "hmac", feature = "sha2"))]
 pub fn seed_from_entropy(entropy: &[u8], passphrase: &str) -> zeroize::Zeroizing<[u8; 64]> {
     use hmac::Hmac;
@@ -137,7 +134,8 @@ pub fn seed_from_entropy(entropy: &[u8], passphrase: &str) -> zeroize::Zeroizing
     let mut seed = zeroize::Zeroizing::new([0u8; 64]);
 
     if passphrase.is_empty() {
-        pbkdf2::<Hmac<Sha512>>(entropy, b"mnemonic", 2048, seed.as_mut());
+        pbkdf2::<Hmac<Sha512>>(entropy, b"mnemonic", 2048, seed.as_mut())
+            .expect("HMAC accepts keys of any length");
     } else {
         let pass_bytes = passphrase.as_bytes();
         let salt_len = 8 + pass_bytes.len();
@@ -145,7 +143,8 @@ pub fn seed_from_entropy(entropy: &[u8], passphrase: &str) -> zeroize::Zeroizing
         salt[..8].copy_from_slice(b"mnemonic");
         let copy_len = pass_bytes.len().min(256);
         salt[8..8 + copy_len].copy_from_slice(&pass_bytes[..copy_len]);
-        pbkdf2::<Hmac<Sha512>>(entropy, &salt[..salt_len.min(8 + 256)], 2048, seed.as_mut());
+        pbkdf2::<Hmac<Sha512>>(entropy, &salt[..salt_len.min(8 + 256)], 2048, seed.as_mut())
+            .expect("HMAC accepts keys of any length");
     }
 
     seed

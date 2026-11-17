@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     store_path.push(".password-store");
 
     let vault: PassVault =
-        Pass::new(store_path.to_str().unwrap(), Language::default()).account(&account);
+        Pass::new(store_path.to_str().unwrap(), Language::English).account(&account);
     let mut substrate = Substrate::new(vault);
     let signer = substrate.unlock(None, ()).await?;
     let mut wallet: Wallet<_, 5> = Wallet::new();

@@ -24,6 +24,9 @@ use smoldot_light::{AddChainConfig, AddChainConfigJsonRpc, Client};
 use super::{IncomingMessage, JsonRpcError, Rpc, RpcResult};
 use crate::Error;
 
+/// Transactions smoldot holds per chain until finalized.
+const MAX_PENDING_TRANSACTIONS: u32 = 64;
+
 /// Light client backend powered by smoldot.
 pub struct Backend<P: PlatformRef> {
     client: Client<P, ()>,
@@ -46,6 +49,9 @@ impl<P: PlatformRef> Backend<P> {
                     database_content: "",
                     potential_relay_chains: core::iter::empty(),
                     statement_protocol_config: None,
+                    max_pending_transactions: MAX_PENDING_TRANSACTIONS
+                        .try_into()
+                        .expect("non-zero"),
                     json_rpc: AddChainConfigJsonRpc::Disabled,
                 })
                 .map_err(|e| Error::Node(format!("relay chain: {e}")))?;
@@ -61,6 +67,7 @@ impl<P: PlatformRef> Backend<P> {
                 database_content: "",
                 potential_relay_chains: relay_chain_ids.into_iter(),
                 statement_protocol_config: None,
+                max_pending_transactions: MAX_PENDING_TRANSACTIONS.try_into().expect("non-zero"),
                 json_rpc: AddChainConfigJsonRpc::Enabled {
                     max_pending_requests: 128.try_into().expect("non-zero"),
                     max_subscriptions: 1024,
