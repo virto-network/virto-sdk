@@ -8,8 +8,19 @@
   `prepare_call`, `build_transaction`, `inspect_transaction`, and
   `submit_transaction` stages.
 - `ExtrinsicAssembler::nonce_account` separates nonce identity from signing
-  identity. The old `account` method remains as a deprecated compatibility
-  alias.
+  identity and is required. The old `account` method remains as a deprecated
+  alias that returns it.
+- `ExtrinsicAssembler::assemble` returns an `AssembledExtrinsic` instead of
+  `Vec<u8>`.
+- `OneShotCall` and `CallBuilder::{signer, nonce, with_extension, finalize}`
+  were removed, and `CallBuilder` lost its signer type parameter; signing and
+  options go through the staged transaction API.
+- Transactions are mortal by default (64 blocks) instead of immortal.
+- `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
+  and `tip` fields.
+- `Error` gained `RuntimeUpgrade` and `GenesisMismatch` variants.
+- `scales` `RawPallet` gained an `errors_ty` field; filtered metadata keeps
+  pallet error types so dispatch errors can be decoded.
 
 ### Added
 
@@ -17,6 +28,11 @@
   optional-extension `None` defaults, transaction diagnostics and receipts.
 - Optional `libwallet` adapter for ordinary wallet signers.
 - Non-mutating `sube query` and `sube tx` CLI commands.
+
+### Fixed
+
+- Serializing dynamic values for types wrapped in more than one newtype (e.g.
+  a `BoundedBTreeSet` of tuples) produced wrong SCALE bytes.
 
 ## 1.0.0
 
