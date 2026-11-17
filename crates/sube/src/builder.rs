@@ -113,7 +113,6 @@ impl IntoFuture for SubeBuilder {
 pub struct Sube<B = AnyBackend> {
     backend: B,
     metadata: Rc<Metadata>,
-    chain_properties: Option<crate::ChainProperties>,
     url: String,
     timeout: core::time::Duration,
 }
@@ -122,7 +121,6 @@ pub struct Sube<B = AnyBackend> {
 pub struct Sube<B> {
     backend: B,
     metadata: Rc<Metadata>,
-    chain_properties: Option<crate::ChainProperties>,
 }
 
 // --- Generic methods (any Backend) ---
@@ -143,7 +141,6 @@ impl<B: Backend> Sube<B> {
         Sube {
             backend,
             metadata,
-            chain_properties: None,
             #[cfg(any(feature = "ws", feature = "smoldot-std"))]
             url: String::new(),
             #[cfg(any(feature = "ws", feature = "smoldot-std"))]
@@ -194,20 +191,9 @@ impl<B: Backend> Sube<B> {
         &self.metadata.registry
     }
 
-    /// Fetch chain properties once and return the cached value thereafter.
-    pub async fn chain_properties(&mut self) -> SubeResult<&crate::ChainProperties> {
-        if self.chain_properties.is_none() {
-            self.chain_properties = Some(self.backend.chain_properties().await?);
-        }
-        Ok(self
-            .chain_properties
-            .as_ref()
-            .expect("chain properties were initialized"))
-    }
-
-    /// Return chain properties when they have already been fetched.
-    pub fn cached_chain_properties(&self) -> Option<&crate::ChainProperties> {
-        self.chain_properties.as_ref()
+    /// Fetch the chain's identity and denomination properties.
+    pub async fn chain_properties(&mut self) -> SubeResult<crate::ChainProperties> {
+        self.backend.chain_properties().await
     }
 
     /// Access the underlying backend.
@@ -504,7 +490,6 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata: Rc::new(metadata),
-            chain_properties: None,
             url: url.into(),
             timeout: crate::DEFAULT_TIMEOUT,
         })
@@ -521,7 +506,6 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata,
-            chain_properties: None,
             url: url_str.into(),
             timeout,
         })
@@ -544,7 +528,6 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata,
-            chain_properties: None,
             url: String::new(),
             timeout: crate::DEFAULT_TIMEOUT,
         })
@@ -560,7 +543,6 @@ impl Sube {
         Ok(Sube {
             backend,
             metadata,
-            chain_properties: None,
             url: String::new(),
             timeout: crate::DEFAULT_TIMEOUT,
         })
@@ -574,7 +556,6 @@ impl Sube {
         log::info!("reconnecting to {}", self.url);
         let url = chain_string_to_url(&self.url)?;
         self.backend = connect(&url, self.timeout).await?;
-        self.chain_properties = None;
         Ok(())
     }
 }
@@ -586,7 +567,6 @@ mod tests {
 
     struct MockBackend {
         submissions: Rc<Cell<usize>>,
-        property_reads: Rc<Cell<usize>>,
         metadata: Metadata,
     }
 
@@ -623,7 +603,6 @@ mod tests {
         }
 
         async fn chain_properties(&mut self) -> SubeResult<crate::ChainProperties> {
-            self.property_reads.set(self.property_reads.get() + 1);
             Ok(crate::ChainProperties {
                 ss58_format: Some(2),
                 token_symbols: vec!["UNIT".into()],
@@ -647,10 +626,8 @@ mod tests {
             let metadata =
                 Metadata::from_bytes(include_bytes!("../tests/fixtures/kreivo.scale")).unwrap();
             let submissions = Rc::new(Cell::new(0));
-            let property_reads = Rc::new(Cell::new(0));
             let backend = MockBackend {
                 submissions: Rc::clone(&submissions),
-                property_reads: Rc::clone(&property_reads),
                 metadata: metadata.clone(),
             };
             let mut chain = Sube::from_parts(backend, Rc::new(metadata));
@@ -680,8 +657,6 @@ mod tests {
             assert!(report.partial_fee.is_none());
 
             assert_eq!(chain.chain_properties().await.unwrap().ss58_format, Some(2));
-            assert_eq!(chain.chain_properties().await.unwrap().ss58_format, Some(2));
-            assert_eq!(property_reads.get(), 1);
 
             chain
                 .submit_transaction(&encoded, WaitFor::BestBlock)

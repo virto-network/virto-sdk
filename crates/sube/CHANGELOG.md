@@ -33,6 +33,9 @@
   `EncodedExtrinsic::hex` are methods instead of fields, and
   `EncodedExtension` has `extra`/`additional_signed` byte fields with
   `extra_hex()`/`additional_signed_hex()` methods.
+- `Sube` no longer caches chain properties: `Sube::chain_properties`
+  fetches them from the backend each call and returns an owned
+  `ChainProperties`. There is no `Sube::cached_chain_properties`.
 - Transactions are mortal by default (64 blocks) instead of immortal.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.

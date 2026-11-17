@@ -91,7 +91,7 @@ pub fn spawn(
                 }
             };
             let metadata = chain.metadata().clone();
-            let properties = chain.chain_properties().await.cloned().unwrap_or_default();
+            let properties = chain.chain_properties().await.unwrap_or_default();
             use sube::Backend;
             let genesis_hash = match chain.backend().block_info(Some(0)).await {
                 Ok(block) => block.hash,

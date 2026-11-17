@@ -188,7 +188,7 @@ pub struct AssembledExtrinsic {
     pub scheme: String,
 }
 
-/// Cached identity and denomination properties reported by the chain.
+/// Identity and denomination properties reported by the chain.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChainProperties {
     pub ss58_format: Option<u16>,
