@@ -1,5 +1,8 @@
 use anyhow::Result;
 
+#[cfg(feature = "pass")]
+use crate::profiles;
+
 #[cfg(feature = "wallet")]
 pub fn import_wallet_profile(
     profile_path: &std::path::Path,
@@ -62,7 +65,7 @@ pub async fn activate_existing_profile(
     }
     match selected {
         crate::profiles::Profile::Wallet(profile) => {
-            let _ = crate::wallet_signer(&profile).await?;
+            let _ = crate::signers::wallet_signer(&profile).await?;
         }
         #[cfg(feature = "pass")]
         crate::profiles::Profile::Pass(profile) => {
@@ -76,13 +79,14 @@ pub async fn activate_existing_profile(
                 anyhow::bail!("pass session expired; register or update it before activation");
             }
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
-            if !crate::on_chain_session_matches(chain, &profile, session, &policy).await {
+            if !on_chain_session_matches(chain, &profile, session, &policy).await {
                 anyhow::bail!(
                     "local pass session does not exactly match on-chain storage; register or update it before activation"
                 );
             }
             let _ =
-                crate::load_session_signer(&session.secure_entry, Some(session.account)).await?;
+                crate::signers::load_session_signer(&session.secure_entry, Some(session.account))
+                    .await?;
         }
     }
     profiles.activate(name, genesis_hash)?;
@@ -171,7 +175,7 @@ pub async fn prepare_enrollment(
     let checkpoint = chain.backend().block_info(None).await?;
     let context = u32::try_from(checkpoint.number)
         .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-    let variant = crate::device_variant(&request.device);
+    let variant = device_variant(&request.device);
     if !config.supports_attestation(variant) {
         anyhow::bail!("runtime does not advertise {variant} enrollment");
     }
@@ -180,8 +184,7 @@ pub async fn prepare_enrollment(
     if profiles.find(&request.name).is_some() {
         anyhow::bail!("profile {:?} already exists", request.name);
     }
-    let registrar_profile =
-        crate::wallet_profile(&profiles, &request.registrar, genesis_hash)?.clone();
+    let registrar_profile = wallet_profile(&profiles, &request.registrar, genesis_hash)?.clone();
     let pending = profiles
         .pending_enrollments
         .iter()
@@ -189,7 +192,7 @@ pub async fn prepare_enrollment(
             pending.name == request.name
                 && pending.genesis_hash == genesis_hash
                 && pending.registrar == request.registrar
-                && crate::same_requested_device(&pending.device_profile(), &request.device)
+                && same_requested_device(&pending.device_profile(), &request.device)
                 && pending.user_id == user_id.0
                 && pending.valid_through >= checkpoint.number
         })
@@ -233,7 +236,7 @@ pub async fn prepare_enrollment(
         call: pending.call.clone(),
         bytes: pending.call_bytes.clone(),
     };
-    let registrar = crate::wallet_signer(&registrar_profile).await?;
+    let registrar = crate::signers::wallet_signer(&registrar_profile).await?;
     let prepared = prepare_transaction(
         chain,
         chain_url,
@@ -270,8 +273,8 @@ async fn prepare_enrollment_device(
 )> {
     match device {
         crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet_profile = crate::wallet_profile(profiles, &wallet, genesis_hash)?.clone();
-            let signer = crate::wallet_signer(&wallet_profile).await?;
+            let wallet_profile = wallet_profile(profiles, &wallet, genesis_hash)?.clone();
+            let signer = crate::signers::wallet_signer(&wallet_profile).await?;
             let public = signer.inner().public();
             let device = pass::wallet::WalletDevice::new(
                 signer.inner(),
@@ -377,12 +380,12 @@ pub async fn prepare_device_addition(
     use sube::Backend;
 
     let mut profiles = crate::profiles::Profiles::load(profile_path)?;
-    let profile = crate::pass_profile(&profiles, &request.profile, genesis_hash)?.clone();
+    let profile = pass_profile(&profiles, &request.profile, genesis_hash)?.clone();
     let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
     let checkpoint = chain.backend().block_info(None).await?;
     let context = u32::try_from(checkpoint.number)
         .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-    let variant = crate::device_variant(&request.device);
+    let variant = device_variant(&request.device);
     if !config.supports_attestation(variant) {
         anyhow::bail!("runtime does not advertise {variant} device registration");
     }
@@ -396,7 +399,7 @@ pub async fn prepare_device_addition(
                 && pending.filter == request.filter
                 && pending.admin_confirm == request.admin_confirmed
                 && pending.valid_through >= checkpoint.number
-                && crate::same_requested_device(&pending.device, &request.device)
+                && same_requested_device(&pending.device, &request.device)
         })
         .cloned();
     let pending = if let Some(pending) = pending {
@@ -483,8 +486,8 @@ async fn prepare_added_device(
 
     match device {
         crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet_profile = crate::wallet_profile(profiles, &wallet, genesis_hash)?.clone();
-            let signer = crate::wallet_signer(&wallet_profile).await?;
+            let wallet_profile = wallet_profile(profiles, &wallet, genesis_hash)?.clone();
+            let signer = crate::signers::wallet_signer(&wallet_profile).await?;
             let public = signer.inner().public();
             let device = pass::wallet::WalletDevice::new(
                 signer.inner(),
@@ -564,7 +567,7 @@ pub async fn prepare_device_removal(
     use sube::Backend;
 
     let profiles = crate::profiles::Profiles::load(profile_path)?;
-    let profile = crate::pass_profile(&profiles, &request.profile, genesis_hash)?.clone();
+    let profile = pass_profile(&profiles, &request.profile, genesis_hash)?.clone();
     let known = profile.device_id == request.device_id
         || profile
             .additional_devices
@@ -630,8 +633,8 @@ pub async fn prepare_pass_session(
         // The runtime stores the filter as sets, so compare it in that form.
         if local_policy.runtime_value() == policy.runtime_value()
             && session.expires_at > checkpoint.number
-            && crate::on_chain_session_matches(chain, &profile, session, &policy).await
-            && crate::load_session_signer(&session.secure_entry, Some(session.account))
+            && on_chain_session_matches(chain, &profile, session, &policy).await
+            && crate::signers::load_session_signer(&session.secure_entry, Some(session.account))
                 .await
                 .is_ok()
         {
@@ -647,15 +650,15 @@ pub async fn prepare_pass_session(
         libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account);
     let existing_account = profile.session.as_ref().map(|session| session.account);
     let (session_signer, pending_seed) = if let Some(expected) = existing_account {
-        match crate::load_session_signer(&secure_entry, Some(expected)).await {
+        match crate::signers::load_session_signer(&secure_entry, Some(expected)).await {
             Ok(signer) => (signer, None),
             Err(_) => {
-                let (signer, seed) = crate::generate_session_signer().await?;
+                let (signer, seed) = crate::signers::generate_session_signer().await?;
                 (signer, Some(zeroize::Zeroizing::new(seed)))
             }
         }
     } else {
-        let (signer, seed) = crate::generate_session_signer().await?;
+        let (signer, seed) = crate::signers::generate_session_signer().await?;
         (signer, Some(zeroize::Zeroizing::new(seed)))
     };
     let session_account = session_signer.account();
@@ -879,14 +882,14 @@ pub async fn prepare_profile_device_transaction(
     call: &sube::PreparedCall,
 ) -> Result<PreparedTransaction> {
     let primary_device = profile.primary_device();
-    let variant = crate::device_variant(&primary_device);
+    let variant = device_variant(&primary_device);
     if !config.supports_credential(variant) {
         anyhow::bail!("runtime does not advertise {variant} authentication");
     }
     match primary_device {
         crate::profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet = crate::wallet_profile(profiles, &wallet, profile.genesis_hash)?.clone();
-            let signer = crate::wallet_signer(&wallet).await?;
+            let wallet = wallet_profile(profiles, &wallet, profile.genesis_hash)?.clone();
+            let signer = crate::signers::wallet_signer(&wallet).await?;
             let public = signer.inner().public();
             let device = pass::wallet::WalletDevice::new(
                 signer.inner(),
@@ -1132,6 +1135,160 @@ pub fn receipt_json(receipt: &sube::TransactionReceipt) -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "pass")]
+pub fn same_requested_device(
+    stored: &profiles::DeviceProviderProfile,
+    requested: &profiles::DeviceProviderProfile,
+) -> bool {
+    match (stored, requested) {
+        (
+            profiles::DeviceProviderProfile::SubstrateKey { wallet: stored },
+            profiles::DeviceProviderProfile::SubstrateKey { wallet: requested },
+        ) => stored == requested,
+        (
+            profiles::DeviceProviderProfile::WebAuthn {
+                rp_id: stored_rp,
+                origin: stored_origin,
+                ..
+            },
+            profiles::DeviceProviderProfile::WebAuthn {
+                rp_id: requested_rp,
+                origin: requested_origin,
+                ..
+            },
+        ) => stored_rp == requested_rp && stored_origin == requested_origin,
+        (
+            profiles::DeviceProviderProfile::SshAgent {
+                fingerprint: stored_fingerprint,
+                namespace: stored_namespace,
+            },
+            profiles::DeviceProviderProfile::SshAgent {
+                fingerprint: requested_fingerprint,
+                namespace: requested_namespace,
+            },
+        ) => stored_fingerprint == requested_fingerprint && stored_namespace == requested_namespace,
+        _ => false,
+    }
+}
+
+#[cfg(feature = "pass")]
+pub fn device_variant(device: &profiles::DeviceProviderProfile) -> &'static str {
+    match device {
+        profiles::DeviceProviderProfile::SubstrateKey { .. } => "SubstrateKey",
+        profiles::DeviceProviderProfile::WebAuthn { .. } => "WebAuthn",
+        profiles::DeviceProviderProfile::SshAgent { .. } => "Ssh",
+    }
+}
+
+pub async fn chain_genesis(chain: &mut sube::Sube) -> Result<[u8; 32]> {
+    use sube::Backend;
+    Ok(chain.backend().block_info(Some(0)).await?.hash)
+}
+
+#[cfg(feature = "pass")]
+pub async fn on_chain_session_matches(
+    chain: &mut sube::Sube,
+    profile: &profiles::PassProfile,
+    session: &profiles::SessionProfile,
+    policy: &pass::DeviceFilter,
+) -> bool {
+    let Some(expected) = expected_session_value(chain.metadata(), policy) else {
+        return false;
+    };
+    let path = format!("Pass/SessionKeys/0x{}", hex::encode(session.account));
+    let Ok(sube::Response::Value(entry, _)) = chain.query(&path).await else {
+        return false;
+    };
+    expected.matches(&entry.data, &profile.pass_account)
+}
+
+/// The expected `Pass::SessionKeys` value, which pallet-pass stores as
+/// `(pass_account, expires_at, DeviceFilter)`.
+#[cfg(feature = "pass")]
+#[derive(Debug, PartialEq, Eq)]
+pub struct ExpectedSessionValue {
+    expiry_len: usize,
+    filter: Vec<u8>,
+}
+
+#[cfg(feature = "pass")]
+impl ExpectedSessionValue {
+    /// Compares the owner and the SCALE-encoded filter exactly; the expiry
+    /// is set by the runtime and only its width is checked.
+    fn matches(&self, data: &[u8], pass_account: &[u8; 32]) -> bool {
+        data.len() == 32 + self.expiry_len + self.filter.len()
+            && data[..32] == pass_account[..]
+            && data[32 + self.expiry_len..] == self.filter[..]
+    }
+}
+
+/// Encode `filter` as the runtime's `DeviceFilter` stored in `SessionKeys`,
+/// with the block-number width taken from metadata. `None` when the layout
+/// is not the expected one.
+#[cfg(feature = "pass")]
+pub fn expected_session_value(
+    metadata: &sube::Metadata,
+    filter: &pass::DeviceFilter,
+) -> Option<ExpectedSessionValue> {
+    use sube::scales::TypeDef;
+    let entry = metadata
+        .pallet_by_name("Pass")?
+        .storage
+        .as_ref()?
+        .entries
+        .iter()
+        .find(|entry| entry.name == "SessionKeys")?;
+    let sube::metadata::StorageEntryType::Map { value, .. } = &entry.ty else {
+        return None;
+    };
+    let registry = &metadata.registry;
+    let Some(TypeDef::Tuple(fields)) = registry.resolve(*value) else {
+        return None;
+    };
+    let expiry_len = match registry.resolve(*fields.get(1)?)? {
+        TypeDef::U32 => 4,
+        TypeDef::U64 => 8,
+        _ => return None,
+    };
+    let filter =
+        sube::scales::to_vec_with_info(&filter.runtime_value(), Some((registry, *fields.get(2)?)))
+            .ok()?;
+    Some(ExpectedSessionValue { expiry_len, filter })
+}
+
+#[cfg(feature = "pass")]
+pub fn wallet_profile<'a>(
+    store: &'a profiles::Profiles,
+    name: &str,
+    genesis_hash: [u8; 32],
+) -> Result<&'a profiles::WalletProfile> {
+    match store.find(name) {
+        Some(profiles::Profile::Wallet(profile)) if profile.genesis_hash == genesis_hash => {
+            Ok(profile)
+        }
+        Some(profiles::Profile::Wallet(_)) => {
+            anyhow::bail!("wallet profile genesis hash does not match the connected chain")
+        }
+        _ => anyhow::bail!("wallet profile {name:?} not found"),
+    }
+}
+
+#[cfg(feature = "pass")]
+pub fn pass_profile<'a>(
+    store: &'a profiles::Profiles,
+    name: &str,
+    genesis_hash: [u8; 32],
+) -> Result<&'a profiles::PassProfile> {
+    match store.find(name) {
+        Some(profiles::Profile::Pass(profile)) if profile.genesis_hash == genesis_hash => {
+            Ok(profile)
+        }
+        Some(profiles::Profile::Pass(_)) => {
+            anyhow::bail!("pass profile genesis hash does not match the connected chain")
+        }
+        _ => anyhow::bail!("pass profile {name:?} not found"),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1322,5 +1479,64 @@ mod tests {
         );
         assert!(changed.additional_devices.is_empty());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn session_value_comparison_is_exact() {
+        let expected = ExpectedSessionValue {
+            expiry_len: 4,
+            // Calls variant (index 2) with one (5, 12) pair.
+            filter: vec![2, 1 << 2, 5, 12],
+        };
+        let owner = [9u8; 32];
+        let mut stored = owner.to_vec();
+        stored.extend(99u32.to_le_bytes());
+        stored.extend([2, 1 << 2, 5, 12]);
+        assert!(expected.matches(&stored, &owner));
+        // Different owner, different filter, or trailing bytes never match.
+        assert!(!expected.matches(&stored, &[8u8; 32]));
+        let mut other_filter = stored.clone();
+        *other_filter.last_mut().unwrap() = 1;
+        assert!(!expected.matches(&other_filter, &owner));
+        let mut longer = stored.clone();
+        longer.push(0);
+        assert!(!expected.matches(&longer, &owner));
+    }
+
+    /// Read-only live check that the expected `SessionKeys` filter encodes
+    /// the same bytes the runtime receives in `add_session_key`.
+    #[cfg(feature = "pass")]
+    #[test]
+    #[ignore = "requires network access to a chain with pallet-pass (SUBE_E2E_URL, default kreivo)"]
+    fn live_session_filter_encoding_matches_add_session_key() {
+        smol::block_on(async {
+            let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
+            let chain = sube::Sube::connect(&url).await.expect("connects");
+            let metadata = chain.metadata();
+            let config = pass::PassRuntimeConfig::discover(metadata).expect("pass config");
+            for policy in [
+                pass::DeviceFilter::Calls(vec![
+                    pass::CallIndex {
+                        pallet: 10,
+                        call: 3,
+                    },
+                    pass::CallIndex { pallet: 5, call: 0 },
+                ]),
+                pass::DeviceFilter::Pallets(vec![31, 10]),
+            ] {
+                let expected = expected_session_value(metadata, &policy).expect("layout");
+                let call = pass::session::prepare_add_session_key(
+                    metadata, &config, [1; 32], &policy, None,
+                )
+                .expect("call");
+                assert!(
+                    call.bytes.ends_with(&expected.filter),
+                    "{policy:?}: call {} does not end with {}",
+                    call.hex(),
+                    hex::encode(&expected.filter)
+                );
+            }
+        })
     }
 }

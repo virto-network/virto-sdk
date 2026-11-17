@@ -6,6 +6,8 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 mod profiles;
+#[cfg(feature = "wallet")]
+mod signers;
 mod tui;
 #[cfg_attr(not(feature = "wallet"), allow(dead_code))]
 mod workflow;
@@ -251,51 +253,6 @@ fn requested_device(args: DeviceProviderArgs) -> Result<profiles::DeviceProvider
 }
 
 #[cfg(feature = "pass")]
-fn same_requested_device(
-    stored: &profiles::DeviceProviderProfile,
-    requested: &profiles::DeviceProviderProfile,
-) -> bool {
-    match (stored, requested) {
-        (
-            profiles::DeviceProviderProfile::SubstrateKey { wallet: stored },
-            profiles::DeviceProviderProfile::SubstrateKey { wallet: requested },
-        ) => stored == requested,
-        (
-            profiles::DeviceProviderProfile::WebAuthn {
-                rp_id: stored_rp,
-                origin: stored_origin,
-                ..
-            },
-            profiles::DeviceProviderProfile::WebAuthn {
-                rp_id: requested_rp,
-                origin: requested_origin,
-                ..
-            },
-        ) => stored_rp == requested_rp && stored_origin == requested_origin,
-        (
-            profiles::DeviceProviderProfile::SshAgent {
-                fingerprint: stored_fingerprint,
-                namespace: stored_namespace,
-            },
-            profiles::DeviceProviderProfile::SshAgent {
-                fingerprint: requested_fingerprint,
-                namespace: requested_namespace,
-            },
-        ) => stored_fingerprint == requested_fingerprint && stored_namespace == requested_namespace,
-        _ => false,
-    }
-}
-
-#[cfg(feature = "pass")]
-fn device_variant(device: &profiles::DeviceProviderProfile) -> &'static str {
-    match device {
-        profiles::DeviceProviderProfile::SubstrateKey { .. } => "SubstrateKey",
-        profiles::DeviceProviderProfile::WebAuthn { .. } => "WebAuthn",
-        profiles::DeviceProviderProfile::SshAgent { .. } => "Ssh",
-    }
-}
-
-#[cfg(feature = "pass")]
 #[derive(Subcommand)]
 enum SessionCommand {
     /// Delete the local session secret; the on-chain entry expires on schedule.
@@ -477,29 +434,6 @@ fn print_call_artifact(chain_url: &str, prepared: &sube::PreparedCall, json: boo
 }
 
 #[cfg(feature = "wallet")]
-async fn wallet_signer(
-    profile: &profiles::WalletProfile,
-) -> Result<sube::libwallet::LibwalletSigner<libwallet::vault::utils::DerivedSigner>> {
-    use libwallet::vault::Vault;
-
-    if !profile.scheme.eq_ignore_ascii_case("sr25519") {
-        anyhow::bail!("unsupported wallet profile scheme {}", profile.scheme);
-    }
-    let keys = libwallet::vault::OSKeyring::<()>::new(&profile.secure_entry, None);
-    let mut vault = libwallet::Substrate::new(keys);
-    let signer = vault.unlock(None, ()).await?;
-    let public = signer.public();
-    if public.as_ref() != profile.account {
-        anyhow::bail!("wallet secure entry does not match the profile account");
-    }
-    Ok(sube::libwallet::LibwalletSigner::new(
-        signer,
-        profile.account,
-        sube::libwallet::SignatureScheme::Sr25519,
-    ))
-}
-
-#[cfg(feature = "wallet")]
 async fn tx_with_wallet(
     chain: &mut sube::Sube,
     chain_url: &str,
@@ -507,11 +441,11 @@ async fn tx_with_wallet(
     profile: &profiles::WalletProfile,
     behavior: TxBehavior,
 ) -> Result<()> {
-    let genesis_hash = chain_genesis(chain).await?;
+    let genesis_hash = workflow::chain_genesis(chain).await?;
     if profile.genesis_hash != genesis_hash {
         anyhow::bail!("active profile genesis hash does not match the connected chain");
     }
-    let signer = wallet_signer(profile).await?;
+    let signer = signers::wallet_signer(profile).await?;
     tx_with_assembler(
         chain,
         chain_url,
@@ -531,7 +465,7 @@ async fn tx_with_pass_session(
     profile: &profiles::PassProfile,
     behavior: TxBehavior,
 ) -> Result<()> {
-    let genesis_hash = chain_genesis(chain).await?;
+    let genesis_hash = workflow::chain_genesis(chain).await?;
     if profile.genesis_hash != genesis_hash {
         anyhow::bail!("active profile genesis hash does not match the connected chain");
     }
@@ -540,7 +474,7 @@ async fn tx_with_pass_session(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("active pass profile has no finalized local session"))?;
     let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
-    let signer = load_session_signer(&session.secure_entry, Some(session.account)).await?;
+    let signer = signers::load_session_signer(&session.secure_entry, Some(session.account)).await?;
     let authorizer =
         pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
     tx_with_assembler(
@@ -609,11 +543,6 @@ fn confirm_submission() -> Result<bool> {
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES"))
-}
-
-async fn chain_genesis(chain: &mut sube::Sube) -> Result<[u8; 32]> {
-    use sube::Backend;
-    Ok(chain.backend().block_info(Some(0)).await?.hash)
 }
 
 fn profile_command(path: &std::path::Path, command: Option<ProfileCommand>) -> Result<()> {
@@ -698,7 +627,7 @@ async fn connect_profile(
     yes: bool,
 ) -> Result<()> {
     let mut chain = sube::Sube::connect(chain_url).await?;
-    let genesis_hash = chain_genesis(&mut chain).await?;
+    let genesis_hash = workflow::chain_genesis(&mut chain).await?;
     let mut store = profiles::Profiles::load(profile_path)?;
     let selected = store
         .find(name)
@@ -709,7 +638,7 @@ async fn connect_profile(
     }
     #[cfg(feature = "wallet")]
     if let profiles::Profile::Wallet(profile) = &selected {
-        let _ = wallet_signer(profile).await?;
+        let _ = signers::wallet_signer(profile).await?;
     }
     #[cfg(feature = "pass")]
     if let profiles::Profile::Pass(profile) = &selected {
@@ -765,7 +694,7 @@ async fn connect_pass_session(
     if let Some(session) = &profile.session
         && session.policy == policy_text
         && session.expires_at > checkpoint.number
-        && on_chain_session_matches(chain, &profile, session, &policy).await
+        && workflow::on_chain_session_matches(chain, &profile, session, &policy).await
     {
         return Ok(());
     }
@@ -781,18 +710,18 @@ async fn connect_pass_session(
 
     let existing_account = profile.session.as_ref().map(|session| session.account);
     let (session_signer, pending_seed) = if let Some(expected) = existing_account {
-        match load_session_signer(&secure_entry, Some(expected)).await {
+        match signers::load_session_signer(&secure_entry, Some(expected)).await {
             Ok(signer) => (signer, None),
             Err(error) => {
                 eprintln!(
                     "Stored session key is unavailable or invalid ({error}); preparing a replacement"
                 );
-                let (signer, seed) = generate_session_signer().await?;
+                let (signer, seed) = signers::generate_session_signer().await?;
                 (signer, Some(seed))
             }
         }
     } else {
-        let (signer, seed) = generate_session_signer().await?;
+        let (signer, seed) = signers::generate_session_signer().await?;
         (signer, Some(seed))
     };
     let session_account = sube::Signer::account(&session_signer);
@@ -844,128 +773,6 @@ async fn connect_pass_session(
 }
 
 #[cfg(feature = "pass")]
-async fn generate_session_signer() -> Result<(
-    sube::libwallet::LibwalletSigner<libwallet::vault::utils::DerivedSigner>,
-    [u8; 32],
-)> {
-    use libwallet::vault::Vault;
-
-    let mut keys = libwallet::vault::Simple::<(), 32>::generate(&mut rand_core::OsRng);
-    let seed = *keys.unlock()?;
-    let mut vault = libwallet::Substrate::new(keys);
-    let derived = vault.unlock(None, ()).await?;
-    let public = derived.public();
-    let account: [u8; 32] = public
-        .as_ref()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("session signer is not AccountId32"))?;
-    Ok((
-        sube::libwallet::LibwalletSigner::new(
-            derived,
-            account,
-            sube::libwallet::SignatureScheme::Sr25519,
-        ),
-        seed,
-    ))
-}
-
-#[cfg(feature = "pass")]
-async fn load_session_signer(
-    secure_entry: &str,
-    expected: Option<[u8; 32]>,
-) -> Result<sube::libwallet::LibwalletSigner<libwallet::vault::utils::DerivedSigner>> {
-    use libwallet::vault::Vault;
-
-    let keys = libwallet::vault::OSKeyring::<()>::new(secure_entry, None);
-    let mut vault = libwallet::Substrate::new(keys);
-    let derived = vault.unlock(None, ()).await?;
-    let public = derived.public();
-    let account: [u8; 32] = public
-        .as_ref()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("session signer is not AccountId32"))?;
-    if expected.is_some_and(|expected| expected != account) {
-        anyhow::bail!("stored session key does not match the pass profile");
-    }
-    Ok(sube::libwallet::LibwalletSigner::new(
-        derived,
-        account,
-        sube::libwallet::SignatureScheme::Sr25519,
-    ))
-}
-
-#[cfg(feature = "pass")]
-async fn on_chain_session_matches(
-    chain: &mut sube::Sube,
-    profile: &profiles::PassProfile,
-    session: &profiles::SessionProfile,
-    policy: &pass::DeviceFilter,
-) -> bool {
-    let Some(expected) = expected_session_value(chain.metadata(), policy) else {
-        return false;
-    };
-    let path = format!("Pass/SessionKeys/0x{}", hex::encode(session.account));
-    let Ok(sube::Response::Value(entry, _)) = chain.query(&path).await else {
-        return false;
-    };
-    expected.matches(&entry.data, &profile.pass_account)
-}
-
-/// The expected `Pass::SessionKeys` value, which pallet-pass stores as
-/// `(pass_account, expires_at, DeviceFilter)`.
-#[cfg(feature = "pass")]
-#[derive(Debug, PartialEq, Eq)]
-struct ExpectedSessionValue {
-    expiry_len: usize,
-    filter: Vec<u8>,
-}
-
-#[cfg(feature = "pass")]
-impl ExpectedSessionValue {
-    /// Compares the owner and the SCALE-encoded filter exactly; the expiry
-    /// is set by the runtime and only its width is checked.
-    fn matches(&self, data: &[u8], pass_account: &[u8; 32]) -> bool {
-        data.len() == 32 + self.expiry_len + self.filter.len()
-            && data[..32] == pass_account[..]
-            && data[32 + self.expiry_len..] == self.filter[..]
-    }
-}
-
-/// Encode `filter` as the runtime's `DeviceFilter` stored in `SessionKeys`,
-/// with the block-number width taken from metadata. `None` when the layout
-/// is not the expected one.
-#[cfg(feature = "pass")]
-fn expected_session_value(
-    metadata: &sube::Metadata,
-    filter: &pass::DeviceFilter,
-) -> Option<ExpectedSessionValue> {
-    use sube::scales::TypeDef;
-    let entry = metadata
-        .pallet_by_name("Pass")?
-        .storage
-        .as_ref()?
-        .entries
-        .iter()
-        .find(|entry| entry.name == "SessionKeys")?;
-    let sube::metadata::StorageEntryType::Map { value, .. } = &entry.ty else {
-        return None;
-    };
-    let registry = &metadata.registry;
-    let Some(TypeDef::Tuple(fields)) = registry.resolve(*value) else {
-        return None;
-    };
-    let expiry_len = match registry.resolve(*fields.get(1)?)? {
-        TypeDef::U32 => 4,
-        TypeDef::U64 => 8,
-        _ => return None,
-    };
-    let filter =
-        sube::scales::to_vec_with_info(&filter.runtime_value(), Some((registry, *fields.get(2)?)))
-            .ok()?;
-    Some(ExpectedSessionValue { expiry_len, filter })
-}
-
-#[cfg(feature = "pass")]
 async fn pass_command(
     chain_url: &str,
     profile_path: &std::path::Path,
@@ -1006,7 +813,7 @@ async fn pass_command(
     }
 
     let mut chain = sube::Sube::connect(chain_url).await?;
-    let genesis_hash = chain_genesis(&mut chain).await?;
+    let genesis_hash = workflow::chain_genesis(&mut chain).await?;
     let mut store = profiles::Profiles::load(profile_path)?;
     let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
     let checkpoint = chain.backend().block_info(None).await?;
@@ -1023,7 +830,7 @@ async fn pass_command(
             yes,
         } => {
             let requested_device = requested_device(device)?;
-            let variant = device_variant(&requested_device);
+            let variant = workflow::device_variant(&requested_device);
             if !config.supports_attestation(variant) {
                 anyhow::bail!("runtime does not advertise {variant} enrollment");
             }
@@ -1032,7 +839,8 @@ async fn pass_command(
             if store.find(&name).is_some() {
                 anyhow::bail!("profile {name:?} already exists");
             }
-            let registrar_profile = wallet_profile(&store, &registrar, genesis_hash)?.clone();
+            let registrar_profile =
+                workflow::wallet_profile(&store, &registrar, genesis_hash)?.clone();
             let pending = store
                 .pending_enrollments
                 .iter()
@@ -1040,7 +848,10 @@ async fn pass_command(
                     pending.name == name
                         && pending.genesis_hash == genesis_hash
                         && pending.registrar == registrar
-                        && same_requested_device(&pending.device_profile(), &requested_device)
+                        && workflow::same_requested_device(
+                            &pending.device_profile(),
+                            &requested_device,
+                        )
                         && pending.user_id == user_id.0
                         && pending.valid_through >= checkpoint.number
                 })
@@ -1054,8 +865,9 @@ async fn pass_command(
             } else {
                 let (draft, enrolled_device) = match requested_device.clone() {
                     profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-                        let wallet_profile = wallet_profile(&store, &wallet, genesis_hash)?.clone();
-                        let signer = wallet_signer(&wallet_profile).await?;
+                        let wallet_profile =
+                            workflow::wallet_profile(&store, &wallet, genesis_hash)?.clone();
+                        let signer = signers::wallet_signer(&wallet_profile).await?;
                         let public = signer.inner().public();
                         let device = pass::wallet::WalletDevice::new(
                             signer.inner(),
@@ -1173,7 +985,7 @@ async fn pass_command(
                 call: pending.call.clone(),
                 bytes: pending.call_bytes.clone(),
             };
-            let registrar_signer = wallet_signer(&registrar_profile).await?;
+            let registrar_signer = signers::wallet_signer(&registrar_profile).await?;
             let receipt = review_pass_transaction(
                 &mut chain,
                 chain_url,
@@ -1226,9 +1038,10 @@ async fn pass_command(
                 submit,
                 yes,
             } => {
-                let mut pass_profile = pass_profile(&store, &profile, genesis_hash)?.clone();
+                let mut pass_profile =
+                    workflow::pass_profile(&store, &profile, genesis_hash)?.clone();
                 let requested_device = requested_device(device)?;
-                let variant = device_variant(&requested_device);
+                let variant = workflow::device_variant(&requested_device);
                 if !config.supports_attestation(variant) {
                     anyhow::bail!("runtime does not advertise {variant} device registration");
                 }
@@ -1241,7 +1054,7 @@ async fn pass_command(
                             && pending.filter == filter
                             && pending.admin_confirm == admin_confirm
                             && pending.valid_through >= checkpoint.number
-                            && same_requested_device(&pending.device, &requested_device)
+                            && workflow::same_requested_device(&pending.device, &requested_device)
                     })
                     .cloned();
                 let pending = if let Some(pending) = pending {
@@ -1261,8 +1074,8 @@ async fn pass_command(
                     let (attestation, enrolled_device) = match requested_device {
                         profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
                             let wallet_profile =
-                                wallet_profile(&store, &wallet, genesis_hash)?.clone();
-                            let signer = wallet_signer(&wallet_profile).await?;
+                                workflow::wallet_profile(&store, &wallet, genesis_hash)?.clone();
+                            let signer = signers::wallet_signer(&wallet_profile).await?;
                             let public = signer.inner().public();
                             let device = pass::wallet::WalletDevice::new(
                                 signer.inner(),
@@ -1400,7 +1213,8 @@ async fn pass_command(
                 submit,
                 yes,
             } => {
-                let mut pass_profile = pass_profile(&store, &profile, genesis_hash)?.clone();
+                let mut pass_profile =
+                    workflow::pass_profile(&store, &profile, genesis_hash)?.clone();
                 let device_id = pass::DeviceId(profiles::parse_hash(&device_id, "device id")?);
                 if device_id.0 == pass_profile.device_id {
                     eprintln!(
@@ -1436,40 +1250,6 @@ async fn pass_command(
             }
         },
         PassCommand::Session { .. } => unreachable!("handled before connecting"),
-    }
-}
-
-#[cfg(feature = "pass")]
-fn wallet_profile<'a>(
-    store: &'a profiles::Profiles,
-    name: &str,
-    genesis_hash: [u8; 32],
-) -> Result<&'a profiles::WalletProfile> {
-    match store.find(name) {
-        Some(profiles::Profile::Wallet(profile)) if profile.genesis_hash == genesis_hash => {
-            Ok(profile)
-        }
-        Some(profiles::Profile::Wallet(_)) => {
-            anyhow::bail!("wallet profile genesis hash does not match the connected chain")
-        }
-        _ => anyhow::bail!("wallet profile {name:?} not found"),
-    }
-}
-
-#[cfg(feature = "pass")]
-fn pass_profile<'a>(
-    store: &'a profiles::Profiles,
-    name: &str,
-    genesis_hash: [u8; 32],
-) -> Result<&'a profiles::PassProfile> {
-    match store.find(name) {
-        Some(profiles::Profile::Pass(profile)) if profile.genesis_hash == genesis_hash => {
-            Ok(profile)
-        }
-        Some(profiles::Profile::Pass(_)) => {
-            anyhow::bail!("pass profile genesis hash does not match the connected chain")
-        }
-        _ => anyhow::bail!("pass profile {name:?} not found"),
     }
 }
 
@@ -1524,14 +1304,14 @@ async fn review_profile_device_transaction(
     yes: bool,
 ) -> Result<Option<sube::TransactionReceipt>> {
     let primary_device = profile.primary_device();
-    let variant = device_variant(&primary_device);
+    let variant = workflow::device_variant(&primary_device);
     if !config.supports_credential(variant) {
         anyhow::bail!("runtime does not advertise {variant} authentication");
     }
     match primary_device {
         profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
-            let wallet = wallet_profile(store, &wallet, profile.genesis_hash)?.clone();
-            let signer = wallet_signer(&wallet).await?;
+            let wallet = workflow::wallet_profile(store, &wallet, profile.genesis_hash)?.clone();
+            let signer = signers::wallet_signer(&wallet).await?;
             let public = signer.inner().public();
             let device = pass::wallet::WalletDevice::new(
                 signer.inner(),
@@ -2003,65 +1783,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "pass")]
-    #[test]
-    fn session_value_comparison_is_exact() {
-        let expected = ExpectedSessionValue {
-            expiry_len: 4,
-            // Calls variant (index 2) with one (5, 12) pair.
-            filter: vec![2, 1 << 2, 5, 12],
-        };
-        let owner = [9u8; 32];
-        let mut stored = owner.to_vec();
-        stored.extend(99u32.to_le_bytes());
-        stored.extend([2, 1 << 2, 5, 12]);
-        assert!(expected.matches(&stored, &owner));
-        // Different owner, different filter, or trailing bytes never match.
-        assert!(!expected.matches(&stored, &[8u8; 32]));
-        let mut other_filter = stored.clone();
-        *other_filter.last_mut().unwrap() = 1;
-        assert!(!expected.matches(&other_filter, &owner));
-        let mut longer = stored.clone();
-        longer.push(0);
-        assert!(!expected.matches(&longer, &owner));
-    }
-
-    /// Read-only live check that the expected `SessionKeys` filter encodes
-    /// the same bytes the runtime receives in `add_session_key`.
-    #[cfg(feature = "pass")]
-    #[test]
-    #[ignore = "requires network access to a chain with pallet-pass (SUBE_E2E_URL, default kreivo)"]
-    fn live_session_filter_encoding_matches_add_session_key() {
-        smol::block_on(async {
-            let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
-            let chain = sube::Sube::connect(&url).await.expect("connects");
-            let metadata = chain.metadata();
-            let config = pass::PassRuntimeConfig::discover(metadata).expect("pass config");
-            for policy in [
-                pass::DeviceFilter::Calls(vec![
-                    pass::CallIndex {
-                        pallet: 10,
-                        call: 3,
-                    },
-                    pass::CallIndex { pallet: 5, call: 0 },
-                ]),
-                pass::DeviceFilter::Pallets(vec![31, 10]),
-            ] {
-                let expected = expected_session_value(metadata, &policy).expect("layout");
-                let call = pass::session::prepare_add_session_key(
-                    metadata, &config, [1; 32], &policy, None,
-                )
-                .expect("call");
-                assert!(
-                    call.bytes.ends_with(&expected.filter),
-                    "{policy:?}: call {} does not end with {}",
-                    call.hex(),
-                    hex::encode(&expected.filter)
-                );
-            }
-        })
-    }
-
     /// Destructive live-chain smoke test. The registrar mnemonic must fund the
     /// account derived at `//default`; the device mnemonic does not need funds.
     #[cfg(feature = "pass")]
@@ -2096,7 +1817,7 @@ mod tests {
             };
 
             let mut chain = sube::Sube::connect(&chain_url).await?;
-            let genesis_hash = chain_genesis(&mut chain).await?;
+            let genesis_hash = workflow::chain_genesis(&mut chain).await?;
             workflow::import_wallet_profile(
                 &profile_path,
                 genesis_hash,
@@ -2158,13 +1879,14 @@ mod tests {
                 sube::DispatchOutcome::Success
             ));
             let stored = workflow::apply_finalized_effect(&profile_path, &receipt, *effect)?;
-            let profile = pass_profile(&stored, &pass_name, genesis_hash)?.clone();
+            let profile = workflow::pass_profile(&stored, &pass_name, genesis_hash)?.clone();
             let session = profile
                 .session
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("finalized session was not persisted"))?;
             cleanup.secure_entries.push(session.secure_entry.clone());
-            let signer = load_session_signer(&session.secure_entry, Some(session.account)).await?;
+            let signer =
+                signers::load_session_signer(&session.secure_entry, Some(session.account)).await?;
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(pass_account), signer, policy);

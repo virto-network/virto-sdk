@@ -665,7 +665,7 @@ async fn prepare_review(
     let Some(profile) = profiles.active() else {
         return Ok(None);
     };
-    let genesis_hash = crate::chain_genesis(chain)
+    let genesis_hash = crate::workflow::chain_genesis(chain)
         .await
         .map_err(|error| error.to_string())?;
     if profile.genesis_hash() != genesis_hash {
@@ -674,7 +674,7 @@ async fn prepare_review(
 
     let (prepared, authorizer) = match profile {
         crate::profiles::Profile::Wallet(profile) => {
-            let signer = crate::wallet_signer(profile)
+            let signer = crate::signers::wallet_signer(profile)
                 .await
                 .map_err(|error| error.to_string())?;
             let prepared = crate::workflow::prepare_transaction(
@@ -697,9 +697,10 @@ async fn prepare_review(
                 .ok_or_else(|| "active pass profile has no finalized local session".to_string())?;
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)
                 .map_err(|error| error.to_string())?;
-            let signer = crate::load_session_signer(&session.secure_entry, Some(session.account))
-                .await
-                .map_err(|error| error.to_string())?;
+            let signer =
+                crate::signers::load_session_signer(&session.secure_entry, Some(session.account))
+                    .await
+                    .map_err(|error| error.to_string())?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
             let prepared = crate::workflow::prepare_transaction(
