@@ -7,22 +7,26 @@
 //!
 //! # Usage
 //!
-//! ```rust,ignore
-//! use pass::{PassAuthenticator, Account, DeviceId, HashedUserId, AuthorityId,
-//!            CredentialMeta, wallet::{WalletCredential, SignatureType}};
+//! Any [`DeviceAuthenticator`] (a substrate key, a WebAuthn authenticator, an
+//! SSH agent, ...) authenticates calls for the pass account it was registered
+//! to:
 //!
-//! let cred = WalletCredential::new(
-//!     CredentialMeta::new(
-//!         HashedUserId(user_id_hash),
-//!         AuthorityId(authority),
-//!         block_number,
-//!         block_hash,
-//!         "SubstrateKey",
-//!     ),
-//!     SignatureType::Sr25519,
-//!     &my_signer,
+//! ```rust,ignore
+//! use pass::{Account, DeviceId, HashedUserId, PassAuthenticator, PassRuntimeConfig};
+//! use pass::wallet::{SignatureType, WalletDevice};
+//!
+//! let config = PassRuntimeConfig::discover(chain.metadata())?;
+//! let device = WalletDevice::new(&signer, signer.public(), SignatureType::Sr25519);
+//! let checkpoint = chain.backend().block_info(None).await?;
+//! let auth = PassAuthenticator::new(
+//!     &device,
+//!     config.derive_account(user_id),
+//!     device.device_id(),
+//!     user_id,
+//!     config.authority_id,
+//!     checkpoint.number as u32,
+//!     checkpoint.hash,
 //! );
-//! let auth = PassAuthenticator::new(Account(acc), DeviceId(dev), cred);
 //!
 //! let call = chain.prepare_call("balances/transfer", &sube::Text("(...)"))?;
 //! let extrinsic = chain
@@ -43,13 +47,11 @@ pub mod wallet;
 pub mod webauthn;
 pub mod workflow;
 
-mod meta;
 mod newtypes;
 pub use config::PassRuntimeConfig;
-pub use meta::CredentialMeta;
 pub use newtypes::{Account, AuthorityId, DeviceId, HashedUserId, InvalidHashedUserId};
 pub use session::{SessionAuthorizer, SessionPolicy};
-pub use workflow::{DeviceAuthenticator, EnrollmentDraft, PassAuthorizer};
+pub use workflow::{DeviceAuthenticator, EnrollmentDraft};
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -58,18 +60,10 @@ use codec::Encode;
 use sube::extrinsic::{AssembledExtrinsic, ChainContext, encode_extensions};
 use sube::metadata::{ExtrinsicMeta, SignedExtensionMeta};
 use sube::{DynValue, Error, ExtrinsicAssembler, Registry, Result};
+use workflow::AssertionRequest;
 
 /// Fixed-size challenge produced by pallet-pass challengers.
 pub type Challenge = [u8; 32];
-
-/// Generates a credential as a [`DynValue`] given the extrinsic context.
-///
-/// The extrinsic context is the blake2b-256 hash of the "inherited implication"
-/// that pallet-pass uses to verify the credential. The returned [`DynValue`]
-/// is serialized to SCALE by `scales` against the credential type from metadata.
-pub trait CredentialProvider {
-    async fn credential(&self, extrinsic_context: &[u8; 32]) -> Result<DynValue>;
-}
 
 /// Blake2b-256 — matches Substrate's `sp_core::hashing::blake2_256`.
 ///
@@ -111,28 +105,47 @@ const PASS_AUTHENTICATE: &str = "PassAuthenticate";
 /// pallet-pass authenticator that produces V5 "General" extrinsics.
 ///
 /// Implements [`ExtrinsicAssembler`] by encoding the `PassAuthenticate`
-/// transaction extension with a credential obtained from the [`CredentialProvider`].
-/// All SCALE encoding is delegated to `scales` via the type registry.
-pub struct PassAuthenticator<C> {
+/// transaction extension with a credential from a [`DeviceAuthenticator`],
+/// challenged with [`block_challenge`] over the extrinsic's inherited
+/// implication. All SCALE encoding is delegated to `scales` via the type
+/// registry.
+pub struct PassAuthenticator<'a, A> {
+    device: &'a A,
     account: Account,
     device_id: DeviceId,
-    credential_provider: C,
+    user_id: HashedUserId,
+    authority_id: AuthorityId,
+    context: u32,
+    block_hash: [u8; 32],
 }
 
-impl<C> PassAuthenticator<C> {
-    /// Construct a new authenticator.
+impl<'a, A> PassAuthenticator<'a, A> {
+    /// Authenticate as `device_id` of `account`, against the challenge
+    /// context `context` whose block hash is `block_hash`.
     ///
-    /// The newtype wrappers on `account` and `device_id` prevent argument-swap bugs.
-    pub fn new(account: Account, device_id: DeviceId, credential_provider: C) -> Self {
+    /// The newtype wrappers prevent argument-swap bugs.
+    pub fn new(
+        device: &'a A,
+        account: Account,
+        device_id: DeviceId,
+        user_id: HashedUserId,
+        authority_id: AuthorityId,
+        context: u32,
+        block_hash: [u8; 32],
+    ) -> Self {
         Self {
+            device,
             account,
             device_id,
-            credential_provider,
+            user_id,
+            authority_id,
+            context,
+            block_hash,
         }
     }
 }
 
-impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
+impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
     type Account = [u8; 32];
 
     fn nonce_account(&self) -> Self::Account {
@@ -157,8 +170,18 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         let implication =
             inherited_implication(version_byte, encoded_call, &after_extra, &after_additional);
 
-        // Ask the provider for the credential bound to this implication.
-        let credential_value = self.credential_provider.credential(&implication).await?;
+        // Ask the device for the credential bound to this implication.
+        let credential_value = self
+            .device
+            .assert(&AssertionRequest {
+                user_id: self.user_id,
+                authority_id: self.authority_id,
+                context: self.context,
+                block_hash: self.block_hash,
+                binding: implication,
+                challenge: block_challenge(&self.block_hash, &implication),
+            })
+            .await?;
 
         // `PassAuthenticate(Option<AuthenticateParams>)`: a bare value for an
         // `Option` is encoded as `Some(value)`.

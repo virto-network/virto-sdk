@@ -113,17 +113,14 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
             .expect("finalized session checkpoint");
         let session_context =
             u32::try_from(session_checkpoint.number).expect("block number fits u32");
-        let provider = pass::PassAuthorizer::new(
+        let direct = pass::PassAuthenticator::new(
             &device,
+            draft.predicted_account,
+            draft.attestation.device_id,
             user_id,
             config.authority_id,
             session_context,
             session_checkpoint.hash,
-        );
-        let direct = pass::PassAuthenticator::new(
-            draft.predicted_account,
-            draft.attestation.device_id,
-            provider,
         );
         let session_registration = chain
             .build_transaction(&add_session, &direct, sube::TransactionOptions::default())

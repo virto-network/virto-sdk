@@ -4,40 +4,20 @@
 //! USB, Windows WebAuthn, and deterministic virtual authenticators share the
 //! same provider-neutral workflow.
 //!
-//! The [`WebAuthnCredential`] struct wraps any [`Authenticator`] and
-//! implements [`CredentialProvider`] for pallet-pass.
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use pass::webauthn::{Authenticator, AssertionResponse, WebAuthnCredential};
-//! use pass::{AuthorityId, CredentialMeta, HashedUserId};
-//!
-//! let cred = WebAuthnCredential::new(
-//!     CredentialMeta::new(
-//!         HashedUserId(user_hash),
-//!         AuthorityId(authority),
-//!         current_block,
-//!         current_block_hash,
-//!         "WebAuthn",
-//!     ),
-//!     my_authenticator,
-//! );
-//! ```
+//! [`WebAuthnDevice`] turns any transport into a [`DeviceAuthenticator`]
+//! for enrollment and for `pass::PassAuthenticator`.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use codec::Encode;
-
 use crate::workflow::{
     AssertionRequest, AttestationRequest, DeviceAttestation, DeviceAuthenticator,
 };
-use crate::{CredentialMeta, CredentialProvider, DeviceId, blake2b_256, block_challenge};
+use crate::{DeviceId, blake2b_256};
 use sube::{DynValue, Result};
 
-/// Errors a WebAuthn [`Authenticator`] backend may report.
+/// Errors a [`WebAuthnTransport`] may report.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum AuthenticatorError {
@@ -610,89 +590,6 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
 
 fn authenticator_error(error: AuthenticatorError) -> sube::Error {
     sube::Error::Signing(alloc::format!("{error}"))
-}
-
-/// Abstraction over a WebAuthn authenticator.
-///
-/// Backends implement this to perform a FIDO2 assertion (authentication).
-/// The challenge is a 32-byte blake2b-256 hash that the backend must
-/// base64url-encode into the WebAuthn `client_data.challenge` field.
-pub trait Authenticator {
-    async fn assert(
-        &self,
-        challenge: &[u8; 32],
-    ) -> core::result::Result<AssertionResponse, AuthenticatorError>;
-}
-
-/// WebAuthn credential provider for pallet-pass.
-///
-/// Wraps any [`Authenticator`] backend and produces a credential matching
-/// pallet-pass's WebAuthn `Assertion` type:
-///
-/// ```text
-/// { "WebAuthn": {
-///     meta: { authority_id, user_id, context },
-///     authenticator_data, client_data, signature
-/// } }
-/// ```
-pub struct WebAuthnCredential<Cx, A> {
-    meta: CredentialMeta<Cx>,
-    authenticator: A,
-}
-
-impl<Cx, A> WebAuthnCredential<Cx, A>
-where
-    Cx: Encode + Into<DynValue> + Clone,
-{
-    pub fn new(meta: CredentialMeta<Cx>, authenticator: A) -> Self {
-        Self {
-            meta,
-            authenticator,
-        }
-    }
-
-    /// Shortcut constructor without an explicit [`CredentialMeta`]. Uses
-    /// `"WebAuthn"` as the composite enum variant name.
-    pub fn with_parts(
-        user_id: crate::HashedUserId,
-        authority_id: crate::AuthorityId,
-        context: Cx,
-        block_hash: [u8; 32],
-        authenticator: A,
-    ) -> Self {
-        Self::new(
-            CredentialMeta::new(user_id, authority_id, context, block_hash, "WebAuthn"),
-            authenticator,
-        )
-    }
-}
-
-impl<Cx, A> CredentialProvider for WebAuthnCredential<Cx, A>
-where
-    Cx: Encode + Into<DynValue> + Clone,
-    A: Authenticator,
-{
-    async fn credential(&self, extrinsic_context: &[u8; 32]) -> Result<DynValue> {
-        let challenge = block_challenge(&self.meta.block_hash, extrinsic_context);
-
-        let resp = self
-            .authenticator
-            .assert(&challenge)
-            .await
-            .map_err(|e| sube::Error::Signing(alloc::format!("{e}")))?;
-
-        let assertion = DynValue::obj(&[
-            ("meta", self.meta.to_assertion_meta()),
-            (
-                "authenticator_data",
-                DynValue::from(resp.authenticator_data),
-            ),
-            ("client_data", DynValue::from(resp.client_data)),
-            ("signature", DynValue::from(resp.signature)),
-        ]);
-
-        Ok(DynValue::obj(&[(self.meta.variant, assertion)]))
-    }
 }
 
 #[cfg(test)]

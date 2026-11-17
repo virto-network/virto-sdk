@@ -180,17 +180,14 @@ fn pass_authenticator_assembles_a_device_credential() {
     let device = RecordingDevice {
         challenge: RefCell::new(None),
     };
-    let provider = pass::PassAuthorizer::new(
+    let authenticator = pass::PassAuthenticator::new(
         &device,
+        pass::Account([0x33; 32]),
+        pass::DeviceId([0x02; 32]),
         pass::HashedUserId([0x44; 32]),
         pass::AuthorityId([0x22; 32]),
         42,
         block_hash,
-    );
-    let authenticator = pass::PassAuthenticator::new(
-        pass::Account([0x33; 32]),
-        pass::DeviceId([0x02; 32]),
-        provider,
     );
     assert_eq!(authenticator.nonce_account(), [0x33; 32]);
 

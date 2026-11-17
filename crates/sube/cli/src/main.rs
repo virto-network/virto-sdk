@@ -1619,17 +1619,14 @@ async fn review_device_authenticated_transaction<A: pass::DeviceAuthenticator>(
     submit: bool,
     yes: bool,
 ) -> Result<Option<sube::TransactionReceipt>> {
-    let provider = pass::PassAuthorizer::new(
+    let authorizer = pass::PassAuthenticator::new(
         device,
+        pass::Account(profile.pass_account),
+        pass::DeviceId(profile.device_id),
         pass::HashedUserId(profile.user_id),
         config.authority_id,
         context,
         block_hash,
-    );
-    let authorizer = pass::PassAuthenticator::new(
-        pass::Account(profile.pass_account),
-        pass::DeviceId(profile.device_id),
-        provider,
     );
     review_pass_transaction(
         chain,

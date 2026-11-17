@@ -858,17 +858,14 @@ async fn prepare_device_authenticated<A: pass::DeviceAuthenticator>(
     call: &sube::PreparedCall,
     device: &A,
 ) -> Result<PreparedTransaction> {
-    let provider = pass::PassAuthorizer::new(
+    let authorizer = pass::PassAuthenticator::new(
         device,
+        pass::Account(profile.pass_account),
+        pass::DeviceId(profile.device_id),
         pass::HashedUserId(profile.user_id),
         config.authority_id,
         context,
         block_hash,
-    );
-    let authorizer = pass::PassAuthenticator::new(
-        pass::Account(profile.pass_account),
-        pass::DeviceId(profile.device_id),
-        provider,
     );
     prepare_transaction(
         chain,

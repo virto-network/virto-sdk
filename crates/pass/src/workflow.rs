@@ -7,9 +7,7 @@ use alloc::{format, vec};
 use sube::{DynValue, Error, Metadata, PreparedCall, Result};
 
 use crate::config::{PassRuntimeConfig, body};
-use crate::{
-    Account, AuthorityId, Challenge, DeviceId, HashedUserId, block_challenge, enrollment_challenge,
-};
+use crate::{Account, AuthorityId, Challenge, DeviceId, HashedUserId, enrollment_challenge};
 
 /// Enrollment data handed to a device provider.
 #[derive(Clone, Debug)]
@@ -64,49 +62,6 @@ pub fn ensure_fresh_context(context: u32, finalized: u32) -> Result<()> {
         ));
     }
     Ok(())
-}
-
-/// Turns any [`DeviceAuthenticator`] into the credential provider consumed by
-/// the generic V5 pass extrinsic assembler.
-pub struct PassAuthorizer<'a, A> {
-    authenticator: &'a A,
-    user_id: HashedUserId,
-    authority_id: AuthorityId,
-    context: u32,
-    block_hash: [u8; 32],
-}
-
-impl<'a, A> PassAuthorizer<'a, A> {
-    pub fn new(
-        authenticator: &'a A,
-        user_id: HashedUserId,
-        authority_id: AuthorityId,
-        context: u32,
-        block_hash: [u8; 32],
-    ) -> Self {
-        Self {
-            authenticator,
-            user_id,
-            authority_id,
-            context,
-            block_hash,
-        }
-    }
-}
-
-impl<A: DeviceAuthenticator> crate::CredentialProvider for PassAuthorizer<'_, A> {
-    async fn credential(&self, binding: &[u8; 32]) -> Result<DynValue> {
-        self.authenticator
-            .assert(&AssertionRequest {
-                user_id: self.user_id,
-                authority_id: self.authority_id,
-                context: self.context,
-                block_hash: self.block_hash,
-                binding: *binding,
-                challenge: block_challenge(&self.block_hash, binding),
-            })
-            .await
-    }
 }
 
 /// Non-secret enrollment state. It remains retryable until the challenge

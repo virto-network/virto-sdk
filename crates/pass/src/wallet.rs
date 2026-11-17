@@ -1,4 +1,4 @@
-//! Credential provider backed by [`libwallet`] signers.
+//! Device provider backed by [`libwallet`] signers.
 //!
 //! Works with any [`libwallet::Signer`] — software keys (Sr25519, Ed25519, Ecdsa),
 //! hardware wallets (Ledger, Trezor), or derived keys from any vault.
@@ -6,20 +6,12 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use pass::wallet::{SignatureType, WalletCredential};
-//! use pass::{AuthorityId, HashedUserId};
+//! use pass::wallet::{SignatureType, WalletDevice};
 //!
-//! let cred = WalletCredential::new(
-//!     CredentialMeta::new(
-//!         HashedUserId(user_hash),
-//!         AuthorityId(authority),
-//!         current_block,
-//!         current_block_hash,
-//!         "SubstrateKey",
-//!     ),
-//!     SignatureType::Sr25519,
-//!     &my_signer,
-//! );
+//! // Registers through `pass::workflow::prepare_enrollment` and authenticates
+//! // through `pass::PassAuthenticator`.
+//! let device = WalletDevice::new(&signer, signer.public(), SignatureType::Sr25519);
+//! let device_id = device.device_id();
 //! ```
 
 use alloc::vec::Vec;
@@ -28,10 +20,7 @@ use codec::Encode;
 use crate::workflow::{
     AssertionRequest, AttestationRequest, DeviceAttestation, DeviceAuthenticator,
 };
-use crate::{
-    AuthorityId, Challenge, CredentialMeta, CredentialProvider, DeviceId, blake2b_256,
-    block_challenge,
-};
+use crate::{AuthorityId, Challenge, DeviceId, blake2b_256};
 use sube::{DynValue, Error, Result};
 
 /// Substrate `MultiSignature` variant.
@@ -59,55 +48,6 @@ impl SignatureType {
     }
 }
 
-/// Credential provider backed by a [`libwallet::Signer`].
-///
-/// Produces a `KeySignature`-shaped credential by:
-/// 1. Computing a challenge from `(context, extrinsic_context)` via the
-///    pallet-pass block challenger.
-/// 2. SCALE-encoding `SignedMessage { context, challenge, authority_id }`.
-/// 3. Signing the encoded message with the libwallet signer.
-/// 4. Returning a `DynValue` that `scales` serializes to the runtime credential
-///    type directly from metadata.
-pub struct WalletCredential<'a, Cx, S: libwallet::Signer> {
-    meta: CredentialMeta<Cx>,
-    signature_type: SignatureType,
-    signer: &'a S,
-}
-
-impl<'a, Cx, S: libwallet::Signer> WalletCredential<'a, Cx, S>
-where
-    Cx: Encode + Into<DynValue> + Clone,
-{
-    /// Create a credential provider from a libwallet signer.
-    ///
-    /// The signature type must be specified explicitly — see [`SignatureType`]
-    /// for why.
-    pub fn new(meta: CredentialMeta<Cx>, signature_type: SignatureType, signer: &'a S) -> Self {
-        Self {
-            meta,
-            signature_type,
-            signer,
-        }
-    }
-
-    /// Shortcut constructor without an explicit [`CredentialMeta`]. Uses
-    /// `"SubstrateKey"` as the composite enum variant name.
-    pub fn with_parts(
-        user_id: crate::HashedUserId,
-        authority_id: AuthorityId,
-        context: Cx,
-        block_hash: [u8; 32],
-        signature_type: SignatureType,
-        signer: &'a S,
-    ) -> Self {
-        Self::new(
-            CredentialMeta::new(user_id, authority_id, context, block_hash, "SubstrateKey"),
-            signature_type,
-            signer,
-        )
-    }
-}
-
 /// SCALE-encode `SignedMessage { context, challenge, authority_id }`.
 fn encode_signed_message<Cx: Encode>(
     context: &Cx,
@@ -119,36 +59,6 @@ fn encode_signed_message<Cx: Encode>(
     challenge.encode_to(&mut out);
     authority_id.0.encode_to(&mut out);
     out
-}
-
-impl<Cx, S> CredentialProvider for WalletCredential<'_, Cx, S>
-where
-    Cx: Encode + Into<DynValue> + Clone,
-    S: libwallet::Signer,
-{
-    async fn credential(&self, extrinsic_context: &[u8; 32]) -> Result<DynValue> {
-        let challenge = block_challenge(&self.meta.block_hash, extrinsic_context);
-        let message_bytes =
-            encode_signed_message(&self.meta.context, &challenge, &self.meta.authority_id);
-
-        let signature = self
-            .signer
-            .sign_msg(&message_bytes)
-            .await
-            .map_err(|e| Error::Signing(alloc::format!("{e}")))?;
-
-        let signature_val = DynValue::obj(&[(
-            self.signature_type.variant_name(),
-            DynValue::from(signature.as_ref()),
-        )]);
-        let key_signature = DynValue::obj(&[
-            ("user_id", DynValue::from(self.meta.user_id.0)),
-            ("message", self.meta.to_signed_message(&challenge)),
-            ("signature", signature_val),
-        ]);
-
-        Ok(DynValue::obj(&[(self.meta.variant, key_signature)]))
-    }
 }
 
 /// Substrate-key device provider used for both registration and direct
