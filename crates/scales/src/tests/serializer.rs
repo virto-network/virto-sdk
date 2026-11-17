@@ -839,6 +839,8 @@ fn dynamic_root_newtype_around_option() -> Result<()> {
     }));
     let (id, reg) = register(&typed);
 
+    // `Option` takes a bare value; `{"Some": ..}` used to be silently
+    // encoded by position and is now rejected.
     let mut wrapped = BTreeMap::new();
     wrapped.insert(
         "Some",
@@ -848,8 +850,7 @@ fn dynamic_root_newtype_around_option() -> Result<()> {
         },
     );
     let mut out = Vec::<u8>::new();
-    to_bytes_with_info(&mut out, &wrapped, Some((&reg, id)))?;
-    assert_eq!(out, typed.encode());
+    assert!(to_bytes_with_info(&mut out, &wrapped, Some((&reg, id))).is_err());
 
     // A bare value for an `Option` is taken as `Some`.
     let mut out = Vec::<u8>::new();
@@ -862,5 +863,59 @@ fn dynamic_root_newtype_around_option() -> Result<()> {
         Some((&reg, id)),
     )?;
     assert_eq!(out, typed.encode());
+    Ok(())
+}
+
+#[test]
+fn named_fields_are_encoded_by_name() -> Result<()> {
+    #[derive(Debug, Encode, TypeInfo)]
+    struct Call {
+        session: [u8; 2],
+        duration: Option<u32>,
+        filter: u8,
+    }
+    let (id, reg) = register(&Call {
+        session: [1, 2],
+        duration: Some(5),
+        filter: 9,
+    });
+    let expected = Call {
+        session: [1, 2],
+        duration: Some(5),
+        filter: 9,
+    }
+    .encode();
+
+    // serde_json objects iterate in key order, not declaration order.
+    let json = serde_json::json!({"session": [1, 2], "duration": 5, "filter": 9});
+    let mut out = Vec::<u8>::new();
+    to_bytes_with_info(&mut out, &json, Some((&reg, id)))?;
+    assert_eq!(out, expected);
+
+    // A missing `Option` field is `None`.
+    let json = serde_json::json!({"session": [1, 2], "filter": 9});
+    let mut out = Vec::<u8>::new();
+    to_bytes_with_info(&mut out, &json, Some((&reg, id)))?;
+    assert_eq!(
+        out,
+        Call {
+            session: [1, 2],
+            duration: None,
+            filter: 9
+        }
+        .encode()
+    );
+
+    // Misnamed or missing required fields fail.
+    for bad in [
+        serde_json::json!({"session": [1, 2], "duration": 5, "filtr": 9}),
+        serde_json::json!({"session": [1, 2], "duration": 5}),
+    ] {
+        let mut out = Vec::<u8>::new();
+        assert!(
+            to_bytes_with_info(&mut out, &bad, Some((&reg, id))).is_err(),
+            "{bad}"
+        );
+    }
     Ok(())
 }

@@ -37,6 +37,12 @@
 - Transaction extensions that are newtypes were serialized without type
   information: `CheckNonce` went out as 8 raw bytes instead of a compact
   integer, so no runtime could decode the transaction.
+- Struct fields given as a map were encoded by position, ignoring their
+  names: a misnamed field encoded silently into wrong bytes, and JSON
+  bodies (whose keys are sorted) failed or mis-encoded. Fields are now
+  matched by name; unknown or missing fields are errors, and a missing
+  `Option` field is `None`. An `Option` takes a bare value, not
+  `{"Some": ..}`.
 - Serializing dynamic values for types wrapped in more than one newtype (e.g.
   a `BoundedBTreeSet` of tuples) produced wrong SCALE bytes.
 

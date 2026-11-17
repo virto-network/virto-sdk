@@ -526,24 +526,98 @@ where
 #[derive(Debug)]
 pub enum FieldTypes<'reg> {
     Ids(&'reg [TypeId]),
-    Fields(alloc::vec::Vec<Field<'reg>>),
 }
 
 impl FieldTypes<'_> {
     fn next(&mut self) -> TypeId {
-        match self {
-            FieldTypes::Ids(ids) => {
-                let (first, rest) = ids.split_first().expect("field available");
-                *ids = rest;
-                *first
-            }
-            FieldTypes::Fields(fields) => {
-                let ty = fields.first().expect("field available").ty;
-                fields.remove(0);
-                ty
-            }
+        let FieldTypes::Ids(ids) = self;
+        let (first, rest) = ids.split_first().expect("field available");
+        *ids = rest;
+        *first
+    }
+}
+
+/// Named struct fields, encoded by name: each value is encoded with its
+/// declared type and the fields are written in declaration order, so the
+/// input's key order does not matter (e.g. JSON objects sorted by key).
+/// Unknown or duplicate names are rejected; a missing `Option` field is
+/// `None` and any other missing field is an error.
+#[derive(Debug)]
+pub struct NamedFields<'reg> {
+    fields: alloc::vec::Vec<Field<'reg>>,
+    values: alloc::vec::Vec<Option<alloc::vec::Vec<u8>>>,
+    current: Option<usize>,
+}
+
+impl<'reg> NamedFields<'reg> {
+    fn new(fields: alloc::vec::Vec<Field<'reg>>) -> Self {
+        let values = fields.iter().map(|_| None).collect();
+        NamedFields {
+            fields,
+            values,
+            current: None,
         }
     }
+
+    fn select<K: Serialize + ?Sized>(&mut self, key: &K) -> Result<()> {
+        let key = to_vec(key)?;
+        let index = self
+            .fields
+            .iter()
+            .position(|field| to_vec(&field.name).is_ok_and(|name| name == key))
+            .ok_or_else(|| Error::BadInput(format!("unknown field {}", key_text(&key))))?;
+        if self.values[index].is_some() {
+            return Err(Error::BadInput(format!(
+                "duplicate field {}",
+                self.fields[index].name
+            )));
+        }
+        self.current = Some(index);
+        Ok(())
+    }
+
+    fn encode<T: Serialize + ?Sized>(&mut self, registry: &'reg Registry, value: &T) -> Result<()> {
+        let index = self
+            .current
+            .take()
+            .ok_or_else(|| Error::BadInput("struct value without a field name".into()))?;
+        let mut field = Serializer::new(
+            alloc::vec::Vec::new(),
+            Some((registry, self.fields[index].ty)),
+        );
+        value.serialize(&mut field)?;
+        self.values[index] = Some(field.out);
+        Ok(())
+    }
+
+    fn finish(self, registry: &Registry, out: &mut impl BufMut) -> Result<()> {
+        for (field, value) in self.fields.iter().zip(self.values) {
+            match value {
+                Some(bytes) => out.put_slice(&bytes),
+                None if is_option(registry, field.ty) => out.put_u8(0x00),
+                None => {
+                    return Err(Error::BadInput(format!("missing field {}", field.name)));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_option(registry: &Registry, ty: TypeId) -> bool {
+    matches!(
+        registry.resolve(unwrap_newtype(registry, ty)),
+        Some(TypeDef::Variant(def)) if def.name() == "Option"
+    )
+}
+
+/// A SCALE-encoded string key, for error messages.
+fn key_text(key: &[u8]) -> alloc::string::String {
+    let text = key
+        .iter()
+        .position(|&b| b.is_ascii_graphic())
+        .map_or(key, |i| &key[i..]);
+    alloc::string::String::from_utf8_lossy(text).into_owned()
 }
 
 #[derive(Debug)]
@@ -553,6 +627,7 @@ where
 {
     Empty(&'a mut Serializer<'reg, B>),
     Composite(&'a mut Serializer<'reg, B>, FieldTypes<'reg>),
+    Named(&'a mut Serializer<'reg, B>, NamedFields<'reg>),
     Sequence(&'a mut Serializer<'reg, B>, TypeId),
     ByteSeq(&'a mut Serializer<'reg, B>),
     Enum(&'a mut Serializer<'reg, B>),
@@ -569,9 +644,7 @@ where
         };
         let ty = ser.resolve(ty_id);
         match ty {
-            TypeDef::Struct(fields) => {
-                Self::Composite(ser, FieldTypes::Fields(fields.iter().collect()))
-            }
+            TypeDef::Struct(fields) => Self::Named(ser, NamedFields::new(fields.iter().collect())),
             TypeDef::StructTuple(ids) => Self::Composite(ser, FieldTypes::Ids(ids)),
             TypeDef::Array(ty, _) => Self::Sequence(ser, ty),
             TypeDef::Tuple(ids) => Self::Composite(ser, FieldTypes::Ids(ids)),
@@ -584,7 +657,7 @@ where
                     match var.map(|v| v.fields()) {
                         Some(Fields::Tuple(types)) => Self::Composite(ser, FieldTypes::Ids(types)),
                         Some(Fields::Struct(fields)) => {
-                            Self::Composite(ser, FieldTypes::Fields(fields.iter().collect()))
+                            Self::Named(ser, NamedFields::new(fields.iter().collect()))
                         }
                         _ => Self::Empty(ser),
                     }
@@ -606,6 +679,7 @@ where
         match self {
             Self::Empty(ser)
             | Self::Composite(ser, _)
+            | Self::Named(ser, _)
             | Self::Enum(ser)
             | Self::Sequence(ser, _)
             | Self::ByteSeq(ser) => ser,
@@ -653,6 +727,7 @@ where
                 Ok(())
             }
             TypedSerializer::Empty(ser) => key.serialize(&mut **ser),
+            TypedSerializer::Named(_, fields) => fields.select(key),
             _ => Ok(()),
         }
     }
@@ -662,6 +737,10 @@ where
         T: Serialize + ?Sized,
     {
         match self {
+            TypedSerializer::Named(ser, fields) => {
+                let registry = ser.registry.expect("called having type");
+                return fields.encode(registry, value);
+            }
             TypedSerializer::Composite(ser, field_types) => {
                 let reg = ser.registry.expect("called having type");
                 ser.ty_id = Some(unwrap_newtype(reg, field_types.next()));
@@ -689,7 +768,7 @@ where
     }
 
     fn end(self) -> Result<Self::Ok> {
-        Ok(())
+        finish(self)
     }
 }
 
@@ -736,16 +815,30 @@ where
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T>(&mut self, _key: &'static str, value: &T) -> Result<()>
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<()>
     where
         T: Serialize + ?Sized,
     {
+        if let TypedSerializer::Named(ser, fields) = self {
+            let registry = ser.registry.expect("called having type");
+            fields.select(key)?;
+            return fields.encode(registry, value);
+        }
         value.serialize(self.serializer())
     }
 
     fn end(self) -> Result<Self::Ok> {
-        Ok(())
+        finish(self)
     }
+}
+
+/// Write buffered named fields, if any.
+fn finish<B: BufMut + Debug>(serializer: TypedSerializer<'_, '_, B>) -> Result<()> {
+    if let TypedSerializer::Named(ser, fields) = serializer {
+        let registry = ser.registry.expect("called having type");
+        fields.finish(registry, &mut ser.out)?;
+    }
+    Ok(())
 }
 
 impl<B> ser::SerializeStructVariant for TypedSerializer<'_, '_, B>
