@@ -4,9 +4,10 @@
 
 ### Breaking changes
 
-- Awaiting a call builder no longer submits. Transactions now use explicit
-  `prepare_call`, `build_transaction`, `inspect_transaction`, and
-  `submit_transaction` stages.
+- Submitting is an explicit stage. Transactions go through `prepare_call`,
+  `build_transaction`, `inspect_transaction` and `submit_transaction`, and
+  only the last one sends anything; in 1.0.0, awaiting a `Sube::call`
+  builder signed and submitted.
 - `ExtrinsicAssembler::account` was replaced by the required
   `ExtrinsicAssembler::nonce_account`, which separates nonce identity from
   signing identity. There is no `account` alias; implementors rename the
@@ -14,8 +15,8 @@
 - `ExtrinsicAssembler::assemble` returns an `AssembledExtrinsic` instead of
   `Vec<u8>`. Besides the bytes it carries each extension's bytes and the
   `signing_account` and `scheme` that `EncodedExtrinsic::authorization`
-  reports, so assemblers describe the identity they actually encoded rather
-  than implementing a separate summary method.
+  reports, so assemblers describe the identity they actually encoded; the
+  unreleased `ExtrinsicAssembler::authorization` method was removed.
 - `OneShotCall`, `CallBuilder` and `Sube::call` were removed. Use
   `Sube::prepare_call(path, &body)` (with `Text(..)` for a text body) and
   pass signing and options to `build_transaction`.
@@ -23,8 +24,10 @@
   `Backend::submit(ext, wait_for: WaitFor, metadata: &Metadata) ->
   Result<TransactionReceipt>` and is the only submission method a backend
   implements; `metadata` decodes the inclusion block's events into the
-  receipt. Applications should call `Sube::submit_transaction`, which also
-  checks the runtime version and genesis hash the bytes were built for.
+  receipt. The unreleased `Backend::submit_transaction` and
+  `Backend::enrich_receipt` hooks were folded into it. Applications should
+  call `Sube::submit_transaction`, which also checks the runtime version and
+  genesis hash the bytes were built for.
 - `extrinsic::encode_extensions` returns `(extra, additional_signed,
   extensions)` instead of `(extra, additional_signed)`; the third item holds
   each extension's exact bytes. There is no separate
