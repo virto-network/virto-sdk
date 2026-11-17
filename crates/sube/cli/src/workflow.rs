@@ -75,7 +75,7 @@ pub async fn activate_existing_profile(
             if session.expires_at <= checkpoint.number {
                 anyhow::bail!("pass session expired; register or update it before activation");
             }
-            let policy = crate::parse_session_policy(chain.metadata(), &session.policy)?;
+            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             if !crate::on_chain_session_matches(chain, &profile, session, &policy).await {
                 anyhow::bail!(
                     "local pass session does not exactly match on-chain storage; register or update it before activation"
@@ -391,10 +391,7 @@ pub async fn prepare_device_addition(
     if !config.supports_attestation(variant) {
         anyhow::bail!("runtime does not advertise {variant} device registration");
     }
-    let filter = crate::parse_device_filter(chain.metadata(), &request.filter)?;
-    if matches!(filter, pass::workflow::DeviceFilter::Admin) && !request.admin_confirmed {
-        anyhow::bail!("Admin device filter requires separate confirmation");
-    }
+    let filter = pass::DeviceFilter::parse(chain.metadata(), &request.filter)?;
     let pending = profiles
         .pending_devices
         .iter()
@@ -635,12 +632,13 @@ pub async fn prepare_pass_session(
     if profile.genesis_hash != genesis_hash {
         anyhow::bail!("profile genesis hash does not match the connected chain");
     }
-    let policy = crate::parse_session_policy(chain.metadata(), policy_text)?;
+    let policy = pass::DeviceFilter::parse(chain.metadata(), policy_text)?;
     let checkpoint = chain.backend().block_info(None).await?;
 
     if let Some(session) = &profile.session {
-        let local_policy = crate::parse_session_policy(chain.metadata(), &session.policy)?;
-        if local_policy == policy
+        let local_policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
+        // The runtime stores the filter as sets, so compare it in that form.
+        if local_policy.runtime_value() == policy.runtime_value()
             && session.expires_at > checkpoint.number
             && crate::on_chain_session_matches(chain, &profile, session, &policy).await
             && crate::load_session_signer(&session.secure_entry, Some(session.account))

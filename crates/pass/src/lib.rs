@@ -39,6 +39,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod config;
+mod filter;
 pub mod session;
 #[cfg(feature = "ssh-agent")]
 pub mod ssh_agent;
@@ -49,8 +50,9 @@ pub mod workflow;
 
 mod newtypes;
 pub use config::PassRuntimeConfig;
+pub use filter::{CallIndex, DeviceFilter};
 pub use newtypes::{Account, AuthorityId, DeviceId, HashedUserId, InvalidHashedUserId};
-pub use session::{SessionAuthorizer, SessionPolicy};
+pub use session::SessionAuthorizer;
 pub use workflow::{DeviceAuthenticator, EnrollmentDraft};
 
 use alloc::string::String;

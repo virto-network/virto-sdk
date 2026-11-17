@@ -539,7 +539,7 @@ async fn tx_with_pass_session(
         .session
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("active pass profile has no finalized local session"))?;
-    let policy = parse_session_policy(chain.metadata(), &session.policy)?;
+    let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
     let signer = load_session_signer(&session.secure_entry, Some(session.account)).await?;
     let authorizer =
         pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
@@ -759,7 +759,7 @@ async fn connect_pass_session(
         .ok_or_else(|| {
             anyhow::anyhow!("pass connect requires --session-policy calls:... or pallets:...")
         })?;
-    let policy = parse_session_policy(chain.metadata(), &policy_text)?;
+    let policy = pass::DeviceFilter::parse(chain.metadata(), &policy_text)?;
     let checkpoint = chain.backend().block_info(None).await?;
 
     if let Some(session) = &profile.session
@@ -899,7 +899,7 @@ async fn on_chain_session_matches(
     chain: &mut sube::Sube,
     profile: &profiles::PassProfile,
     session: &profiles::SessionProfile,
-    policy: &pass::SessionPolicy,
+    policy: &pass::DeviceFilter,
 ) -> bool {
     let Some(expected) = expected_session_value(chain.metadata(), policy) else {
         return false;
@@ -931,14 +931,13 @@ impl ExpectedSessionValue {
     }
 }
 
-/// Encode `policy` as the runtime's `DeviceFilter`, taking variant indices and
-/// the block-number width from metadata. `None` when the layout is not the
-/// expected one, or for `Spend`: the runtime's `Spend` holds per-asset limits,
-/// which `SessionPolicy::Spend` cannot express.
+/// Encode `filter` as the runtime's `DeviceFilter` stored in `SessionKeys`,
+/// with the block-number width taken from metadata. `None` when the layout
+/// is not the expected one.
 #[cfg(feature = "pass")]
 fn expected_session_value(
     metadata: &sube::Metadata,
-    policy: &pass::SessionPolicy,
+    filter: &pass::DeviceFilter,
 ) -> Option<ExpectedSessionValue> {
     use sube::scales::TypeDef;
     let entry = metadata
@@ -960,53 +959,10 @@ fn expected_session_value(
         TypeDef::U64 => 8,
         _ => return None,
     };
-    let Some(TypeDef::Variant(filter)) = registry.resolve(*fields.get(2)?) else {
-        return None;
-    };
-    let index = |name: &str| {
-        filter
-            .variants()
-            .find(|variant| variant.name() == name)
-            .map(|variant| variant.index())
-    };
-    let mut out = Vec::new();
-    match policy {
-        pass::SessionPolicy::Calls(calls) => {
-            let mut pairs: Vec<(u8, u8)> = calls.iter().map(|c| (c.pallet, c.call)).collect();
-            pairs.sort_unstable();
-            pairs.dedup();
-            out.push(index("Calls")?);
-            push_compact_len(&mut out, pairs.len());
-            for (pallet, call) in pairs {
-                out.extend([pallet, call]);
-            }
-        }
-        pass::SessionPolicy::Pallets(pallets) => {
-            let mut pallets = pallets.clone();
-            pallets.sort_unstable();
-            pallets.dedup();
-            out.push(index("Pallets")?);
-            push_compact_len(&mut out, pallets.len());
-            out.extend(pallets);
-        }
-        pass::SessionPolicy::Spend { .. } => return None,
-    }
-    Some(ExpectedSessionValue {
-        expiry_len,
-        filter: out,
-    })
-}
-
-/// SCALE compact encoding of a collection length (`BTreeSet`/`Vec` prefix).
-#[cfg(feature = "pass")]
-fn push_compact_len(out: &mut Vec<u8>, len: usize) {
-    if len < 1 << 6 {
-        out.push((len as u8) << 2);
-    } else if len < 1 << 14 {
-        out.extend(((len as u16) << 2 | 0b01).to_le_bytes());
-    } else {
-        out.extend(((len as u32) << 2 | 0b10).to_le_bytes());
-    }
+    let filter =
+        sube::scales::to_vec_with_info(&filter.runtime_value(), Some((registry, *fields.get(2)?)))
+            .ok()?;
+    Some(ExpectedSessionValue { expiry_len, filter })
 }
 
 #[cfg(feature = "pass")]
@@ -1380,7 +1336,7 @@ async fn pass_command(
                             }
                         }
                     };
-                    let resolved_filter = parse_device_filter(chain.metadata(), &filter)?;
+                    let resolved_filter = pass::DeviceFilter::parse(chain.metadata(), &filter)?;
                     let call = pass::workflow::prepare_add_device(
                         chain.metadata(),
                         &config,
@@ -1521,87 +1477,6 @@ fn pass_profile<'a>(
         }
         _ => anyhow::bail!("pass profile {name:?} not found"),
     }
-}
-
-#[cfg(feature = "pass")]
-fn parse_device_filter(
-    metadata: &sube::Metadata,
-    value: &str,
-) -> Result<pass::workflow::DeviceFilter> {
-    if value.eq_ignore_ascii_case("admin") {
-        return Ok(pass::workflow::DeviceFilter::Admin);
-    }
-    if let Some(calls) = value.strip_prefix("calls:") {
-        let policy = pass::SessionPolicy::resolve(
-            metadata,
-            pass::session::SessionPolicyRequest::Calls(
-                calls.split(',').map(str::to_owned).collect(),
-            ),
-        )?;
-        if let pass::SessionPolicy::Calls(calls) = policy {
-            return Ok(pass::workflow::DeviceFilter::Calls(
-                calls
-                    .into_iter()
-                    .map(|call| (call.pallet, call.call))
-                    .collect(),
-            ));
-        }
-    }
-    if let Some(pallets) = value.strip_prefix("pallets:") {
-        let policy = pass::SessionPolicy::resolve(
-            metadata,
-            pass::session::SessionPolicyRequest::Pallets(
-                pallets.split(',').map(str::to_owned).collect(),
-            ),
-        )?;
-        if let pass::SessionPolicy::Pallets(pallets) = policy {
-            return Ok(pass::workflow::DeviceFilter::Pallets(pallets));
-        }
-    }
-    anyhow::bail!("filter must be calls:pallet/call,..., pallets:pallet,..., or admin")
-}
-
-#[cfg(feature = "pass")]
-fn parse_session_policy(metadata: &sube::Metadata, value: &str) -> Result<pass::SessionPolicy> {
-    if value.eq_ignore_ascii_case("admin") {
-        anyhow::bail!("Admin sessions are not permitted");
-    }
-    if let Some(calls) = value.strip_prefix("calls:") {
-        return Ok(pass::SessionPolicy::resolve(
-            metadata,
-            pass::session::SessionPolicyRequest::Calls(
-                calls.split(',').map(str::to_owned).collect(),
-            ),
-        )?);
-    }
-    if let Some(pallets) = value.strip_prefix("pallets:") {
-        return Ok(pass::SessionPolicy::resolve(
-            metadata,
-            pass::session::SessionPolicyRequest::Pallets(
-                pallets.split(',').map(str::to_owned).collect(),
-            ),
-        )?);
-    }
-    if let Some(spend) = value.strip_prefix("spend:") {
-        let mut parts = spend.splitn(3, ':');
-        let pallet = parts.next().unwrap_or_default();
-        let limit = parts
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("spend policy is missing a limit"))?
-            .parse::<u128>()?;
-        let calls = parts
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("spend policy is missing calls"))?;
-        return Ok(pass::SessionPolicy::resolve(
-            metadata,
-            pass::session::SessionPolicyRequest::Spend {
-                pallet: pallet.into(),
-                calls: calls.split(',').map(str::to_owned).collect(),
-                limit,
-            },
-        )?);
-    }
-    anyhow::bail!("session policy must be calls:pallet/call,... or pallets:pallet,...")
 }
 
 #[cfg(feature = "pass")]
@@ -2157,22 +2032,6 @@ mod tests {
         assert!(!expected.matches(&longer, &owner));
     }
 
-    #[cfg(feature = "pass")]
-    #[test]
-    fn compact_length_prefixes_match_scale() {
-        let encode = |len| {
-            let mut out = Vec::new();
-            push_compact_len(&mut out, len);
-            out
-        };
-        assert_eq!(encode(0), [0x00]);
-        assert_eq!(encode(1), [0x04]);
-        assert_eq!(encode(63), [0xfc]);
-        assert_eq!(encode(64), [0x01, 0x01]);
-        assert_eq!(encode(16383), [0xfd, 0xff]);
-        assert_eq!(encode(16384), [0x02, 0x00, 0x01, 0x00]);
-    }
-
     /// Read-only live check that the expected `SessionKeys` filter encodes
     /// the same bytes the runtime receives in `add_session_key`.
     #[cfg(feature = "pass")]
@@ -2185,14 +2044,14 @@ mod tests {
             let metadata = chain.metadata();
             let config = pass::PassRuntimeConfig::discover(metadata).expect("pass config");
             for policy in [
-                pass::SessionPolicy::Calls(vec![
-                    pass::session::CallIndex {
+                pass::DeviceFilter::Calls(vec![
+                    pass::CallIndex {
                         pallet: 10,
                         call: 3,
                     },
-                    pass::session::CallIndex { pallet: 5, call: 0 },
+                    pass::CallIndex { pallet: 5, call: 0 },
                 ]),
-                pass::SessionPolicy::Pallets(vec![31, 10]),
+                pass::DeviceFilter::Pallets(vec![31, 10]),
             ] {
                 let expected = expected_session_value(metadata, &policy).expect("layout");
                 let call = pass::session::prepare_add_session_key(
@@ -2312,7 +2171,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("finalized session was not persisted"))?;
             cleanup.secure_entries.push(session.secure_entry.clone());
             let signer = load_session_signer(&session.secure_entry, Some(session.account)).await?;
-            let policy = parse_session_policy(chain.metadata(), &session.policy)?;
+            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(pass_account), signer, policy);
 

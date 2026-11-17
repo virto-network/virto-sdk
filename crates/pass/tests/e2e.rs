@@ -94,14 +94,13 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
         let allowed = chain
             .prepare_call("system/remark", &sube::Text("(remark:0x706173732d653265)"))
             .expect("prepare allowed call");
-        let policy = pass::SessionPolicy::this_call(&allowed, chain.metadata())
-            .expect("resolve call policy");
+        let filter = pass::DeviceFilter::this_call(&allowed).expect("call filter");
         let duration = pass::session::session_duration(&config, None).expect("session duration");
         let add_session = pass::session::prepare_add_session_key(
             chain.metadata(),
             &config,
             session_account,
-            &policy,
+            &filter,
             Some(duration),
         )
         .expect("prepare session registration");
@@ -142,8 +141,7 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
             "registered session was not found in Pass storage"
         );
 
-        let session =
-            pass::SessionAuthorizer::new(draft.predicted_account, session_signer, policy.clone());
+        let session = pass::SessionAuthorizer::new(draft.predicted_account, session_signer, filter);
         assert_eq!(session.nonce_account(), draft.predicted_account.0);
         let allowed_transaction = chain
             .build_transaction(&allowed, &session, sube::TransactionOptions::default())

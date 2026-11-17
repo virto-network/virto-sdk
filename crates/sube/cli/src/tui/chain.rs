@@ -695,7 +695,7 @@ async fn prepare_review(
                 .session
                 .as_ref()
                 .ok_or_else(|| "active pass profile has no finalized local session".to_string())?;
-            let policy = crate::parse_session_policy(chain.metadata(), &session.policy)
+            let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)
                 .map_err(|error| error.to_string())?;
             let signer = crate::load_session_signer(&session.secure_entry, Some(session.account))
                 .await

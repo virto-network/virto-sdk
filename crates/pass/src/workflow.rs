@@ -7,7 +7,9 @@ use alloc::{format, vec};
 use sube::{DynValue, Error, Metadata, PreparedCall, Result};
 
 use crate::config::{PassRuntimeConfig, body};
-use crate::{Account, AuthorityId, Challenge, DeviceId, HashedUserId, enrollment_challenge};
+use crate::{
+    Account, AuthorityId, Challenge, DeviceFilter, DeviceId, HashedUserId, enrollment_challenge,
+};
 
 /// Enrollment data handed to a device provider.
 #[derive(Clone, Debug)]
@@ -136,36 +138,6 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
         // Kreivo's challenger accepts the current and previous two contexts.
         valid_through: u64::from(context).saturating_add(2),
     })
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DeviceFilter {
-    Calls(Vec<(u8, u8)>),
-    Pallets(Vec<u8>),
-    Admin,
-}
-
-impl DeviceFilter {
-    pub fn runtime_value(&self) -> DynValue {
-        match self {
-            Self::Calls(calls) => DynValue::obj(&[(
-                "Calls",
-                DynValue::Seq(
-                    calls
-                        .iter()
-                        .map(|(pallet, call)| {
-                            DynValue::Seq(vec![DynValue::from(*pallet), DynValue::from(*call)])
-                        })
-                        .collect(),
-                ),
-            )]),
-            Self::Pallets(pallets) => DynValue::obj(&[(
-                "Pallets",
-                DynValue::Seq(pallets.iter().map(|index| DynValue::from(*index)).collect()),
-            )]),
-            Self::Admin => DynValue::obj(&[("Admin", DynValue::Null)]),
-        }
-    }
 }
 
 /// Prepare `Pass.add_device`. Requiring `directly_authenticated` makes it

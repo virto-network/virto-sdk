@@ -1,215 +1,32 @@
-//! Scoped session resolution, authorization, and persistence.
+//! Scoped session registration and authorization.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use sube::extrinsic::{ChainContext, assemble_signed_v4};
 use sube::metadata::ExtrinsicMeta;
 use sube::{DynValue, Error, ExtrinsicAssembler, Metadata, PreparedCall, Registry, Result, Signer};
 
-use crate::Account;
 use crate::config::{PassRuntimeConfig, body};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CallIndex {
-    pub pallet: u8,
-    pub call: u8,
-}
-
-/// An explicit request which is resolved to metadata indices before signing.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SessionPolicyRequest {
-    Calls(Vec<String>),
-    Pallets(Vec<String>),
-    Spend {
-        pallet: String,
-        calls: Vec<String>,
-        limit: u128,
-    },
-    Admin,
-}
-
-/// A metadata-resolved, locally enforceable session filter.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SessionPolicy {
-    Calls(Vec<CallIndex>),
-    Pallets(Vec<u8>),
-    Spend { calls: Vec<CallIndex>, limit: u128 },
-}
-
-impl SessionPolicy {
-    pub fn resolve(metadata: &Metadata, request: SessionPolicyRequest) -> Result<Self> {
-        match request {
-            SessionPolicyRequest::Admin => Err(Error::OperationFailed(
-                "Admin sessions are not permitted".into(),
-            )),
-            SessionPolicyRequest::Calls(paths) => {
-                if paths.is_empty() {
-                    return Err(Error::BadInput);
-                }
-                let mut calls = Vec::with_capacity(paths.len());
-                for path in paths {
-                    calls.push(resolve_call(metadata, &path)?);
-                }
-                calls.sort();
-                calls.dedup();
-                Ok(Self::Calls(calls))
-            }
-            SessionPolicyRequest::Pallets(names) => {
-                if names.is_empty() {
-                    return Err(Error::BadInput);
-                }
-                let mut pallets = Vec::with_capacity(names.len());
-                for name in names {
-                    pallets.push(
-                        metadata
-                            .pallet_by_name(&name)
-                            .ok_or_else(|| Error::PalletNotFound(name.clone()))?
-                            .index,
-                    );
-                }
-                pallets.sort_unstable();
-                pallets.dedup();
-                Ok(Self::Pallets(pallets))
-            }
-            // pallet-pass's Spend filter holds per-asset limits
-            // (`{ asset, max_amount }`), which this policy cannot express;
-            // refuse rather than encode a filter the runtime would misread.
-            SessionPolicyRequest::Spend { .. } => Err(Error::Mapping(
-                "Spend sessions are not supported yet: the runtime's Spend filter takes per-asset limits"
-                    .into(),
-            )),
-        }
-    }
-
-    pub fn this_call(call: &PreparedCall, metadata: &Metadata) -> Result<Self> {
-        Self::resolve(
-            metadata,
-            SessionPolicyRequest::Calls(vec![format!("{}/{}", call.pallet, call.call)]),
-        )
-    }
-
-    pub fn this_pallet(call: &PreparedCall, metadata: &Metadata) -> Result<Self> {
-        Self::resolve(
-            metadata,
-            SessionPolicyRequest::Pallets(vec![call.pallet.clone()]),
-        )
-    }
-
-    pub fn allows_encoded_call(&self, encoded_call: &[u8]) -> bool {
-        let Some((&pallet, rest)) = encoded_call.split_first() else {
-            return false;
-        };
-        let Some(&call) = rest.first() else {
-            return false;
-        };
-        match self {
-            Self::Calls(calls) | Self::Spend { calls, .. } => {
-                calls.contains(&CallIndex { pallet, call })
-            }
-            Self::Pallets(pallets) => pallets.contains(&pallet),
-        }
-    }
-
-    pub fn runtime_value(&self) -> DynValue {
-        match self {
-            // The runtime stores these as `BTreeSet`s, so encode them sorted
-            // and deduplicated, exactly as they will be stored.
-            Self::Calls(calls) => DynValue::obj(&[(
-                "Calls",
-                DynValue::Seq(
-                    sorted(calls)
-                        .iter()
-                        .map(|call| {
-                            DynValue::Seq(vec![
-                                DynValue::from(call.pallet),
-                                DynValue::from(call.call),
-                            ])
-                        })
-                        .collect(),
-                ),
-            )]),
-            Self::Pallets(pallets) => DynValue::obj(&[(
-                "Pallets",
-                DynValue::Seq(
-                    sorted(pallets)
-                        .iter()
-                        .map(|pallet| DynValue::from(*pallet))
-                        .collect(),
-                ),
-            )]),
-            Self::Spend { calls, limit } => DynValue::obj(&[(
-                "Spend",
-                DynValue::obj(&[
-                    (
-                        "calls",
-                        DynValue::Seq(
-                            calls
-                                .iter()
-                                .map(|call| {
-                                    DynValue::Seq(vec![
-                                        DynValue::from(call.pallet),
-                                        DynValue::from(call.call),
-                                    ])
-                                })
-                                .collect(),
-                        ),
-                    ),
-                    ("limit", u128_value(*limit)),
-                ]),
-            )]),
-        }
-    }
-}
-
-fn u128_value(value: u128) -> DynValue {
-    DynValue::from(value)
-}
-
-fn resolve_call(metadata: &Metadata, path: &str) -> Result<CallIndex> {
-    let (pallet_name, call_name) = path.split_once('/').ok_or(Error::BadInput)?;
-    let pallet = metadata
-        .pallet_by_name(pallet_name)
-        .ok_or_else(|| Error::PalletNotFound(pallet_name.into()))?;
-    let calls_ty = pallet.calls_ty.ok_or(Error::CallNotFound)?;
-    let calls = match metadata.registry.resolve(calls_ty) {
-        Some(sube::scales::TypeDef::Variant(calls)) => calls,
-        _ => return Err(Error::CallNotFound),
-    };
-    let call = calls
-        .variants()
-        .find(|variant| variant.name().eq_ignore_ascii_case(call_name))
-        .ok_or(Error::CallNotFound)?;
-    Ok(CallIndex {
-        pallet: pallet.index,
-        call: call.index(),
-    })
-}
+use crate::{Account, DeviceFilter};
 
 /// V4 session authorization: the pass account supplies the nonce while the
 /// session account is encoded and signs the extrinsic.
+///
+/// Calls outside the session's filter are refused before signing.
 pub struct SessionAuthorizer<S> {
     pass_account: Account,
     signer: S,
-    policy: SessionPolicy,
+    filter: DeviceFilter,
 }
 
 impl<S> SessionAuthorizer<S> {
-    pub fn new(pass_account: Account, signer: S, policy: SessionPolicy) -> Self {
+    pub fn new(pass_account: Account, signer: S, filter: DeviceFilter) -> Self {
         Self {
             pass_account,
             signer,
-            policy,
+            filter,
         }
-    }
-
-    pub fn policy(&self) -> &SessionPolicy {
-        &self.policy
-    }
-
-    pub fn signer(&self) -> &S {
-        &self.signer
     }
 }
 
@@ -228,7 +45,7 @@ impl<S: Signer> ExtrinsicAssembler for SessionAuthorizer<S> {
         ctx: &ChainContext,
         overrides: &[(String, DynValue)],
     ) -> Result<sube::extrinsic::AssembledExtrinsic> {
-        if !self.policy.allows_encoded_call(encoded_call) {
+        if !self.filter.allows(encoded_call) {
             return Err(Error::OperationFailed(
                 "call is outside the local session policy".into(),
             ));
@@ -251,20 +68,18 @@ pub fn session_duration(config: &PassRuntimeConfig, requested: Option<u32>) -> R
     }
 }
 
-fn sorted<T: Clone + Ord>(items: &[T]) -> Vec<T> {
-    let mut items = items.to_vec();
-    items.sort_unstable();
-    items.dedup();
-    items
-}
-
 pub fn prepare_add_session_key(
     metadata: &Metadata,
     config: &PassRuntimeConfig,
     session_account: [u8; 32],
-    policy: &SessionPolicy,
+    filter: &DeviceFilter,
     requested_duration: Option<u32>,
 ) -> Result<PreparedCall> {
+    if matches!(filter, DeviceFilter::Admin) {
+        return Err(Error::OperationFailed(
+            "Admin sessions are not permitted".into(),
+        ));
+    }
     // Without a filter argument pallet-pass grants an Admin session key, so
     // never fall back to a filterless call.
     let Some(filter_field) = ["filter", "policy"]
@@ -276,12 +91,6 @@ pub fn prepare_add_session_key(
             config.pallet, config.add_session_key.name
         )));
     };
-    if matches!(policy, SessionPolicy::Spend { .. }) {
-        return Err(Error::Mapping(
-            "Spend sessions are not supported yet: the runtime's Spend filter takes per-asset limits"
-                .into(),
-        ));
-    }
     let duration = session_duration(config, requested_duration)?;
     let fields = vec![
         (
@@ -290,7 +99,7 @@ pub fn prepare_add_session_key(
         ),
         // A bare value for an `Option` field is encoded as `Some(value)`.
         ("duration", DynValue::from(duration)),
-        (filter_field, policy.runtime_value()),
+        (filter_field, filter.runtime_value()),
     ];
     sube::extrinsic::prepare_call(
         metadata,
@@ -304,6 +113,7 @@ pub const FORGET_SESSION_WARNING: &str = "The local session secret was deleted. 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     struct MockSigner;
 
@@ -320,29 +130,12 @@ mod tests {
         }
     }
 
-    fn call_policy() -> SessionPolicy {
-        SessionPolicy::Calls(vec![CallIndex { pallet: 5, call: 2 }])
+    fn call_filter() -> DeviceFilter {
+        DeviceFilter::Calls(vec![crate::CallIndex { pallet: 5, call: 2 }])
     }
 
-    #[test]
-    fn admin_sessions_are_rejected() {
-        let metadata =
-            Metadata::from_bytes(include_bytes!("../../sube/tests/fixtures/kreivo.scale")).unwrap();
-        assert!(SessionPolicy::resolve(&metadata, SessionPolicyRequest::Admin).is_err());
-    }
-
-    #[test]
-    fn local_filter_rejects_disallowed_call() {
-        assert!(call_policy().allows_encoded_call(&[5, 2, 9]));
-        assert!(!call_policy().allows_encoded_call(&[5, 3, 9]));
-    }
-
-    #[test]
-    fn session_signer_and_nonce_identities_are_distinct() {
-        let (metadata, _) = kreivo();
-        let authorizer = SessionAuthorizer::new(Account([2; 32]), MockSigner, call_policy());
-        assert_eq!(authorizer.nonce_account(), [2; 32]);
-        let ctx = ChainContext {
+    fn context() -> ChainContext {
+        ChainContext {
             spec_version: 1,
             tx_version: 1,
             genesis_hash: [1; 32],
@@ -351,17 +144,7 @@ mod tests {
             checkpoint_hash: [1; 32],
             mortality: sube::Mortality::Immortal,
             tip: 0,
-        };
-        let assembled = futures_lite::future::block_on(authorizer.assemble(
-            &[5, 2, 9],
-            &metadata.extrinsic,
-            &metadata.registry,
-            &ctx,
-            &[],
-        ))
-        .unwrap();
-        assert_eq!(assembled.signing_account, vec![3; 32]);
-        assert_eq!(assembled.scheme, "Sr25519");
+        }
     }
 
     fn kreivo() -> (Metadata, PassRuntimeConfig) {
@@ -371,33 +154,78 @@ mod tests {
         (metadata, config)
     }
 
-    #[test]
-    fn session_call_without_a_filter_argument_is_refused() {
+    /// The fixture's runtime has a filter-taking session call.
+    fn kreivo_with_filtered_sessions() -> (Metadata, PassRuntimeConfig) {
         let (metadata, mut config) = kreivo();
-        config
-            .add_session_key
-            .fields
-            .retain(|field| field != "filter");
-        let policy = SessionPolicy::Pallets(vec![10]);
-        assert!(prepare_add_session_key(&metadata, &config, [1; 32], &policy, None).is_err());
+        config.add_session_key.fields.push("filter".into());
+        (metadata, config)
     }
 
     #[test]
-    fn spend_sessions_are_refused() {
+    fn admin_sessions_are_rejected() {
+        let (metadata, config) = kreivo_with_filtered_sessions();
+        let error =
+            prepare_add_session_key(&metadata, &config, [1; 32], &DeviceFilter::Admin, None)
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Admin sessions are not permitted"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn session_authorizer_refuses_calls_outside_its_filter() {
+        let (metadata, _) = kreivo();
+        let authorizer = SessionAuthorizer::new(Account([2; 32]), MockSigner, call_filter());
+        let error = futures_lite::future::block_on(authorizer.assemble(
+            &[5, 3, 9],
+            &metadata.extrinsic,
+            &metadata.registry,
+            &context(),
+            &[],
+        ))
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("outside the local session policy"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn session_signer_and_nonce_identities_are_distinct() {
+        let (metadata, _) = kreivo();
+        let authorizer = SessionAuthorizer::new(Account([2; 32]), MockSigner, call_filter());
+        assert_eq!(authorizer.nonce_account(), [2; 32]);
+        let assembled = futures_lite::future::block_on(authorizer.assemble(
+            &[5, 2, 9],
+            &metadata.extrinsic,
+            &metadata.registry,
+            &context(),
+            &[],
+        ))
+        .unwrap();
+        assert_eq!(assembled.signing_account, vec![3; 32]);
+        assert_eq!(assembled.scheme, "Sr25519");
+    }
+
+    #[test]
+    fn session_call_without_a_filter_argument_is_refused() {
+        // This fixture predates `add_session_key_with_filter`: discovery falls
+        // back to the filterless call, which would grant an Admin session.
         let (metadata, config) = kreivo();
-        let request = SessionPolicyRequest::Spend {
-            pallet: "Balances".into(),
-            calls: vec!["transfer_keep_alive".into()],
-            limit: 1,
-        };
-        assert!(SessionPolicy::resolve(&metadata, request).is_err());
-        let policy = SessionPolicy::Spend {
-            calls: vec![CallIndex {
-                pallet: 10,
-                call: 3,
-            }],
-            limit: 1,
-        };
-        assert!(prepare_add_session_key(&metadata, &config, [1; 32], &policy, None).is_err());
+        assert!(!config.add_session_key.has_field("filter"));
+        let filter = DeviceFilter::Pallets(vec![10]);
+        let error =
+            prepare_add_session_key(&metadata, &config, [1; 32], &filter, None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to create an unrestricted session"),
+            "{error}"
+        );
     }
 }

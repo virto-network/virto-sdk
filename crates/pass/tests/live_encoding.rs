@@ -3,8 +3,8 @@
 //!
 //! cargo test -p pass --test live_encoding -- --ignored
 
-use pass::session::{CallIndex, prepare_add_session_key};
-use pass::{PassRuntimeConfig, SessionPolicy};
+use pass::session::prepare_add_session_key;
+use pass::{CallIndex, DeviceFilter, PassRuntimeConfig};
 
 /// Scoped sessions must go through `add_session_key_with_filter`: the plain
 /// call takes no filter, and pallet-pass grants it an Admin session key.
@@ -18,14 +18,14 @@ fn session_call_carries_the_filter_and_an_optional_duration() {
         let config = PassRuntimeConfig::discover(metadata).expect("pass config");
         assert_eq!(config.add_session_key.name, "add_session_key_with_filter");
 
-        let policy = SessionPolicy::Calls(vec![
+        let filter = DeviceFilter::Calls(vec![
             CallIndex {
                 pallet: 10,
                 call: 3,
             },
             CallIndex { pallet: 5, call: 0 },
         ]);
-        let call = prepare_add_session_key(metadata, &config, [1; 32], &policy, Some(100))
+        let call = prepare_add_session_key(metadata, &config, [1; 32], &filter, Some(100))
             .expect("session call");
 
         let mut expected = vec![config.pallet_index, config.add_session_key.index];
