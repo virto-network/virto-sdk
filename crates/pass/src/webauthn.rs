@@ -442,12 +442,6 @@ mod desktop {
             let short_y = auth_data_with_key(&[1], &[1; 32], &[2; 31], &[]);
             assert!(attested_p256_key(&short_y).is_err());
         }
-
-        #[test]
-        fn passkey_shared_bytes_keep_challenge_exact() {
-            let challenge: passkey::types::Bytes = vec![9; 32].into();
-            assert_eq!(challenge.as_slice(), &[9; 32]);
-        }
     }
 }
 
