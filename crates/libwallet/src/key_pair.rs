@@ -507,7 +507,7 @@ pub mod ed25519 {
 #[cfg(feature = "secp256k1")]
 pub mod secp256k1 {
     use super::{Bytes, Signer};
-    use k256::ecdsa::{self, signature::Verifier};
+    use k256::ecdsa::{self, signature::hazmat::PrehashVerifier};
     use zeroize::Zeroize;
 
     pub const SEED_LEN: usize = 32;
@@ -565,7 +565,9 @@ pub mod secp256k1 {
             let Ok(sig) = ecdsa::Signature::from_slice(&sig_bytes[..64]) else {
                 return false;
             };
-            self.secret.verifying_key().verify(msg.as_ref(), &sig).is_ok()
+            // `sign_msg` treats `msg` as a prehash (the chain-specific digest),
+            // so verification must not hash it again.
+            self.secret.verifying_key().verify_prehash(msg.as_ref(), &sig).is_ok()
         }
     }
 

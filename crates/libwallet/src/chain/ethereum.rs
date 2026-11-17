@@ -50,7 +50,7 @@ impl<K: KeyStore> Vault for Ethereum<K> {
     ) -> Result<Self::Signer, Self::Error> {
         use crate::vault::VaultError;
         let entropy = self.keys.unlock().map_err(VaultError::KeyStore)?;
-        let seed = crate::chain::seed_from_entropy(entropy, "");
+        let seed = crate::chain::bip39_seed(entropy, "").ok_or(VaultError::Derivation)?;
 
         let path = path.unwrap_or(DEFAULT_PATH);
         let derived = ExtendedKey::from_seed(&*seed)
