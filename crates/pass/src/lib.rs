@@ -169,14 +169,12 @@ impl<C: CredentialProvider> ExtrinsicAssembler for PassAuthenticator<C> {
         // Ask the provider for the credential bound to this implication.
         let credential_value = self.credential_provider.credential(&implication).await?;
 
-        // Build Option::Some(AuthenticateParams { device_id, credential }).
-        let pass_value = DynValue::obj(&[(
-            "Some",
-            DynValue::obj(&[
-                ("device_id", DynValue::from(self.device_id.0)),
-                ("credential", credential_value),
-            ]),
-        )]);
+        // `PassAuthenticate(Option<AuthenticateParams>)`: a bare value for an
+        // `Option` is encoded as `Some(value)`.
+        let pass_value = DynValue::obj(&[
+            ("device_id", DynValue::from(self.device_id.0)),
+            ("credential", credential_value),
+        ]);
 
         // Re-encode ALL extensions with the PassAuthenticate override in place.
         let mut all_overrides = Vec::from(overrides);

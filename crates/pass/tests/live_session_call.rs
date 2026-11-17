@@ -39,3 +39,57 @@ fn session_call_carries_the_filter_and_an_optional_duration() {
         assert_eq!(call.hex, format!("0x{}", hex::encode(&expected)));
     })
 }
+
+/// `PassAuthenticate(Option<AuthenticateParams>)` must be SCALE-encoded
+/// against the live runtime type, not as an untyped map.
+#[test]
+#[ignore = "requires network access to a chain with pallet-pass"]
+fn pass_authenticate_extension_encodes_against_the_runtime_type() {
+    use sube::DynValue;
+    futures_lite::future::block_on(async {
+        let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
+        let chain = sube::Sube::connect(&url).await.expect("connect");
+        let metadata = chain.metadata();
+        let extension = metadata
+            .extrinsic
+            .extensions
+            .iter()
+            .find(|extension| extension.identifier == "PassAuthenticate")
+            .expect("PassAuthenticate");
+        let message = DynValue::obj(&[
+            ("context", DynValue::U32(42)),
+            ("challenge", DynValue::from([0x11u8; 32])),
+            ("authority_id", DynValue::from([0x22u8; 32])),
+        ]);
+        let credential = DynValue::obj(&[(
+            "SubstrateKey",
+            DynValue::obj(&[
+                ("user_id", DynValue::from([0x44u8; 32])),
+                ("message", message),
+                (
+                    "signature",
+                    DynValue::obj(&[("Sr25519", DynValue::from([0x33u8; 64]))]),
+                ),
+            ]),
+        )]);
+        // As `PassAuthenticator` builds it: a bare value for the `Option`.
+        let value = DynValue::obj(&[
+            ("device_id", DynValue::from([0x02u8; 32])),
+            ("credential", credential),
+        ]);
+        let encoded =
+            sube::scales::to_vec_with_info(&value, Some((&metadata.registry, extension.ty)))
+                .expect("encodes");
+
+        let mut expected = vec![0x01]; // Some
+        expected.extend([0x02; 32]);
+        expected.push(0x01); // PassCredential::SubstrateKey
+        expected.extend([0x44; 32]);
+        expected.extend(42u32.to_le_bytes());
+        expected.extend([0x11; 32]);
+        expected.extend([0x22; 32]);
+        expected.push(0x01); // MultiSignature::Sr25519
+        expected.extend([0x33; 64]);
+        assert_eq!(hex::encode(encoded), hex::encode(expected));
+    })
+}
