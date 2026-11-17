@@ -55,8 +55,6 @@ pub enum FromChain {
 
 pub struct CallReview {
     pub text: String,
-    pub call_hex: Option<String>,
-    pub extrinsic_hex: Option<String>,
     pub artifact: Option<String>,
     pub submittable: bool,
     pub requires_finalized: bool,
@@ -171,8 +169,6 @@ pub fn spawn(
                                     let _ = to_ui
                                         .send(FromChain::CallPrepared(CallReview {
                                             text: prepared_call_review(&call),
-                                            call_hex: Some(call.hex()),
-                                            extrinsic_hex: None,
                                             artifact: None,
                                             submittable: false,
                                             requires_finalized: false,
@@ -226,8 +222,6 @@ pub fn spawn(
                                     let _ = to_ui
                                         .send(FromChain::CallPrepared(CallReview {
                                             text,
-                                            call_hex: None,
-                                            extrinsic_hex: None,
                                             artifact: None,
                                             submittable: false,
                                             requires_finalized: false,
@@ -430,8 +424,6 @@ fn prepared_call_review(call: &sube::PreparedCall) -> String {
 fn review_of(staged: &crate::workflow::Staged) -> CallReview {
     CallReview {
         text: staged.review_text(),
-        call_hex: Some(staged.prepared.transaction.call.hex()),
-        extrinsic_hex: Some(staged.prepared.transaction.hex()),
         artifact: Some(
             serde_json::to_string_pretty(&staged.prepared.artifact())
                 .unwrap_or_else(|_| "{}".into()),

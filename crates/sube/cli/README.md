@@ -84,8 +84,7 @@ Only an owned metadata snapshot and formatted results cross into the UI thread.
 Completing a call form prepares and validates the typed call and shows its hex;
 it does not generate or execute a shell command. With an active signing
 profile, the result panel shows the signed transaction review and `s` submits
-those reviewed bytes for finalization. `c` and `x` copy the call or full
-extrinsic via the terminal clipboard, while `e` writes a collision-safe JSON
+those reviewed bytes for finalization, while `e` writes a collision-safe JSON
 artifact beside the profile store.
 
 Press `p` in the TUI to manage chain-bound profiles. From the profile dialog,

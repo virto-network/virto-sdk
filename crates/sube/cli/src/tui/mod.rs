@@ -211,8 +211,6 @@ struct App {
     call_form_key: Option<(String, String)>,
     call_result: Option<String>,
     call_submittable: bool,
-    call_hex: Option<String>,
-    extrinsic_hex: Option<String>,
     artifact: Option<String>,
     artifact_dir: std::path::PathBuf,
     review_scroll: u16,
@@ -250,8 +248,6 @@ impl App {
         self.call_form_key = None;
         self.call_result = None;
         self.call_submittable = false;
-        self.call_hex = None;
-        self.extrinsic_hex = None;
         self.artifact = None;
         self.error = None;
 
@@ -323,8 +319,6 @@ impl App {
         if self.call_form.is_some() && self.call_form_key == key {
             self.call_result = None;
             self.call_submittable = false;
-            self.call_hex = None;
-            self.extrinsic_hex = None;
             self.artifact = None;
             self.error = None;
             return;
@@ -333,8 +327,6 @@ impl App {
         self.call_form_key = key;
         self.call_result = None;
         self.call_submittable = false;
-        self.call_hex = None;
-        self.extrinsic_hex = None;
         self.artifact = None;
         self.error = None;
 
@@ -409,8 +401,6 @@ impl App {
         self.review_returns_to_profiles = false;
         self.call_result = None;
         self.call_submittable = false;
-        self.call_hex = None;
-        self.extrinsic_hex = None;
         self.artifact = None;
 
         let pallet = match self.current_pallet() {
@@ -475,8 +465,6 @@ impl App {
             FromChain::CallPrepared(review) => {
                 self.call_result = Some(review.text);
                 self.call_submittable = review.submittable;
-                self.call_hex = review.call_hex;
-                self.extrinsic_hex = review.extrinsic_hex;
                 self.artifact = review.artifact;
                 self.review_requires_finalized = review.requires_finalized;
                 if review.requires_finalized {
@@ -488,8 +476,6 @@ impl App {
             FromChain::CallError(error) => {
                 self.error = Some(error);
                 self.call_submittable = false;
-                self.call_hex = None;
-                self.extrinsic_hex = None;
                 self.artifact = None;
             }
             FromChain::BlockDetail(hash, events) => {
@@ -663,8 +649,6 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         call_form_key: None,
         call_result: None,
         call_submittable: false,
-        call_hex: None,
-        extrinsic_hex: None,
         artifact: None,
         artifact_dir,
         review_scroll: 0,
@@ -1368,8 +1352,6 @@ fn handle_review(app: &mut App, key: KeyCode) {
         KeyCode::Esc => {
             app.call_result = None;
             app.call_submittable = false;
-            app.call_hex = None;
-            app.extrinsic_hex = None;
             app.artifact = None;
             app.error = None;
             app.review_scroll = 0;
@@ -1398,20 +1380,6 @@ fn handle_review(app: &mut App, key: KeyCode) {
         KeyCode::Char('s') if app.call_submittable => {
             app.focus = Focus::ConfirmSubmit;
         }
-        KeyCode::Char('c') if app.call_hex.is_some() => {
-            let result = copy_terminal_clipboard(app.call_hex.as_deref().unwrap_or_default());
-            app.error = Some(match result {
-                Ok(()) => "Copied call hex through the terminal clipboard.".into(),
-                Err(error) => format!("Could not copy call hex: {error}"),
-            });
-        }
-        KeyCode::Char('x') if app.extrinsic_hex.is_some() => {
-            let result = copy_terminal_clipboard(app.extrinsic_hex.as_deref().unwrap_or_default());
-            app.error = Some(match result {
-                Ok(()) => "Copied full extrinsic hex through the terminal clipboard.".into(),
-                Err(error) => format!("Could not copy extrinsic hex: {error}"),
-            });
-        }
         KeyCode::Char('e') if app.artifact.is_some() => {
             let result = export_artifact(
                 &app.artifact_dir,
@@ -1439,34 +1407,6 @@ fn handle_submit_confirmation(app: &mut App, key: KeyCode) {
         }
         _ => {}
     }
-}
-
-fn copy_terminal_clipboard(value: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let encoded = base64_no_pad(value.as_bytes());
-    let mut stdout = std::io::stdout().lock();
-    write!(stdout, "\x1b]52;c;{encoded}\x07")?;
-    stdout.flush()
-}
-
-fn base64_no_pad(input: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let first = chunk[0];
-        let second = chunk.get(1).copied().unwrap_or(0);
-        let third = chunk.get(2).copied().unwrap_or(0);
-        output.push(ALPHABET[(first >> 2) as usize] as char);
-        output.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
-        if chunk.len() > 1 {
-            output.push(ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
-        }
-        if chunk.len() > 2 {
-            output.push(ALPHABET[(third & 0x3f) as usize] as char);
-        }
-    }
-    output
 }
 
 fn export_artifact(
@@ -1588,12 +1528,7 @@ fn handle_block_detail(app: &mut App, key: KeyCode) {
 
 #[cfg(test)]
 mod tests {
-    use super::{base64_no_pad, export_artifact};
-
-    #[test]
-    fn osc52_payload_uses_unpadded_base64() {
-        assert_eq!(base64_no_pad(b"call hex"), "Y2FsbCBoZXg");
-    }
+    use super::export_artifact;
 
     #[test]
     fn artifact_export_never_overwrites_an_existing_file() {
