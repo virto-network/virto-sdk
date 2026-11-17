@@ -103,6 +103,8 @@ impl<T: SshAgentTransport> DeviceAuthenticator for SshAgentDevice<T> {
     }
 }
 
+/// Append an SSH wire-format `string`. Agent requests are length-checked as a
+/// whole before sending, so no field can overflow its `u32` length.
 fn ssh_string(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(&(value.len() as u32).to_be_bytes());
     output.extend_from_slice(value);
@@ -130,9 +132,11 @@ mod unix {
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
     use sha2::{Digest, Sha256};
 
-    use super::{AgentKey, SshAgentTransport};
+    use super::{AgentKey, SshAgentTransport, ssh_string};
 
     const REQUEST_IDENTITIES: u8 = 11;
     const IDENTITIES_ANSWER: u8 = 12;
@@ -224,8 +228,8 @@ mod unix {
             message: &[u8],
         ) -> core::result::Result<Vec<u8>, String> {
             let mut request = vec![SIGN_REQUEST];
-            put_string(&mut request, public_key)?;
-            put_string(&mut request, message)?;
+            ssh_string(&mut request, public_key);
+            ssh_string(&mut request, message);
             request.extend_from_slice(&0u32.to_be_bytes());
 
             let response = self.request(&request)?;
@@ -282,37 +286,9 @@ mod unix {
         Ok(value)
     }
 
-    fn put_string(output: &mut Vec<u8>, value: &[u8]) -> core::result::Result<(), String> {
-        let length =
-            u32::try_from(value.len()).map_err(|_| "ssh-agent string is too large".to_string())?;
-        output.extend_from_slice(&length.to_be_bytes());
-        output.extend_from_slice(value);
-        Ok(())
-    }
-
     fn openssh_fingerprint(public_key: &[u8]) -> String {
         let digest = Sha256::digest(public_key);
-        format!("SHA256:{}", base64_no_pad(&digest))
-    }
-
-    fn base64_no_pad(input: &[u8]) -> String {
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
-        for chunk in input.chunks(3) {
-            let first = chunk[0];
-            let second = chunk.get(1).copied().unwrap_or(0);
-            let third = chunk.get(2).copied().unwrap_or(0);
-            output.push(ALPHABET[(first >> 2) as usize] as char);
-            output.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
-            if chunk.len() > 1 {
-                output.push(ALPHABET[(((second & 0x0f) << 2) | (third >> 6)) as usize] as char);
-            }
-            if chunk.len() > 2 {
-                output.push(ALPHABET[(third & 0x3f) as usize] as char);
-            }
-        }
-        output
+        format!("SHA256:{}", STANDARD_NO_PAD.encode(digest))
     }
 
     #[cfg(test)]
@@ -337,6 +313,18 @@ mod unix {
         }
 
         #[test]
+        fn fingerprint_matches_openssh() {
+            let mut public_key = Vec::new();
+            ssh_string(&mut public_key, b"ssh-ed25519");
+            ssh_string(&mut public_key, &[7; 32]);
+            // base64(sha256(blob)) without padding, as `ssh-keygen -l` prints it.
+            assert_eq!(
+                openssh_fingerprint(&public_key),
+                "SHA256:gNSIRW+2Iyiuvsdp/bgjy38bvWHw6wQm3tuoXrl3WjQ"
+            );
+        }
+
+        #[test]
         fn native_transport_lists_and_signs_without_exporting_a_secret() {
             let temporary = std::env::temp_dir().join(format!(
                 "pass-ssh-agent-{}-{}.sock",
@@ -349,8 +337,8 @@ mod unix {
             let _ = std::fs::remove_file(&temporary);
             let listener = UnixListener::bind(&temporary).unwrap();
             let mut public_key = Vec::new();
-            put_string(&mut public_key, b"ssh-ed25519").unwrap();
-            put_string(&mut public_key, &[7; 32]).unwrap();
+            ssh_string(&mut public_key, b"ssh-ed25519");
+            ssh_string(&mut public_key, &[7; 32]);
             let expected_key = public_key.clone();
 
             let server = thread::spawn(move || {
@@ -358,8 +346,8 @@ mod unix {
                 assert_eq!(read_frame(&mut identities), vec![REQUEST_IDENTITIES]);
                 let mut answer = vec![IDENTITIES_ANSWER];
                 answer.extend_from_slice(&1u32.to_be_bytes());
-                put_string(&mut answer, &expected_key).unwrap();
-                put_string(&mut answer, b"test").unwrap();
+                ssh_string(&mut answer, &expected_key);
+                ssh_string(&mut answer, b"test");
                 identities.write_all(&frame(&answer)).unwrap();
 
                 let (mut signer, _) = listener.accept().unwrap();
@@ -371,10 +359,10 @@ mod unix {
                 assert_eq!(take_u32(&mut cursor).unwrap(), 0);
 
                 let mut signature_blob = Vec::new();
-                put_string(&mut signature_blob, b"ssh-ed25519").unwrap();
-                put_string(&mut signature_blob, &[9; 64]).unwrap();
+                ssh_string(&mut signature_blob, b"ssh-ed25519");
+                ssh_string(&mut signature_blob, &[9; 64]);
                 let mut response = vec![SIGN_RESPONSE];
-                put_string(&mut response, &signature_blob).unwrap();
+                ssh_string(&mut response, &signature_blob);
                 signer.write_all(&frame(&response)).unwrap();
             });
 

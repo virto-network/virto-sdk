@@ -31,7 +31,7 @@ default = ["wallet"]
 wallet = ["dep:libwallet", "libwallet/sr25519"]
 ssh-agent = ["dep:sha2"]
 std = ["sube/std"]
-unix-ssh-agent = ["ssh-agent", "std"]
+unix-ssh-agent = ["ssh-agent", "std", "dep:base64"]
 desktop-webauthn = [
     "std",
     "dep:base64",
