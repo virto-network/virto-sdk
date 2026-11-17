@@ -66,12 +66,8 @@ use prelude::*;
 use util::to_camel;
 
 mod prelude {
-    #[cfg(any(
-        feature = "ws",
-        feature = "ws-edge",
-        feature = "smoldot-std",
-        all(feature = "ws-web", target_arch = "wasm32")
-    ))]
+    // `ws-web` implies `std`, where `Box` already comes from the std prelude.
+    #[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot-std"))]
     pub use alloc::boxed::Box;
     pub use alloc::string::{String, ToString};
     pub use alloc::vec::Vec;

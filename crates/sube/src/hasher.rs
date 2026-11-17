@@ -52,7 +52,7 @@ fn twox_hash_concat(input: &[u8]) -> Vec<u8> {
 
 fn twox256_hash(input: &[u8]) -> Vec<u8> {
     let mut dest = [0u8; 32];
-    for (i, chunk) in dest.chunks_exact_mut(8).enumerate() {
+    for (i, chunk) in dest.as_chunks_mut::<8>().0.iter_mut().enumerate() {
         let mut h = twox_hash::XxHash64::with_seed(i as u64);
         h.write(input);
         chunk.copy_from_slice(&h.finish().to_le_bytes());

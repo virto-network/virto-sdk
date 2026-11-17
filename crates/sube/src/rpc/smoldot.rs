@@ -91,7 +91,7 @@ impl<P: PlatformRef> super::Rpc for Backend<P> {
 
         let mut req = String::new();
         super::format_request(&mut req, id, method, params);
-        log::debug!("RPC request: {}", &req);
+        log::debug!("RPC request: {}", req);
 
         self.client
             .json_rpc_request(req, self.chain_id)
@@ -107,7 +107,7 @@ impl<P: PlatformRef> super::Rpc for Backend<P> {
                 .await
                 .ok_or_else(|| JsonRpcError::new(-32603, "smoldot responses closed"))?;
 
-            log::trace!("smoldot response: {}", &json);
+            log::trace!("smoldot response: {}", json);
 
             match IncomingMessage::parse(&json) {
                 Some(IncomingMessage::Response(r)) if r.id == id => {
@@ -122,7 +122,7 @@ impl<P: PlatformRef> super::Rpc for Backend<P> {
                         .push_back((n.params.subscription, n.params.result));
                 }
                 None => {
-                    log::warn!("failed to parse smoldot message: {}", &json);
+                    log::warn!("failed to parse smoldot message: {}", json);
                 }
             }
         }
@@ -143,14 +143,14 @@ impl<P: PlatformRef> super::RpcSubscription for Backend<P> {
         }
         loop {
             let json = self.responses.next().await?;
-            log::trace!("smoldot response: {}", &json);
+            log::trace!("smoldot response: {}", json);
             match IncomingMessage::parse(&json) {
                 Some(IncomingMessage::Notification(n)) => {
                     return Some((n.params.subscription, n.params.result));
                 }
                 Some(IncomingMessage::Response(_)) | Some(IncomingMessage::Error(_)) => {}
                 None => {
-                    log::warn!("failed to parse smoldot message: {}", &json);
+                    log::warn!("failed to parse smoldot message: {}", json);
                 }
             }
         }

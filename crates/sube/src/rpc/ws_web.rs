@@ -41,7 +41,7 @@ impl Backend {
                 .map_err(|e| JsonRpcError::new(-32603, &format!("ws read: {e}")))?;
             match frame {
                 Message::Text(text) => {
-                    log::trace!("WS(web) message: {}", &text);
+                    log::trace!("WS(web) message: {}", text);
                     if let Some(msg) = IncomingMessage::parse(&text) {
                         return Ok(msg);
                     }
@@ -61,7 +61,7 @@ impl super::Rpc for Backend {
 
         let mut req = String::new();
         super::format_request(&mut req, id, method, params);
-        log::debug!("RPC request: {}", &req);
+        log::debug!("RPC request: {}", req);
 
         self.ws
             .send(Message::Text(req))

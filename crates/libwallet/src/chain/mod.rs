@@ -85,12 +85,10 @@ pub(crate) fn decode_raw_secret(value: &str) -> Option<alloc::vec::Vec<u8>> {
     }
     value
         .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = hex_nibble(pair[0])?;
-            let low = hex_nibble(pair[1])?;
-            Some((high << 4) | low)
-        })
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[high, low]| Some((hex_nibble(high)? << 4) | hex_nibble(low)?))
         .collect()
 }
 

@@ -43,3 +43,4 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 [[bench]]
 name = "comparison"
 harness = false
+required-features = ["compress"]
