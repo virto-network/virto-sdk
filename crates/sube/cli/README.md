@@ -41,7 +41,7 @@ profile:
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
   --name alice-pass --user-id 0x... --registrar alice \
-  --device-wallet alice-device --submit
+  --device wallet:alice-device --submit
 ```
 
 Default desktop builds can instead create a WebAuthn credential. Only the RP
@@ -50,19 +50,20 @@ ID, origin, and opaque credential ID are written to the profile:
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
   --name alice-pass --user-id 0x... --registrar alice \
-  --webauthn-rp-id wallet.example.com \
-  --webauthn-origin https://wallet.example.com --submit
+  --device webauthn:wallet.example.com@https://wallet.example.com --submit
 ```
 
 Unix builds with `--features ssh-agent` accept an Ed25519 key selected by its
-exact OpenSSH fingerprint. The runtime must advertise the `Ssh` credential
-variant; otherwise the command stops before prompting the agent:
+exact OpenSSH fingerprint, optionally followed by `#` and the SSHSIG namespace
+(`sube` by default), which must stay the same for that device. The runtime
+must advertise the `Ssh` credential variant; otherwise the command stops
+before prompting the agent:
 
 ```sh
 cargo run -p sube-cli --features ssh-agent -- \
   --chain wss://example.invalid pass enroll \
   --name alice-pass --user-id 0x... --registrar alice \
-  --ssh-fingerprint SHA256:... --ssh-namespace virto-pass --submit
+  --device 'ssh:SHA256:...#virto-pass' --submit
 ```
 
 Without `--submit`, enrollment and device commands only print the review;

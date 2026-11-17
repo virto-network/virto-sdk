@@ -128,8 +128,10 @@ enum PassCommand {
         /// Ordinary wallet profile paying for registration.
         #[arg(long)]
         registrar: String,
-        #[command(flatten)]
-        device: DeviceProviderArgs,
+        /// Device to enroll: wallet:PROFILE, webauthn:RP_ID@ORIGIN or
+        /// ssh:FINGERPRINT[#NAMESPACE].
+        #[arg(long)]
+        device: profiles::DeviceProviderProfile,
         #[arg(long)]
         name: String,
         #[arg(long)]
@@ -152,8 +154,10 @@ enum PassCommand {
 enum DeviceCommand {
     Add {
         profile: String,
-        #[command(flatten)]
-        device: DeviceProviderArgs,
+        /// Device to add: wallet:PROFILE, webauthn:RP_ID@ORIGIN or
+        /// ssh:FINGERPRINT[#NAMESPACE].
+        #[arg(long)]
+        device: profiles::DeviceProviderProfile,
         /// Explicit filter: calls:pallet/call,... or pallets:pallet,...
         #[arg(long)]
         filter: String,
@@ -173,85 +177,6 @@ enum DeviceCommand {
         #[arg(long, requires = "submit")]
         yes: bool,
     },
-}
-
-#[cfg(feature = "pass")]
-#[derive(clap::Args)]
-struct DeviceProviderArgs {
-    /// Substrate-key wallet profile used as the device.
-    #[arg(long)]
-    #[cfg_attr(feature = "desktop-webauthn", arg(conflicts_with = "webauthn_rp_id"))]
-    #[cfg_attr(feature = "ssh-agent", arg(conflicts_with = "ssh_fingerprint"))]
-    #[cfg_attr(
-        all(not(feature = "desktop-webauthn"), not(feature = "ssh-agent")),
-        arg(required = true)
-    )]
-    #[cfg_attr(
-        all(feature = "desktop-webauthn", not(feature = "ssh-agent")),
-        arg(required_unless_present = "webauthn_rp_id")
-    )]
-    #[cfg_attr(
-        all(not(feature = "desktop-webauthn"), feature = "ssh-agent"),
-        arg(required_unless_present = "ssh_fingerprint")
-    )]
-    #[cfg_attr(
-        all(feature = "desktop-webauthn", feature = "ssh-agent"),
-        arg(required_unless_present_any = ["webauthn_rp_id", "ssh_fingerprint"])
-    )]
-    device_wallet: Option<String>,
-    /// WebAuthn relying-party domain used by the desktop authenticator.
-    #[cfg(feature = "desktop-webauthn")]
-    #[arg(long, requires = "webauthn_origin", conflicts_with = "device_wallet")]
-    #[cfg_attr(feature = "ssh-agent", arg(conflicts_with = "ssh_fingerprint"))]
-    webauthn_rp_id: Option<String>,
-    /// HTTPS WebAuthn origin whose host is or contains the RP ID.
-    #[cfg(feature = "desktop-webauthn")]
-    #[arg(long, requires = "webauthn_rp_id", conflicts_with = "device_wallet")]
-    #[cfg_attr(feature = "ssh-agent", arg(conflicts_with = "ssh_fingerprint"))]
-    webauthn_origin: Option<String>,
-    /// Exact OpenSSH SHA256 fingerprint selected from SSH_AUTH_SOCK.
-    #[cfg(feature = "ssh-agent")]
-    #[arg(long, conflicts_with = "device_wallet")]
-    #[cfg_attr(feature = "desktop-webauthn", arg(conflicts_with = "webauthn_rp_id"))]
-    ssh_fingerprint: Option<String>,
-    /// SSHSIG namespace. It must remain stable for this pass device.
-    #[cfg(feature = "ssh-agent")]
-    #[arg(long, requires = "ssh_fingerprint", default_value = "sube")]
-    ssh_namespace: String,
-}
-
-#[cfg(feature = "pass")]
-fn requested_device(args: DeviceProviderArgs) -> Result<profiles::DeviceProviderProfile> {
-    let selected = args
-        .device_wallet
-        .map(|wallet| profiles::DeviceProviderProfile::SubstrateKey { wallet });
-    #[cfg(any(feature = "desktop-webauthn", feature = "ssh-agent"))]
-    let mut selected = selected;
-
-    #[cfg(feature = "desktop-webauthn")]
-    if let (Some(rp_id), Some(origin)) = (args.webauthn_rp_id, args.webauthn_origin) {
-        if selected.is_some() {
-            anyhow::bail!("select exactly one device provider");
-        }
-        selected = Some(profiles::DeviceProviderProfile::WebAuthn {
-            rp_id,
-            origin,
-            credential_id: Vec::new(),
-        });
-    }
-
-    #[cfg(feature = "ssh-agent")]
-    if let Some(fingerprint) = args.ssh_fingerprint {
-        if selected.is_some() {
-            anyhow::bail!("select exactly one device provider");
-        }
-        selected = Some(profiles::DeviceProviderProfile::SshAgent {
-            fingerprint,
-            namespace: args.ssh_namespace,
-        });
-    }
-
-    selected.ok_or_else(|| anyhow::anyhow!("select a device provider"))
 }
 
 #[cfg(feature = "pass")]
@@ -650,7 +575,7 @@ async fn pass_command(
                 name,
                 user_id,
                 registrar,
-                device: requested_device(device)?,
+                device,
             };
             let staged = workflow::prepare_enrollment(
                 &mut chain,
@@ -675,7 +600,7 @@ async fn pass_command(
         } => {
             let request = workflow::DeviceAdditionRequest {
                 profile,
-                device: requested_device(device)?,
+                device,
                 filter,
                 admin_confirmed: admin_confirm,
             };
@@ -1041,8 +966,8 @@ mod tests {
             &"11".repeat(32),
             "--registrar",
             "sponsor",
-            "--device-wallet",
-            "device",
+            "--device",
+            "wallet:device",
             "--name",
             "my-pass",
         ])
@@ -1050,141 +975,15 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Command::Pass {
-                command: PassCommand::Enroll { submit: false, .. }
+                command: PassCommand::Enroll {
+                    submit: false,
+                    device: profiles::DeviceProviderProfile::SubstrateKey { .. },
+                    ..
+                }
             })
         ));
     }
 
-    #[cfg(all(feature = "pass", feature = "desktop-webauthn"))]
-    #[test]
-    fn webauthn_enrollment_requires_a_complete_exclusive_profile() {
-        let base = [
-            "sube",
-            "pass",
-            "enroll",
-            "--user-id",
-            "1111111111111111111111111111111111111111111111111111111111111111",
-            "--registrar",
-            "sponsor",
-            "--name",
-            "my-pass",
-        ];
-        let cli = Cli::try_parse_from(
-            base.into_iter()
-                .chain([
-                    "--webauthn-rp-id",
-                    "example.com",
-                    "--webauthn-origin",
-                    "https://example.com",
-                ])
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Some(Command::Pass {
-                command: PassCommand::Enroll { .. }
-            })
-        ));
-
-        assert!(
-            Cli::try_parse_from(
-                base.into_iter()
-                    .chain(["--webauthn-rp-id", "example.com"])
-                    .collect::<Vec<_>>()
-            )
-            .is_err()
-        );
-        assert!(
-            Cli::try_parse_from(
-                base.into_iter()
-                    .chain([
-                        "--device-wallet",
-                        "device",
-                        "--webauthn-rp-id",
-                        "example.com",
-                        "--webauthn-origin",
-                        "https://example.com",
-                    ])
-                    .collect::<Vec<_>>()
-            )
-            .is_err()
-        );
-    }
-
-    #[cfg(all(feature = "pass", not(feature = "desktop-webauthn")))]
-    #[test]
-    fn webauthn_flags_are_hidden_without_the_provider_feature() {
-        assert!(
-            Cli::try_parse_from([
-                "sube",
-                "pass",
-                "enroll",
-                "--user-id",
-                &"11".repeat(32),
-                "--registrar",
-                "sponsor",
-                "--webauthn-rp-id",
-                "example.com",
-                "--webauthn-origin",
-                "https://example.com",
-                "--name",
-                "my-pass",
-            ])
-            .is_err()
-        );
-    }
-
-    #[cfg(all(feature = "pass", feature = "ssh-agent"))]
-    #[test]
-    fn ssh_agent_enrollment_selects_one_fingerprint_and_namespace() {
-        let cli = Cli::try_parse_from([
-            "sube",
-            "pass",
-            "enroll",
-            "--user-id",
-            &"11".repeat(32),
-            "--registrar",
-            "sponsor",
-            "--ssh-fingerprint",
-            "SHA256:example",
-            "--ssh-namespace",
-            "virto-pass",
-            "--name",
-            "my-pass",
-        ])
-        .unwrap();
-        let Some(Command::Pass {
-            command: PassCommand::Enroll { device, .. },
-        }) = cli.command
-        else {
-            panic!("expected pass enrollment");
-        };
-        assert_eq!(device.ssh_fingerprint.as_deref(), Some("SHA256:example"));
-        assert_eq!(device.ssh_namespace, "virto-pass");
-
-        assert!(
-            Cli::try_parse_from([
-                "sube",
-                "pass",
-                "enroll",
-                "--user-id",
-                &"11".repeat(32),
-                "--registrar",
-                "sponsor",
-                "--device-wallet",
-                "device",
-                "--ssh-fingerprint",
-                "SHA256:example",
-                "--name",
-                "my-pass",
-            ])
-            .is_err()
-        );
-    }
-
-    /// Destructive live-chain smoke test. The registrar mnemonic must fund the
-    /// account derived at `//default`; the device mnemonic does not need funds.
     #[cfg(feature = "pass")]
     #[test]
     #[ignore = "requires SUBE_E2E_URL and disposable funded live-chain credentials"]
