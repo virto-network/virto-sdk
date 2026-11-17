@@ -88,13 +88,15 @@ impl<'a, S: libwallet::Signer> WalletDevice<'a, S> {
 }
 
 impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
-    const VARIANT: &'static str = "SubstrateKey";
+    fn variant(&self) -> &'static str {
+        "SubstrateKey"
+    }
 
     async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
         let device_id = self.device_id();
         Ok(DeviceAttestation {
             device_id,
-            variant: Self::VARIANT.into(),
+            variant: self.variant().into(),
             // substrate-keys `KeyRegistration { public, message, signature }`.
             payload: DynValue::obj(&[
                 ("public", DynValue::from(device_id.0)),
@@ -106,7 +108,7 @@ impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
 
     async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue> {
         Ok(DynValue::obj(&[(
-            Self::VARIANT,
+            self.variant(),
             DynValue::obj(&[
                 ("user_id", DynValue::from(request.user_id.0)),
                 ("message", request.message_value()),

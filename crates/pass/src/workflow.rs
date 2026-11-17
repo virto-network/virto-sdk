@@ -86,8 +86,9 @@ impl DeviceAttestation {
 /// provider-specific types into enrollment or session APIs.
 pub trait DeviceAuthenticator {
     /// Variant name of the device's attestation and credential in the
-    /// runtime's enums.
-    const VARIANT: &'static str;
+    /// runtime's enums. A method rather than a constant so that one type can
+    /// stand for devices of several kinds.
+    fn variant(&self) -> &'static str;
 
     async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation>;
 
@@ -118,10 +119,10 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
 ) -> Result<EnrollmentDraft> {
     // Check before prompting the device for an attestation the runtime
     // would reject.
-    if !config.supports_attestation(A::VARIANT) {
+    if !config.supports_attestation(authenticator.variant()) {
         return Err(Error::Mapping(format!(
             "runtime does not advertise {} attestations",
-            A::VARIANT
+            authenticator.variant()
         )));
     }
     let predicted_account = config.derive_account(user_id);
@@ -222,7 +223,9 @@ mod tests {
     struct Unprompted;
 
     impl DeviceAuthenticator for Unprompted {
-        const VARIANT: &'static str = "Nostr";
+        fn variant(&self) -> &'static str {
+            "Nostr"
+        }
 
         async fn attest(&self, _: &ChallengeRequest) -> Result<DeviceAttestation> {
             panic!("the device must not be prompted")

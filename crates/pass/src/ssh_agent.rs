@@ -73,7 +73,9 @@ impl<T: SshAgentTransport> SshAgentDevice<T> {
 }
 
 impl<T: SshAgentTransport> DeviceAuthenticator for SshAgentDevice<T> {
-    const VARIANT: &'static str = "Ssh";
+    fn variant(&self) -> &'static str {
+        "Ssh"
+    }
 
     async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
         let key = self.selected_key().await?;
@@ -81,7 +83,7 @@ impl<T: SshAgentTransport> DeviceAuthenticator for SshAgentDevice<T> {
         let device_id = DeviceId(blake2b_256(&key.public_key));
         Ok(DeviceAttestation {
             device_id,
-            variant: Self::VARIANT.into(),
+            variant: self.variant().into(),
             payload: DynValue::obj(&[
                 ("meta", request.registration_meta(device_id)),
                 ("public_key", DynValue::from(key.public_key)),
@@ -94,7 +96,7 @@ impl<T: SshAgentTransport> DeviceAuthenticator for SshAgentDevice<T> {
         let key = self.selected_key().await?;
         let signature = self.sign(&key, request).await?;
         Ok(DynValue::obj(&[(
-            Self::VARIANT,
+            self.variant(),
             DynValue::obj(&[
                 ("user_id", DynValue::from(request.user_id.0)),
                 ("message", request.message_value()),
