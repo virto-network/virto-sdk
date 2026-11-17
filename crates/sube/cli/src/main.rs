@@ -474,7 +474,7 @@ async fn tx_with_pass_session(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("active pass profile has no finalized local session"))?;
     let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
-    let signer = signers::load_session_signer(&session.secure_entry, Some(session.account)).await?;
+    let signer = signers::load_session_signer(&session.secure_entry, session.account).await?;
     let authorizer =
         pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy);
     tx_with_assembler(
@@ -710,7 +710,7 @@ async fn connect_pass_session(
 
     let existing_account = profile.session.as_ref().map(|session| session.account);
     let (session_signer, pending_seed) = if let Some(expected) = existing_account {
-        match signers::load_session_signer(&secure_entry, Some(expected)).await {
+        match signers::load_session_signer(&secure_entry, expected).await {
             Ok(signer) => (signer, None),
             Err(error) => {
                 eprintln!(
@@ -1886,7 +1886,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("finalized session was not persisted"))?;
             cleanup.secure_entries.push(session.secure_entry.clone());
             let signer =
-                signers::load_session_signer(&session.secure_entry, Some(session.account)).await?;
+                signers::load_session_signer(&session.secure_entry, session.account).await?;
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)?;
             let authorizer =
                 pass::SessionAuthorizer::new(pass::Account(pass_account), signer, policy);

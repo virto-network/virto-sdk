@@ -85,8 +85,7 @@ pub async fn activate_existing_profile(
                 );
             }
             let _ =
-                crate::signers::load_session_signer(&session.secure_entry, Some(session.account))
-                    .await?;
+                crate::signers::load_session_signer(&session.secure_entry, session.account).await?;
         }
     }
     profiles.activate(name, genesis_hash)?;
@@ -634,7 +633,7 @@ pub async fn prepare_pass_session(
         if local_policy.runtime_value() == policy.runtime_value()
             && session.expires_at > checkpoint.number
             && on_chain_session_matches(chain, &profile, session, &policy).await
-            && crate::signers::load_session_signer(&session.secure_entry, Some(session.account))
+            && crate::signers::load_session_signer(&session.secure_entry, session.account)
                 .await
                 .is_ok()
         {
@@ -650,7 +649,7 @@ pub async fn prepare_pass_session(
         libwallet::pass_session_entry_id(&profile.genesis_hash, &profile.pass_account);
     let existing_account = profile.session.as_ref().map(|session| session.account);
     let (session_signer, pending_seed) = if let Some(expected) = existing_account {
-        match crate::signers::load_session_signer(&secure_entry, Some(expected)).await {
+        match crate::signers::load_session_signer(&secure_entry, expected).await {
             Ok(signer) => (signer, None),
             Err(_) => {
                 let (signer, seed) = crate::signers::generate_session_signer().await?;

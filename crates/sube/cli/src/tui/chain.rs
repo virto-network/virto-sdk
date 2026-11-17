@@ -698,7 +698,7 @@ async fn prepare_review(
             let policy = pass::DeviceFilter::parse(chain.metadata(), &session.policy)
                 .map_err(|error| error.to_string())?;
             let signer =
-                crate::signers::load_session_signer(&session.secure_entry, Some(session.account))
+                crate::signers::load_session_signer(&session.secure_entry, session.account)
                     .await
                     .map_err(|error| error.to_string())?;
             let authorizer =

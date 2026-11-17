@@ -1,79 +1,56 @@
 //! Wallet and session signers backed by the OS secure store.
 
 use anyhow::Result;
+use libwallet::KeyStore;
+use libwallet::vault::{OSKeyring, Vault, VaultError};
 
 use crate::profiles;
 
-#[cfg(feature = "wallet")]
-pub async fn wallet_signer(
-    profile: &profiles::WalletProfile,
-) -> Result<sube::libwallet::LibwalletSigner<libwallet::vault::utils::DerivedSigner>> {
-    use libwallet::vault::Vault;
+/// The `//default` sr25519 key of a stored secret.
+pub type WalletSigner = sube::libwallet::LibwalletSigner<libwallet::vault::utils::DerivedSigner>;
 
-    if !profile.scheme.eq_ignore_ascii_case("sr25519") {
-        anyhow::bail!("unsupported wallet profile scheme {}", profile.scheme);
-    }
-    let keys = libwallet::vault::OSKeyring::<()>::new(&profile.secure_entry, None);
-    let mut vault = libwallet::Substrate::new(keys);
-    let signer = vault.unlock(None, ()).await?;
-    let public = signer.public();
-    if public.as_ref() != profile.account {
-        anyhow::bail!("wallet secure entry does not match the profile account");
-    }
-    Ok(sube::libwallet::LibwalletSigner::new(
-        signer,
-        profile.account,
-        sube::libwallet::SignatureScheme::Sr25519,
-    ))
-}
-
-#[cfg(feature = "pass")]
-pub async fn generate_session_signer() -> Result<(
-    sube::libwallet::LibwalletSigner<libwallet::vault::utils::DerivedSigner>,
-    [u8; 32],
-)> {
-    use libwallet::vault::Vault;
-
-    let mut keys = libwallet::vault::Simple::<(), 32>::generate(&mut rand_core::OsRng);
-    let seed = *keys.unlock()?;
-    let mut vault = libwallet::Substrate::new(keys);
-    let derived = vault.unlock(None, ()).await?;
-    let public = derived.public();
-    let account: [u8; 32] = public
+/// Derive the `//default` sr25519 signer from `keys`.
+async fn unlock<K: KeyStore>(keys: K) -> Result<WalletSigner>
+where
+    VaultError<K::Error>: std::error::Error + Send + Sync + 'static,
+{
+    let derived = libwallet::Substrate::new(keys).unlock(None, ()).await?;
+    let account: [u8; 32] = derived
+        .public()
         .as_ref()
         .try_into()
-        .map_err(|_| anyhow::anyhow!("session signer is not AccountId32"))?;
-    Ok((
-        sube::libwallet::LibwalletSigner::new(
-            derived,
-            account,
-            sube::libwallet::SignatureScheme::Sr25519,
-        ),
-        seed,
-    ))
-}
-
-#[cfg(feature = "pass")]
-pub async fn load_session_signer(
-    secure_entry: &str,
-    expected: Option<[u8; 32]>,
-) -> Result<sube::libwallet::LibwalletSigner<libwallet::vault::utils::DerivedSigner>> {
-    use libwallet::vault::Vault;
-
-    let keys = libwallet::vault::OSKeyring::<()>::new(secure_entry, None);
-    let mut vault = libwallet::Substrate::new(keys);
-    let derived = vault.unlock(None, ()).await?;
-    let public = derived.public();
-    let account: [u8; 32] = public
-        .as_ref()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("session signer is not AccountId32"))?;
-    if expected.is_some_and(|expected| expected != account) {
-        anyhow::bail!("stored session key does not match the pass profile");
-    }
-    Ok(sube::libwallet::LibwalletSigner::new(
+        .map_err(|_| anyhow::anyhow!("signer is not AccountId32"))?;
+    Ok(WalletSigner::new(
         derived,
         account,
         sube::libwallet::SignatureScheme::Sr25519,
     ))
+}
+
+pub async fn wallet_signer(profile: &profiles::WalletProfile) -> Result<WalletSigner> {
+    if !profile.scheme.eq_ignore_ascii_case("sr25519") {
+        anyhow::bail!("unsupported wallet profile scheme {}", profile.scheme);
+    }
+    let signer = unlock(OSKeyring::<()>::new(&profile.secure_entry, None)).await?;
+    if sube::Signer::account(&signer) != profile.account {
+        anyhow::bail!("wallet secure entry does not match the profile account");
+    }
+    Ok(signer)
+}
+
+/// A fresh session signer and the seed to store once it is registered.
+#[cfg(feature = "pass")]
+pub async fn generate_session_signer() -> Result<(WalletSigner, [u8; 32])> {
+    let mut keys = libwallet::vault::Simple::<(), 32>::generate(&mut rand_core::OsRng);
+    let seed = *keys.unlock()?;
+    Ok((unlock(keys).await?, seed))
+}
+
+#[cfg(feature = "pass")]
+pub async fn load_session_signer(secure_entry: &str, expected: [u8; 32]) -> Result<WalletSigner> {
+    let signer = unlock(OSKeyring::<()>::new(secure_entry, None)).await?;
+    if sube::Signer::account(&signer) != expected {
+        anyhow::bail!("stored session key does not match the pass profile");
+    }
+    Ok(signer)
 }
