@@ -31,6 +31,12 @@
 
 ### Fixed
 
+- Signed transactions could not be built from V14 metadata (what
+  `Metadata_metadata` returns), which declares no address or signature type;
+  they now fall back to `MultiAddress::Id` and `MultiSignature`.
+- Transaction extensions that are newtypes were serialized without type
+  information: `CheckNonce` went out as 8 raw bytes instead of a compact
+  integer, so no runtime could decode the transaction.
 - Serializing dynamic values for types wrapped in more than one newtype (e.g.
   a `BoundedBTreeSet` of tuples) produced wrong SCALE bytes.
 
