@@ -229,7 +229,6 @@ pub struct TransactionWeight {
 pub enum TransactionValidity {
     Valid,
     Invalid(String),
-    Unknown,
 }
 
 /// Non-mutating fee/weight/validity diagnostics.
@@ -237,6 +236,8 @@ pub enum TransactionValidity {
 pub struct TransactionReport {
     pub partial_fee: Option<u128>,
     pub weight: Option<TransactionWeight>,
+    /// `None` when the runtime's validation API is unavailable or its answer
+    /// could not be decoded; `warnings` says which.
     pub validity: Option<TransactionValidity>,
     pub warnings: Vec<String>,
 }

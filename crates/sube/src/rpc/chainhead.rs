@@ -1266,7 +1266,6 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 )))
             }
             Ok(_) => {
-                report.validity = Some(crate::TransactionValidity::Unknown);
                 report
                     .warnings
                     .push("validation API returned an unknown result shape".into());

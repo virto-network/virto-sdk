@@ -38,6 +38,9 @@
   `ChainProperties`. There is no `Sube::cached_chain_properties`.
 - `TransactionEvent` has no `data` field; it was always empty. The decoded
   fields are in `decoded`.
+- `TransactionValidity` has no `Unknown` variant. An undecodable validation
+  result leaves `TransactionReport::validity` as `None` with a warning, as an
+  unavailable validation API already did.
 - Transactions are mortal by default (64 blocks) instead of immortal.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.
