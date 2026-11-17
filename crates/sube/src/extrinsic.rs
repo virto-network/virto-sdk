@@ -259,7 +259,7 @@ pub enum DispatchOutcome {
 pub struct TransactionEvent {
     pub pallet: String,
     pub variant: String,
-    pub data: Vec<u8>,
+    /// The event's fields in scales text form.
     pub decoded: Option<String>,
 }
 

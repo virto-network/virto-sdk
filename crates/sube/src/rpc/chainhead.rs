@@ -1483,7 +1483,6 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             receipt.events.push(crate::TransactionEvent {
                 pallet: pallet.into(),
                 variant: variant.into(),
-                data: Vec::new(),
                 decoded: scales::to_text(&pallet_event).ok(),
             });
         }

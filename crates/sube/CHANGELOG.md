@@ -36,6 +36,8 @@
 - `Sube` no longer caches chain properties: `Sube::chain_properties`
   fetches them from the backend each call and returns an owned
   `ChainProperties`. There is no `Sube::cached_chain_properties`.
+- `TransactionEvent` has no `data` field; it was always empty. The decoded
+  fields are in `decoded`.
 - Transactions are mortal by default (64 blocks) instead of immortal.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.
