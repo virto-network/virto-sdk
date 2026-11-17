@@ -123,10 +123,8 @@ fn substrate_key_attestation_encodes_against_the_runtime_type() {
         );
         let request = pass::workflow::AttestationRequest {
             user_id: pass::HashedUserId([0x11; 32]),
-            pass_account: pass::Account([0x55; 32]),
             authority_id: pass::AuthorityId([0x22; 32]),
             context: 42,
-            block_hash: [0x66; 32],
             challenge: [0x33; 32],
         };
         let attestation = device.attest(&request).await.expect("attest");

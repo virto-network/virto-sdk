@@ -179,8 +179,6 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
                 user_id: self.user_id,
                 authority_id: self.authority_id,
                 context: self.context,
-                block_hash: self.block_hash,
-                binding: implication,
                 challenge: block_challenge(&self.block_hash, &implication),
             })
             .await?;

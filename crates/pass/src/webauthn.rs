@@ -465,8 +465,6 @@ pub struct WebAuthnDevice<T> {
     rp_id: String,
     origin: String,
     credential_id: RefCell<Option<Vec<u8>>>,
-    attestation_variant: &'static str,
-    credential_variant: &'static str,
 }
 
 impl<T> WebAuthnDevice<T> {
@@ -480,8 +478,6 @@ impl<T> WebAuthnDevice<T> {
             rp_id: rp_id.into(),
             origin: origin.into(),
             credential_id: RefCell::new(None),
-            attestation_variant: "WebAuthn",
-            credential_variant: "WebAuthn",
         }
     }
 
@@ -491,19 +487,7 @@ impl<T> WebAuthnDevice<T> {
             rp_id: profile.rp_id,
             origin: profile.origin,
             credential_id: RefCell::new(Some(profile.credential_id)),
-            attestation_variant: "WebAuthn",
-            credential_variant: "WebAuthn",
         }
-    }
-
-    pub fn with_variants(
-        mut self,
-        attestation_variant: &'static str,
-        credential_variant: &'static str,
-    ) -> Self {
-        self.attestation_variant = attestation_variant;
-        self.credential_variant = credential_variant;
-        self
     }
 
     pub fn profile(&self) -> Option<WebAuthnProfile> {
@@ -531,7 +515,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
         let device_id = DeviceId(blake2b_256(&response.credential_id));
         Ok(DeviceAttestation {
             device_id,
-            variant: self.attestation_variant.into(),
+            variant: "WebAuthn".into(),
             payload: DynValue::obj(&[
                 (
                     "meta",
@@ -567,7 +551,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
             .await
             .map_err(authenticator_error)?;
         Ok(DynValue::obj(&[(
-            self.credential_variant,
+            "WebAuthn",
             DynValue::obj(&[
                 (
                     "meta",
@@ -596,7 +580,7 @@ fn authenticator_error(error: AuthenticatorError) -> sube::Error {
 mod tests {
     use super::*;
     use crate::workflow::{AssertionRequest, AttestationRequest};
-    use crate::{Account, AuthorityId, HashedUserId};
+    use crate::{AuthorityId, HashedUserId};
     use alloc::{string::ToString, vec};
 
     struct VirtualAuthenticator {
@@ -637,10 +621,8 @@ mod tests {
     fn attestation_request() -> AttestationRequest {
         AttestationRequest {
             user_id: HashedUserId([1; 32]),
-            pass_account: Account([2; 32]),
             authority_id: AuthorityId([3; 32]),
             context: 4,
-            block_hash: [5; 32],
             challenge: [6; 32],
         }
     }
@@ -662,8 +644,6 @@ mod tests {
             user_id: HashedUserId([1; 32]),
             authority_id: AuthorityId([3; 32]),
             context: 4,
-            block_hash: [5; 32],
-            binding: [8; 32],
             challenge: [9; 32],
         };
         assert!(futures_lite::future::block_on(device.assert(&request)).is_ok());

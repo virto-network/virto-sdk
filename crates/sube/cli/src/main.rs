@@ -1065,7 +1065,6 @@ async fn pass_command(
                         let draft = pass::workflow::prepare_enrollment(
                             chain.metadata(),
                             &config,
-                            registrar.clone(),
                             user_id,
                             context,
                             checkpoint.hash,
@@ -1088,7 +1087,6 @@ async fn pass_command(
                             let draft = pass::workflow::prepare_enrollment(
                                 chain.metadata(),
                                 &config,
-                                registrar.clone(),
                                 user_id,
                                 context,
                                 checkpoint.hash,
@@ -1129,7 +1127,6 @@ async fn pass_command(
                             let draft = pass::workflow::prepare_enrollment(
                                 chain.metadata(),
                                 &config,
-                                registrar.clone(),
                                 user_id,
                                 context,
                                 checkpoint.hash,
@@ -1254,15 +1251,13 @@ async fn pass_command(
                     );
                     pending
                 } else {
-                    let pass_account = pass::Account(pass_profile.pass_account);
-                    let request = pass::workflow::AttestationRequest {
-                        user_id: pass::HashedUserId(pass_profile.user_id),
-                        pass_account,
-                        authority_id: config.authority_id,
+                    let request = pass::workflow::AttestationRequest::new(
+                        pass::HashedUserId(pass_profile.user_id),
+                        pass::Account(pass_profile.pass_account),
+                        config.authority_id,
                         context,
-                        block_hash: checkpoint.hash,
-                        challenge: pass::enrollment_challenge(&checkpoint.hash, pass_account),
-                    };
+                        &checkpoint.hash,
+                    );
                     let (attestation, enrolled_device) = match requested_device {
                         profiles::DeviceProviderProfile::SubstrateKey { wallet } => {
                             let wallet_profile =
@@ -1342,7 +1337,6 @@ async fn pass_command(
                         &config,
                         &attestation,
                         &resolved_filter,
-                        true,
                         admin_confirm,
                     )?;
                     let pending = profiles::PendingDeviceAddition {

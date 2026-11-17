@@ -68,8 +68,6 @@ pub struct WalletDevice<'a, S: libwallet::Signer> {
     signer: &'a S,
     public_key: Vec<u8>,
     signature_type: SignatureType,
-    attestation_variant: &'static str,
-    credential_variant: &'static str,
 }
 
 impl<'a, S: libwallet::Signer> WalletDevice<'a, S> {
@@ -78,19 +76,7 @@ impl<'a, S: libwallet::Signer> WalletDevice<'a, S> {
             signer,
             public_key: public_key.as_ref().to_vec(),
             signature_type,
-            attestation_variant: "SubstrateKey",
-            credential_variant: "SubstrateKey",
         }
-    }
-
-    pub fn with_variants(
-        mut self,
-        attestation_variant: &'static str,
-        credential_variant: &'static str,
-    ) -> Self {
-        self.attestation_variant = attestation_variant;
-        self.credential_variant = credential_variant;
-        self
     }
 
     /// The device's `AccountId32`, which the substrate-keys authenticator
@@ -123,7 +109,7 @@ impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
         let device_id = self.device_id();
         Ok(DeviceAttestation {
             device_id,
-            variant: self.attestation_variant.into(),
+            variant: "SubstrateKey".into(),
             // substrate-keys `KeyRegistration { public, message, signature }`.
             payload: DynValue::obj(&[
                 ("public", DynValue::from(device_id.0)),
@@ -149,7 +135,7 @@ impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
             .await
             .map_err(|error| Error::Signing(alloc::format!("{error}")))?;
         Ok(DynValue::obj(&[(
-            self.credential_variant,
+            "SubstrateKey",
             DynValue::obj(&[
                 ("user_id", DynValue::from(request.user_id.0)),
                 (
@@ -204,10 +190,8 @@ mod tests {
         let device = WalletDevice::new(&MockSigner, [7; 32], SignatureType::Sr25519);
         let attestation_request = AttestationRequest {
             user_id: crate::HashedUserId([1; 32]),
-            pass_account: crate::Account([2; 32]),
             authority_id: crate::AuthorityId([3; 32]),
             context: 4,
-            block_hash: [5; 32],
             challenge: [6; 32],
         };
         let attestation =
@@ -219,8 +203,6 @@ mod tests {
             user_id: attestation_request.user_id,
             authority_id: attestation_request.authority_id,
             context: attestation_request.context,
-            block_hash: attestation_request.block_hash,
-            binding: [8; 32],
             challenge: [9; 32],
         };
         assert!(futures_lite::future::block_on(device.assert(&assertion_request)).is_ok());

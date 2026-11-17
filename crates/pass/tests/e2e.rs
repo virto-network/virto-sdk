@@ -55,7 +55,6 @@ fn funded_substrate_key_enrollment_and_session_workflow() {
         let draft = pass::workflow::prepare_enrollment(
             chain.metadata(),
             &config,
-            "e2e-registrar",
             user_id,
             enrollment_context,
             enrollment_checkpoint.hash,

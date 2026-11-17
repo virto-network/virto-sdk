@@ -166,7 +166,7 @@ mod unix {
     use alloc::vec::Vec;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use sha2::{Digest, Sha256};
 
@@ -199,10 +199,6 @@ mod unix {
                 .map(PathBuf::from)
                 .map(Self::new)
                 .ok_or_else(|| "SSH_AUTH_SOCK is not set".into())
-        }
-
-        pub fn socket(&self) -> &Path {
-            &self.socket
         }
 
         fn request(&self, payload: &[u8]) -> core::result::Result<Vec<u8>, String> {
@@ -474,8 +470,6 @@ mod tests {
             user_id: crate::HashedUserId([1; 32]),
             authority_id: crate::AuthorityId([2; 32]),
             context: 3,
-            block_hash: [4; 32],
-            binding: [5; 32],
             challenge: [6; 32],
         };
         futures_lite::future::block_on(device.assert(&request)).unwrap();

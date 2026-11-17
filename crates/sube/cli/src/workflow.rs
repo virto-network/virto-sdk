@@ -201,7 +201,6 @@ pub async fn prepare_enrollment(
             chain,
             &config,
             &profiles,
-            &request.registrar,
             user_id,
             context,
             checkpoint.hash,
@@ -260,7 +259,6 @@ async fn prepare_enrollment_device(
     chain: &mut sube::Sube,
     config: &pass::PassRuntimeConfig,
     profiles: &crate::profiles::Profiles,
-    registrar: &str,
     user_id: pass::HashedUserId,
     context: u32,
     block_hash: [u8; 32],
@@ -283,7 +281,6 @@ async fn prepare_enrollment_device(
             let draft = pass::workflow::prepare_enrollment(
                 chain.metadata(),
                 config,
-                registrar,
                 user_id,
                 context,
                 block_hash,
@@ -306,7 +303,6 @@ async fn prepare_enrollment_device(
                 let draft = pass::workflow::prepare_enrollment(
                     chain.metadata(),
                     config,
-                    registrar,
                     user_id,
                     context,
                     block_hash,
@@ -347,7 +343,6 @@ async fn prepare_enrollment_device(
                 let draft = pass::workflow::prepare_enrollment(
                     chain.metadata(),
                     config,
-                    registrar,
                     user_id,
                     context,
                     block_hash,
@@ -407,17 +402,13 @@ pub async fn prepare_device_addition(
     let pending = if let Some(pending) = pending {
         pending
     } else {
-        let attestation_request = pass::workflow::AttestationRequest {
-            user_id: pass::HashedUserId(profile.user_id),
-            pass_account: pass::Account(profile.pass_account),
-            authority_id: config.authority_id,
+        let attestation_request = pass::workflow::AttestationRequest::new(
+            pass::HashedUserId(profile.user_id),
+            pass::Account(profile.pass_account),
+            config.authority_id,
             context,
-            block_hash: checkpoint.hash,
-            challenge: pass::enrollment_challenge(
-                &checkpoint.hash,
-                pass::Account(profile.pass_account),
-            ),
-        };
+            &checkpoint.hash,
+        );
         let (attestation, enrolled_device) = prepare_added_device(
             &profiles,
             genesis_hash,
@@ -430,7 +421,6 @@ pub async fn prepare_device_addition(
             &config,
             &attestation,
             &filter,
-            true,
             request.admin_confirmed,
         )?;
         let pending = crate::profiles::PendingDeviceAddition {
