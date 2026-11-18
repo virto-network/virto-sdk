@@ -14,6 +14,9 @@ const PALLET: &str = "Pass";
 /// Plain `add_session_key` grants an Admin (unrestricted) session; scoped
 /// sessions must use the filtered variant.
 const ADD_SESSION_KEY: &str = "add_session_key_with_filter";
+/// Plain `add_device` grants an Admin device; scoped devices must use the
+/// filtered variant.
+const ADD_DEVICE: &str = "add_device_with_filter";
 
 /// A metadata-resolved call and its named fields.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +106,9 @@ impl PassRuntimeConfig {
         };
 
         let register = resolve_call("register")?;
-        let add_device = resolve_call("add_device")?;
+        // Older runtimes only have the filterless call, which
+        // `prepare_add_device` accepts for Admin devices only.
+        let add_device = resolve_call(ADD_DEVICE).or_else(|_| resolve_call("add_device"))?;
         let remove_device = resolve_call("remove_device")?.name;
         // Older runtimes only have the filterless call; it is still discovered
         // so the rest of the pass workflow works, and `prepare_add_session_key`
@@ -315,6 +320,8 @@ mod tests {
         assert_eq!(config.pallet_id, *b"kreivo_p");
         assert!(config.supports_credential("WebAuthn"));
         assert!(config.supports_attestation("WebAuthn"));
+        assert_eq!(config.add_device.name, "add_device_with_filter");
+        assert!(config.add_device.has_field("filter"));
         assert_eq!(config.add_session_key.name, "add_session_key_with_filter");
         assert!(config.add_session_key.has_field("duration"));
         assert!(config.add_session_key.has_field("filter"));

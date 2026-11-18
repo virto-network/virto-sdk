@@ -156,8 +156,11 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
     })
 }
 
-/// Prepare `Pass.add_device`. An `Admin` filter needs `admin_confirmed`: this
-/// is the one place that enforces it.
+/// Prepare `Pass.add_device_with_filter`. An `Admin` filter needs
+/// `admin_confirmed`: this is the one place that enforces it.
+///
+/// Runtimes that only have the filterless `add_device` grant every device
+/// Admin, so a scoped device is refused there.
 pub fn prepare_add_device(
     metadata: &Metadata,
     config: &PassRuntimeConfig,
@@ -180,6 +183,11 @@ pub fn prepare_add_device(
     let mut fields = vec![("attestation", attestation.runtime_value())];
     if config.add_device.has_field("filter") {
         fields.push(("filter", filter.runtime_value()));
+    } else if !matches!(filter, DeviceFilter::Admin) {
+        return Err(Error::Mapping(format!(
+            "{}::{} takes no device filter; refusing to add an unrestricted device",
+            config.pallet, config.add_device.name
+        )));
     }
     sube::extrinsic::prepare_call(
         metadata,
@@ -272,5 +280,83 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("separate confirmation"));
+    }
+
+    fn substrate_key_attestation() -> DeviceAttestation {
+        DeviceAttestation {
+            device_id: DeviceId([1; 32]),
+            variant: "SubstrateKey".into(),
+            payload: DynValue::obj(&[
+                ("public", DynValue::from([1u8; 32])),
+                (
+                    "message",
+                    DynValue::obj(&[
+                        ("context", DynValue::from(4u32)),
+                        ("challenge", DynValue::from([9u8; 32])),
+                        ("authority_id", DynValue::from([3u8; 32])),
+                    ]),
+                ),
+                (
+                    "signature",
+                    DynValue::obj(&[("Sr25519", DynValue::from([7u8; 64].as_slice()))]),
+                ),
+            ]),
+        }
+    }
+
+    #[test]
+    fn scoped_devices_are_added_with_their_filter() {
+        // Plain `add_device` would grant the device Admin.
+        let metadata =
+            Metadata::from_bytes(include_bytes!("../../sube/tests/fixtures/kreivo.scale")).unwrap();
+        let config = PassRuntimeConfig::discover(&metadata).unwrap();
+        let filter = DeviceFilter::Pallets(vec![10]);
+        let call = prepare_add_device(
+            &metadata,
+            &config,
+            &substrate_key_attestation(),
+            &filter,
+            false,
+        )
+        .unwrap();
+        assert!(call.call.eq_ignore_ascii_case("add_device_with_filter"));
+
+        // Pass (6) / add_device_with_filter (5)
+        let mut expected = vec![6, 5];
+        // Attestation::SubstrateKey (1) { public, message, signature }
+        expected.push(1);
+        expected.extend([1; 32]);
+        expected.extend(4u32.to_le_bytes());
+        expected.extend([9; 32]);
+        expected.extend([3; 32]);
+        // MultiSignature::Sr25519 (1)
+        expected.push(1);
+        expected.extend([7; 64]);
+        // DeviceFilter::Pallets (1) { 10 }
+        expected.extend([1, 4, 10]);
+        assert_eq!(call.bytes, expected);
+    }
+
+    #[test]
+    fn scoped_devices_are_refused_without_a_filter_argument() {
+        let metadata =
+            Metadata::from_bytes(include_bytes!("../../sube/tests/fixtures/kreivo.scale")).unwrap();
+        let mut config = PassRuntimeConfig::discover(&metadata).unwrap();
+        config.add_device.name = "add_device".into();
+        config.add_device.fields.retain(|field| field != "filter");
+        let error = prepare_add_device(
+            &metadata,
+            &config,
+            &substrate_key_attestation(),
+            &DeviceFilter::Pallets(vec![10]),
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to add an unrestricted device"),
+            "{error}"
+        );
     }
 }
