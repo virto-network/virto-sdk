@@ -117,6 +117,8 @@ struct App {
     block_detail: Option<BlockDetail>,
 
     error: Option<String>,
+    /// Why the chain connection is down, while it's being re-established.
+    connection: Option<String>,
     should_quit: bool,
 
     to_chain: mpsc::Sender<ToChain>,
@@ -333,6 +335,7 @@ impl App {
 
     fn process_chain_message(&mut self, msg: FromChain) {
         match msg {
+            FromChain::Connection(status) => self.connection = status,
             FromChain::Block(block) => {
                 self.recent_blocks.push(block);
                 if self.recent_blocks.len() > 200 {
@@ -388,6 +391,9 @@ impl App {
             }
             #[cfg(feature = "wallet")]
             FromChain::ProfileError(error) => self.error = Some(error),
+            // Handled by the event loop, which owns the terminal.
+            #[cfg(feature = "desktop-webauthn")]
+            FromChain::DevicePrompt(_) | FromChain::DevicePromptDone => {}
         }
     }
 
@@ -439,7 +445,10 @@ impl App {
         }
     }
 
+    /// Filter the pallet list by the search query. The selected pallet
+    /// stays selected while it matches; otherwise the first match is.
     fn apply_filter(&mut self) {
+        let selected = self.pallets.get(self.pallet_idx).cloned();
         let q = self.search_query.to_lowercase();
         if q.is_empty() {
             self.pallets = self.all_pallets.clone();
@@ -451,8 +460,12 @@ impl App {
                 .cloned()
                 .collect();
         }
-        if self.pallet_idx >= self.pallets.len() {
-            self.pallet_idx = self.pallets.len().saturating_sub(1);
+        self.pallet_idx = selected
+            .as_ref()
+            .and_then(|name| self.pallets.iter().position(|p| p == name))
+            .unwrap_or(0);
+        if self.pallets.get(self.pallet_idx) != selected.as_ref() {
+            self.refresh_pallet();
         }
     }
 }
@@ -466,6 +479,24 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
     let (chain_tx, ui_rx) = smol::channel::unbounded::<FromChain>();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
+    #[cfg(feature = "desktop-webauthn")]
+    {
+        let prompts = chain_tx.clone();
+        crate::device::on_prompt(move |prompt| match prompt {
+            crate::device::Prompt::Begin => {
+                let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+                if prompts
+                    .send_blocking(FromChain::DevicePrompt(ack_tx))
+                    .is_ok()
+                {
+                    let _ = ack_rx.recv();
+                }
+            }
+            crate::device::Prompt::End => {
+                let _ = prompts.send_blocking(FromChain::DevicePromptDone);
+            }
+        });
+    }
     chain::spawn(
         chain_url.into(),
         profile_path.to_owned(),
@@ -524,6 +555,7 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         recent_blocks: vec![],
         block_detail: None,
         error: None,
+        connection: None,
         should_quit: false,
         to_chain: ui_tx,
     };
@@ -533,7 +565,13 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         terminal.draw(|f| draw::draw(f, &app))?;
 
         while let Ok(msg) = ui_rx.try_recv() {
-            app.process_chain_message(msg);
+            match msg {
+                #[cfg(feature = "desktop-webauthn")]
+                FromChain::DevicePrompt(ack) => {
+                    hand_over_terminal(&mut terminal, &mut app, &ui_rx, ack)?
+                }
+                msg => app.process_chain_message(msg),
+            }
         }
         app.flush_pending_detail();
 
@@ -559,6 +597,46 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
 
     disable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+/// Give the terminal to an authenticator prompt until it's done: the
+/// authenticator library asks for a security key's PIN on the terminal.
+#[cfg(feature = "desktop-webauthn")]
+fn hand_over_terminal(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut App,
+    ui_rx: &smol::channel::Receiver<FromChain>,
+    ack: mpsc::SyncSender<()>,
+) -> Result<()> {
+    disable_raw_mode()?;
+    crossterm::execute!(
+        std::io::stdout(),
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    )?;
+    println!(
+        "\nUse your security key: touch it when it blinks, and enter its PIN here if asked.\n"
+    );
+    let _ = ack.send(());
+    loop {
+        match ui_rx.recv_blocking() {
+            Ok(FromChain::DevicePromptDone) | Err(_) => break,
+            Ok(FromChain::DevicePrompt(ack)) => {
+                let _ = ack.send(());
+            }
+            Ok(msg) => app.process_chain_message(msg),
+        }
+    }
+    enable_raw_mode()?;
+    crossterm::execute!(
+        std::io::stdout(),
+        EnterAlternateScreen,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+    )?;
+    // A new terminal redraws everything. `Terminal::clear` would also do,
+    // but waits for the terminal to report the cursor position.
+    *terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     Ok(())
 }
 
@@ -718,7 +796,13 @@ fn pass_dialog(app: &App, key: char) -> Result<dialog::Dialog, &'static str> {
         devices => Ok(devices),
     };
     match key {
-        'e' => Ok(dialog::Dialog::enroll(devices()?)),
+        'e' => {
+            let registrars = crate::workflow::registrar_candidates(&app.profiles, app.genesis_hash);
+            if registrars.is_empty() {
+                return Err("Import a wallet profile (a) to pay for enrollment first.");
+            }
+            Ok(dialog::Dialog::enroll(devices()?, registrars))
+        }
         's' => {
             let profile = profile.ok_or("Select a pass profile to manage its session.")?;
             let selected = app.current_pallet().and_then(|pallet| {
@@ -832,11 +916,8 @@ fn handle_form(app: &mut App, key: KeyCode) {
         KeyCode::Down | KeyCode::Tab => form.next_field(),
         KeyCode::Right => form.toggle(),
         KeyCode::Left => form.toggle_back(),
-        KeyCode::Char(' ') => form.toggle(),
-        KeyCode::Char('+') => form.add_list_item(),
-        KeyCode::Char('-') => form.remove_list_item(),
         KeyCode::Backspace => form.backspace(),
-        KeyCode::Char(c) => form.push_char(c),
+        KeyCode::Char(c) => form.key_char(c),
         _ => {}
     }
 }
@@ -845,7 +926,7 @@ fn handle_search(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Esc => {
             app.search_query.clear();
-            app.pallets = app.all_pallets.clone();
+            app.apply_filter();
             app.focus = Focus::Navigate;
         }
         KeyCode::Enter => app.focus = Focus::Navigate,

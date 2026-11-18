@@ -222,6 +222,43 @@ pub enum TransactionValidity {
     Invalid(String),
 }
 
+/// Names an encoded `sp_runtime::TransactionValidityError`, followed by its
+/// hex, e.g. `Invalid::Payment (0x0001)`; unknown encodings are only hex.
+pub fn describe_validity_error(encoded: &[u8]) -> String {
+    const INVALID: &[&str] = &[
+        "Call",
+        "Payment",
+        "Future",
+        "Stale",
+        "BadProof",
+        "AncientBirthBlock",
+        "ExhaustsResources",
+        "Custom",
+        "BadMandatory",
+        "MandatoryValidation",
+        "BadSigner",
+        "IndeterminateImplicit",
+        "UnknownOrigin",
+    ];
+    const UNKNOWN: &[&str] = &["CannotLookup", "NoUnsignedValidator", "Custom"];
+    let hex = to_hex(encoded);
+    let (kind, variants) = match encoded.first() {
+        Some(0) => ("Invalid", INVALID),
+        Some(1) => ("Unknown", UNKNOWN),
+        _ => return hex,
+    };
+    let Some(name) = encoded
+        .get(1)
+        .and_then(|&index| variants.get(usize::from(index)))
+    else {
+        return hex;
+    };
+    match (*name, encoded.get(2)) {
+        ("Custom", Some(code)) => format!("{kind}::Custom({code}) ({hex})"),
+        _ => format!("{kind}::{name} ({hex})"),
+    }
+}
+
 /// Non-mutating fee/weight/validity diagnostics.
 #[derive(Clone, Debug, Default)]
 pub struct TransactionReport {
@@ -643,6 +680,24 @@ fn encode_signature(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validity_errors_are_named() {
+        assert_eq!(
+            describe_validity_error(&[0, 1]),
+            "Invalid::Payment (0x0001)"
+        );
+        assert_eq!(
+            describe_validity_error(&[0, 7, 3]),
+            "Invalid::Custom(3) (0x000703)"
+        );
+        assert_eq!(
+            describe_validity_error(&[1, 0]),
+            "Unknown::CannotLookup (0x0100)"
+        );
+        assert_eq!(describe_validity_error(&[0, 99]), "0x0063");
+        assert_eq!(describe_validity_error(&[]), "0x");
+    }
 
     fn test_ctx() -> ChainContext {
         ChainContext {

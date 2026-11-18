@@ -24,6 +24,9 @@ webauthn-authenticator-rs = { version = "0.6.2", default-features = false, featu
 futures-lite = "2"
 libwallet = { path = "../libwallet", default-features = false, features = ["substrate", "mnemonic", "std", "rand"] }
 sube = { path = "../sube", default-features = false, features = ["wss", "libwallet"] }
+# The signature check Kreivo's WebAuthn authenticator runs.
+webauthn-verifier = { package = "pass-authenticators-webauthn-verifier", version = "1.2" }
+sha2 = "0.11"
 
 [features]
 default = ["wallet"]
@@ -36,3 +39,5 @@ desktop-webauthn = [
     "dep:serde_cbor_2",
     "dep:webauthn-authenticator-rs",
 ]
+# A software WebAuthn authenticator, for tests only.
+soft-webauthn = ["desktop-webauthn", "webauthn-authenticator-rs/softpasskey"]

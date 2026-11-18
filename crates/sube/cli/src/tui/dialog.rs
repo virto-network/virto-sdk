@@ -157,22 +157,26 @@ impl Dialog {
         }
     }
 
-    /// `devices` are the device kinds the runtime accepts, as presets.
+    /// `devices` are the device kinds the runtime accepts and `registrars`
+    /// the wallet profiles that can pay, as presets.
     #[cfg(feature = "pass")]
-    pub fn enroll(devices: Vec<String>) -> Self {
+    pub fn enroll(devices: Vec<String>, registrars: Vec<String>) -> Self {
         Self {
             action: Action::Enroll,
             title: "Enroll pass account",
             fields: vec![
                 Field::text("Pass profile name"),
-                Field::text("Hashed user ID (exact 32-byte hex)"),
-                Field::text("Registrar wallet profile"),
+                Field::text("User ID (empty: SHA-256 of the profile name, or exact 32-byte hex)"),
+                Field::with_presets("Paying wallet (←→ to select)", registrars),
                 Field::with_presets(DEVICE_LABEL, devices),
             ],
             focus: 0,
             notes: vec![
-                "The predicted pass address and complete transaction are shown before submission."
+                "The profile name fixes the pass account unless you give a user ID; a name \
+                 someone already registered is rejected."
                     .into(),
+                "The paying wallet signs the registration and pays its fee and deposit.".into(),
+                "The pass account and complete transaction are shown before submission.".into(),
             ],
         }
     }
@@ -284,14 +288,14 @@ impl Dialog {
             )),
             #[cfg(feature = "pass")]
             Action::Enroll => {
-                if (0..3).any(|field| self.value(field).is_empty()) {
-                    return Err("Name, exact user ID and registrar are required.".into());
+                if self.value(0).is_empty() || self.value(2).is_empty() {
+                    return Err("A profile name and a paying wallet are required.".into());
                 }
                 Ok((
                     ToChain::PrepareEnrollment(crate::workflow::EnrollmentRequest {
                         name: self.value(0).into(),
-                        user_id: self.value(1).into(),
-                        registrar: self.value(2).into(),
+                        user_id: Some(self.value(1).into()).filter(|id: &String| !id.is_empty()),
+                        registrar: Some(self.value(2).into()),
                         device: self.value(3).parse()?,
                     }),
                     "Creating device attestation and enrollment draft...",
@@ -340,7 +344,7 @@ impl Dialog {
 }
 
 #[cfg(feature = "pass")]
-const DEVICE_LABEL: &str = "Device (wallet:PROFILE or webauthn:RP_ID@ORIGIN)";
+const DEVICE_LABEL: &str = "Device (wallet:PROFILE or webauthn:DOMAIN)";
 
 /// The device kinds this build supports and the runtime accepts, as
 /// `--device` prefixes.
@@ -474,7 +478,7 @@ mod tests {
         assert_eq!(*field.value, "wallet:");
         field.cycle(false);
         assert_eq!(*field.value, "webauthn:");
-        field.value.push_str("example.com@https://example.com");
+        field.value.push_str("example.com");
         field.cycle(true);
         assert_eq!(*field.value, "wallet:");
     }
@@ -528,5 +532,27 @@ mod tests {
             panic!("expected a device removal");
         };
         assert_eq!(request.device_id, [5; 32]);
+    }
+
+    #[test]
+    fn enrollment_defaults_the_user_id_and_paying_wallet() {
+        let metadata = kreivo();
+        let mut dialog = Dialog::enroll(vec!["wallet:".into()], vec!["alice".into(), "bob".into()]);
+        assert!(dialog.request(&metadata).is_err(), "no profile name");
+        type_into(&mut dialog, 0, "alice-pass");
+        type_into(&mut dialog, 3, "wallet:device");
+        let Ok((ToChain::PrepareEnrollment(request), _)) = dialog.request(&metadata) else {
+            panic!("expected an enrollment");
+        };
+        assert_eq!(request.user_id, None);
+        assert_eq!(request.registrar.as_deref(), Some("alice"));
+
+        type_into(&mut dialog, 1, " 0x01 ");
+        dialog.fields[2].cycle(true);
+        let Ok((ToChain::PrepareEnrollment(request), _)) = dialog.request(&metadata) else {
+            panic!("expected an enrollment");
+        };
+        assert_eq!(request.user_id.as_deref(), Some("0x01"));
+        assert_eq!(request.registrar.as_deref(), Some("bob"));
     }
 }

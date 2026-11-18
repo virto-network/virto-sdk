@@ -136,50 +136,97 @@ mod desktop {
             &self,
             request: &CreateRequest<'_>,
         ) -> core::result::Result<AttestationResponse, AuthenticatorError> {
-            let origin = parse_origin(request.origin)?;
-            let options = create_options(request)?;
-            let mut backend = PlatformBackend::default();
-            let credential = backend
-                .do_registration(origin, options)
-                .map_err(map_backend_error)?;
-            let authenticator_data =
-                attestation_authenticator_data(&credential.response.attestation_object)?;
-            // The runtime stores this key and verifies every later assertion
-            // against it as a DER SubjectPublicKeyInfo.
-            let (credential_id, public_key) = attested_p256_key(&authenticator_data)?;
-            if credential_id != credential.raw_id {
-                return Err(AuthenticatorError::Other(
-                    "WebAuthn attested credential id does not match the credential".into(),
-                ));
-            }
-            Ok(AttestationResponse {
-                credential_id: credential.raw_id,
-                authenticator_data,
-                client_data: credential.response.client_data_json,
-                public_key: public_key.to_vec(),
-            })
+            create_with(&mut PlatformBackend::default(), request)
         }
 
         async fn get(
             &self,
             request: &GetRequest<'_>,
         ) -> core::result::Result<AssertionResponse, AuthenticatorError> {
-            let origin = parse_origin(request.origin)?;
-            let options = get_options(request)?;
-            let mut backend = PlatformBackend::default();
-            let credential = backend
-                .do_authentication(origin, options)
-                .map_err(map_backend_error)?;
-            if credential.raw_id != request.credential_id {
-                return Err(AuthenticatorError::NoCredential);
-            }
-
-            Ok(AssertionResponse {
-                authenticator_data: credential.response.authenticator_data,
-                client_data: credential.response.client_data_json,
-                signature: credential.response.signature,
-            })
+            get_with(&mut PlatformBackend::default(), request)
         }
+    }
+
+    /// A software authenticator that keeps its keys in memory, for tests
+    /// only: the keys have no hardware protection and are lost when the
+    /// process exits. Clones share the same authenticator.
+    #[cfg(feature = "soft-webauthn")]
+    #[derive(Clone)]
+    pub struct SoftWebAuthnTransport(
+        alloc::rc::Rc<core::cell::RefCell<webauthn_authenticator_rs::softpasskey::SoftPasskey>>,
+    );
+
+    #[cfg(feature = "soft-webauthn")]
+    impl Default for SoftWebAuthnTransport {
+        fn default() -> Self {
+            // Claims user verification, as a key with a PIN would.
+            let passkey = webauthn_authenticator_rs::softpasskey::SoftPasskey::new(true);
+            Self(alloc::rc::Rc::new(core::cell::RefCell::new(passkey)))
+        }
+    }
+
+    #[cfg(feature = "soft-webauthn")]
+    impl WebAuthnTransport for SoftWebAuthnTransport {
+        async fn create(
+            &self,
+            request: &CreateRequest<'_>,
+        ) -> core::result::Result<AttestationResponse, AuthenticatorError> {
+            create_with(&mut *self.0.borrow_mut(), request)
+        }
+
+        async fn get(
+            &self,
+            request: &GetRequest<'_>,
+        ) -> core::result::Result<AssertionResponse, AuthenticatorError> {
+            get_with(&mut *self.0.borrow_mut(), request)
+        }
+    }
+
+    fn create_with(
+        backend: &mut impl WebauthnAuthenticator,
+        request: &CreateRequest<'_>,
+    ) -> core::result::Result<AttestationResponse, AuthenticatorError> {
+        let origin = parse_origin(request.origin)?;
+        let options = create_options(request)?;
+        let credential = backend
+            .do_registration(origin, options)
+            .map_err(map_backend_error)?;
+        let authenticator_data =
+            attestation_authenticator_data(&credential.response.attestation_object)?;
+        // The runtime stores this key and verifies every later assertion
+        // against it as a DER SubjectPublicKeyInfo.
+        let (credential_id, public_key) = attested_p256_key(&authenticator_data)?;
+        if credential_id != credential.raw_id {
+            return Err(AuthenticatorError::Other(
+                "WebAuthn attested credential id does not match the credential".into(),
+            ));
+        }
+        Ok(AttestationResponse {
+            credential_id: credential.raw_id,
+            authenticator_data,
+            client_data: credential.response.client_data_json,
+            public_key: public_key.to_vec(),
+        })
+    }
+
+    fn get_with(
+        backend: &mut impl WebauthnAuthenticator,
+        request: &GetRequest<'_>,
+    ) -> core::result::Result<AssertionResponse, AuthenticatorError> {
+        let origin = parse_origin(request.origin)?;
+        let options = get_options(request)?;
+        let credential = backend
+            .do_authentication(origin, options)
+            .map_err(map_backend_error)?;
+        if credential.raw_id != request.credential_id {
+            return Err(AuthenticatorError::NoCredential);
+        }
+
+        Ok(AssertionResponse {
+            authenticator_data: credential.response.authenticator_data,
+            client_data: credential.response.client_data_json,
+            signature: credential.response.signature,
+        })
     }
 
     fn parse_origin(origin: &str) -> core::result::Result<Url, AuthenticatorError> {
@@ -206,10 +253,13 @@ mod desktop {
                     { "type": "public-key", "alg": -7 }
                 ],
                 "timeout": 60_000,
+                // pallet-pass rejects attestations without user
+                // verification. Credentials are always named in
+                // `allowCredentials`, so they needn't be discoverable.
                 "authenticatorSelection": {
-                    "residentKey": "preferred",
+                    "residentKey": "discouraged",
                     "requireResidentKey": false,
-                    "userVerification": "preferred"
+                    "userVerification": "required"
                 },
                 "attestation": "none"
             }
@@ -345,6 +395,72 @@ mod desktop {
         use super::*;
         use alloc::vec;
 
+        /// What Kreivo's WebAuthn authenticator checks of an attestation and
+        /// an assertion, applied to the software authenticator's responses.
+        #[cfg(feature = "soft-webauthn")]
+        #[test]
+        fn soft_authenticator_passes_the_runtime_checks() {
+            use sha2::Digest;
+
+            use futures_lite::future::block_on;
+            let transport = SoftWebAuthnTransport::default();
+            let created = block_on(transport.create(&CreateRequest {
+                rp_id: "localhost",
+                origin: "https://localhost",
+                user_id: &[1; 32],
+                challenge: &[2; 32],
+            }))
+            .unwrap();
+            let check = |authenticator_data: &[u8], client_data: &[u8], kind, challenge: &[u8]| {
+                let client: serde_json::Value = serde_json::from_slice(client_data).unwrap();
+                assert_eq!(client["type"], kind);
+                let origin = Url::parse(client["origin"].as_str().unwrap()).unwrap();
+                assert_eq!(origin.domain(), Some("localhost"));
+                assert_eq!(
+                    URL_SAFE_NO_PAD
+                        .decode(client["challenge"].as_str().unwrap())
+                        .unwrap(),
+                    challenge
+                );
+                // The RP id hash is of the origin's domain.
+                assert_eq!(
+                    authenticator_data[..32],
+                    sha2::Sha256::digest("localhost")[..]
+                );
+                authenticator_data[32]
+            };
+            let flags = check(
+                &created.authenticator_data,
+                &created.client_data,
+                "webauthn.create",
+                &[2; 32],
+            );
+            // User present and user verified.
+            assert_eq!(flags & 0b101, 0b101);
+
+            let asserted = block_on(transport.get(&GetRequest {
+                rp_id: "localhost",
+                origin: "https://localhost",
+                credential_id: &created.credential_id,
+                challenge: &[3; 32],
+            }))
+            .unwrap();
+            let flags = check(
+                &asserted.authenticator_data,
+                &asserted.client_data,
+                "webauthn.get",
+                &[3; 32],
+            );
+            assert_eq!(flags & 0b1, 0b1);
+            webauthn_verifier::webauthn_verify(
+                &asserted.authenticator_data,
+                &asserted.client_data,
+                &asserted.signature,
+                &created.public_key,
+            )
+            .unwrap();
+        }
+
         #[test]
         fn requests_preserve_rp_credential_and_exact_challenge() {
             let create = create_options(&CreateRequest {
@@ -451,6 +567,11 @@ mod desktop {
     any(target_os = "linux", target_os = "macos", windows)
 ))]
 pub use desktop::DesktopWebAuthnTransport;
+#[cfg(all(
+    feature = "soft-webauthn",
+    any(target_os = "linux", target_os = "macos", windows)
+))]
+pub use desktop::SoftWebAuthnTransport;
 
 /// Desktop WebAuthn provider independent of the concrete platform transport.
 pub struct WebAuthnDevice<T> {

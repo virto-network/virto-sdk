@@ -105,7 +105,6 @@ pub struct EnrollmentDraft {
     pub call: PreparedCall,
     pub checkpoint_number: u64,
     pub checkpoint_hash: [u8; 32],
-    pub valid_through: u64,
 }
 
 /// Build the registration draft locally, prompting `authenticator` once.
@@ -151,8 +150,6 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
         call,
         checkpoint_number: u64::from(context),
         checkpoint_hash: block_hash,
-        // Kreivo's challenger accepts the current and previous two contexts.
-        valid_through: u64::from(context).saturating_add(2),
     })
 }
 

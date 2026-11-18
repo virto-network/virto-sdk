@@ -20,7 +20,67 @@ pub struct Device {
 enum Provider {
     Wallet(WalletSigner),
     #[cfg(feature = "desktop-webauthn")]
-    WebAuthn(pass::webauthn::WebAuthnDevice<pass::webauthn::DesktopWebAuthnTransport>),
+    WebAuthn(pass::webauthn::WebAuthnDevice<WebAuthnTransport>),
+}
+
+#[cfg(all(feature = "desktop-webauthn", not(feature = "soft-webauthn")))]
+type WebAuthnTransport = pass::webauthn::DesktopWebAuthnTransport;
+#[cfg(feature = "soft-webauthn")]
+type WebAuthnTransport = pass::webauthn::SoftWebAuthnTransport;
+
+#[cfg(feature = "desktop-webauthn")]
+fn webauthn_transport() -> WebAuthnTransport {
+    #[cfg(feature = "soft-webauthn")]
+    {
+        // One authenticator per thread, so that a credential created at
+        // enrollment can sign later in the same process.
+        thread_local!(static SOFT: WebAuthnTransport = WebAuthnTransport::default());
+        SOFT.with(Clone::clone)
+    }
+    #[cfg(not(feature = "soft-webauthn"))]
+    pass::webauthn::DesktopWebAuthnTransport
+}
+
+#[cfg(feature = "desktop-webauthn")]
+/// Authenticator prompts, such as touching a security key or entering its
+/// PIN, happen on the terminal, outside of the CLI's control.
+pub enum Prompt {
+    Begin,
+    End,
+}
+
+#[cfg(feature = "desktop-webauthn")]
+static PROMPT_HOOK: std::sync::OnceLock<Box<dyn Fn(Prompt) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+#[cfg(feature = "desktop-webauthn")]
+/// Run `hook` around authenticator prompts, so that a full-screen UI can
+/// give the terminal to them. `Prompt::Begin` must return only once it has.
+pub fn on_prompt(hook: impl Fn(Prompt) + Send + Sync + 'static) {
+    let _ = PROMPT_HOOK.set(Box::new(hook));
+}
+
+#[cfg(feature = "desktop-webauthn")]
+/// Marks an authenticator prompt for as long as it lives.
+struct Prompting;
+
+#[cfg(feature = "desktop-webauthn")]
+impl Prompting {
+    fn begin() -> Self {
+        if let Some(hook) = PROMPT_HOOK.get() {
+            hook(Prompt::Begin);
+        }
+        Prompting
+    }
+}
+
+#[cfg(feature = "desktop-webauthn")]
+impl Drop for Prompting {
+    fn drop(&mut self) {
+        if let Some(hook) = PROMPT_HOOK.get() {
+            hook(Prompt::End);
+        }
+    }
 }
 
 impl Device {
@@ -43,12 +103,12 @@ impl Device {
                 origin,
                 credential_id,
             } => {
-                use pass::webauthn::{DesktopWebAuthnTransport, WebAuthnDevice, WebAuthnProfile};
+                use pass::webauthn::{WebAuthnDevice, WebAuthnProfile};
                 Provider::WebAuthn(if credential_id.is_empty() {
-                    WebAuthnDevice::for_enrollment(DesktopWebAuthnTransport, rp_id, origin)
+                    WebAuthnDevice::for_enrollment(webauthn_transport(), rp_id, origin)
                 } else {
                     WebAuthnDevice::from_profile(
-                        DesktopWebAuthnTransport,
+                        webauthn_transport(),
                         WebAuthnProfile {
                             rp_id: rp_id.clone(),
                             origin: origin.clone(),
@@ -109,7 +169,10 @@ impl DeviceAuthenticator for Device {
         match &self.provider {
             Provider::Wallet(signer) => wallet_device(signer).attest(request).await,
             #[cfg(feature = "desktop-webauthn")]
-            Provider::WebAuthn(device) => device.attest(request).await,
+            Provider::WebAuthn(device) => {
+                let _prompting = Prompting::begin();
+                device.attest(request).await
+            }
         }
     }
 
@@ -117,7 +180,10 @@ impl DeviceAuthenticator for Device {
         match &self.provider {
             Provider::Wallet(signer) => wallet_device(signer).assert(request).await,
             #[cfg(feature = "desktop-webauthn")]
-            Provider::WebAuthn(device) => device.assert(request).await,
+            Provider::WebAuthn(device) => {
+                let _prompting = Prompting::begin();
+                device.assert(request).await
+            }
         }
     }
 }

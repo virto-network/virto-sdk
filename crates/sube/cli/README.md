@@ -35,36 +35,53 @@ printf '%s\n' "$MNEMONIC" | cargo run -p sube-cli -- profile add-wallet alice \
   --genesis 0x...
 ```
 
-Pass enrollment always requires an exact 32-byte hashed user ID and an
-ordinary registrar profile. A Substrate-key device names another wallet
-profile:
+Pass enrollment derives the hashed user ID from `--name` (its SHA-256, as the
+former JS server SDK did), and that ID fixes the pass account. Pass accounts are
+global, so a name someone already registered is rejected before the device is
+prompted; pick another name or give an exact 32-byte `--user-id`. The
+registrar is the ordinary wallet profile that signs and pays for the
+registration: `--registrar` defaults to the active wallet profile, or the
+only one on this chain. A Substrate-key device names
+another wallet profile:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
-  --name alice-pass --user-id 0x... --registrar alice \
+  --name alice-pass --registrar alice \
   --device wallet:alice-device --submit
 ```
 
-Default desktop builds can instead create a WebAuthn credential. Only the RP
-ID, origin, and opaque credential ID are written to the profile:
+Default desktop builds can instead create a WebAuthn credential for a domain,
+`webauthn:DOMAIN`. pallet-pass only accepts a credential whose RP ID is the
+origin's domain, so the domain is the RP ID and `https://DOMAIN` the origin.
+The chain doesn't restrict which domain: any one, `localhost` included, works
+from the CLI, but a browser app can only use the credential if it is that
+app's domain. Only the domain, origin, and opaque credential ID are written to
+the profile, and the credential works only with its domain. Linux and macOS use
+USB security keys; Windows uses the system's WebAuthn API. pallet-pass requires
+user verification, so a security key needs a PIN (or fingerprint), which it
+asks for on the terminal for every operation; the TUI hands the terminal over
+while it does:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
-  --name alice-pass --user-id 0x... --registrar alice \
-  --device webauthn:wallet.example.com@https://wallet.example.com --submit
+  --name alice-pass --registrar alice \
+  --device webauthn:wallet.example.com --submit
 ```
 
 Without `--submit`, enrollment and device commands only print the review;
 nothing is stored, so a later `--submit` prompts the device again. Profiles
 change only after the transaction finalizes successfully. Connecting a pass
-profile requires an explicit session policy unless the exact stored policy can
-be reused:
+profile with a session policy registers that session, or reuses the exact
+stored one, and calls are then signed with the session key. Without a policy
+or a stored session, the device itself authenticates each call:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io connect alice-pass \
   --session-policy 'calls:Balances/transfer_keep_alive'
 
 cargo run -p sube-cli -- --chain wss://kreivo.io pass session forget alice-pass
+# Without a session, the security key signs each call.
+cargo run -p sube-cli -- --chain wss://kreivo.io connect alice-pass
 ```
 
 The network connection is created and owned by a dedicated worker thread.
@@ -79,14 +96,17 @@ Press `p` in the TUI to manage chain-bound profiles. From the profile dialog,
 `a` imports an ordinary wallet, `e` enrolls a pass account, `s` registers or
 reuses an explicitly scoped session, `f` forgets it, and `d`/`r` add or remove
 devices. Devices are entered as for `--device`; `←`/`→` cycles a field's
-presets (device kinds the chain accepts, the stored or selected session
-policy, known devices to remove). Pass enrollment, session, and device mutations always enter the same full-screen
+presets (device kinds the chain accepts, the paying wallet, the stored or
+selected session policy, known devices to remove). Enrollment leaves the user
+ID empty to derive it from the profile name. Pass enrollment, session, and device mutations always enter the same full-screen
 review and require a successful finalized receipt before changing the local
 profile. Adding an Admin device requires typing `ADMIN`; removal requires
 typing `REMOVE` after reviewing the last-device warning.
 
 Typed forms accept SS58 or hex AccountId32 values; amounts are entered in the
-chain's smallest unit. `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:` and `hex:`
+chain's smallest unit. Outside text fields, Space toggles enums and booleans,
+and `+`/`-` add and remove list items. If the node connection drops, the TUI
+reconnects and says so in its header. `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:` and `hex:`
 modes. Conversion errors stay inline and do not reach the chain
 worker.
 
@@ -112,4 +132,17 @@ SUBE_E2E_REGISTRAR_MNEMONIC='funded mnemonic' \
 SUBE_E2E_DEVICE_MNEMONIC='disposable device mnemonic' \
 cargo test -p sube-cli --all-features \
   live_pass_enrollment_session_and_submission -- --ignored --nocapture
+```
+
+`live_pass_webauthn_flow` runs the same flow with a WebAuthn device, and also
+signs a call with the device itself. The device is an in-memory software
+authenticator from the test-only `soft-webauthn` feature, which also turns
+every `webauthn:` device of a `sube` build into one; its keys are lost when the
+process exits. Never use such a build with real accounts.
+
+```sh
+SUBE_E2E_URL=wss://... \
+SUBE_E2E_REGISTRAR_MNEMONIC='funded mnemonic' \
+cargo test -p sube-cli --features soft-webauthn \
+  live_pass_webauthn_flow -- --ignored --nocapture
 ```

@@ -1313,10 +1313,9 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 report.validity = Some(crate::TransactionValidity::Valid)
             }
             Ok(output) if output.first() == Some(&1) => {
-                report.validity = Some(crate::TransactionValidity::Invalid(format!(
-                    "0x{}",
-                    hex::encode(&output[1..])
-                )))
+                report.validity = Some(crate::TransactionValidity::Invalid(
+                    crate::extrinsic::describe_validity_error(&output[1..]),
+                ))
             }
             Ok(_) => {
                 report

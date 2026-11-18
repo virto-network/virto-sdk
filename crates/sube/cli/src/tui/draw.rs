@@ -38,11 +38,14 @@ pub fn draw(f: &mut Frame, app: &App) {
         ])
         .split(f.area());
 
-    let latest = app
-        .recent_blocks
-        .last()
-        .map(|b| format!(" · block #{}", b.number))
-        .unwrap_or_default();
+    let latest = match &app.connection {
+        Some(status) => format!(" · {status}"),
+        None => app
+            .recent_blocks
+            .last()
+            .map(|b| format!(" · block #{}", b.number))
+            .unwrap_or_default(),
+    };
     f.render_widget(
         Paragraph::new(format!(" sube · {}{latest}", app.chain_url))
             .bold()
@@ -95,14 +98,22 @@ fn draw_profiles(f: &mut Frame, app: &App) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(5),
             Constraint::Length(3),
         ])
         .split(area);
+    #[allow(unreachable_patterns)]
+    let account = match app.profiles.profiles.get(app.profile_idx) {
+        Some(crate::profiles::Profile::Wallet(wallet)) => Some(wallet.account),
+        #[cfg(feature = "pass")]
+        Some(crate::profiles::Profile::Pass(pass)) => Some(pass.pass_account),
+        _ => None,
+    };
+    let account = account.map_or_else(String::new, |account| format!("0x{}", hex::encode(account)));
     f.render_widget(
         Paragraph::new(format!(
-            "Connected genesis: 0x{}",
+            "Connected genesis: 0x{}\nSelected account:  {account}",
             hex::encode(app.genesis_hash)
         ))
         .block(Block::default().borders(Borders::ALL).title("Profiles")),
