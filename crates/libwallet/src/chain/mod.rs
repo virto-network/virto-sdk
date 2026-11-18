@@ -123,8 +123,12 @@ impl<S, const N: usize> MutableKeyStore for crate::vault::Simple<S, N> {
     }
 }
 
-/// Derive a 64-byte seed from mnemonic entropy using BIP39-compatible
-/// PBKDF2-HMAC-SHA512 key derivation (2048 rounds, salt = "mnemonic" + passphrase).
+/// Derive a 64-byte Substrate seed from mnemonic entropy (substrate-bip39):
+/// PBKDF2-HMAC-SHA512 over the raw *entropy* (2048 rounds, salt = "mnemonic" +
+/// passphrase), as used by `subkey` and Polkadot wallets.
+///
+/// This is not the standard BIP39 seed used by Ethereum, Bitcoin, Solana and
+/// Cosmos wallets; see [`bip39_seed`] for that.
 #[cfg(all(feature = "pbkdf2", feature = "hmac", feature = "sha2"))]
 pub fn seed_from_entropy(entropy: &[u8], passphrase: &str) -> zeroize::Zeroizing<[u8; 64]> {
     use hmac::Hmac;
@@ -148,6 +152,18 @@ pub fn seed_from_entropy(entropy: &[u8], passphrase: &str) -> zeroize::Zeroizing
     }
 
     seed
+}
+
+/// Derive the standard BIP39 seed for mnemonic entropy: PBKDF2-HMAC-SHA512 over
+/// the (English, NFKD-normalized) mnemonic *phrase*, salt = "mnemonic" +
+/// passphrase. This matches MetaMask, Ledger, Phantom and other BIP39 wallets.
+///
+/// Returns `None` if `entropy` is not a valid BIP39 length (16–32 bytes, in
+/// steps of 4).
+#[cfg(feature = "mnemonic")]
+pub fn bip39_seed(entropy: &[u8], passphrase: &str) -> Option<zeroize::Zeroizing<[u8; 64]>> {
+    let mnemonic = crate::Mnemonic::from_entropy(entropy).ok()?;
+    Some(zeroize::Zeroizing::new(mnemonic.to_seed(passphrase)))
 }
 
 impl From<&str> for crate::Network {

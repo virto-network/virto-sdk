@@ -21,6 +21,8 @@ pub mod chain;
 pub use chain::{KeyStore, MutableKeyStore, pass_session_entry_id};
 #[cfg(all(feature = "pbkdf2", feature = "hmac", feature = "sha2"))]
 pub use chain::seed_from_entropy;
+#[cfg(feature = "mnemonic")]
+pub use chain::bip39_seed;
 #[cfg(feature = "substrate")]
 pub use chain::Substrate;
 #[cfg(feature = "ethereum")]

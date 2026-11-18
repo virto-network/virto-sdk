@@ -42,6 +42,7 @@ rusb = { version = "0.9", optional = true }
 
 [dev-dependencies]
 async-std = {version = "1.10.0", features = ["attributes"]}
+smol = "2"
 serde_json = {version = "1.0", default-features = false, features = ["alloc"]}
 # pass vault example
 dirs = "7"
@@ -58,15 +59,19 @@ std = [
 ]
 substrate = ["sr25519", "pbkdf2", "hmac", "sha2"]
 ed25519 = ["dep:ed25519-dalek"]
-ethereum = ["secp256k1", "dep:sha3", "pbkdf2", "hmac", "sha2"]
-bitcoin = ["secp256k1", "pbkdf2", "hmac", "sha2"]
-solana = ["ed25519", "hmac", "sha2", "pbkdf2"]
-cosmos = ["secp256k1", "hmac", "sha2", "pbkdf2"]
+ethereum = ["secp256k1", "dep:sha3", "mnemonic", "pbkdf2", "hmac", "sha2"]
+bitcoin = ["secp256k1", "mnemonic", "pbkdf2", "hmac", "sha2"]
+solana = ["ed25519", "mnemonic", "hmac", "sha2", "pbkdf2"]
+cosmos = ["secp256k1", "mnemonic", "hmac", "sha2", "pbkdf2"]
 ledger = ["std"]
 trezor = ["std", "dep:rusb"]
 vault_os = ["keyring", "mnemonic", "rand"]
 vault_pass = ["prs-lib", "mnemonic", "rand"]
 vault_simple = ["mnemonic", "rand"]
+
+[[test]]
+name = "golden_vectors"
+required-features = ["std", "substrate", "ethereum", "bitcoin", "solana", "cosmos", "vault_simple"]
 
 [[example]]
 name = "account_generation"
