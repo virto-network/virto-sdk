@@ -4,4 +4,3 @@ Cargo.lock
 **/*.rs.bk
 dist/
 .vscode/
-node_modules/
