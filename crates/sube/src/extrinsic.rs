@@ -95,7 +95,13 @@ fn to_hex(bytes: &[u8]) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mortality {
     Immortal,
-    Mortal { period: u64 },
+    /// Valid for `period` blocks from the checkpoint. The period is rounded
+    /// up to a power of two and limited to 4..=4096 blocks: longer eras are
+    /// quantized, so they would have to be signed against an earlier block
+    /// than the checkpoint.
+    Mortal {
+        period: u64,
+    },
 }
 
 /// Options used while signing and encoding a transaction.
@@ -347,19 +353,22 @@ fn expiry(checkpoint: u64, mortality: Mortality) -> Option<u64> {
     }
 }
 
+/// The longest era whose phase isn't quantized, so the era is born at the
+/// checkpoint itself.
+const MAX_PERIOD: u64 = 1 << 12;
+
 fn normalize_period(period: u64) -> u64 {
     period
         .checked_next_power_of_two()
-        .unwrap_or(1 << 16)
-        .clamp(4, 1 << 16)
+        .unwrap_or(MAX_PERIOD)
+        .clamp(4, MAX_PERIOD)
 }
 
 /// Encode `sp_runtime::generic::Era::Mortal` using its compact two-byte format.
 pub fn encode_mortal_era(period: u64, current: u64) -> [u8; 2] {
     let period = normalize_period(period);
-    let quantize_factor = (period >> 12).max(1);
-    let phase = (current % period) / quantize_factor * quantize_factor;
-    let encoded = (period.trailing_zeros() - 1) as u16 | (((phase / quantize_factor) << 4) as u16);
+    let phase = current % period;
+    let encoded = (period.trailing_zeros() - 1) as u16 | ((phase << 4) as u16);
     encoded.to_le_bytes()
 }
 
@@ -689,6 +698,20 @@ mod tests {
         assert_eq!(encode_mortal_era(64, 0), [0x05, 0x00]);
         assert_eq!(encode_mortal_era(64, 42), [0xa5, 0x02]);
         assert_eq!(encode_mortal_era(3, 5), encode_mortal_era(4, 5));
+    }
+
+    /// Eras longer than 4096 blocks quantize their phase: at 8192 blocks a
+    /// checkpoint of 101 would be born at block 100, not at the block whose
+    /// hash was signed.
+    #[test]
+    fn long_eras_are_capped_so_they_are_born_at_the_checkpoint() {
+        // period 4096 (2^12 → 11), phase 101: (101 << 4) | 11 = 0x065b
+        assert_eq!(encode_mortal_era(8192, 101), [0x5b, 0x06]);
+        assert_eq!(encode_mortal_era(u64::MAX, 101), [0x5b, 0x06]);
+        assert_eq!(
+            expiry(101, Mortality::Mortal { period: 8192 }),
+            Some(101 + 4096)
+        );
     }
 
     #[test]
