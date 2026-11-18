@@ -26,8 +26,9 @@ cargo run -p sube-cli -- --chain wss://kreivo.io
 ```
 
 Create an ordinary wallet profile by piping its mnemonic to the secure store.
-The profile file contains only the derived `//default` sr25519 account and the
-genesis hash:
+The profile signs with the mnemonic's root sr25519 key, the account wallets
+such as polkadot.js, Talisman or subkey show for it. The profile file contains
+only that account and the genesis hash:
 
 ```sh
 printf '%s\n' "$MNEMONIC" | cargo run -p sube-cli -- profile add-wallet alice \
@@ -100,14 +101,14 @@ An ignored destructive smoke test exercises Substrate-key enrollment, exact
 session registration, a locally rejected call, an allowed finalized call,
 adding and removing a scoped device, and receipt inspection. Use disposable
 credentials: enrollment and the allowed remark remain on the selected chain.
-The registrar mnemonic is derived at `//default`; that account pays for
-enrollment and transfers 0.02 KSM to the new pass account, which pays its own
-fees unless a subscribed community covers them. The test stops before
+The registrar's account (the mnemonic's root key) pays for enrollment and
+transfers 0.02 KSM to the new pass account, which pays its own fees unless a
+subscribed community covers them. The test stops before
 submitting anything if the registrar holds less than 0.1 KSM.
 
 ```sh
 SUBE_E2E_URL=wss://... \
-SUBE_E2E_REGISTRAR_MNEMONIC='funded mnemonic derived at //default' \
+SUBE_E2E_REGISTRAR_MNEMONIC='funded mnemonic' \
 SUBE_E2E_DEVICE_MNEMONIC='disposable device mnemonic' \
 cargo test -p sube-cli --all-features \
   live_pass_enrollment_session_and_submission -- --ignored --nocapture

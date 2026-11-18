@@ -103,9 +103,9 @@ enum Command {
 #[derive(Subcommand)]
 enum ProfileCommand {
     List,
-    /// Import a wallet from the mnemonic read on stdin. Its //default
-    /// sr25519 account is derived and the mnemonic kept in the OS secure
-    /// store.
+    /// Import a wallet from the mnemonic read on stdin. It signs with the
+    /// mnemonic's root sr25519 key, the account wallets show for it, and the
+    /// mnemonic is kept in the OS secure store.
     #[cfg(feature = "wallet")]
     AddWallet {
         name: String,
@@ -1031,12 +1031,12 @@ mod tests {
             let registrar_account = registrar.account;
             let free = free_balance(&mut chain, registrar_account).await?;
             eprintln!(
-                "registrar (//default): 0x{}, free balance {free}",
+                "registrar: 0x{}, free balance {free}",
                 hex::encode(registrar_account)
             );
             anyhow::ensure!(
                 free >= 5 * PASS_TOP_UP,
-                "fund the registrar's //default account with at least {} units",
+                "fund the registrar's account with at least {} units",
                 5 * PASS_TOP_UP
             );
             let stored = workflow::import_wallet_profile(

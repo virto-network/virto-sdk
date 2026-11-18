@@ -10,26 +10,20 @@ pub fn import_wallet_profile(
     name: String,
     mnemonic: &str,
 ) -> Result<crate::profiles::Profiles> {
-    use libwallet::{MutableKeyStore, Pair};
+    use libwallet::MutableKeyStore;
 
     let mnemonic: libwallet::Mnemonic = mnemonic
         .parse()
         .map_err(|_| anyhow::anyhow!("mnemonic is invalid"))?;
-    let seed = libwallet::seed_from_entropy(mnemonic.entropy(), "");
-    let root = libwallet::vault::utils::RootAccount::from_bytes(&*seed)
-        .ok_or_else(|| anyhow::anyhow!("could not derive wallet root"))?;
-    let account: [u8; 32] = root
-        .derive("//default")
-        .public()
-        .as_ref()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("wallet signer is not AccountId32"))?;
+    // The account wallets show for the mnemonic.
+    let key = crate::profiles::WalletKey::Root;
+    let (_, account) = crate::signers::wallet_key(mnemonic.entropy(), key)?;
 
     let mut profiles = crate::profiles::Profiles::load(profile_path)?;
     if profiles.find(&name).is_some() {
         anyhow::bail!("profile {name:?} already exists");
     }
-    let profile = crate::profiles::WalletProfile::new(name, genesis_hash, account);
+    let profile = crate::profiles::WalletProfile::new(name, genesis_hash, key, account);
     // The entry is new, so rolling it back can't remove another wallet's.
     let mut keys = libwallet::vault::OSKeyring::<()>::new(&profile.secure_entry(), None);
     keys.update(mnemonic.phrase())?;

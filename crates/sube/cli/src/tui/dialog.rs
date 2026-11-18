@@ -96,7 +96,8 @@ impl Dialog {
             fields: vec![Field::text("Profile name"), Field::masked("Mnemonic")],
             focus: 0,
             notes: vec![
-                "The //default Sr25519 account is derived and verified before storage.".into(),
+                "The mnemonic's root Sr25519 account is derived and verified before storage."
+                    .into(),
             ],
         }
     }
