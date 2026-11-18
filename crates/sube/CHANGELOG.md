@@ -48,6 +48,12 @@
   methods; `tip`, `mortal` and `with_extension` were removed. Set the public
   `tip`, `mortality` and `extensions` fields directly.
 - Transactions are mortal by default (64 blocks) instead of immortal.
+- Mortal periods are limited to 4096 blocks (they were rounded up to a
+  power of two up to 65536). Longer eras quantize their phase, so the
+  runtime checked the signature against an earlier block than the one
+  signed.
+- `TransactionReceipt` gained `events_error`, which says why an included
+  transaction's outcome is `Unknown`.
 - `ChainContext` gained `checkpoint_number`, `checkpoint_hash`, `mortality`
   and `tip` fields.
 - `Error` gained `RuntimeUpgrade` and `GenesisMismatch` variants.
@@ -79,6 +85,15 @@
   `{"Some": ..}`.
 - Serializing dynamic values for types wrapped in more than one newtype (e.g.
   a `BoundedBTreeSet` of tuples) produced wrong SCALE bytes.
+- A serialized Rust `Option` with type information got its `Some` tag twice,
+  and a null for an `Option` type was encoded as `Some` with no payload; it
+  is now `None`.
+- Receipts never had events: they were read through `archive_v1_storage`
+  with the wrong event names, and the error was dropped. Events are now read
+  at the transaction's block with `chainHead_v1_storage`, falling back to the
+  archive API, which not every node offers.
+- Queries at a block hash hold that block's pin, so the unpin flush before
+  the query can't release it.
 
 ## 1.0.0
 
