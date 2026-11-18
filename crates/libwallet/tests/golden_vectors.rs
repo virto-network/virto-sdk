@@ -66,15 +66,31 @@ fn substrate_sr25519() {
             &alice.to_string(),
             "d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d",
         );
-        let root = v.unlock(None, ()).await.unwrap();
+        // The vault's default account is `//default`, not the root key.
+        let default = v.unlock(None, ()).await.unwrap();
         check(
-            "substrate root",
-            &root.to_string(),
+            "substrate //default",
+            &default.to_string(),
             "701f7cc645a26b6bc9c2c61beb25ac9c7564890eccf962fe4f16549b41b29b65",
         );
-        let sig = root.sign_msg(MSG).await.unwrap();
-        assert!(root.verify(MSG, &sig).await);
+        let sig = default.sign_msg(MSG).await.unwrap();
+        assert!(default.verify(MSG, &sig).await);
     });
+}
+
+#[test]
+fn substrate_root_key() {
+    use libwallet::Pair;
+    // The root key is the account `subkey` and Polkadot wallets show for the
+    // phrase (external vector: the dev phrase's root account).
+    let m: Mnemonic = PHRASE.parse().unwrap();
+    let seed = libwallet::seed_from_entropy(m.entropy(), "");
+    let root = libwallet::any::Pair::from_bytes(&*seed).unwrap();
+    check(
+        "substrate root",
+        &hex(root.public()),
+        "46ebddef8cd9bb167dc30878d7113b7e168e6f0646beffd77d69d39bad76b47a",
+    );
 }
 
 #[test]

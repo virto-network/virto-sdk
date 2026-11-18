@@ -25,3 +25,7 @@ jobs:
         working-directory: crates/libwallet
         run: just lint
 
+      - name: Test
+        working-directory: crates/libwallet
+        run: just test
+

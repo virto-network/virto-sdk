@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Breaking changes
 
@@ -9,9 +9,14 @@
   a phrase produces the same accounts as MetaMask, Ledger, Phantom and other
   BIP39 wallets. They previously used the Substrate seed (PBKDF2 over the
   mnemonic *entropy*), so accounts derived by earlier versions will not match.
-  To recover funds held by an old account, derive it with
-  `seed_from_entropy` and the chain's BIP32/SLIP-10 path. Substrate accounts are
-  unchanged.
+  libwallet can no longer sign for an old account. To move its funds, derive
+  its private key with `seed_from_entropy`, the chain's BIP32/SLIP-10 path and
+  `bip32::ExtendedKey` or `bip32::Slip10Key`, and import that key into another
+  wallet. Substrate accounts are unchanged.
+- These vaults need entropy of a BIP39 length (16 to 32 bytes, in steps of 4,
+  i.e. 12 to 24 words). Other lengths, such as a 64-byte `Simple` store, now
+  fail with `VaultError::Derivation`. They derive with an empty BIP39
+  passphrase.
 - The non-Substrate chain features (`ethereum`, `bitcoin`, `solana`, `cosmos`)
   now enable `mnemonic`.
 - `Language` is now `bip0039::BuiltInLanguage` and no longer implements

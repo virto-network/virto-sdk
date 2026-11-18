@@ -5,6 +5,8 @@ check:
     cargo check
 lint:
     cargo clippy -- -D warnings
+test:
+    cargo test --features std,substrate,ethereum,bitcoin,solana,cosmos,vault_simple
 
 check-no-std:
 	cargo build --features substrate --target wasm32-unknown-unknown
