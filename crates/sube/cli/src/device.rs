@@ -41,6 +41,7 @@ fn webauthn_transport() -> WebAuthnTransport {
     pass::webauthn::DesktopWebAuthnTransport
 }
 
+#[cfg(feature = "desktop-webauthn")]
 /// Authenticator prompts, such as touching a security key or entering its
 /// PIN, happen on the terminal, outside of the CLI's control.
 pub enum Prompt {
@@ -48,18 +49,22 @@ pub enum Prompt {
     End,
 }
 
+#[cfg(feature = "desktop-webauthn")]
 static PROMPT_HOOK: std::sync::OnceLock<Box<dyn Fn(Prompt) + Send + Sync>> =
     std::sync::OnceLock::new();
 
+#[cfg(feature = "desktop-webauthn")]
 /// Run `hook` around authenticator prompts, so that a full-screen UI can
 /// give the terminal to them. `Prompt::Begin` must return only once it has.
 pub fn on_prompt(hook: impl Fn(Prompt) + Send + Sync + 'static) {
     let _ = PROMPT_HOOK.set(Box::new(hook));
 }
 
+#[cfg(feature = "desktop-webauthn")]
 /// Marks an authenticator prompt for as long as it lives.
 struct Prompting;
 
+#[cfg(feature = "desktop-webauthn")]
 impl Prompting {
     fn begin() -> Self {
         if let Some(hook) = PROMPT_HOOK.get() {
@@ -69,6 +74,7 @@ impl Prompting {
     }
 }
 
+#[cfg(feature = "desktop-webauthn")]
 impl Drop for Prompting {
     fn drop(&mut self) {
         if let Some(hook) = PROMPT_HOOK.get() {

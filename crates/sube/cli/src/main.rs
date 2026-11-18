@@ -505,42 +505,41 @@ async fn connect_profile(
     if let Some(profiles::Profile::Pass(profile)) =
         profiles::Profiles::load(profile_path)?.find(name)
     {
-        let policy = session_policy
-            .map(str::to_owned)
-            .or_else(|| {
-                profile
-                    .session
-                    .as_ref()
-                    .map(|session| session.policy.clone())
-            })
-            .ok_or_else(|| {
-                anyhow::anyhow!("pass connect requires --session-policy calls:... or pallets:...")
-            })?;
-        ensure_confirmable(true, yes)?;
-        let preparation = workflow::prepare_pass_session(
-            &mut chain,
-            chain_url,
-            profile_path,
-            genesis_hash,
-            name,
-            &policy,
-            session_duration,
-        )
-        .await?;
-        if let workflow::SessionPreparation::Review(staged) = preparation {
-            let behavior = TxBehavior {
-                json: false,
-                submit: true,
-                yes,
-                best: false,
-            };
-            finish(&mut chain, profile_path, *staged, behavior).await?;
+        // Without a session policy, given or stored, the profile is activated
+        // as it is below, and its device signs each transaction.
+        let policy = session_policy.map(str::to_owned).or_else(|| {
+            profile
+                .session
+                .as_ref()
+                .map(|session| session.policy.clone())
+        });
+        if let Some(policy) = policy {
+            ensure_confirmable(true, yes)?;
+            let preparation = workflow::prepare_pass_session(
+                &mut chain,
+                chain_url,
+                profile_path,
+                genesis_hash,
+                name,
+                &policy,
+                session_duration,
+            )
+            .await?;
+            if let workflow::SessionPreparation::Review(staged) = preparation {
+                let behavior = TxBehavior {
+                    json: false,
+                    submit: true,
+                    yes,
+                    best: false,
+                };
+                finish(&mut chain, profile_path, *staged, behavior).await?;
+            }
+            println!(
+                "Connected profile {name} to 0x{}",
+                hex::encode(genesis_hash)
+            );
+            return Ok(());
         }
-        println!(
-            "Connected profile {name} to 0x{}",
-            hex::encode(genesis_hash)
-        );
-        return Ok(());
     }
     #[cfg(not(feature = "pass"))]
     let _ = (session_policy, session_duration, yes);

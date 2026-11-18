@@ -46,7 +46,12 @@ cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
 ```
 
 Default desktop builds can instead create a WebAuthn credential. Only the RP
-ID, origin, and opaque credential ID are written to the profile:
+ID, origin, and opaque credential ID are written to the profile. The RP ID must
+be the origin's domain, which is what pallet-pass checks. Linux and macOS use
+USB security keys; Windows uses the system's WebAuthn API. pallet-pass requires
+user verification, so a security key needs a PIN (or fingerprint), which it
+asks for on the terminal for every operation; the TUI hands the terminal over
+while it does:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
@@ -57,14 +62,17 @@ cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
 Without `--submit`, enrollment and device commands only print the review;
 nothing is stored, so a later `--submit` prompts the device again. Profiles
 change only after the transaction finalizes successfully. Connecting a pass
-profile requires an explicit session policy unless the exact stored policy can
-be reused:
+profile with a session policy registers that session, or reuses the exact
+stored one, and calls are then signed with the session key. Without a policy
+or a stored session, the device itself authenticates each call:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io connect alice-pass \
   --session-policy 'calls:Balances/transfer_keep_alive'
 
 cargo run -p sube-cli -- --chain wss://kreivo.io pass session forget alice-pass
+# Without a session, the security key signs each call.
+cargo run -p sube-cli -- --chain wss://kreivo.io connect alice-pass
 ```
 
 The network connection is created and owned by a dedicated worker thread.
@@ -86,7 +94,9 @@ profile. Adding an Admin device requires typing `ADMIN`; removal requires
 typing `REMOVE` after reviewing the last-device warning.
 
 Typed forms accept SS58 or hex AccountId32 values; amounts are entered in the
-chain's smallest unit. `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:` and `hex:`
+chain's smallest unit. Outside text fields, Space toggles enums and booleans,
+and `+`/`-` add and remove list items. If the node connection drops, the TUI
+reconnects and says so in its header. `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:` and `hex:`
 modes. Conversion errors stay inline and do not reach the chain
 worker.
 
@@ -112,4 +122,17 @@ SUBE_E2E_REGISTRAR_MNEMONIC='funded mnemonic' \
 SUBE_E2E_DEVICE_MNEMONIC='disposable device mnemonic' \
 cargo test -p sube-cli --all-features \
   live_pass_enrollment_session_and_submission -- --ignored --nocapture
+```
+
+`live_pass_webauthn_flow` runs the same flow with a WebAuthn device, and also
+signs a call with the device itself. The device is an in-memory software
+authenticator from the test-only `soft-webauthn` feature, which also turns
+every `webauthn:` device of a `sube` build into one; its keys are lost when the
+process exits. Never use such a build with real accounts.
+
+```sh
+SUBE_E2E_URL=wss://... \
+SUBE_E2E_REGISTRAR_MNEMONIC='funded mnemonic' \
+cargo test -p sube-cli --features soft-webauthn \
+  live_pass_webauthn_flow -- --ignored --nocapture
 ```
