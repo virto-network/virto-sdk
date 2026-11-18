@@ -381,28 +381,28 @@ pub async fn prepare_pass_session(
         anyhow::bail!("profile genesis hash does not match the connected chain");
     }
     let policy = parse_session_policy(chain.metadata(), policy_text)?;
-    let checkpoint = chain.backend().block_info(None).await?;
-
-    if let Some(session) = &profile.session {
-        // The runtime stores the filter as sets, so compare it in that form.
-        // A stored policy that no longer parses is simply not reused.
-        let same_policy = parse_session_policy(chain.metadata(), &session.policy)
-            .is_ok_and(|local| local.runtime_value() == policy.runtime_value());
-        if same_policy
-            && session.expires_at > checkpoint.number
-            && on_chain_session_matches(chain, &profile, session, &policy).await
-            && crate::signers::load_session_signer(&profile.session_entry(), session.account)
-                .await
-                .is_ok()
-        {
-            profiles.activate(name, genesis_hash)?;
-            profiles.save(profile_path)?;
-            return Ok(SessionPreparation::Reused(profiles));
-        }
-    }
-
     let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
     let duration = pass::session::session_duration(&config, requested_duration)?;
+    let checkpoint = chain.backend().block_info(None).await?;
+
+    if let Some(session) = &profile.session
+        && reusable_session(
+            chain.metadata(),
+            session,
+            &policy,
+            requested_duration,
+            checkpoint.number,
+        )
+        && on_chain_session_matches(chain, &profile, session, &policy).await
+        && crate::signers::load_session_signer(&profile.session_entry(), session.account)
+            .await
+            .is_ok()
+    {
+        profiles.activate(name, genesis_hash)?;
+        profiles.save(profile_path)?;
+        return Ok(SessionPreparation::Reused(profiles));
+    }
+
     let existing_account = profile.session.as_ref().map(|session| session.account);
     let mut notes = Vec::new();
     let (session_signer, new_seed) = if let Some(expected) = existing_account {
@@ -511,6 +511,24 @@ pub fn apply_finalized_effect(
         }
     }
     Ok(profiles)
+}
+
+/// Whether the stored session can stand in for the one requested, as far as
+/// the local profile tells. An explicit duration always registers a new
+/// session, since the stored one's remaining lifetime is unrelated to it.
+#[cfg(feature = "pass")]
+fn reusable_session(
+    metadata: &sube::Metadata,
+    session: &crate::profiles::SessionProfile,
+    policy: &pass::DeviceFilter,
+    requested_duration: Option<u32>,
+    now: u64,
+) -> bool {
+    // The runtime stores the filter as sets, so compare it in that form. A
+    // stored policy that no longer parses is simply not reused.
+    let same_policy = parse_session_policy(metadata, &session.policy)
+        .is_ok_and(|local| local.runtime_value() == policy.runtime_value());
+    requested_duration.is_none() && same_policy && session.expires_at > now
 }
 
 #[cfg(feature = "pass")]
@@ -1176,6 +1194,31 @@ mod tests {
             parse_session_policy(&metadata, "calls:System/remark").unwrap(),
             pass::DeviceFilter::Calls(_)
         ));
+    }
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn sessions_are_reused_only_without_an_explicit_duration() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let session = crate::profiles::SessionProfile {
+            account: [1; 32],
+            policy: "calls:System/remark".into(),
+            expires_at: 200,
+        };
+        let policy = parse_session_policy(&metadata, "calls:System/remark").unwrap();
+        assert!(reusable_session(&metadata, &session, &policy, None, 100));
+        assert!(!reusable_session(
+            &metadata,
+            &session,
+            &policy,
+            Some(1),
+            100
+        ));
+        assert!(!reusable_session(&metadata, &session, &policy, None, 200));
+        let other = parse_session_policy(&metadata, "pallets:System").unwrap();
+        assert!(!reusable_session(&metadata, &session, &other, None, 100));
     }
 
     #[cfg(feature = "pass")]
