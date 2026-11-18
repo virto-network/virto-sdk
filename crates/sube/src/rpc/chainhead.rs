@@ -63,6 +63,9 @@ pub struct ChainHead<R> {
     /// Set when a finalized event arrives after flush — means finalized_hash
     /// points to an already-unpinned block and we need to refollow.
     needs_refollow: bool,
+    /// A block kept pinned even when it is queued for unpinning, e.g. a
+    /// transaction's block while its events are read.
+    held: Option<String>,
     /// User-visible events buffered during internal operations.
     event_queue: VecDeque<ChainEvent>,
 }
@@ -302,30 +305,44 @@ fn parse_operation_started(json: &str) -> Result<OperationStarted<'_>, crate::Er
 
 // --- Archive storage event types ---
 
+/// An `archive_v1_storageEvent`: one `storage` event per item, then
+/// `storageDone`.
 #[derive(Debug)]
 enum ArchiveStorageEvent<'a> {
-    Items { items: Vec<StorageItem> },
+    Storage(StorageItem),
     Done,
     Error { error: &'a str },
-    WaitingForContinue,
 }
 
 fn parse_archive_storage_event(json: &str) -> Result<ArchiveStorageEvent<'_>, crate::Error> {
     let event = extract_json_str(json, "\"event\":\"")
         .ok_or_else(|| crate::Error::Decode("missing event field".into()))?;
     match event {
-        "items" => Ok(ArchiveStorageEvent::Items {
-            items: parse_storage_items(json),
-        }),
-        "done" => Ok(ArchiveStorageEvent::Done),
-        "error" => Ok(ArchiveStorageEvent::Error {
+        "storage" => Ok(ArchiveStorageEvent::Storage(StorageItem {
+            key: extract_json_string(json, "\"key\":\"")
+                .ok_or_else(|| crate::Error::Decode("storage event without a key".into()))?,
+            value: extract_json_string(json, "\"value\":\""),
+        })),
+        "storageDone" => Ok(ArchiveStorageEvent::Done),
+        "storageError" => Ok(ArchiveStorageEvent::Error {
             error: extract_json_str(json, "\"error\":\"").unwrap_or("unknown error"),
         }),
-        "waitingForContinue" => Ok(ArchiveStorageEvent::WaitingForContinue),
         other => Err(crate::Error::Decode(format!(
             "unknown archive event: {other}"
         ))),
     }
+}
+
+/// Take the queued unpins, except `held`, which stays queued.
+fn take_unpins(pending: &mut Vec<String>, held: Option<&str>) -> Vec<String> {
+    let hashes = core::mem::take(pending);
+    let Some(held) = held else {
+        return hashes;
+    };
+    // The held block is unpinned by a later flush, once released.
+    let (kept, unpin) = hashes.into_iter().partition(|hash| hash == held);
+    *pending = kept;
+    unpin
 }
 
 // --- Transaction watch event types ---
@@ -415,6 +432,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
             storage_accum: BTreeMap::new(),
             pending_unpin: Vec::new(),
             needs_refollow: false,
+            held: None,
             event_queue: VecDeque::new(),
         };
 
@@ -541,7 +559,7 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
 
     /// Flush all pending unpins in a single batch RPC call.
     async fn flush_unpins(&mut self) {
-        let hashes = core::mem::take(&mut self.pending_unpin);
+        let hashes = take_unpins(&mut self.pending_unpin, self.held.as_deref());
         if hashes.is_empty() {
             return;
         }
@@ -756,9 +774,67 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
         hash: &str,
         keys: &[String],
     ) -> crate::Result<Vec<StorageItem>> {
-        // Drain buffered events and flush unpins before querying
-        self.prepare_operation().await?;
-        self.storage_with_hash(hash, keys).await
+        // Drain buffered events and flush unpins before querying, except
+        // the block being queried.
+        self.held = Some(hash.into());
+        let result = match self.prepare_operation().await {
+            Ok(_) => self.storage_with_hash(hash, keys).await,
+            Err(error) => Err(error),
+        };
+        self.held = None;
+        result
+    }
+
+    /// Read storage at `hash`, a block reported by another subscription
+    /// (e.g. a transaction watch), keeping it pinned while reading. Falls
+    /// back to the archive API, which not every node offers.
+    async fn storage_at_reported_block(
+        &mut self,
+        hash: &str,
+        keys: &[String],
+    ) -> crate::Result<Vec<StorageItem>> {
+        self.held = Some(hash.into());
+        let result = self.storage_at_held_block(hash, keys).await;
+        self.held = None;
+        match result {
+            Ok(items) => Ok(items),
+            Err(error) => self.archive_storage(hash, keys).await.map_err(|archive| {
+                crate::Error::Node(format!("{error}; archive fallback: {archive}"))
+            }),
+        }
+    }
+
+    async fn storage_at_held_block(
+        &mut self,
+        hash: &str,
+        keys: &[String],
+    ) -> crate::Result<Vec<StorageItem>> {
+        // Transaction and follow events come on separate subscriptions, so
+        // the follow subscription may announce (and pin) the block shortly
+        // after the watch reported it.
+        const ATTEMPTS: usize = 4;
+        let mut attempt = 1;
+        loop {
+            self.prepare_operation().await?;
+            match self.storage_with_hash(hash, keys).await {
+                Ok(items) => return Ok(items),
+                Err(error) if attempt == ATTEMPTS => return Err(error),
+                Err(_) => {
+                    attempt += 1;
+                    self.next_lifecycle_event().await?;
+                }
+            }
+        }
+    }
+
+    /// Wait for and record the next follow event.
+    async fn next_lifecycle_event(&mut self) -> crate::Result<()> {
+        let (_, event_json) = self.next_follow_event().await?;
+        match parse_follow_event(&event_json)? {
+            FollowEvent::Stop => self.needs_refollow = true,
+            event => self.record_lifecycle_event(event),
+        }
+        Ok(())
     }
 
     /// Send a storage query and wait for results.
@@ -971,23 +1047,10 @@ impl<R: Rpc + RpcSubscription> ChainHead<R> {
                     .map_err(|e| crate::Error::Decode(format!("archive event: {e}")))?;
 
                 match event {
-                    ArchiveStorageEvent::Items { items } => {
-                        for item in items {
-                            result_items.push(item);
-                        }
-                    }
+                    ArchiveStorageEvent::Storage(item) => result_items.push(item),
                     ArchiveStorageEvent::Done => return Ok(result_items),
                     ArchiveStorageEvent::Error { error } => {
                         return Err(crate::Error::Node(format!("archive storage: {error}")));
-                    }
-                    ArchiveStorageEvent::WaitingForContinue => {
-                        let _ = self
-                            .rpc
-                            .rpc(
-                                "archive_v1_storageContinue",
-                                &format!(r#"["{}"]"#, archive_sub_id),
-                            )
-                            .await;
                     }
                 }
             } else if sub_id == self.follow_sub_id {
@@ -1280,8 +1343,8 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
         let mut receipt = self.watch_transaction(ext, wait_for).await?;
         let Some(block_hash) = receipt
             .finalized_block_hash
-            .as_deref()
-            .or(receipt.best_block_hash.as_deref())
+            .clone()
+            .or(receipt.best_block_hash.clone())
         else {
             return Ok(receipt);
         };
@@ -1289,19 +1352,23 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             return Ok(receipt);
         };
 
-        // Transaction-watch blocks are not guaranteed to be pinned by the
-        // chainHead subscription, so fetch events through archive storage.
+        let unavailable = |mut receipt: crate::TransactionReceipt, why: String| {
+            receipt.events_error = Some(why);
+            Ok(receipt)
+        };
         let key = match crate::resolve_query(metadata, "system/events") {
             Ok(crate::ResolvedQuery::Storage(key)) => key,
-            _ => return Ok(receipt),
+            _ => return unavailable(receipt, "metadata has no System.Events storage".into()),
         };
         let key_bytes = key.key();
         let items = match self
-            .archive_storage(block_hash, &[to_hex(&key_bytes)])
+            .storage_at_reported_block(&block_hash, &[to_hex(&key_bytes)])
             .await
         {
             Ok(items) => items,
-            Err(_) => return Ok(receipt),
+            Err(error) => {
+                return unavailable(receipt, format!("reading System.Events failed: {error}"));
+            }
         };
         let Some(raw) = items
             .iter()
@@ -1309,12 +1376,12 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             .and_then(|item| item.value.as_deref())
             .and_then(|value| hex::decode(value.trim_start_matches("0x")).ok())
         else {
-            return Ok(receipt);
+            return unavailable(receipt, "System.Events is empty at the block".into());
         };
 
         let records = scales::Value::new(&raw, key.ty, &metadata.registry);
         let Some(records) = records.sequence_iter() else {
-            return Ok(receipt);
+            return unavailable(receipt, "System.Events doesn't decode".into());
         };
         for record in records {
             let Some(phase) = record.field("phase") else {
@@ -1357,6 +1424,11 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
             });
         }
 
+        if matches!(receipt.dispatch_outcome, crate::DispatchOutcome::Unknown) {
+            receipt.events_error = Some(format!(
+                "no ExtrinsicSuccess or ExtrinsicFailed event for extrinsic {extrinsic_index}"
+            ));
+        }
         Ok(receipt)
     }
 
@@ -1768,6 +1840,36 @@ fn decode_dispatch_info(mut input: &[u8]) -> Option<(crate::TransactionWeight, u
 #[cfg(test)]
 mod transaction_watch_tests {
     use super::*;
+
+    /// As sent by Polkadot's archive node.
+    #[test]
+    fn parses_archive_storage_events() {
+        let storage = r#"{"event":"storage","key":"0x26aa","value":"0x0102"}"#;
+        match parse_archive_storage_event(storage).unwrap() {
+            ArchiveStorageEvent::Storage(item) => {
+                assert_eq!(item.key, "0x26aa");
+                assert_eq!(item.value.as_deref(), Some("0x0102"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse_archive_storage_event(r#"{"event":"storageDone"}"#).unwrap(),
+            ArchiveStorageEvent::Done
+        ));
+        assert!(matches!(
+            parse_archive_storage_event(r#"{"event":"storageError","error":"boom"}"#).unwrap(),
+            ArchiveStorageEvent::Error { error: "boom" }
+        ));
+    }
+
+    #[test]
+    fn held_blocks_stay_pinned_until_released() {
+        let mut pending = vec!["0xa".to_string(), "0xtx".into(), "0xb".into()];
+        assert_eq!(take_unpins(&mut pending, Some("0xtx")), ["0xa", "0xb"]);
+        assert_eq!(pending, ["0xtx"]);
+        assert_eq!(take_unpins(&mut pending, None), ["0xtx"]);
+        assert!(pending.is_empty());
+    }
 
     #[test]
     fn decodes_runtime_version() {

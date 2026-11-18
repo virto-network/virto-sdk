@@ -264,6 +264,9 @@ pub struct TransactionReceipt {
     pub extrinsic_index: Option<u32>,
     pub dispatch_outcome: DispatchOutcome,
     pub events: Vec<TransactionEvent>,
+    /// Why the outcome is [`DispatchOutcome::Unknown`] although the
+    /// transaction was included, e.g. its block's events couldn't be read.
+    pub events_error: Option<String>,
 }
 
 /// Chain context fetched once for extension defaults.
