@@ -163,9 +163,11 @@ impl PassRuntimeConfig {
             .any(|candidate| candidate.eq_ignore_ascii_case(variant))
     }
 
-    /// Default AccountId32 derivation used by `PalletId::into_sub_account_truncating`.
+    /// The pass account of `user_id`, assuming the runtime uses pallet-pass's
+    /// default `AddressGenerator` (`()`). The generator is a runtime
+    /// configuration type and is not described by the metadata.
     pub fn derive_account(&self, user_id: HashedUserId) -> Account {
-        derive_account(self.pallet_id, user_id)
+        derive_account(user_id)
     }
 }
 
@@ -278,21 +280,20 @@ fn collect_named_enum_variants(
     }
 }
 
-/// Convert a pallet id into the authority AccountId32 used by FRAME.
+/// The authority id of a pallet, as frame-contrib's `AuthorityFromPalletId`
+/// derives it: the pallet id, zero-padded to 32 bytes.
 pub fn pallet_authority_id(pallet_id: [u8; 8]) -> AuthorityId {
     let mut authority = [0u8; 32];
-    authority[..4].copy_from_slice(b"modl");
-    authority[4..12].copy_from_slice(&pallet_id);
+    authority[..8].copy_from_slice(&pallet_id);
     AuthorityId(authority)
 }
 
-/// Default pass account derivation for AccountId32 runtimes.
-pub fn derive_account(pallet_id: [u8; 8], user_id: HashedUserId) -> Account {
-    let mut encoded = Vec::with_capacity(44);
-    encoded.extend_from_slice(b"modl");
-    encoded.extend_from_slice(&pallet_id);
-    encoded.extend_from_slice(&user_id.0);
-    Account(blake2b_256(&encoded))
+/// The pass account of `user_id` under pallet-pass's default
+/// `AddressGenerator`: `blake2_256([0; 32] ++ user_id)`.
+pub fn derive_account(user_id: HashedUserId) -> Account {
+    let mut input = [0u8; 64];
+    input[32..].copy_from_slice(&user_id.0);
+    Account(blake2b_256(&input))
 }
 
 /// Build a dynamic call body from metadata-resolved fields.
@@ -328,11 +329,21 @@ mod tests {
     }
 
     #[test]
-    fn account_derivation_is_stable() {
-        let account = derive_account(*b"kreivo_p", HashedUserId([0x11; 32]));
+    fn accounts_are_derived_like_the_default_address_generator() {
+        // blake2_256([0; 32] ++ [0x11; 32]), computed independently.
+        let account = derive_account(HashedUserId([0x11; 32]));
         assert_eq!(
             hex::encode(account.0),
-            "57f6077d10a19211d718c5373d96e3efaa7c9cfa32c149b16ffe41a03ef9995c"
+            "04422c9487f442300bf68985ccf6aa95843dffa3c16f4b0003ee06a54bcb9c12"
         );
+    }
+
+    #[test]
+    fn the_authority_is_the_zero_padded_pallet_id() {
+        let metadata = Metadata::from_bytes(KREIVO_META).unwrap();
+        let config = PassRuntimeConfig::discover(&metadata).unwrap();
+        let mut expected = [0u8; 32];
+        expected[..8].copy_from_slice(b"kreivo_p");
+        assert_eq!(config.authority_id, AuthorityId(expected));
     }
 }
