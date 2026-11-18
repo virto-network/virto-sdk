@@ -235,6 +235,9 @@ pub async fn prepare_enrollment(
                 "Predicted pass account: 0x{}",
                 hex::encode(draft.predicted_account.0)
             ),
+            "The pass account starts without funds: transfer some to it before it \
+             sends calls, unless a community pays its fees."
+                .into(),
         ],
         effect: Some(PendingEffect::Enrollment(Box::new(
             crate::profiles::PassProfile {
@@ -888,11 +891,18 @@ impl PreparedTransaction {
         )
     }
 
-    pub fn known_invalid(&self) -> bool {
-        matches!(
-            self.report.validity,
-            Some(sube::TransactionValidity::Invalid(_))
-        )
+    /// Fails, without submitting, when the chain's validation rejected the
+    /// reviewed transaction.
+    pub fn ensure_not_rejected(&self) -> Result<()> {
+        let Some(sube::TransactionValidity::Invalid(reason)) = &self.report.validity else {
+            return Ok(());
+        };
+        let hint = if reason.starts_with("Invalid::Payment") {
+            "; the signing account can't pay the fee, so fund it first"
+        } else {
+            ""
+        };
+        anyhow::bail!("the chain rejects this transaction: {reason}{hint}; nothing was submitted")
     }
 }
 
@@ -921,9 +931,7 @@ pub async fn submit_transaction(
     prepared: &PreparedTransaction,
     wait_for: sube::WaitFor,
 ) -> Result<sube::TransactionReceipt> {
-    if prepared.known_invalid() {
-        anyhow::bail!("transaction validation reports known-invalid; submission blocked");
-    }
+    prepared.ensure_not_rejected()?;
     chain
         .submit_transaction(&prepared.transaction, wait_for)
         .await

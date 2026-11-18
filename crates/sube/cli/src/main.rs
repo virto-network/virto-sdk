@@ -385,9 +385,7 @@ fn review(
     if !behavior.submit {
         return Ok(false);
     }
-    if staged.prepared.known_invalid() {
-        anyhow::bail!("the chain reports this transaction invalid; no transaction was submitted");
-    }
+    staged.prepared.ensure_not_rejected()?;
     if !behavior.yes && !confirm()? {
         anyhow::bail!("submission canceled; no transaction was submitted");
     }
@@ -852,7 +850,11 @@ mod tests {
     #[cfg(feature = "wallet")]
     #[test]
     fn known_invalid_transactions_are_reviewed_but_never_submitted() {
-        let invalid = || staged(Some(sube::TransactionValidity::Invalid("0x0001".into())));
+        let invalid = || {
+            staged(Some(sube::TransactionValidity::Invalid(
+                "Invalid::Payment (0x0001)".into(),
+            )))
+        };
         let mut behavior = TxBehavior {
             json: false,
             submit: false,
@@ -865,16 +867,16 @@ mod tests {
         assert!(
             String::from_utf8(output)
                 .unwrap()
-                .contains("Invalid(\"0x0001\")")
+                .contains("Invalid(\"Invalid::Payment (0x0001)\")")
         );
 
         behavior.submit = true;
         behavior.yes = true;
         let error = review(&invalid(), behavior, &mut Vec::new(), never).unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("reports this transaction invalid")
+            error.to_string().contains(
+                "rejects this transaction: Invalid::Payment (0x0001); the signing account"
+            )
         );
     }
 
