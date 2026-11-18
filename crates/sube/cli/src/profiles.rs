@@ -32,6 +32,15 @@ impl Profile {
             Self::Pass(profile) => profile.genesis_hash,
         }
     }
+
+    /// The on-chain account: a wallet's own, or a pass profile's pass account.
+    pub fn account(&self) -> [u8; 32] {
+        match self {
+            Self::Wallet(profile) => profile.account,
+            #[cfg(feature = "pass")]
+            Self::Pass(profile) => profile.pass_account,
+        }
+    }
 }
 
 /// Which sr25519 key of a mnemonic a wallet profile signs with.
@@ -240,6 +249,15 @@ impl Profiles {
     }
 
     #[cfg(feature = "wallet")]
+    /// Each profile on the chain `genesis_hash` with its account.
+    pub fn accounts(&self, genesis_hash: [u8; 32]) -> Vec<(String, [u8; 32])> {
+        self.profiles
+            .iter()
+            .filter(|profile| profile.genesis_hash() == genesis_hash)
+            .map(|profile| (profile.name().to_owned(), profile.account()))
+            .collect()
+    }
+
     pub fn active(&self) -> Option<&Profile> {
         self.active.as_deref().and_then(|name| self.find(name))
     }

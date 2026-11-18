@@ -103,8 +103,9 @@ review and require a successful finalized receipt before changing the local
 profile. Adding an Admin device requires typing `ADMIN`; removal requires
 typing `REMOVE` after reviewing the last-device warning.
 
-Typed forms accept SS58 or hex AccountId32 values; amounts are entered in the
-chain's smallest unit. Outside text fields, Space toggles enums and booleans,
+Typed forms accept SS58 or hex AccountId32 values, or the name of a profile on
+the chain for its account: `←`/`→` on an account field cycles through them.
+Amounts are entered in the chain's smallest unit. Outside text fields, Space toggles enums and booleans,
 and `+`/`-` add and remove list items. If the node connection drops, the TUI
 reconnects and says so in its header. `Vec<u8>` fields accept plain UTF-8 as well as explicit `utf8:` and `hex:`
 modes. Conversion errors stay inline and do not reach the chain
