@@ -919,3 +919,56 @@ fn named_fields_are_encoded_by_name() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn rust_options_get_one_tag() -> Result<()> {
+    #[derive(Debug, Encode, TypeInfo, Serialize)]
+    struct Call {
+        duration: Option<u32>,
+        nested: Option<Option<u8>>,
+        filter: u8,
+    }
+    for call in [
+        Call {
+            duration: Some(5),
+            nested: Some(Some(7)),
+            filter: 9,
+        },
+        Call {
+            duration: None,
+            nested: Some(None),
+            filter: 9,
+        },
+    ] {
+        let (id, reg) = register(&call);
+        let mut out = Vec::<u8>::new();
+        to_bytes_with_info(&mut out, &call, Some((&reg, id)))?;
+        assert_eq!(out, call.encode(), "{call:?}");
+    }
+
+    // A root `Option` too.
+    let (id, reg) = register(&Some(5u32));
+    let mut out = Vec::<u8>::new();
+    to_bytes_with_info(&mut out, &Some(5u32), Some((&reg, id)))?;
+    assert_eq!(out, Some(5u32).encode());
+    Ok(())
+}
+
+#[test]
+fn null_options_are_none() -> Result<()> {
+    #[derive(Debug, Encode, TypeInfo)]
+    struct Call {
+        duration: Option<u32>,
+        filter: u8,
+    }
+    let call = Call {
+        duration: None,
+        filter: 9,
+    };
+    let (id, reg) = register(&call);
+    let json = serde_json::json!({"duration": null, "filter": 9});
+    let mut out = Vec::<u8>::new();
+    to_bytes_with_info(&mut out, &json, Some((&reg, id)))?;
+    assert_eq!(out, call.encode());
+    Ok(())
+}

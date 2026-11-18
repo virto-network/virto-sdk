@@ -288,11 +288,20 @@ where
     where
         T: Serialize + ?Sized,
     {
-        self.out.put_u8(0x01);
+        // An `Option` type takes the tag and moves to the inner type, so
+        // the value isn't tagged a second time.
+        if !self.maybe_some()? {
+            self.out.put_u8(0x01);
+        }
         value.serialize(self)
     }
 
     fn serialize_unit(self) -> Result<Self::Ok> {
+        // A null `Option` is `None`.
+        if self.is_option() {
+            self.out.put_u8(0x00);
+            return Ok(());
+        }
         self.maybe_some()?;
         Ok(())
     }
@@ -415,7 +424,9 @@ where
 {
     // A check to run for every serialize fn since any type could be an Option::Some
     // if the type info says its an Option assume its Some and extract the inner type
-    fn maybe_some(&mut self) -> Result<()> {
+    /// If the current type is an `Option`, write the `Some` tag and move to
+    /// the inner type. Returns whether it did.
+    fn maybe_some(&mut self) -> Result<bool> {
         if let Some(ty_id) = self.ty_id {
             if let TypeDef::Variant(vdef) = self.resolve(ty_id) {
                 if vdef.name() == "Option" {
@@ -424,10 +435,16 @@ where
                         _ => None,
                     };
                     self.out.put_u8(0x01);
+                    return Ok(true);
                 }
             }
         }
-        Ok(())
+        Ok(false)
+    }
+
+    fn is_option(&self) -> bool {
+        self.ty_id
+            .is_some_and(|ty_id| matches!(self.resolve(ty_id), TypeDef::Variant(vdef) if vdef.name() == "Option"))
     }
 
     #[inline]
