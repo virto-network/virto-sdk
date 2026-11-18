@@ -29,11 +29,8 @@ pub fn import_wallet_profile(
     if profiles.find(&name).is_some() {
         anyhow::bail!("profile {name:?} already exists");
     }
-    let profile = crate::profiles::WalletProfile {
-        name,
-        genesis_hash,
-        account,
-    };
+    let profile = crate::profiles::WalletProfile::new(name, genesis_hash, account);
+    // The entry is new, so rolling it back can't remove another wallet's.
     let mut keys = libwallet::vault::OSKeyring::<()>::new(&profile.secure_entry(), None);
     keys.update(mnemonic.phrase())?;
     profiles.upsert(crate::profiles::Profile::Wallet(profile));

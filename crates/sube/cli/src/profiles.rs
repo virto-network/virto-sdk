@@ -40,13 +40,34 @@ pub struct WalletProfile {
     pub genesis_hash: [u8; 32],
     /// The sr25519 account derived at `//default`.
     pub account: [u8; 32],
+    /// Random id of the OS keyring entry holding the mnemonic, so wallets of
+    /// the same name in different profile stores don't share an entry.
+    /// Stores written before it existed name the entry after the wallet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyring_id: Option<String>,
 }
 
 #[cfg(feature = "wallet")]
 impl WalletProfile {
+    /// A new wallet profile with its own keyring entry.
+    pub fn new(name: String, genesis_hash: [u8; 32], account: [u8; 32]) -> Self {
+        use rand_core::RngCore;
+        let mut id = [0u8; 16];
+        rand_core::OsRng.fill_bytes(&mut id);
+        Self {
+            name,
+            genesis_hash,
+            account,
+            keyring_id: Some(hex::encode(id)),
+        }
+    }
+
     /// The OS secure-store entry holding the mnemonic.
     pub fn secure_entry(&self) -> String {
-        format!("wallet-profile-v1-{}", self.name)
+        match &self.keyring_id {
+            Some(id) => format!("wallet-profile-v2-{id}"),
+            None => format!("wallet-profile-v1-{}", self.name),
+        }
     }
 }
 
@@ -285,6 +306,7 @@ mod tests {
             name: "alice".into(),
             genesis_hash: [1; 32],
             account: [2; 32],
+            keyring_id: None,
         }));
         assert!(profiles.activate("alice", [3; 32]).is_err());
         assert_eq!(profiles.active, None);
@@ -298,6 +320,7 @@ mod tests {
                 name: "alice".into(),
                 genesis_hash: [1; 32],
                 account,
+                keyring_id: None,
             }));
         }
         assert_eq!(profiles.profiles.len(), 1);
@@ -327,6 +350,27 @@ mod tests {
         for dropped in ["pending", "secure_entry", "scheme"] {
             assert!(!saved.contains(dropped), "{dropped}");
         }
+    }
+
+    #[test]
+    #[cfg(feature = "wallet")]
+    fn wallets_of_the_same_name_get_their_own_keyring_entries() {
+        // e.g. "alice" in two stores selected with --profiles
+        let first = WalletProfile::new("alice".into(), [1; 32], [2; 32]);
+        let second = WalletProfile::new("alice".into(), [1; 32], [2; 32]);
+        assert_ne!(first.secure_entry(), second.secure_entry());
+        assert!(first.secure_entry().starts_with("wallet-profile-v2-"));
+
+        // Profiles saved before keyring ids keep their entry.
+        let legacy: WalletProfile = serde_json::from_str(
+            r#"{"name": "alice", "genesis_hash": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                "account": [2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.secure_entry(), "wallet-profile-v1-alice");
+        let saved: WalletProfile =
+            serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap();
+        assert_eq!(saved.secure_entry(), first.secure_entry());
     }
 
     #[test]
