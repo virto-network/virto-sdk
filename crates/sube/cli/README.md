@@ -97,9 +97,9 @@ Build the generic explorer without wallet, pass, or desktop WebAuthn
 support with `--no-default-features`.
 
 An ignored destructive smoke test exercises Substrate-key enrollment, exact
-session registration, a locally rejected call, an allowed finalized call, and
-receipt inspection. Use disposable credentials: enrollment and the allowed
-remark remain on the selected chain.
+session registration, a locally rejected call, an allowed finalized call,
+adding and removing a scoped device, and receipt inspection. Use disposable
+credentials: enrollment and the allowed remark remain on the selected chain.
 
 ```sh
 SUBE_E2E_URL=wss://... \

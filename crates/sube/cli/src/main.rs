@@ -985,26 +985,35 @@ mod tests {
             ));
             let mut cleanup = E2eCleanup {
                 profile_path: profile_path.clone(),
-                secure_entries: vec![
-                    format!("wallet-profile-v1-{registrar_name}"),
-                    format!("wallet-profile-v1-{device_name}"),
-                ],
+                secure_entries: Vec::new(),
+            };
+            // Wallet profiles get random keyring entries.
+            let wallet_entry = |profiles: &profiles::Profiles, name: &str| match profiles.find(name)
+            {
+                Some(profiles::Profile::Wallet(wallet)) => wallet.secure_entry(),
+                _ => unreachable!("{name} was just imported"),
             };
 
             let mut chain = sube::Sube::connect(&chain_url).await?;
             let genesis_hash = workflow::chain_genesis(&mut chain).await?;
-            workflow::import_wallet_profile(
+            let stored = workflow::import_wallet_profile(
                 &profile_path,
                 genesis_hash,
                 registrar_name.clone(),
                 &registrar_mnemonic,
             )?;
-            workflow::import_wallet_profile(
+            cleanup
+                .secure_entries
+                .push(wallet_entry(&stored, &registrar_name));
+            let stored = workflow::import_wallet_profile(
                 &profile_path,
                 genesis_hash,
                 device_name.clone(),
                 &device_mnemonic,
             )?;
+            cleanup
+                .secure_entries
+                .push(wallet_entry(&stored, &device_name));
 
             let mut user_id = [0u8; 32];
             user_id[..16].copy_from_slice(&unique.to_le_bytes());
@@ -1109,6 +1118,102 @@ mod tests {
             ));
             assert!(receipt.finalized_block_hash.is_some());
             assert!(receipt.extrinsic_index.is_some());
+
+            // A scoped second device, authorized by the first one, then
+            // removed again.
+            let scoped_name = format!("e2e-scoped-{unique}");
+            let mut entropy = [0u8; 32];
+            rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut entropy);
+            let scoped_mnemonic: libwallet::Mnemonic =
+                libwallet::Mnemonic::from_entropy(entropy.to_vec())
+                    .map_err(|_| anyhow::anyhow!("mnemonic"))?;
+            let stored = workflow::import_wallet_profile(
+                &profile_path,
+                genesis_hash,
+                scoped_name.clone(),
+                scoped_mnemonic.phrase(),
+            )?;
+            cleanup
+                .secure_entries
+                .push(wallet_entry(&stored, &scoped_name));
+            let addition = workflow::prepare_device_addition(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                workflow::DeviceAdditionRequest {
+                    profile: pass_name.clone(),
+                    device: profiles::DeviceProviderProfile::SubstrateKey {
+                        wallet: scoped_name,
+                    },
+                    filter: "calls:System/remark".into(),
+                    admin_confirmed: false,
+                },
+            )
+            .await?;
+            assert!(
+                addition
+                    .prepared
+                    .transaction
+                    .call
+                    .call
+                    .eq_ignore_ascii_case("add_device_with_filter")
+            );
+            let receipt = workflow::submit_transaction(
+                &mut chain,
+                &addition.prepared,
+                sube::WaitFor::Finalized,
+            )
+            .await?;
+            assert!(
+                matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success),
+                "{receipt:?}"
+            );
+            let effect = addition
+                .effect
+                .expect("a device addition changes the profile");
+            let stored =
+                workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
+            let profile = workflow::pass_profile(&stored, &pass_name, genesis_hash)?.clone();
+            let scoped = profile.additional_devices[0].device_id;
+            assert!(workflow::device_registered(&mut chain, profile.pass_account, scoped).await?);
+            // DeviceFilter::Calls { (System 0, remark 0) }, not Admin.
+            let path = format!(
+                "Pass/DeviceFilters/0x{}/0x{}",
+                hex::encode(profile.pass_account),
+                hex::encode(scoped)
+            );
+            let sube::Response::Value(filter, _) = chain.query(&path).await? else {
+                anyhow::bail!("the scoped device has no filter");
+            };
+            assert_eq!(filter.data, [2, 1 << 2, 0, 0]);
+
+            let removal = workflow::prepare_device_removal(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                workflow::DeviceRemovalRequest {
+                    profile: pass_name.clone(),
+                    device_id: scoped,
+                },
+            )
+            .await?;
+            let receipt = workflow::submit_transaction(
+                &mut chain,
+                &removal.prepared,
+                sube::WaitFor::Finalized,
+            )
+            .await?;
+            assert!(
+                matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success),
+                "{receipt:?}"
+            );
+            let effect = removal
+                .effect
+                .expect("a device removal changes the profile");
+            workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
+            assert!(!workflow::device_registered(&mut chain, profile.pass_account, scoped).await?);
             Ok(())
         })
     }
