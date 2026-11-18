@@ -122,12 +122,14 @@ enum ProfileCommand {
 #[derive(Subcommand)]
 enum PassCommand {
     Enroll {
-        /// Exact 32-byte hashed user id (hex).
+        /// Exact 32-byte hashed user id (hex). Defaults to the SHA-256 of
+        /// --name.
         #[arg(long)]
-        user_id: String,
-        /// Ordinary wallet profile paying for registration.
+        user_id: Option<String>,
+        /// Wallet profile paying for registration. Defaults to the active
+        /// wallet profile, or the only one on this chain.
         #[arg(long)]
-        registrar: String,
+        registrar: Option<String>,
         /// Device to enroll: wallet:PROFILE or webauthn:RP_ID@ORIGIN.
         #[arg(long)]
         device: profiles::DeviceProviderProfile,
@@ -1060,8 +1062,8 @@ mod tests {
                 genesis_hash,
                 workflow::EnrollmentRequest {
                     name: pass_name.clone(),
-                    user_id: hex::encode(user_id),
-                    registrar: registrar_name.clone(),
+                    user_id: Some(hex::encode(user_id)),
+                    registrar: Some(registrar_name.clone()),
                     device: "webauthn:localhost@https://localhost"
                         .parse()
                         .map_err(anyhow::Error::msg)?,
@@ -1301,8 +1303,8 @@ mod tests {
                 genesis_hash,
                 workflow::EnrollmentRequest {
                     name: pass_name.clone(),
-                    user_id: hex::encode(user_id),
-                    registrar: registrar_name.clone(),
+                    user_id: Some(hex::encode(user_id)),
+                    registrar: Some(registrar_name.clone()),
                     device: profiles::DeviceProviderProfile::SubstrateKey {
                         wallet: device_name,
                     },

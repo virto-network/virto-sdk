@@ -146,8 +146,11 @@ impl PendingEffect {
 #[cfg(feature = "pass")]
 pub struct EnrollmentRequest {
     pub name: String,
-    pub user_id: String,
-    pub registrar: String,
+    /// Exact 32-byte hex; `None` derives it from `name` with [`user_id_for`].
+    pub user_id: Option<String>,
+    /// Wallet profile paying for registration; `None` uses the active
+    /// wallet profile, or the only one on this chain.
+    pub registrar: Option<String>,
     pub device: crate::profiles::DeviceProviderProfile,
 }
 
@@ -180,12 +183,28 @@ pub async fn prepare_enrollment(
     let checkpoint = chain.backend().block_info(None).await?;
     let context = u32::try_from(checkpoint.number)
         .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
-    let user_id =
-        pass::HashedUserId::from_exact(&hex::decode(request.user_id.trim_start_matches("0x"))?)?;
+    let user_id = match request.user_id.as_deref().map(str::trim) {
+        None | Some("") => user_id_for(&request.name),
+        Some(exact) => {
+            pass::HashedUserId::from_exact(&hex::decode(exact.trim_start_matches("0x"))?)?
+        }
+    };
     if profiles.find(&request.name).is_some() {
         anyhow::bail!("profile {:?} already exists", request.name);
     }
-    let registrar_profile = wallet_profile(&profiles, &request.registrar, genesis_hash)?.clone();
+    let pass_account = config.derive_account(user_id);
+    if account_exists(chain, pass_account.0).await? {
+        anyhow::bail!(
+            "pass account 0x{} for this user ID already exists on chain; choose another \
+             profile name or an explicit user ID",
+            hex::encode(pass_account.0)
+        );
+    }
+    let registrar_name = match request.registrar {
+        Some(name) => name,
+        None => default_registrar(&profiles, genesis_hash)?,
+    };
+    let registrar_profile = wallet_profile(&profiles, &registrar_name, genesis_hash)?.clone();
     // Checks the runtime accepts the device before prompting it.
     let device = crate::device::Device::open(&profiles, genesis_hash, &request.device).await?;
     let draft = pass::workflow::prepare_enrollment(
@@ -202,17 +221,21 @@ pub async fn prepare_enrollment(
         chain,
         chain_url,
         &draft.call,
-        &request.registrar,
+        &registrar_name,
         &registrar,
         sube::TransactionOptions::default(),
     )
     .await?;
     Ok(Staged {
         prepared,
-        notes: vec![format!(
-            "Predicted pass account: 0x{}",
-            hex::encode(draft.predicted_account.0)
-        )],
+        notes: vec![
+            format!("User ID: 0x{}", hex::encode(user_id.0)),
+            format!("Paid by: {registrar_name}"),
+            format!(
+                "Predicted pass account: 0x{}",
+                hex::encode(draft.predicted_account.0)
+            ),
+        ],
         effect: Some(PendingEffect::Enrollment(Box::new(
             crate::profiles::PassProfile {
                 name: request.name,
@@ -514,6 +537,72 @@ async fn effect_on_chain(
 }
 
 /// Whether `Pass::Devices(pass_account, device_id)` exists.
+/// Wallet profiles on this chain that can pay for enrollment, the active
+/// profile first.
+#[cfg(feature = "pass")]
+pub fn registrar_candidates(store: &profiles::Profiles, genesis_hash: [u8; 32]) -> Vec<String> {
+    let mut names: Vec<String> = store
+        .profiles
+        .iter()
+        .filter_map(|profile| match profile {
+            profiles::Profile::Wallet(wallet) if wallet.genesis_hash == genesis_hash => {
+                Some(wallet.name.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    if let Some(active) = names
+        .iter()
+        .position(|name| Some(name) == store.active.as_ref())
+    {
+        names[..=active].rotate_right(1);
+    }
+    names
+}
+
+/// The active wallet profile if it is on this chain, else the only one.
+#[cfg(feature = "pass")]
+fn default_registrar(store: &profiles::Profiles, genesis_hash: [u8; 32]) -> Result<String> {
+    let candidates = registrar_candidates(store, genesis_hash);
+    match candidates.first() {
+        Some(first) if candidates.len() == 1 || store.active.as_ref() == Some(first) => {
+            Ok(first.clone())
+        }
+        Some(_) => anyhow::bail!(
+            "several wallet profiles could pay for enrollment ({}); choose one with --registrar",
+            candidates.join(", ")
+        ),
+        None => anyhow::bail!("no wallet profile on this chain can pay for enrollment"),
+    }
+}
+
+/// The hashed user ID for a user name: SHA-256 of its UTF-8 bytes, as the
+/// former JS server SDK derived it.
+#[cfg(feature = "pass")]
+pub fn user_id_for(name: &str) -> pass::HashedUserId {
+    use sha2::Digest;
+    pass::HashedUserId(sha2::Sha256::digest(name.as_bytes()).into())
+}
+
+/// Whether `account` already exists on chain, so registering it would fail.
+#[cfg(feature = "pass")]
+async fn account_exists(chain: &mut sube::Sube, account: [u8; 32]) -> Result<bool> {
+    let path = format!("System/Account/0x{}", hex::encode(account));
+    let sube::Response::Value(entry, meta) = chain.query(&path).await? else {
+        return Ok(false);
+    };
+    let info = sube::Value::new(&entry.data, entry.ty, &meta.registry);
+    // Registration creates the account, which System does only while it has
+    // no providers and no sufficients.
+    let refs = |field| {
+        info.field(field)
+            .and_then(|count| count.as_u32())
+            .ok_or_else(|| anyhow::anyhow!("System.Account has no {field}"))
+    };
+    let total = refs("providers")? + refs("sufficients")?;
+    Ok(total > 0)
+}
+
 #[cfg(feature = "pass")]
 pub async fn device_registered(
     chain: &mut sube::Sube,
@@ -1068,6 +1157,56 @@ pub fn pass_profile<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn user_ids_are_the_sha256_of_the_name() {
+        assert_eq!(
+            hex::encode(user_id_for("abc").0),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[cfg(feature = "pass")]
+    #[test]
+    fn registrars_are_chain_wallets_with_the_active_one_first() {
+        let wallet = |name: &str, genesis| {
+            profiles::Profile::Wallet(profiles::WalletProfile::new(
+                name.into(),
+                genesis,
+                profiles::WalletKey::Root,
+                [2; 32],
+            ))
+        };
+        let mut store = profiles::Profiles {
+            profiles: vec![
+                wallet("alice", [1; 32]),
+                wallet("other-chain", [9; 32]),
+                wallet("bob", [1; 32]),
+                wallet("carol", [1; 32]),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            registrar_candidates(&store, [1; 32]),
+            ["alice", "bob", "carol"]
+        );
+        store.active = Some("carol".into());
+        assert_eq!(
+            registrar_candidates(&store, [1; 32]),
+            ["carol", "alice", "bob"]
+        );
+        store.active = Some("other-chain".into());
+        assert_eq!(
+            registrar_candidates(&store, [1; 32]),
+            ["alice", "bob", "carol"]
+        );
+        assert!(registrar_candidates(&store, [3; 32]).is_empty());
+        assert!(default_registrar(&store, [1; 32]).is_err(), "ambiguous");
+        store.active = Some("bob".into());
+        assert_eq!(default_registrar(&store, [1; 32]).unwrap(), "bob");
+        assert_eq!(default_registrar(&store, [9; 32]).unwrap(), "other-chain");
+    }
 
     #[cfg(feature = "pass")]
     fn finalized_receipt() -> sube::TransactionReceipt {

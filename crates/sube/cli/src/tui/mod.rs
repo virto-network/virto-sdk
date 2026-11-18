@@ -796,7 +796,13 @@ fn pass_dialog(app: &App, key: char) -> Result<dialog::Dialog, &'static str> {
         devices => Ok(devices),
     };
     match key {
-        'e' => Ok(dialog::Dialog::enroll(devices()?)),
+        'e' => {
+            let registrars = crate::workflow::registrar_candidates(&app.profiles, app.genesis_hash);
+            if registrars.is_empty() {
+                return Err("Import a wallet profile (a) to pay for enrollment first.");
+            }
+            Ok(dialog::Dialog::enroll(devices()?, registrars))
+        }
         's' => {
             let profile = profile.ok_or("Select a pass profile to manage its session.")?;
             let selected = app.current_pallet().and_then(|pallet| {

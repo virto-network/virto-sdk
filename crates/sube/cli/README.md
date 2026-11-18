@@ -35,13 +35,18 @@ printf '%s\n' "$MNEMONIC" | cargo run -p sube-cli -- profile add-wallet alice \
   --genesis 0x...
 ```
 
-Pass enrollment always requires an exact 32-byte hashed user ID and an
-ordinary registrar profile. A Substrate-key device names another wallet
-profile:
+Pass enrollment derives the hashed user ID from `--name` (its SHA-256, as the
+former JS server SDK did), and that ID fixes the pass account. Pass accounts are
+global, so a name someone already registered is rejected before the device is
+prompted; pick another name or give an exact 32-byte `--user-id`. The
+registrar is the ordinary wallet profile that signs and pays for the
+registration: `--registrar` defaults to the active wallet profile, or the
+only one on this chain. A Substrate-key device names
+another wallet profile:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
-  --name alice-pass --user-id 0x... --registrar alice \
+  --name alice-pass --registrar alice \
   --device wallet:alice-device --submit
 ```
 
@@ -55,7 +60,7 @@ while it does:
 
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
-  --name alice-pass --user-id 0x... --registrar alice \
+  --name alice-pass --registrar alice \
   --device webauthn:wallet.example.com@https://wallet.example.com --submit
 ```
 
@@ -87,8 +92,9 @@ Press `p` in the TUI to manage chain-bound profiles. From the profile dialog,
 `a` imports an ordinary wallet, `e` enrolls a pass account, `s` registers or
 reuses an explicitly scoped session, `f` forgets it, and `d`/`r` add or remove
 devices. Devices are entered as for `--device`; `←`/`→` cycles a field's
-presets (device kinds the chain accepts, the stored or selected session
-policy, known devices to remove). Pass enrollment, session, and device mutations always enter the same full-screen
+presets (device kinds the chain accepts, the paying wallet, the stored or
+selected session policy, known devices to remove). Enrollment leaves the user
+ID empty to derive it from the profile name. Pass enrollment, session, and device mutations always enter the same full-screen
 review and require a successful finalized receipt before changing the local
 profile. Adding an Admin device requires typing `ADMIN`; removal requires
 typing `REMOVE` after reviewing the last-device warning.
