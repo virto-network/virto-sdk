@@ -75,57 +75,50 @@ impl Field {
             } else {
                 "false".into()
             }),
+            // The text format spells enums `Enum::Variant(..)`, with named
+            // payloads as `name:value` and tuple payloads by position.
             Field::Enum {
-                variants,
+                name,
                 selected,
                 sub_fields,
+                ty_id,
                 ..
             } => {
-                let variant = &variants[*selected];
-                if sub_fields.is_empty() {
-                    Ok(variant.clone())
-                } else if sub_fields.len() == 1 {
-                    Ok(format!(
-                        "{}({})",
-                        variant,
-                        sub_fields[0].to_value(registry, context)?
-                    ))
-                } else {
+                let Some(TypeDef::Variant(vdef)) = registry.resolve(*ty_id) else {
+                    return Err(format!("{name}: type is not an enum"));
+                };
+                let variant = vdef
+                    .variants()
+                    .nth(*selected)
+                    .ok_or_else(|| format!("{name}: unknown variant"))?;
+                let named = matches!(variant.fields(), sube::scales::Fields::Struct(_));
+                let mut out = format!("{}::{}", vdef.name(), variant.name());
+                if !sub_fields.is_empty() {
                     let parts = sub_fields
                         .iter()
                         .map(|field| {
-                            Ok(format!(
-                                "{}:{}",
-                                field.name(),
-                                field.to_value(registry, context)?
-                            ))
+                            let value = field.to_value(registry, context)?;
+                            Ok(if named {
+                                format!("{}:{value}", field.name())
+                            } else {
+                                value
+                            })
                         })
                         .collect::<Result<Vec<_>, String>>()?;
-                    Ok(format!("{}({})", variant, parts.join(";")))
+                    out.push('(');
+                    out.push_str(&parts.join(";"));
+                    out.push(')');
                 }
+                Ok(out)
             }
+            // Sequences are `..item;item.`; each list item is a single field.
             Field::List { items, .. } => {
                 let parts = items
                     .iter()
-                    .map(|item_fields| {
-                        if item_fields.len() == 1 {
-                            item_fields[0].to_value(registry, context)
-                        } else {
-                            let inner = item_fields
-                                .iter()
-                                .map(|field| {
-                                    Ok(format!(
-                                        "{}:{}",
-                                        field.name(),
-                                        field.to_value(registry, context)?
-                                    ))
-                                })
-                                .collect::<Result<Vec<_>, String>>()?;
-                            Ok(format!("({})", inner.join(";")))
-                        }
-                    })
+                    .flatten()
+                    .map(|field| field.to_value(registry, context))
                     .collect::<Result<Vec<_>, String>>()?;
-                Ok(format!("..({})", parts.join(";")))
+                Ok(format!("..{}.", parts.join(";")))
             }
         }
     }
@@ -762,6 +755,69 @@ mod tests {
         form.next_field();
 
         assert!(form.values().unwrap()[0].contains('7'));
+    }
+
+    #[test]
+    fn form_values_parse_as_call_bodies() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let registry = &metadata.registry;
+        let call_fields = |pallet: &str, call: &str| {
+            let calls_ty = metadata.pallet_by_name(pallet).unwrap().calls_ty.unwrap();
+            let Some(TypeDef::Variant(calls)) = registry.resolve(calls_ty) else {
+                panic!("calls are not an enum");
+            };
+            let variant = calls.variants().find(|v| v.name() == call).unwrap();
+            let sube::scales::Fields::Struct(fields) = variant.fields() else {
+                panic!("call fields are not named");
+            };
+            fields
+                .iter()
+                .map(|f| (f.name.to_string(), f.ty))
+                .collect::<Vec<_>>()
+        };
+        let form_for = |fields: &[(String, TypeId)]| {
+            FormState::new(
+                fields
+                    .iter()
+                    .map(|(name, ty)| field_from_type(name, *ty, registry))
+                    .collect(),
+                sube::Rc::new(registry.clone()),
+                FormContext {
+                    ss58_format: Some(42),
+                },
+            )
+        };
+        let parses = |fields: &[(String, TypeId)], form: &FormState| {
+            for ((name, ty), value) in fields.iter().zip(form.values().unwrap()) {
+                sube::scales::from_text(&value, registry, *ty)
+                    .unwrap_or_else(|e| panic!("{name} = {value}: {e:?}"));
+            }
+        };
+
+        // A transfer to an SS58 address: the address sits in `MultiAddress::Id`.
+        let transfer = call_fields("Balances", "transfer_keep_alive");
+        let mut form = form_for(&transfer);
+        form.next_field();
+        for c in "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY".chars() {
+            form.push_char(c);
+        }
+        form.next_field();
+        form.push_char('1');
+        assert_eq!(
+            form.values().unwrap()[0],
+            "MultiAddress::Id(0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d)"
+        );
+        parses(&transfer, &form);
+
+        // A list of calls, each an enum with a named payload.
+        let batch = call_fields("Utility", "batch");
+        let mut form = form_for(&batch);
+        form.add_list_item();
+        form.add_list_item();
+        assert!(form.values().unwrap()[0].starts_with("..RuntimeCall::"));
+        parses(&batch, &form);
     }
 
     #[test]
