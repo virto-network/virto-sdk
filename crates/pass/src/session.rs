@@ -160,16 +160,9 @@ mod tests {
         (metadata, config)
     }
 
-    /// The fixture's runtime has a filter-taking session call.
-    fn kreivo_with_filtered_sessions() -> (Metadata, PassRuntimeConfig) {
-        let (metadata, mut config) = kreivo();
-        config.add_session_key.fields.push("filter".into());
-        (metadata, config)
-    }
-
     #[test]
     fn admin_sessions_are_rejected() {
-        let (metadata, config) = kreivo_with_filtered_sessions();
+        let (metadata, config) = kreivo();
         let error =
             prepare_add_session_key(&metadata, &config, [1; 32], &DeviceFilter::Admin, None)
                 .unwrap_err();
@@ -236,10 +229,13 @@ mod tests {
 
     #[test]
     fn session_call_without_a_filter_argument_is_refused() {
-        // This fixture predates `add_session_key_with_filter`: discovery falls
-        // back to the filterless call, which would grant an Admin session.
-        let (metadata, config) = kreivo();
-        assert!(!config.add_session_key.has_field("filter"));
+        // Runtimes without `add_session_key_with_filter` only offer the
+        // filterless call, which would grant an Admin session.
+        let (metadata, mut config) = kreivo();
+        config
+            .add_session_key
+            .fields
+            .retain(|field| field != "filter");
         let filter = DeviceFilter::Pallets(vec![10]);
         let error =
             prepare_add_session_key(&metadata, &config, [1; 32], &filter, None).unwrap_err();

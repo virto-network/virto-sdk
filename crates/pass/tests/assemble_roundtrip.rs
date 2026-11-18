@@ -33,7 +33,7 @@ fn ctx() -> ChainContext {
 }
 
 /// Build a mock PassAuthenticate value shaped like the fixture runtime's
-/// WebAuthn credential (the fixture predates `SubstrateKey`).
+/// WebAuthn credential.
 fn mock_pass_authenticate() -> DynValue {
     let meta = DynValue::obj(&[
         ("authority_id", DynValue::from([0x22u8; 32])),

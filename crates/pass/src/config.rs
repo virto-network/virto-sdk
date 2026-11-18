@@ -315,10 +315,9 @@ mod tests {
         assert_eq!(config.pallet_id, *b"kreivo_p");
         assert!(config.supports_credential("WebAuthn"));
         assert!(config.supports_attestation("WebAuthn"));
-        // This fixture predates `add_session_key_with_filter`.
-        assert_eq!(config.add_session_key.name, "add_session_key");
+        assert_eq!(config.add_session_key.name, "add_session_key_with_filter");
         assert!(config.add_session_key.has_field("duration"));
-        assert!(!config.add_session_key.has_field("filter"));
+        assert!(config.add_session_key.has_field("filter"));
     }
 
     #[test]
