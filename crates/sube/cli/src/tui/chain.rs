@@ -199,11 +199,14 @@ pub fn spawn(
                                     #[cfg(feature = "pass")]
                                     if let Some(effect) = current.effect {
                                         let message = effect.finalized_message();
-                                        let update = match crate::workflow::apply_finalized_effect(
+                                        let update = match crate::workflow::persist_effect(
+                                            &mut chain,
                                             &profile_path,
                                             &receipt,
                                             effect,
-                                        ) {
+                                        )
+                                        .await
+                                        {
                                             Ok(profiles) => {
                                                 FromChain::ProfilesUpdated(profiles, message.into())
                                             }

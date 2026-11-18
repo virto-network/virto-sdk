@@ -414,7 +414,7 @@ async fn finish(
     #[cfg(feature = "pass")]
     if let Some(effect) = staged.effect {
         let message = effect.finalized_message();
-        workflow::apply_finalized_effect(profile_path, &receipt, effect)?;
+        workflow::persist_effect(chain, profile_path, &receipt, effect).await?;
         println!("{message}");
     }
     #[cfg(not(feature = "pass"))]

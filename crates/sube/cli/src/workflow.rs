@@ -454,19 +454,122 @@ pub async fn prepare_pass_session(
     })))
 }
 
+/// Persist `effect` once its transaction finalized successfully. When the
+/// transaction's events couldn't be read, its outcome is unknown and the
+/// effect is looked up in chain state instead, so that e.g. a registered
+/// session's new key isn't discarded.
+#[cfg(feature = "pass")]
+pub async fn persist_effect(
+    chain: &mut sube::Sube,
+    profile_path: &std::path::Path,
+    receipt: &sube::TransactionReceipt,
+    effect: PendingEffect,
+) -> Result<crate::profiles::Profiles> {
+    if receipt.finalized_block_hash.is_some()
+        && matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Unknown)
+    {
+        if effect_on_chain(chain, profile_path, &effect).await? {
+            return apply_effect(profile_path, effect);
+        }
+        anyhow::bail!(
+            "the operation's outcome is unknown ({}) and its effect isn't visible on chain; \
+             local profile remains unchanged",
+            receipt
+                .events_error
+                .as_deref()
+                .unwrap_or("no dispatch event")
+        );
+    }
+    apply_finalized_effect(profile_path, receipt, effect)
+}
+
+/// Whether chain state shows `effect`: the session key, or the device
+/// added, enrolled or removed.
+#[cfg(feature = "pass")]
+async fn effect_on_chain(
+    chain: &mut sube::Sube,
+    profile_path: &std::path::Path,
+    effect: &PendingEffect,
+) -> Result<bool> {
+    let profiles = crate::profiles::Profiles::load(profile_path)?;
+    let pass_account = |name: &str| -> Result<[u8; 32]> {
+        match profiles.find(name) {
+            Some(crate::profiles::Profile::Pass(profile)) => Ok(profile.pass_account),
+            _ => anyhow::bail!("pass profile {name:?} not found"),
+        }
+    };
+    Ok(match effect {
+        PendingEffect::Session {
+            profile, session, ..
+        } => {
+            let Some(crate::profiles::Profile::Pass(profile)) = profiles.find(profile) else {
+                anyhow::bail!("pass profile {profile:?} not found");
+            };
+            let policy = parse_session_policy(chain.metadata(), &session.policy)?;
+            on_chain_session_matches(chain, profile, session, &policy).await
+        }
+        PendingEffect::Enrollment(profile) => {
+            device_registered(chain, profile.pass_account, profile.device_id).await?
+        }
+        PendingEffect::DeviceAddition { profile, device } => {
+            device_registered(chain, pass_account(profile)?, device.device_id).await?
+        }
+        PendingEffect::DeviceRemoval { profile, device_id } => {
+            !device_registered(chain, pass_account(profile)?, *device_id).await?
+        }
+    })
+}
+
+/// Whether `Pass::Devices(pass_account, device_id)` exists.
+#[cfg(feature = "pass")]
+pub async fn device_registered(
+    chain: &mut sube::Sube,
+    pass_account: [u8; 32],
+    device_id: [u8; 32],
+) -> Result<bool> {
+    let path = format!(
+        "Pass/Devices/0x{}/0x{}",
+        hex::encode(pass_account),
+        hex::encode(device_id)
+    );
+    match chain.query(&path).await? {
+        sube::Response::Value(..) => Ok(true),
+        sube::Response::None | sube::Response::Void => Ok(false),
+        other => anyhow::bail!("unexpected Pass::Devices response: {other:?}"),
+    }
+}
+
 #[cfg(feature = "pass")]
 pub fn apply_finalized_effect(
     profile_path: &std::path::Path,
     receipt: &sube::TransactionReceipt,
     effect: PendingEffect,
 ) -> Result<crate::profiles::Profiles> {
+    if receipt.finalized_block_hash.is_none() {
+        anyhow::bail!("operation did not finalize; local profile remains unchanged");
+    }
+    match &receipt.dispatch_outcome {
+        sube::DispatchOutcome::Success => apply_effect(profile_path, effect),
+        sube::DispatchOutcome::Failed(error) => {
+            anyhow::bail!("operation failed: {error}; local profile remains unchanged")
+        }
+        sube::DispatchOutcome::Unknown => anyhow::bail!(
+            "the operation's outcome is unknown ({}); local profile remains unchanged",
+            receipt
+                .events_error
+                .as_deref()
+                .unwrap_or("no dispatch event")
+        ),
+    }
+}
+
+#[cfg(feature = "pass")]
+fn apply_effect(
+    profile_path: &std::path::Path,
+    effect: PendingEffect,
+) -> Result<crate::profiles::Profiles> {
     use libwallet::MutableKeyStore;
 
-    if receipt.finalized_block_hash.is_none()
-        || !matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success)
-    {
-        anyhow::bail!("operation did not finalize successfully; local profile remains unchanged");
-    }
     let mut profiles = crate::profiles::Profiles::load(profile_path)?;
     match effect {
         PendingEffect::Session {
@@ -829,6 +932,7 @@ pub fn receipt_json(receipt: &sube::TransactionReceipt) -> serde_json::Value {
         "finalizedBlockHash": receipt.finalized_block_hash,
         "extrinsicIndex": receipt.extrinsic_index,
         "dispatchOutcome": format!("{:?}", receipt.dispatch_outcome),
+        "eventsError": receipt.events_error,
         "events": receipt.events.iter().map(|event| serde_json::json!({
             "pallet": event.pallet,
             "variant": event.variant,
@@ -1239,6 +1343,32 @@ mod tests {
         let mut longer = stored.clone();
         longer.push(0);
         assert!(!expected.matches(&longer, &owner));
+    }
+
+    /// Read-only live check of the `Pass::Devices` lookup used to confirm
+    /// effects whose transaction events couldn't be read.
+    #[cfg(feature = "pass")]
+    #[test]
+    #[ignore = "requires network access to a chain with pallet-pass (SUBE_E2E_URL, default kreivo)"]
+    fn live_device_lookup_resolves() {
+        smol::block_on(async {
+            let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
+            let mut chain = sube::Sube::connect(&url).await.expect("connects");
+            assert!(
+                !device_registered(&mut chain, [0xee; 32], [0xee; 32])
+                    .await
+                    .unwrap()
+            );
+            let sube::Response::ValueSet(entries, _) =
+                chain.query("Pass/Devices").await.expect("lists devices")
+            else {
+                panic!("expected the Devices entries");
+            };
+            let (keys, _) = entries.first().expect("a registered device");
+            let key =
+                |index: usize| -> [u8; 32] { keys[index].data.as_slice().try_into().unwrap() };
+            assert!(device_registered(&mut chain, key(0), key(1)).await.unwrap());
+        })
     }
 
     /// Read-only live check of how the CLI expects the runtime to store a
