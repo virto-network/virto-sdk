@@ -267,7 +267,12 @@ impl App {
             None => return,
         };
 
-        let values = match self.storage_form.as_ref().map(|f| f.values()).transpose() {
+        let values = match self
+            .storage_form
+            .as_ref()
+            .map(|f| f.key_values())
+            .transpose()
+        {
             Ok(values) => values.unwrap_or_default(),
             Err(error) => {
                 self.error = Some(error);
@@ -275,7 +280,7 @@ impl App {
                 return;
             }
         };
-        let keys_part = if values.is_empty() || values.iter().all(|v| v.is_empty()) {
+        let keys_part = if values.is_empty() {
             String::new()
         } else {
             format!("/{}", values.join("/"))

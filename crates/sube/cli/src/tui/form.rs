@@ -15,6 +15,7 @@ pub enum Field {
         input: String,
         /// If true, the input is UTF-8 text, or hex with a `hex:` or `0x` prefix.
         is_bytes: bool,
+        ty_id: TypeId,
     },
     /// Boolean toggle.
     Bool { name: String, value: bool },
@@ -56,19 +57,29 @@ impl Field {
                 name,
                 input,
                 is_bytes,
+                ty_id,
                 ..
             } => {
-                if *is_bytes {
-                    return encode_bytes(input).map_err(|error| format!("{name}: {error}"));
-                }
-
-                if looks_like_ss58(input) {
-                    return decode_ss58_account(input, context.ss58_format)
+                let input = input.trim();
+                let value = if *is_bytes {
+                    encode_bytes(input).map_err(|error| format!("{name}: {error}"))?
+                } else if looks_like_ss58(input) {
+                    decode_ss58_account(input, context.ss58_format)
                         .map(|account| format!("0x{}", hex::encode(account)))
-                        .map_err(|error| format!("{name}: {error}"));
+                        .map_err(|error| format!("{name}: {error}"))?
+                } else {
+                    input.to_string()
+                };
+                // Check the field alone, so a bad value names its field.
+                if let Err(error) = sube::scales::from_text(&value, registry, *ty_id) {
+                    return Err(match byte_array_len(*ty_id, registry) {
+                        _ if input.is_empty() => format!("{name}: missing"),
+                        Some(32) => format!("{name}: expected an SS58 address or 0x hex"),
+                        Some(len) => format!("{name}: expected 0x hex of {len} bytes"),
+                        None => format!("{name}: {error}"),
+                    });
                 }
-
-                Ok(input.clone())
+                Ok(value)
             }
             Field::Bool { value, .. } => Ok(if *value {
                 "true".into()
@@ -127,6 +138,17 @@ impl Field {
 #[derive(Clone, Copy, Default)]
 pub struct FormContext {
     pub ss58_format: Option<u16>,
+}
+
+/// The length of a byte array type, seen through newtypes like `AccountId32`.
+fn byte_array_len(ty_id: TypeId, registry: &Registry) -> Option<u32> {
+    match registry.resolve(ty_id)? {
+        TypeDef::Array(inner, len) if matches!(registry.resolve(inner), Some(TypeDef::U8)) => {
+            Some(len)
+        }
+        TypeDef::StructNewType(inner) => byte_array_len(inner, registry),
+        _ => None,
+    }
 }
 
 fn encode_bytes(input: &str) -> Result<String, String> {
@@ -227,7 +249,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             let sub_fields = if !variants.is_empty() {
                 vdef.variants()
                     .next()
-                    .map(|v| variant_sub_fields(&v, registry))
+                    .map(|v| variant_sub_fields(&v, name, registry))
                     .unwrap_or_default()
             } else {
                 vec![]
@@ -246,6 +268,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             type_desc: "Vec<u8> (utf8: or hex:)".into(),
             input: String::new(),
             is_bytes: true,
+            ty_id,
         },
         Some(TypeDef::Sequence(inner)) => {
             // Vec<u8> is Bytes, but Sequence(u8) might also appear
@@ -255,6 +278,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
                     type_desc: "Vec<u8> (utf8: or hex:)".into(),
                     input: String::new(),
                     is_bytes: true,
+                    ty_id,
                 }
             } else {
                 Field::List {
@@ -269,20 +293,27 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             type_desc: types::describe(ty_id, registry),
             input: String::new(),
             is_bytes: false,
+            ty_id,
         },
     }
 }
 
-fn variant_sub_fields(variant: &sube::scales::Variant, registry: &Registry) -> Vec<Field> {
+/// Unnamed payloads are named after the enum field (`dest`, `dest.1`), so
+/// they can't be mistaken for a sibling field.
+fn variant_sub_fields(
+    variant: &sube::scales::Variant,
+    parent: &str,
+    registry: &Registry,
+) -> Vec<Field> {
     match variant.fields() {
         sube::scales::Fields::Unit => vec![],
         sube::scales::Fields::NewType(ty_id) => {
-            vec![field_from_type("value", ty_id, registry)]
+            vec![field_from_type(parent, ty_id, registry)]
         }
         sube::scales::Fields::Tuple(ids) => ids
             .iter()
             .enumerate()
-            .map(|(i, id)| field_from_type(&format!("field{i}"), *id, registry))
+            .map(|(i, id)| field_from_type(&format!("{parent}.{i}"), *id, registry))
             .collect(),
         sube::scales::Fields::Struct(fields) => fields
             .iter()
@@ -350,7 +381,13 @@ impl FormState {
         }
     }
 
+    /// Typing on an enum row moves to its first payload field.
     pub fn push_char(&mut self, c: char) {
+        if let Some(Field::Enum { sub_fields, .. }) = self.field_at_cursor_mut()
+            && !sub_fields.is_empty()
+        {
+            self.cursor += 1;
+        }
         if let Some(Field::Text { input, .. }) = self.field_at_cursor_mut() {
             input.push(c);
         }
@@ -392,8 +429,9 @@ impl FormState {
                 }
             }
             CycleAction::CycleEnum(ty_id, new_selected) => {
-                let new_sub = resolve_variant_sub_fields(ty_id, new_selected, &self.registry);
+                let registry = self.registry.clone();
                 if let Some(Field::Enum {
+                    name,
                     selected,
                     sub_fields,
                     saved_fields,
@@ -402,7 +440,9 @@ impl FormState {
                 {
                     saved_fields[*selected] = Some(core::mem::take(sub_fields));
                     *selected = new_selected;
-                    *sub_fields = saved_fields[new_selected].take().unwrap_or(new_sub);
+                    *sub_fields = saved_fields[new_selected].take().unwrap_or_else(|| {
+                        resolve_variant_sub_fields(ty_id, new_selected, name, &registry)
+                    });
                 }
             }
             CycleAction::None => {}
@@ -446,6 +486,20 @@ impl FormState {
             .collect()
     }
 
+    /// Storage key values. Trailing keys left empty are dropped, so a map
+    /// can be queried by a prefix of its keys or as a whole.
+    pub fn key_values(&self) -> Result<Vec<String>, String> {
+        let given = self
+            .fields
+            .iter()
+            .rposition(|f| !matches!(f, Field::Text { input, .. } if input.trim().is_empty()))
+            .map_or(0, |last| last + 1);
+        self.fields[..given]
+            .iter()
+            .map(|f| f.to_value(&self.registry, self.context))
+            .collect()
+    }
+
     pub fn field_names(&self) -> Vec<String> {
         self.fields.iter().map(|f| f.name().to_string()).collect()
     }
@@ -475,11 +529,16 @@ impl FormState {
     }
 }
 
-fn resolve_variant_sub_fields(ty_id: TypeId, selected: usize, registry: &Registry) -> Vec<Field> {
+fn resolve_variant_sub_fields(
+    ty_id: TypeId,
+    selected: usize,
+    parent: &str,
+    registry: &Registry,
+) -> Vec<Field> {
     if let Some(TypeDef::Variant(vdef)) = registry.resolve(ty_id)
         && let Some(variant) = vdef.variants().nth(selected)
     {
-        return variant_sub_fields(&variant, registry);
+        return variant_sub_fields(&variant, parent, registry);
     }
     vec![]
 }
@@ -717,11 +776,7 @@ fn render_field(
 mod tests {
     use super::*;
 
-    #[test]
-    fn enum_navigation_preserves_entered_variant_values() {
-        let metadata =
-            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
-                .unwrap();
+    fn transfer_dest_ty(metadata: &sube::Metadata) -> TypeId {
         let balances = metadata.pallet_by_name("Balances").unwrap();
         let calls = match metadata
             .registry
@@ -735,26 +790,38 @@ mod tests {
             .variants()
             .find(|variant| variant.name() == "transfer_keep_alive")
             .unwrap();
-        let dest_ty = match transfer.fields() {
+        match transfer.fields() {
             sube::scales::Fields::Struct(fields) => {
                 fields.iter().find(|field| field.name == "dest").unwrap().ty
             }
             _ => panic!("transfer fields are not named"),
-        };
+        }
+    }
+
+    #[test]
+    fn enum_navigation_preserves_entered_variant_values() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let dest_ty = transfer_dest_ty(&metadata);
 
         let mut form = FormState::new(
             vec![field_from_type("dest", dest_ty, &metadata.registry)],
             sube::Rc::new(metadata.registry.clone()),
             FormContext::default(),
         );
+        let account = format!("0x{}", "77".repeat(32));
         form.next_field();
-        form.push_char('7');
+        account.chars().for_each(|c| form.push_char(c));
         form.prev_field();
         form.toggle();
         form.toggle_back();
         form.next_field();
 
-        assert!(form.values().unwrap()[0].contains('7'));
+        assert_eq!(
+            form.values().unwrap()[0],
+            format!("MultiAddress::Id({account})")
+        );
     }
 
     #[test]
@@ -797,12 +864,14 @@ mod tests {
         };
 
         // A transfer to an SS58 address: the address sits in `MultiAddress::Id`.
+        // Typing on the `dest` enum row goes to the address below it.
         let transfer = call_fields("Balances", "transfer_keep_alive");
         let mut form = form_for(&transfer);
-        form.next_field();
-        for c in "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY".chars() {
+        assert_eq!(form.values().unwrap_err(), "dest: missing");
+        for c in "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY ".chars() {
             form.push_char(c);
         }
+        assert_eq!(form.values().unwrap_err(), "value: missing");
         form.next_field();
         form.push_char('1');
         assert_eq!(
@@ -811,6 +880,14 @@ mod tests {
         );
         parses(&transfer, &form);
 
+        // An amount typed into the address says what the address field takes.
+        let mut form = form_for(&transfer);
+        form.push_char('1');
+        assert_eq!(
+            form.values().unwrap_err(),
+            "dest: expected an SS58 address or 0x hex"
+        );
+
         // A list of calls, each an enum with a named payload.
         let batch = call_fields("Utility", "batch");
         let mut form = form_for(&batch);
@@ -818,6 +895,42 @@ mod tests {
         form.add_list_item();
         assert!(form.values().unwrap()[0].starts_with("..RuntimeCall::"));
         parses(&batch, &form);
+    }
+
+    #[test]
+    fn storage_keys_can_be_left_out_from_the_end() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let Some(TypeDef::Variant(address)) =
+            metadata.registry.resolve(transfer_dest_ty(&metadata))
+        else {
+            panic!("dest is not an enum");
+        };
+        let sube::scales::Fields::NewType(account_ty) = address.variants().next().unwrap().fields()
+        else {
+            panic!("MultiAddress::Id is not a newtype");
+        };
+        let mut form = FormState::new(
+            ["account", "device"]
+                .iter()
+                .map(|name| field_from_type(name, account_ty, &metadata.registry))
+                .collect(),
+            sube::Rc::new(metadata.registry.clone()),
+            FormContext::default(),
+        );
+        assert!(form.key_values().unwrap().is_empty());
+
+        let account = format!("0x{}", "11".repeat(32));
+        account.chars().for_each(|c| form.push_char(c));
+        assert_eq!(form.key_values().unwrap(), [account]);
+
+        form.next_field();
+        form.push_char('1');
+        assert_eq!(
+            form.key_values().unwrap_err(),
+            "device: expected an SS58 address or 0x hex"
+        );
     }
 
     #[test]
@@ -847,18 +960,17 @@ mod tests {
         let metadata =
             sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
                 .unwrap();
-        let form = FormState::new(
-            vec![Field::Text {
-                name: "dest".into(),
-                type_desc: "AccountId32".into(),
-                input: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY".into(),
-                is_bytes: false,
-            }],
+        let dest_ty = transfer_dest_ty(&metadata);
+        let mut form = FormState::new(
+            vec![field_from_type("dest", dest_ty, &metadata.registry)],
             sube::Rc::new(metadata.registry.clone()),
             FormContext {
                 ss58_format: Some(2),
             },
         );
+        for c in "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY".chars() {
+            form.push_char(c);
+        }
 
         assert!(
             form.values()
