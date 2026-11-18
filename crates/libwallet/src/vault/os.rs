@@ -1,14 +1,16 @@
 use core::marker::PhantomData;
 
 use keyring;
-use mnemonic::{Language, Mnemonic};
+use crate::{Language, Mnemonic};
 
 const SERVICE: &str = "libwallet_account";
 
 /// A key store backed by the OS secure store (keychain/credential manager).
 /// Wrap with `Substrate<OSKeyring<..>>` to produce substrate-compatible signers.
 pub struct OSKeyring<S> {
-    entry: keyring::Entry,
+    /// `None` when the credential store failed to initialize, so that
+    /// constructing a vault can't fail; use reports [`Error::Keyring`].
+    entry: Option<keyring::Entry>,
     entropy: Option<zeroize::Zeroizing<Vec<u8>>>,
     auto_generate: Option<Language>,
     _phantom: PhantomData<S>,
@@ -17,19 +19,23 @@ pub struct OSKeyring<S> {
 impl<S> OSKeyring<S> {
     pub fn new(uname: &str, lang: impl Into<Option<Language>>) -> Self {
         OSKeyring {
-            entry: keyring::Entry::new(SERVICE, uname),
+            entry: keyring::Entry::new(SERVICE, uname).ok(),
             entropy: None,
             auto_generate: lang.into(),
             _phantom: PhantomData,
         }
     }
 
+    fn entry(&self) -> Result<&keyring::Entry, Error> {
+        self.entry.as_ref().ok_or(Error::Keyring)
+    }
+
     pub fn update(&self, phrase: &str) -> Result<(), Error> {
-        self.entry.set_password(phrase).map_err(|_| Error::Keyring)
+        self.entry()?.set_password(phrase).map_err(|_| Error::Keyring)
     }
 
     pub(crate) fn get(&self) -> Result<zeroize::Zeroizing<String>, Error> {
-        self.entry
+        self.entry()?
             .get_password()
             .map(zeroize::Zeroizing::new)
             .map_err(|error| match error {
@@ -56,7 +62,7 @@ impl<S> OSKeyring<S> {
 
     fn generate(&self, lang: Language) -> Result<zeroize::Zeroizing<String>, Error> {
         let phrase = crate::util::gen_phrase(&mut rand_core::OsRng, lang);
-        self.entry
+        self.entry()?
             .set_password(phrase.phrase())
             .map_err(|_| Error::Keyring)?;
         Ok(zeroize::Zeroizing::new(phrase.phrase().to_string()))
@@ -101,7 +107,7 @@ impl<S> crate::chain::MutableKeyStore for OSKeyring<S> {
 
     fn upsert(&mut self, secret: &[u8]) -> Result<(), Self::Error> {
         let encoded = crate::chain::encode_raw_secret(secret);
-        self.entry
+        self.entry()?
             .set_password(&encoded)
             .map_err(|_| Error::Keyring)?;
         self.entropy = None;
@@ -109,7 +115,7 @@ impl<S> crate::chain::MutableKeyStore for OSKeyring<S> {
     }
 
     fn delete(&mut self) -> Result<(), Self::Error> {
-        match self.entry.delete_password() {
+        match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => {}
             Err(_) => return Err(Error::Keyring),
         }

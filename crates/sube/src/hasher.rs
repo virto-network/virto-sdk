@@ -95,6 +95,28 @@ mod tests {
         assert_eq!(out.len(), 32);
     }
 
+    /// Known-answer vectors (RFC 7693 BLAKE2b with the digest length set in the
+    /// parameter block, as Substrate's `blake2_128`/`blake2_256` do).
+    #[test]
+    fn hash_blake2_known_answers() {
+        assert_eq!(
+            hash(&Hasher::Blake2_128, b"hello"),
+            hex!("46fb7408d4f285228f4af516ea25851b")
+        );
+        assert_eq!(
+            hash(&Hasher::Blake2_256, b"hello"),
+            hex!("324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf")
+        );
+        assert_eq!(
+            hash(&Hasher::Blake2_128Concat, b"hello"),
+            [
+                hex!("46fb7408d4f285228f4af516ea25851b").as_slice(),
+                b"hello"
+            ]
+            .concat()
+        );
+    }
+
     #[test]
     fn hash_blake128_concat_includes_input() {
         let input = b"hello";

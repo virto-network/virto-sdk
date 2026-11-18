@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use mnemonic::Language;
+use crate::Language;
 use prs_lib::{
     crypto::{self, IsContext, Proto},
     store::{FindSecret, Store},
@@ -55,7 +55,7 @@ impl<Id> Pass<Id> {
         }
 
         let mnemonic = stored
-            .parse::<mnemonic::Mnemonic>()
+            .parse::<crate::Mnemonic>()
             .map_err(|_| Error::Plaintext)?;
 
         self.entropy = Some(zeroize::Zeroizing::new(mnemonic.entropy().to_vec()));
@@ -73,7 +73,7 @@ impl<Id> Pass<Id> {
         };
 
         let secret = secret.ok_or(Error::NotFound)?;
-        let plaintext = crypto::context(Proto::Gpg)
+        let plaintext = crypto::context(&crypto::Config::from(Proto::Gpg))
             .map_err(|_e| Error::Decrypt)?
             .decrypt_file(&secret.path)
             .map_err(|_e| Error::Decrypt)?;
@@ -96,7 +96,7 @@ impl<Id> Pass<Id> {
         let target = self.secret_path(account, true)?;
         let temporary = target.with_extension("gpg.libwallet-tmp");
         let plaintext = Plaintext::from(value);
-        let result = crypto::context(Proto::Gpg)
+        let result = crypto::context(&crypto::Config::from(Proto::Gpg))
             .map_err(|_| Error::Encrypt)?
             .encrypt_file(
                 &self.store.recipients().map_err(|_| Error::Encrypt)?,
@@ -127,7 +127,7 @@ impl<Id> Pass<Id> {
 
         let plaintext = Plaintext::from(phrase.to_string());
 
-        crypto::context(Proto::Gpg)
+        crypto::context(&crypto::Config::from(Proto::Gpg))
             .map_err(|_| Error::Encrypt)?
             .encrypt_file(
                 &self.store.recipients().map_err(|_| Error::Encrypt)?,

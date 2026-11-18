@@ -59,6 +59,8 @@
 - `Error` gained `RuntimeUpgrade` and `GenesisMismatch` variants.
 - `scales` `RawPallet` gained an `errors_ty` field; filtered metadata keeps
   pallet error types so dispatch errors can be decoded.
+- The minimum supported Rust version is now 1.91, because `smoldot-light` 4.0
+  does not build on older compilers.
 
 ### Added
 
@@ -94,6 +96,18 @@
   archive API, which not every node offers.
 - Queries at a block hash hold that block's pin, so the unpin flush before
   the query can't release it.
+
+### Maintenance
+
+- Dependencies updated: `blake2` 0.11, `smoldot-light` 4.0, `gloo-net` 0.8,
+  `mbedtls-rs` 0.3 (`ws-edge`). Storage hashing output is unchanged and now
+  covered by BLAKE2 known-answer tests.
+- The workspace uses the MSRV-aware resolver (`resolver = "3"`), so fresh
+  resolves pick dependency versions compatible with the declared
+  `rust-version`.
+- The bare-metal QEMU smoke test applies its linker script from `build.rs`, so
+  it no longer depends on the directory cargo runs from.
+- Fixed lints reported by newer Clippy releases.
 
 ## 1.0.0
 

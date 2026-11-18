@@ -11,8 +11,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
+use crate::DeviceId;
 use crate::workflow::{ChallengeRequest, DeviceAttestation, DeviceAuthenticator};
-use crate::{DeviceId, blake2b_256};
+use blake2::{Blake2b256, Digest};
 use sube::{DynValue, Result};
 
 /// Errors a [`WebAuthnTransport`] may report.
@@ -508,7 +509,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
             .await
             .map_err(authenticator_error)?;
         *self.credential_id.borrow_mut() = Some(response.credential_id.clone());
-        let device_id = DeviceId(blake2b_256(&response.credential_id));
+        let device_id = DeviceId(Blake2b256::digest(&response.credential_id).into());
         Ok(DeviceAttestation {
             device_id,
             variant: self.variant().into(),
@@ -626,6 +627,7 @@ mod tests {
         let attestation =
             futures_lite::future::block_on(device.attest(&attestation_request())).unwrap();
         assert_eq!(attestation.variant, "WebAuthn");
+        let device_id: [u8; 32] = Blake2b256::digest([1, 2, 3]).into();
         assert_eq!(
             attestation.payload,
             DynValue::obj(&[
@@ -633,7 +635,7 @@ mod tests {
                     "meta",
                     DynValue::obj(&[
                         ("authority_id", DynValue::from([3u8; 32])),
-                        ("device_id", DynValue::from(blake2b_256(&[1, 2, 3]))),
+                        ("device_id", DynValue::from(device_id)),
                         ("context", DynValue::from(4u32)),
                     ])
                 ),

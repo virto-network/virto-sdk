@@ -9,7 +9,7 @@ const TEST_USER: &str = "test_user";
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let vault = vault::OSKeyring::<String>::new(TEST_USER, Language::default());
+    let vault = vault::OSKeyring::<String>::new(TEST_USER, Language::English);
     let mut substrate = Substrate::new(vault);
     let signer = substrate.unlock(None, ()).await?;
     let mut wallet: Wallet<_, 5> = Wallet::new();

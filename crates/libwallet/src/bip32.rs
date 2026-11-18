@@ -2,7 +2,7 @@
 //! BIP32 (secp256k1) uses HMAC-SHA512 + k256 scalar arithmetic.
 //! SLIP-0010 (ed25519) uses HMAC-SHA512 with hardened-only derivation.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha512;
 use zeroize::Zeroize;
 
@@ -51,7 +51,7 @@ impl ExtendedKey {
             mac.update(&self.key);
         } else {
             let signing_key = k256::ecdsa::SigningKey::from_slice(&self.key).ok()?;
-            let pubkey = signing_key.verifying_key().to_encoded_point(true);
+            let pubkey = signing_key.verifying_key().to_sec1_point(true);
             mac.update(pubkey.as_bytes());
         }
         mac.update(&index.to_be_bytes());
@@ -65,8 +65,8 @@ impl ExtendedKey {
         result.zeroize();
 
         use k256::elliptic_curve::ops::Reduce;
-        let tweak = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&il.into());
-        let parent = <k256::Scalar as Reduce<k256::U256>>::reduce_bytes(&self.key.into());
+        let tweak = <k256::Scalar as Reduce<k256::FieldBytes>>::reduce(&il.into());
+        let parent = <k256::Scalar as Reduce<k256::FieldBytes>>::reduce(&self.key.into());
         il.zeroize();
         let child = tweak + parent;
 
