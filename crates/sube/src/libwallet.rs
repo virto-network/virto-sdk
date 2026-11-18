@@ -2,6 +2,7 @@
 //!
 //! This optional module intentionally contains no pallet-pass knowledge.
 
+use crate::prelude::*;
 use crate::{Error, Result, Signer};
 use libwallet::Signer as WalletSigner;
 
