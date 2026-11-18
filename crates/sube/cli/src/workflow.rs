@@ -734,18 +734,40 @@ pub async fn prepare_with_active_profile(
             prepare_transaction(chain, chain_url, call, &profile.name, &signer, options).await?
         }
         #[cfg(feature = "pass")]
-        crate::profiles::Profile::Pass(profile) => {
-            let session = profile.session.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("active pass profile has no finalized local session")
-            })?;
-            let policy = parse_session_policy(chain.metadata(), &session.policy)?;
-            let signer =
-                crate::signers::load_session_signer(&profile.session_entry(), session.account)
-                    .await?;
-            let authorizer =
-                pass::SessionAuthorizer::new(pass::Account(profile.pass_account), signer, policy)?;
-            prepare_transaction(chain, chain_url, call, &profile.name, &authorizer, options).await?
-        }
+        crate::profiles::Profile::Pass(profile) => match &profile.session {
+            Some(session) => {
+                let policy = parse_session_policy(chain.metadata(), &session.policy)?;
+                let signer =
+                    crate::signers::load_session_signer(&profile.session_entry(), session.account)
+                        .await?;
+                let authorizer = pass::SessionAuthorizer::new(
+                    pass::Account(profile.pass_account),
+                    signer,
+                    policy,
+                )?;
+                prepare_transaction(chain, chain_url, call, &profile.name, &authorizer, options)
+                    .await?
+            }
+            // Without a session, the device authenticates the call itself.
+            None => {
+                use sube::Backend;
+                let config = pass::PassRuntimeConfig::discover(chain.metadata())?;
+                let checkpoint = chain.backend().block_info(None).await?;
+                let context = u32::try_from(checkpoint.number)
+                    .map_err(|_| anyhow::anyhow!("pass context exceeds u32"))?;
+                prepare_profile_device_transaction(
+                    chain,
+                    chain_url,
+                    &profiles,
+                    profile,
+                    &config,
+                    context,
+                    checkpoint.hash,
+                    call,
+                )
+                .await?
+            }
+        },
     };
     Ok(Some(prepared))
 }

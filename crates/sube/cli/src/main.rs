@@ -199,6 +199,11 @@ struct TxBehavior {
 }
 
 fn main() -> Result<()> {
+    #[cfg(feature = "soft-webauthn")]
+    eprintln!(
+        "warning: built with soft-webauthn: WebAuthn devices are in-memory test keys, \
+         lost when sube exits"
+    );
     smol::block_on(run())
 }
 
@@ -976,6 +981,240 @@ mod tests {
             .and_then(|data| data.field("free"))
             .and_then(|free| free.as_u128())
             .ok_or_else(|| anyhow::anyhow!("System.Account has no free balance"))
+    }
+
+    /// Submit `prepared` and wait until it finalizes successfully.
+    #[cfg(feature = "soft-webauthn")]
+    async fn submit_ok(
+        chain: &mut sube::Sube,
+        prepared: &workflow::PreparedTransaction,
+    ) -> Result<sube::TransactionReceipt> {
+        let receipt =
+            workflow::submit_transaction(chain, prepared, sube::WaitFor::Finalized).await?;
+        anyhow::ensure!(
+            matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success),
+            "{receipt:?}"
+        );
+        Ok(receipt)
+    }
+
+    /// The pass flow with a WebAuthn device, played by the in-memory
+    /// software authenticator: enrollment, a call the device signs itself,
+    /// a session, and a scoped device it adds and removes.
+    #[cfg(feature = "soft-webauthn")]
+    #[test]
+    #[ignore = "requires SUBE_E2E_URL and a disposable funded registrar"]
+    fn live_pass_webauthn_flow() -> Result<()> {
+        smol::block_on(async {
+            let Ok(chain_url) = std::env::var("SUBE_E2E_URL") else {
+                eprintln!("SUBE_E2E_URL is unset; skipping live-chain WebAuthn test");
+                return Ok(());
+            };
+            let registrar_mnemonic = std::env::var("SUBE_E2E_REGISTRAR_MNEMONIC")
+                .map_err(|_| anyhow::anyhow!("SUBE_E2E_REGISTRAR_MNEMONIC is required"))?;
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos();
+            let registrar_name = format!("e2e-registrar-{unique}");
+            let pass_name = format!("e2e-webauthn-{unique}");
+            let profile_path = std::env::temp_dir().join(format!(
+                "sube-live-webauthn-{}-{unique}.json",
+                std::process::id()
+            ));
+            let mut cleanup = E2eCleanup {
+                profile_path: profile_path.clone(),
+                secure_entries: Vec::new(),
+            };
+            let wallet = |profiles: &profiles::Profiles, name: &str| match profiles.find(name) {
+                Some(profiles::Profile::Wallet(wallet)) => wallet.clone(),
+                _ => unreachable!("{name} was just imported"),
+            };
+
+            let mut chain = sube::Sube::connect(&chain_url).await?;
+            let genesis_hash = workflow::chain_genesis(&mut chain).await?;
+            let stored = workflow::import_wallet_profile(
+                &profile_path,
+                genesis_hash,
+                registrar_name.clone(),
+                &registrar_mnemonic,
+            )?;
+            let registrar = wallet(&stored, &registrar_name);
+            cleanup.secure_entries.push(registrar.secure_entry());
+            let free = free_balance(&mut chain, registrar.account).await?;
+            eprintln!(
+                "registrar: 0x{}, free balance {free}",
+                hex::encode(registrar.account)
+            );
+            anyhow::ensure!(
+                free >= 5 * PASS_TOP_UP,
+                "fund the registrar's account with at least {} units",
+                5 * PASS_TOP_UP
+            );
+
+            let mut user_id = [0u8; 32];
+            user_id[..16].copy_from_slice(&unique.to_le_bytes());
+            user_id[16..].copy_from_slice(&genesis_hash[..16]);
+            let enrollment = workflow::prepare_enrollment(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                workflow::EnrollmentRequest {
+                    name: pass_name.clone(),
+                    user_id: hex::encode(user_id),
+                    registrar: registrar_name.clone(),
+                    device: "webauthn:localhost@https://localhost"
+                        .parse()
+                        .map_err(anyhow::Error::msg)?,
+                },
+            )
+            .await?;
+            let receipt = submit_ok(&mut chain, &enrollment.prepared).await?;
+            let effect = enrollment.effect.expect("enrollment changes the profile");
+            let stored =
+                workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
+            let profile = workflow::pass_profile(&stored, &pass_name, genesis_hash)?.clone();
+            assert!(matches!(
+                profile.device,
+                profiles::DeviceProviderProfile::WebAuthn { ref credential_id, .. }
+                    if !credential_id.is_empty()
+            ));
+            assert!(
+                workflow::device_registered(&mut chain, profile.pass_account, profile.device_id)
+                    .await?
+            );
+
+            // A new pass account pays its own fees.
+            let top_up = chain.prepare_call(
+                "Balances/transfer_keep_alive",
+                &sube::DynValue::obj(&[
+                    (
+                        "dest",
+                        sube::DynValue::obj(&[("Id", sube::DynValue::from(profile.pass_account))]),
+                    ),
+                    ("value", sube::DynValue::U128(PASS_TOP_UP)),
+                ]),
+            )?;
+            let registrar_signer = signers::wallet_signer(&registrar).await?;
+            let prepared = workflow::prepare_transaction(
+                &mut chain,
+                &chain_url,
+                &top_up,
+                &registrar_name,
+                &registrar_signer,
+                sube::TransactionOptions::default(),
+            )
+            .await?;
+            submit_ok(&mut chain, &prepared).await?;
+
+            // Without a session, the device signs the call itself.
+            let mut profiles = profiles::Profiles::load(&profile_path)?;
+            profiles.activate(&pass_name, genesis_hash)?;
+            profiles.save(&profile_path)?;
+            let remark =
+                chain.prepare_call("System/remark", &sube::Text("(remark:0x7765626175746866)"))?;
+            let prepared = workflow::prepare_with_active_profile(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                &remark,
+            )
+            .await?
+            .expect("the pass profile is active");
+            submit_ok(&mut chain, &prepared).await?;
+
+            let session = workflow::prepare_pass_session(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                &pass_name,
+                "calls:System/remark",
+                None,
+            )
+            .await?;
+            let workflow::SessionPreparation::Review(staged) = session else {
+                anyhow::bail!("new pass profile unexpectedly reused a session")
+            };
+            let receipt = submit_ok(&mut chain, &staged.prepared).await?;
+            let effect = staged.effect.expect("a session changes the profile");
+            let stored =
+                workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
+            let profile = workflow::pass_profile(&stored, &pass_name, genesis_hash)?.clone();
+            assert!(
+                profile.session.is_some(),
+                "finalized session was not persisted"
+            );
+            cleanup.secure_entries.push(profile.session_entry());
+            let prepared = workflow::prepare_with_active_profile(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                &remark,
+            )
+            .await?
+            .expect("the pass profile is active");
+            submit_ok(&mut chain, &prepared).await?;
+
+            // The WebAuthn device adds a scoped wallet device, then removes it.
+            let scoped_name = format!("e2e-scoped-{unique}");
+            let mut entropy = [0u8; 32];
+            rand_core::RngCore::fill_bytes(&mut rand_core::OsRng, &mut entropy);
+            let scoped_mnemonic = libwallet::Mnemonic::from_entropy(entropy.to_vec())
+                .map_err(|_| anyhow::anyhow!("mnemonic"))?;
+            let stored = workflow::import_wallet_profile(
+                &profile_path,
+                genesis_hash,
+                scoped_name.clone(),
+                scoped_mnemonic.phrase(),
+            )?;
+            cleanup
+                .secure_entries
+                .push(wallet(&stored, &scoped_name).secure_entry());
+            let addition = workflow::prepare_device_addition(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                workflow::DeviceAdditionRequest {
+                    profile: pass_name.clone(),
+                    device: profiles::DeviceProviderProfile::SubstrateKey {
+                        wallet: scoped_name,
+                    },
+                    filter: "calls:System/remark".into(),
+                    admin_confirmed: false,
+                },
+            )
+            .await?;
+            let receipt = submit_ok(&mut chain, &addition.prepared).await?;
+            let effect = addition
+                .effect
+                .expect("a device addition changes the profile");
+            let stored =
+                workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
+            let profile = workflow::pass_profile(&stored, &pass_name, genesis_hash)?.clone();
+            let scoped = profile.additional_devices[0].device_id;
+            assert!(workflow::device_registered(&mut chain, profile.pass_account, scoped).await?);
+
+            let removal = workflow::prepare_device_removal(
+                &mut chain,
+                &chain_url,
+                &profile_path,
+                genesis_hash,
+                workflow::DeviceRemovalRequest {
+                    profile: pass_name.clone(),
+                    device_id: scoped,
+                },
+            )
+            .await?;
+            let receipt = submit_ok(&mut chain, &removal.prepared).await?;
+            let effect = removal
+                .effect
+                .expect("a device removal changes the profile");
+            workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
+            assert!(!workflow::device_registered(&mut chain, profile.pass_account, scoped).await?);
+            Ok(())
+        })
     }
 
     #[cfg(feature = "pass")]

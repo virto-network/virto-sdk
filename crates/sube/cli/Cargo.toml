@@ -29,9 +29,13 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 zeroize = "1"
 rand_core = { version = "0.6", features = ["getrandom"], optional = true }
+url = { version = "2", optional = true }
 
 [features]
 default = ["wallet", "pass", "desktop-webauthn"]
 wallet = ["dep:libwallet", "dep:rand_core", "sube/libwallet"]
 pass = ["wallet", "dep:pass"]
-desktop-webauthn = ["pass", "pass/desktop-webauthn"]
+desktop-webauthn = ["pass", "pass/desktop-webauthn", "dep:url"]
+# WebAuthn devices use an in-memory software authenticator instead of a
+# security key. For tests only: its keys are lost when the process exits.
+soft-webauthn = ["desktop-webauthn", "pass/soft-webauthn"]

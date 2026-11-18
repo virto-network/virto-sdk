@@ -51,6 +51,12 @@ pub enum FromChain {
     ProfilesUpdated(crate::profiles::Profiles, String),
     #[cfg(feature = "wallet")]
     ProfileError(String),
+    /// An authenticator prompt needs the terminal; acknowledge once the UI
+    /// has given it up.
+    #[cfg(feature = "desktop-webauthn")]
+    DevicePrompt(mpsc::SyncSender<()>),
+    #[cfg(feature = "desktop-webauthn")]
+    DevicePromptDone,
 }
 
 pub struct CallReview {

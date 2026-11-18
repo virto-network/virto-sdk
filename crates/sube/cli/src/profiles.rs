@@ -154,9 +154,21 @@ impl std::str::FromStr for DeviceProviderProfile {
             #[cfg(feature = "desktop-webauthn")]
             "webauthn" => {
                 let (rp_id, origin) = selection.split_once('@').ok_or(USAGE)?;
+                // pallet-pass checks the credential's RP id against the
+                // origin's domain, so they must be equal.
+                let domain = url::Url::parse(origin)
+                    .ok()
+                    .filter(|url| matches!(url.scheme(), "https" | "http"))
+                    .and_then(|url| url.domain().map(str::to_owned));
+                if domain.as_deref() != Some(rp_id) {
+                    return Err(format!(
+                        "the RP id must be the origin's domain, e.g. webauthn:{0}@https://{0}",
+                        nonempty(rp_id).unwrap_or_else(|| "example.com".into())
+                    ));
+                }
                 Ok(Self::WebAuthn {
-                    rp_id: nonempty(rp_id).ok_or(USAGE)?,
-                    origin: nonempty(origin).ok_or(USAGE)?,
+                    rp_id: rp_id.to_owned(),
+                    origin: origin.to_owned(),
                     credential_id: Vec::new(),
                 })
             }
@@ -417,6 +429,11 @@ mod tests {
             "wallet:",
             "nostr:npub1",
             "webauthn:example.com",
+            // The RP id must be the origin's domain.
+            "webauthn:example.com@https://login.example.com",
+            "webauthn:@https://example.com",
+            "webauthn:127.0.0.1@https://127.0.0.1",
+            "webauthn:example.com@ftp://example.com",
         ] {
             assert!(parse(invalid).is_err(), "{invalid}");
         }

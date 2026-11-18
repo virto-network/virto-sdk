@@ -388,6 +388,9 @@ impl App {
             }
             #[cfg(feature = "wallet")]
             FromChain::ProfileError(error) => self.error = Some(error),
+            // Handled by the event loop, which owns the terminal.
+            #[cfg(feature = "desktop-webauthn")]
+            FromChain::DevicePrompt(_) | FromChain::DevicePromptDone => {}
         }
     }
 
@@ -466,6 +469,24 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
     let (chain_tx, ui_rx) = smol::channel::unbounded::<FromChain>();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
+    #[cfg(feature = "desktop-webauthn")]
+    {
+        let prompts = chain_tx.clone();
+        crate::device::on_prompt(move |prompt| match prompt {
+            crate::device::Prompt::Begin => {
+                let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+                if prompts
+                    .send_blocking(FromChain::DevicePrompt(ack_tx))
+                    .is_ok()
+                {
+                    let _ = ack_rx.recv();
+                }
+            }
+            crate::device::Prompt::End => {
+                let _ = prompts.send_blocking(FromChain::DevicePromptDone);
+            }
+        });
+    }
     chain::spawn(
         chain_url.into(),
         profile_path.to_owned(),
@@ -533,7 +554,13 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         terminal.draw(|f| draw::draw(f, &app))?;
 
         while let Ok(msg) = ui_rx.try_recv() {
-            app.process_chain_message(msg);
+            match msg {
+                #[cfg(feature = "desktop-webauthn")]
+                FromChain::DevicePrompt(ack) => {
+                    hand_over_terminal(&mut terminal, &mut app, &ui_rx, ack)?
+                }
+                msg => app.process_chain_message(msg),
+            }
         }
         app.flush_pending_detail();
 
@@ -559,6 +586,40 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
 
     disable_raw_mode()?;
     crossterm::execute!(std::io::stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+/// Give the terminal to an authenticator prompt until it's done: the
+/// authenticator library asks for a security key's PIN on the terminal.
+#[cfg(feature = "desktop-webauthn")]
+fn hand_over_terminal(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut App,
+    ui_rx: &smol::channel::Receiver<FromChain>,
+    ack: mpsc::SyncSender<()>,
+) -> Result<()> {
+    disable_raw_mode()?;
+    crossterm::execute!(
+        std::io::stdout(),
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    )?;
+    println!(
+        "\nUse your security key: touch it when it blinks, and enter its PIN here if asked.\n"
+    );
+    let _ = ack.send(());
+    loop {
+        match ui_rx.recv_blocking() {
+            Ok(FromChain::DevicePromptDone) | Err(_) => break,
+            Ok(FromChain::DevicePrompt(ack)) => {
+                let _ = ack.send(());
+            }
+            Ok(msg) => app.process_chain_message(msg),
+        }
+    }
+    enable_raw_mode()?;
+    crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
+    terminal.clear()?;
     Ok(())
 }
 
