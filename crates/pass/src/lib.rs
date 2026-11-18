@@ -99,8 +99,13 @@ pub fn enrollment_challenge(block_hash: &[u8; 32], account: Account) -> Challeng
     block_challenge(block_hash, &account.0)
 }
 
-/// V5 General extrinsic version prefix (bit 6 set).
-const GENERAL_PREFIX: u8 = 0b01000000;
+/// The first byte of a V5 General extrinsic: the `0b01` General preamble
+/// and format version 5. It is fixed, since V14/V15 metadata only
+/// advertises version 4.
+const GENERAL_V5: u8 = 0b0100_0101;
+/// The transaction-extension version. Runtimes that don't version their
+/// extensions use 0.
+const EXTENSION_VERSION: u8 = 0;
 /// Extension identifier used by pallet-pass.
 const PASS_AUTHENTICATE: &str = "PassAuthenticate";
 
@@ -168,9 +173,12 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
         let (after_extra, after_additional, _) =
             encode_extensions(after, registry, ctx, overrides)?;
 
-        let version_byte = GENERAL_PREFIX | meta.version;
-        let implication =
-            inherited_implication(version_byte, encoded_call, &after_extra, &after_additional);
+        let implication = inherited_implication(
+            EXTENSION_VERSION,
+            encoded_call,
+            &after_extra,
+            &after_additional,
+        );
 
         // Ask the device for the credential bound to this implication.
         let credential_value = self
@@ -198,8 +206,8 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
 
         // Assemble the V5 General extrinsic: [ver, ext_ver, extras, call]
         let mut inner = Vec::with_capacity(2 + all_extra.len() + encoded_call.len());
-        inner.push(version_byte);
-        inner.push(0u8); // extension_version
+        inner.push(GENERAL_V5);
+        inner.push(EXTENSION_VERSION);
         inner.extend_from_slice(&all_extra);
         inner.extend_from_slice(encoded_call);
 
@@ -226,16 +234,20 @@ fn extensions_after_pass_authenticate(
 }
 
 /// Compute the inherited implication that the signer binds to:
-/// `blake2b_256(version_byte || encoded_call || after_extras || after_additionals)`.
+/// `blake2b_256(extension_version || encoded_call || after_extras || after_additionals)`.
+///
+/// This is Substrate's `TxBaseImplication((extension_version, call))`
+/// followed by the extensions after `PassAuthenticate`, which pallet-pass
+/// hashes with `using_encoded(blake2_256)`.
 pub fn inherited_implication(
-    version_byte: u8,
+    extension_version: u8,
     encoded_call: &[u8],
     after_extra: &[u8],
     after_additional: &[u8],
 ) -> [u8; 32] {
     let mut raw =
         Vec::with_capacity(1 + encoded_call.len() + after_extra.len() + after_additional.len());
-    raw.push(version_byte);
+    raw.push(extension_version);
     raw.extend_from_slice(encoded_call);
     raw.extend_from_slice(after_extra);
     raw.extend_from_slice(after_additional);

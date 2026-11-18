@@ -156,3 +156,62 @@ fn substrate_key_attestation_encodes_against_the_runtime_type() {
         );
     })
 }
+
+/// A device-authenticated (V5 General) transaction must decode on the live
+/// runtime. The device isn't registered, so the runtime rejects it, but as an
+/// invalid transaction rather than as undecodable bytes.
+#[test]
+#[ignore = "requires network access to a chain with pallet-pass"]
+fn device_authenticated_transactions_decode_on_chain() {
+    use libwallet::vault::{Simple, Vault};
+    use sube::{Backend as _, TransactionOptions, TransactionValidity};
+    futures_lite::future::block_on(async {
+        let url = std::env::var("SUBE_E2E_URL").unwrap_or_else(|_| "wss://kreivo.io".into());
+        let mut chain = sube::Sube::connect(&url).await.expect("connect");
+        let config = PassRuntimeConfig::discover(chain.metadata()).expect("pass config");
+
+        let phrase = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo \
+                      zoo zoo zoo zoo zoo vote";
+        let mut vault = libwallet::Substrate::new(Simple::<()>::from_phrase(phrase).unwrap());
+        let signer = vault
+            .unlock(None, ())
+            .await
+            .unwrap_or_else(|_| panic!("unlock"));
+        let public = signer.public();
+        let device = pass::wallet::WalletDevice::new(
+            &signer,
+            public.as_ref(),
+            pass::wallet::SignatureType::Sr25519,
+        );
+        let user_id = pass::HashedUserId([0x11; 32]);
+        let checkpoint = chain.backend().block_info(None).await.expect("checkpoint");
+        let authenticator = pass::PassAuthenticator::new(
+            &device,
+            config.derive_account(user_id),
+            device.device_id(),
+            user_id,
+            config.authority_id,
+            checkpoint.number as u32,
+            checkpoint.hash,
+        );
+        let call =
+            pass::workflow::prepare_remove_device(chain.metadata(), &config, device.device_id())
+                .expect("remove_device call");
+        let extrinsic = chain
+            .build_transaction(&call, &authenticator, TransactionOptions::default())
+            .await
+            .expect("builds");
+        // After the compact length prefix: General V5, extension version 0.
+        let prefix = [1, 2, 4][usize::from(extrinsic.bytes[0] & 0b11)];
+        assert_eq!(extrinsic.bytes[prefix..prefix + 2], [0x45, 0x00]);
+        let report = chain
+            .inspect_transaction(&extrinsic)
+            .await
+            .expect("inspects");
+        assert!(
+            matches!(report.validity, Some(TransactionValidity::Invalid(_))),
+            "{report:?}"
+        );
+        eprintln!("{report:?}");
+    })
+}

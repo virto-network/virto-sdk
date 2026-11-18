@@ -122,16 +122,17 @@ fn kreivo_v5_inherited_implication_golden_vector() {
         &[],
     )
     .expect("extensions after PassAuthenticate");
-    let implication = pass::inherited_implication(
-        0x40 | meta.extrinsic.version,
-        &call.bytes,
-        &after_extra,
-        &after_additional,
-    );
+    let implication = pass::inherited_implication(0, &call.bytes, &after_extra, &after_additional);
 
+    // blake2_256 of, written out by hand:
+    //   00                     extension version
+    //   06 02 11{32}           Pass.remove_device(device_id)
+    //   05 00 | 00 | 00 00     CheckMortality, CheckNonce, ChargeAssetTxPayment
+    //   64000000 02000000      spec and transaction versions
+    //   ab{32} cd{32}          genesis and checkpoint hashes
     assert_eq!(
         hex::encode(implication),
-        "93480035c8de934618faa5bde6a36f593fc3f5c422a5e12694d572628a84e61d"
+        "4da426ed2064f3e3f7d741ba9a6dbe27f724eeaa26c21b8c2812f844c0fda36c"
     );
 }
 
@@ -217,16 +218,14 @@ fn pass_authenticator_assembles_a_device_credential() {
         &[],
     )
     .expect("extensions after PassAuthenticate");
-    let version = 0x40 | meta.extrinsic.version;
-    let implication =
-        pass::inherited_implication(version, &call.bytes, &after_extra, &after_additional);
+    let implication = pass::inherited_implication(0, &call.bytes, &after_extra, &after_additional);
     assert_eq!(
         *device.challenge.borrow(),
         Some(pass::block_challenge(&block_hash, &implication))
     );
 
-    // version | extension version | PassAuthenticate (first extension) ...
-    let mut expected = vec![version, 0x00, 0x01];
+    // General V5 | extension version | PassAuthenticate (first extension) ...
+    let mut expected = vec![0x45, 0x00, 0x01];
     expected.extend([0x02; 32]);
     expected.push(0x00); // PassCredential::WebAuthn
     expected.extend([0x22; 32]);
