@@ -960,6 +960,24 @@ mod tests {
         ));
     }
 
+    /// What the live smoke test transfers to the new pass account for its
+    /// fees and the scoped device's deposit: 0.02 KSM on Kreivo.
+    #[cfg(feature = "pass")]
+    const PASS_TOP_UP: u128 = 20_000_000_000;
+
+    #[cfg(feature = "pass")]
+    async fn free_balance(chain: &mut sube::Sube, account: [u8; 32]) -> Result<u128> {
+        let path = format!("System/Account/0x{}", hex::encode(account));
+        let sube::Response::Value(entry, meta) = chain.query(&path).await? else {
+            return Ok(0);
+        };
+        let info = sube::Value::new(&entry.data, entry.ty, &meta.registry);
+        info.field("data")
+            .and_then(|data| data.field("free"))
+            .and_then(|free| free.as_u128())
+            .ok_or_else(|| anyhow::anyhow!("System.Account has no free balance"))
+    }
+
     #[cfg(feature = "pass")]
     #[test]
     #[ignore = "requires SUBE_E2E_URL and disposable funded live-chain credentials"]
@@ -1005,6 +1023,22 @@ mod tests {
             cleanup
                 .secure_entries
                 .push(wallet_entry(&stored, &registrar_name));
+            // Stop before submitting anything if the registrar can't pay for
+            // the run: its fees and deposits plus the pass account's top-up.
+            let Some(profiles::Profile::Wallet(registrar)) = stored.find(&registrar_name) else {
+                unreachable!("the registrar was just imported")
+            };
+            let registrar_account = registrar.account;
+            let free = free_balance(&mut chain, registrar_account).await?;
+            eprintln!(
+                "registrar (//default): 0x{}, free balance {free}",
+                hex::encode(registrar_account)
+            );
+            anyhow::ensure!(
+                free >= 5 * PASS_TOP_UP,
+                "fund the registrar's //default account with at least {} units",
+                5 * PASS_TOP_UP
+            );
             let stored = workflow::import_wallet_profile(
                 &profile_path,
                 genesis_hash,
@@ -1026,7 +1060,7 @@ mod tests {
                 workflow::EnrollmentRequest {
                     name: pass_name.clone(),
                     user_id: hex::encode(user_id),
-                    registrar: registrar_name,
+                    registrar: registrar_name.clone(),
                     device: profiles::DeviceProviderProfile::SubstrateKey {
                         wallet: device_name,
                     },
@@ -1039,12 +1073,45 @@ mod tests {
                 sube::WaitFor::Finalized,
             )
             .await?;
-            assert!(matches!(
-                receipt.dispatch_outcome,
-                sube::DispatchOutcome::Success
-            ));
+            assert!(
+                matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success),
+                "{receipt:?}"
+            );
             let effect = enrollment.effect.expect("enrollment changes the profile");
-            workflow::apply_finalized_effect(&profile_path, &receipt, effect)?;
+            let stored =
+                workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
+
+            // A new pass account pays its own fees unless a subscribed
+            // community covers them, so the registrar tops it up.
+            let pass_account =
+                workflow::pass_profile(&stored, &pass_name, genesis_hash)?.pass_account;
+            let top_up = chain.prepare_call(
+                "Balances/transfer_keep_alive",
+                &sube::DynValue::obj(&[
+                    (
+                        "dest",
+                        sube::DynValue::obj(&[("Id", sube::DynValue::from(pass_account))]),
+                    ),
+                    ("value", sube::DynValue::U128(PASS_TOP_UP)),
+                ]),
+            )?;
+            let registrar_signer = signers::wallet_signer(registrar).await?;
+            let prepared = workflow::prepare_transaction(
+                &mut chain,
+                &chain_url,
+                &top_up,
+                &registrar_name,
+                &registrar_signer,
+                sube::TransactionOptions::default(),
+            )
+            .await?;
+            let receipt =
+                workflow::submit_transaction(&mut chain, &prepared, sube::WaitFor::Finalized)
+                    .await?;
+            assert!(
+                matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success),
+                "{receipt:?}"
+            );
 
             let session = workflow::prepare_pass_session(
                 &mut chain,
@@ -1065,12 +1132,13 @@ mod tests {
                 sube::WaitFor::Finalized,
             )
             .await?;
-            assert!(matches!(
-                receipt.dispatch_outcome,
-                sube::DispatchOutcome::Success
-            ));
+            assert!(
+                matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success),
+                "{receipt:?}"
+            );
             let effect = staged.effect.expect("a session changes the profile");
-            let stored = workflow::apply_finalized_effect(&profile_path, &receipt, effect)?;
+            let stored =
+                workflow::persist_effect(&mut chain, &profile_path, &receipt, effect).await?;
             let profile = workflow::pass_profile(&stored, &pass_name, genesis_hash)?.clone();
             let session = profile
                 .session
@@ -1112,10 +1180,10 @@ mod tests {
             let receipt =
                 workflow::submit_transaction(&mut chain, &prepared, sube::WaitFor::Finalized)
                     .await?;
-            assert!(matches!(
-                receipt.dispatch_outcome,
-                sube::DispatchOutcome::Success
-            ));
+            assert!(
+                matches!(receipt.dispatch_outcome, sube::DispatchOutcome::Success),
+                "{receipt:?}"
+            );
             assert!(receipt.finalized_block_hash.is_some());
             assert!(receipt.extrinsic_index.is_some());
 

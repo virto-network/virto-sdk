@@ -100,6 +100,10 @@ An ignored destructive smoke test exercises Substrate-key enrollment, exact
 session registration, a locally rejected call, an allowed finalized call,
 adding and removing a scoped device, and receipt inspection. Use disposable
 credentials: enrollment and the allowed remark remain on the selected chain.
+The registrar mnemonic is derived at `//default`; that account pays for
+enrollment and transfers 0.02 KSM to the new pass account, which pays its own
+fees unless a subscribed community covers them. The test stops before
+submitting anything if the registrar holds less than 0.1 KSM.
 
 ```sh
 SUBE_E2E_URL=wss://... \
