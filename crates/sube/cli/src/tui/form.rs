@@ -381,6 +381,20 @@ impl FormState {
         }
     }
 
+    /// A typed character. Text fields take every character; elsewhere
+    /// Space toggles, and `+` and `-` add and remove list items.
+    pub fn key_char(&mut self, c: char) {
+        if matches!(self.field_at_cursor_mut(), Some(Field::Text { .. })) {
+            return self.push_char(c);
+        }
+        match c {
+            ' ' => self.toggle(),
+            '+' => self.add_list_item(),
+            '-' => self.remove_list_item(),
+            c => self.push_char(c),
+        }
+    }
+
     /// Typing on an enum row moves to its first payload field.
     pub fn push_char(&mut self, c: char) {
         if let Some(Field::Enum { sub_fields, .. }) = self.field_at_cursor_mut()
@@ -895,6 +909,29 @@ mod tests {
         form.add_list_item();
         assert!(form.values().unwrap()[0].starts_with("..RuntimeCall::"));
         parses(&batch, &form);
+    }
+
+    #[test]
+    fn text_fields_take_spaces_and_signs() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let mut form = FormState::new(
+            vec![Field::Text {
+                name: "remark".into(),
+                type_desc: "Vec<u8>".into(),
+                input: String::new(),
+                is_bytes: true,
+                ty_id: TypeId::default(),
+            }],
+            sube::Rc::new(metadata.registry.clone()),
+            FormContext::default(),
+        );
+        "a b-c+".chars().for_each(|c| form.key_char(c));
+        let Field::Text { input, .. } = &form.fields[0] else {
+            unreachable!()
+        };
+        assert_eq!(input, "a b-c+");
     }
 
     #[test]

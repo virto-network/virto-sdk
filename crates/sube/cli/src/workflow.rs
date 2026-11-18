@@ -55,25 +55,31 @@ pub async fn activate_existing_profile(
             let _ = crate::signers::wallet_signer(&profile).await?;
         }
         #[cfg(feature = "pass")]
-        crate::profiles::Profile::Pass(profile) => {
-            use sube::Backend;
+        crate::profiles::Profile::Pass(profile) => match &profile.session {
+            // Without a session, the device signs each call.
+            None => {
+                if !device_registered(chain, profile.pass_account, profile.device_id).await? {
+                    anyhow::bail!("the pass profile's device is not registered on chain");
+                }
+            }
+            Some(session) => {
+                use sube::Backend;
 
-            let session = profile.session.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("pass profile requires a scoped session before activation")
-            })?;
-            let checkpoint = chain.backend().block_info(None).await?;
-            if session.expires_at <= checkpoint.number {
-                anyhow::bail!("pass session expired; register or update it before activation");
+                let checkpoint = chain.backend().block_info(None).await?;
+                if session.expires_at <= checkpoint.number {
+                    anyhow::bail!("pass session expired; register or update it before activation");
+                }
+                let policy = parse_session_policy(chain.metadata(), &session.policy)?;
+                if !on_chain_session_matches(chain, &profile, session, &policy).await {
+                    anyhow::bail!(
+                        "local pass session does not exactly match on-chain storage; register or update it before activation"
+                    );
+                }
+                let _ =
+                    crate::signers::load_session_signer(&profile.session_entry(), session.account)
+                        .await?;
             }
-            let policy = parse_session_policy(chain.metadata(), &session.policy)?;
-            if !on_chain_session_matches(chain, &profile, session, &policy).await {
-                anyhow::bail!(
-                    "local pass session does not exactly match on-chain storage; register or update it before activation"
-                );
-            }
-            let _ = crate::signers::load_session_signer(&profile.session_entry(), session.account)
-                .await?;
-        }
+        },
     }
     profiles.activate(name, genesis_hash)?;
     profiles.save(profile_path)?;
@@ -203,13 +209,10 @@ pub async fn prepare_enrollment(
     .await?;
     Ok(Staged {
         prepared,
-        notes: vec![
-            format!(
-                "Predicted pass account: 0x{}",
-                hex::encode(draft.predicted_account.0)
-            ),
-            format!("Enrollment valid through #{}", draft.valid_through),
-        ],
+        notes: vec![format!(
+            "Predicted pass account: 0x{}",
+            hex::encode(draft.predicted_account.0)
+        )],
         effect: Some(PendingEffect::Enrollment(Box::new(
             crate::profiles::PassProfile {
                 name: request.name,
@@ -276,14 +279,10 @@ pub async fn prepare_device_addition(
     .await?;
     Ok(Staged {
         prepared,
-        notes: vec![
-            format!("New device ID: 0x{}", hex::encode(attestation.device_id.0)),
-            // Kreivo's challenger accepts the current and previous two contexts.
-            format!(
-                "Device addition valid through #{}",
-                checkpoint.number.saturating_add(2)
-            ),
-        ],
+        notes: vec![format!(
+            "New device ID: 0x{}",
+            hex::encode(attestation.device_id.0)
+        )],
         effect: Some(PendingEffect::DeviceAddition {
             profile: profile.name,
             device: crate::profiles::DeviceRecord {

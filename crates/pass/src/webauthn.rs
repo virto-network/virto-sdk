@@ -417,11 +417,16 @@ mod desktop {
                 let origin = Url::parse(client["origin"].as_str().unwrap()).unwrap();
                 assert_eq!(origin.domain(), Some("localhost"));
                 assert_eq!(
-                    URL_SAFE_NO_PAD.decode(client["challenge"].as_str().unwrap()).unwrap(),
+                    URL_SAFE_NO_PAD
+                        .decode(client["challenge"].as_str().unwrap())
+                        .unwrap(),
                     challenge
                 );
                 // The RP id hash is of the origin's domain.
-                assert_eq!(authenticator_data[..32], sha2::Sha256::digest("localhost")[..]);
+                assert_eq!(
+                    authenticator_data[..32],
+                    sha2::Sha256::digest("localhost")[..]
+                );
                 authenticator_data[32]
             };
             let flags = check(

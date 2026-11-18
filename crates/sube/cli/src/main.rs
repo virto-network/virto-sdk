@@ -1108,9 +1108,13 @@ mod tests {
             submit_ok(&mut chain, &prepared).await?;
 
             // Without a session, the device signs the call itself.
-            let mut profiles = profiles::Profiles::load(&profile_path)?;
-            profiles.activate(&pass_name, genesis_hash)?;
-            profiles.save(&profile_path)?;
+            workflow::activate_existing_profile(
+                &mut chain,
+                &profile_path,
+                genesis_hash,
+                &pass_name,
+            )
+            .await?;
             let remark =
                 chain.prepare_call("System/remark", &sube::Text("(remark:0x7765626175746866)"))?;
             let prepared = workflow::prepare_with_active_profile(

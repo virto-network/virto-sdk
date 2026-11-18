@@ -117,6 +117,8 @@ struct App {
     block_detail: Option<BlockDetail>,
 
     error: Option<String>,
+    /// Why the chain connection is down, while it's being re-established.
+    connection: Option<String>,
     should_quit: bool,
 
     to_chain: mpsc::Sender<ToChain>,
@@ -333,6 +335,7 @@ impl App {
 
     fn process_chain_message(&mut self, msg: FromChain) {
         match msg {
+            FromChain::Connection(status) => self.connection = status,
             FromChain::Block(block) => {
                 self.recent_blocks.push(block);
                 if self.recent_blocks.len() > 200 {
@@ -442,7 +445,10 @@ impl App {
         }
     }
 
+    /// Filter the pallet list by the search query. The selected pallet
+    /// stays selected while it matches; otherwise the first match is.
     fn apply_filter(&mut self) {
+        let selected = self.pallets.get(self.pallet_idx).cloned();
         let q = self.search_query.to_lowercase();
         if q.is_empty() {
             self.pallets = self.all_pallets.clone();
@@ -454,8 +460,12 @@ impl App {
                 .cloned()
                 .collect();
         }
-        if self.pallet_idx >= self.pallets.len() {
-            self.pallet_idx = self.pallets.len().saturating_sub(1);
+        self.pallet_idx = selected
+            .as_ref()
+            .and_then(|name| self.pallets.iter().position(|p| p == name))
+            .unwrap_or(0);
+        if self.pallets.get(self.pallet_idx) != selected.as_ref() {
+            self.refresh_pallet();
         }
     }
 }
@@ -545,6 +555,7 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         recent_blocks: vec![],
         block_detail: None,
         error: None,
+        connection: None,
         should_quit: false,
         to_chain: ui_tx,
     };
@@ -618,8 +629,14 @@ fn hand_over_terminal(
         }
     }
     enable_raw_mode()?;
-    crossterm::execute!(std::io::stdout(), EnterAlternateScreen)?;
-    terminal.clear()?;
+    crossterm::execute!(
+        std::io::stdout(),
+        EnterAlternateScreen,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+    )?;
+    // A new terminal redraws everything. `Terminal::clear` would also do,
+    // but waits for the terminal to report the cursor position.
+    *terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     Ok(())
 }
 
@@ -893,11 +910,8 @@ fn handle_form(app: &mut App, key: KeyCode) {
         KeyCode::Down | KeyCode::Tab => form.next_field(),
         KeyCode::Right => form.toggle(),
         KeyCode::Left => form.toggle_back(),
-        KeyCode::Char(' ') => form.toggle(),
-        KeyCode::Char('+') => form.add_list_item(),
-        KeyCode::Char('-') => form.remove_list_item(),
         KeyCode::Backspace => form.backspace(),
-        KeyCode::Char(c) => form.push_char(c),
+        KeyCode::Char(c) => form.key_char(c),
         _ => {}
     }
 }
@@ -906,7 +920,7 @@ fn handle_search(app: &mut App, key: KeyCode) {
     match key {
         KeyCode::Esc => {
             app.search_query.clear();
-            app.pallets = app.all_pallets.clone();
+            app.apply_filter();
             app.focus = Focus::Navigate;
         }
         KeyCode::Enter => app.focus = Focus::Navigate,

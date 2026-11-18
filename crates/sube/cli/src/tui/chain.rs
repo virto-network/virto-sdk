@@ -40,6 +40,9 @@ pub enum ToChain {
 }
 
 pub enum FromChain {
+    /// The connection was lost and is being re-established (`Some`), or
+    /// is back (`None`).
+    Connection(Option<String>),
     Block(BlockInfo),
     Finalized(Vec<String>),
     StorageResult(String),
@@ -380,7 +383,10 @@ pub fn spawn(
 
                 match chain.next_event().await {
                     Ok(sube::ChainEvent::NewBlock { hash, .. }) => {
-                        let number = chain.header(&hash).await.map(|h| h.number).unwrap_or(0);
+                        let Ok(header) = chain.header(&hash).await else {
+                            continue;
+                        };
+                        let number = header.number;
                         // Count events by rough text-scan heuristic; precise
                         // introspection would need to walk scales::Value.
                         let (event_count, has_extrinsics) =
@@ -407,6 +413,11 @@ pub fn spawn(
                         let _ = to_ui.send(FromChain::Finalized(hashes)).await;
                     }
                     Ok(_) => {}
+                    // An event error may be passing; a node that doesn't
+                    // answer is gone.
+                    Err(_) if chain.backend().block_info(None).await.is_err() => {
+                        chain = reconnect(&chain_url, &to_ui).await;
+                    }
                     Err(_) => {
                         smol::Timer::after(std::time::Duration::from_secs(1)).await;
                     }
@@ -414,6 +425,21 @@ pub fn spawn(
             }
         })
     });
+}
+
+/// Connect to `chain_url` again, retrying with backoff until it answers.
+async fn reconnect(chain_url: &str, to_ui: &smol::channel::Sender<FromChain>) -> sube::Sube {
+    let mut delay = 1;
+    loop {
+        let status = format!("connection lost, reconnecting in {delay}s");
+        let _ = to_ui.send(FromChain::Connection(Some(status))).await;
+        smol::Timer::after(std::time::Duration::from_secs(delay)).await;
+        if let Ok(chain) = sube::Sube::connect(chain_url).await {
+            let _ = to_ui.send(FromChain::Connection(None)).await;
+            return chain;
+        }
+        delay = (delay * 2).min(30);
+    }
 }
 
 fn prepared_call_review(call: &sube::PreparedCall) -> String {
