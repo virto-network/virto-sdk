@@ -339,7 +339,7 @@ impl Dialog {
 }
 
 #[cfg(feature = "pass")]
-const DEVICE_LABEL: &str = "Device (wallet:PROFILE, webauthn:RP_ID@ORIGIN or ssh:FINGERPRINT#NS)";
+const DEVICE_LABEL: &str = "Device (wallet:PROFILE or webauthn:RP_ID@ORIGIN)";
 
 /// The device kinds this build supports and the runtime accepts, as
 /// `--device` prefixes.
@@ -352,8 +352,6 @@ pub fn device_presets(metadata: &sube::Metadata) -> Vec<String> {
         ("SubstrateKey", "wallet:"),
         #[cfg(feature = "desktop-webauthn")]
         ("WebAuthn", "webauthn:"),
-        #[cfg(all(feature = "ssh-agent", unix))]
-        ("Ssh", "ssh:"),
     ];
     kinds
         .iter()
@@ -367,7 +365,6 @@ fn device_provider_label(device: &crate::profiles::DeviceProviderProfile) -> &'s
     match device {
         crate::profiles::DeviceProviderProfile::SubstrateKey { .. } => "Substrate key",
         crate::profiles::DeviceProviderProfile::WebAuthn { .. } => "WebAuthn",
-        crate::profiles::DeviceProviderProfile::SshAgent { .. } => "SSH agent",
     }
 }
 

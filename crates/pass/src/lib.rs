@@ -7,9 +7,8 @@
 //!
 //! # Usage
 //!
-//! Any [`DeviceAuthenticator`] (a substrate key, a WebAuthn authenticator, an
-//! SSH agent, ...) authenticates calls for the pass account it was registered
-//! to:
+//! Any [`DeviceAuthenticator`] (a substrate key, a WebAuthn authenticator,
+//! ...) authenticates calls for the pass account it was registered to:
 //!
 //! ```rust,ignore
 //! use pass::{Account, DeviceId, HashedUserId, PassAuthenticator, PassRuntimeConfig};
@@ -41,8 +40,6 @@ extern crate std;
 pub mod config;
 mod filter;
 pub mod session;
-#[cfg(feature = "ssh-agent")]
-pub mod ssh_agent;
 #[cfg(feature = "wallet")]
 pub mod wallet;
 pub mod webauthn;

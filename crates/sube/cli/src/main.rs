@@ -128,8 +128,7 @@ enum PassCommand {
         /// Ordinary wallet profile paying for registration.
         #[arg(long)]
         registrar: String,
-        /// Device to enroll: wallet:PROFILE, webauthn:RP_ID@ORIGIN or
-        /// ssh:FINGERPRINT[#NAMESPACE].
+        /// Device to enroll: wallet:PROFILE or webauthn:RP_ID@ORIGIN.
         #[arg(long)]
         device: profiles::DeviceProviderProfile,
         #[arg(long)]
@@ -154,8 +153,7 @@ enum PassCommand {
 enum DeviceCommand {
     Add {
         profile: String,
-        /// Device to add: wallet:PROFILE, webauthn:RP_ID@ORIGIN or
-        /// ssh:FINGERPRINT[#NAMESPACE].
+        /// Device to add: wallet:PROFILE or webauthn:RP_ID@ORIGIN.
         #[arg(long)]
         device: profiles::DeviceProviderProfile,
         /// Explicit filter: calls:pallet/call,... or pallets:pallet,...

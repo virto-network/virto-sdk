@@ -53,19 +53,6 @@ cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
   --device webauthn:wallet.example.com@https://wallet.example.com --submit
 ```
 
-Unix builds with `--features ssh-agent` accept an Ed25519 key selected by its
-exact OpenSSH fingerprint, optionally followed by `#` and the SSHSIG namespace
-(`sube` by default), which must stay the same for that device. The runtime
-must advertise the `Ssh` credential variant; otherwise the command stops
-before prompting the agent:
-
-```sh
-cargo run -p sube-cli --features ssh-agent -- \
-  --chain wss://example.invalid pass enroll \
-  --name alice-pass --user-id 0x... --registrar alice \
-  --device 'ssh:SHA256:...#virto-pass' --submit
-```
-
 Without `--submit`, enrollment and device commands only print the review;
 nothing is stored, so a later `--submit` prompts the device again. Profiles
 change only after the transaction finalizes successfully. Connecting a pass
@@ -106,8 +93,8 @@ Profiles contain no secrets and are bound to a genesis hash. Wallet and session
 keys stay in the platform secure store. `tx` is non-mutating unless `--submit`
 is supplied, and asks for confirmation unless `--yes` is also supplied.
 
-Build the generic explorer without wallet, pass, SSH-agent, or desktop
-WebAuthn support with `--no-default-features`.
+Build the generic explorer without wallet, pass, or desktop WebAuthn
+support with `--no-default-features`.
 
 An ignored destructive smoke test exercises Substrate-key enrollment, exact
 session registration, a locally rejected call, an allowed finalized call, and

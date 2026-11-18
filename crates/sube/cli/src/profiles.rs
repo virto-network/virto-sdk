@@ -117,22 +117,16 @@ pub enum DeviceProviderProfile {
         origin: String,
         credential_id: Vec<u8>,
     },
-    SshAgent {
-        fingerprint: String,
-        namespace: String,
-    },
 }
 
-/// Parses a device selection: `wallet:PROFILE`, `webauthn:RP_ID@ORIGIN` or
-/// `ssh:FINGERPRINT[#NAMESPACE]` (namespace `sube` by default). Providers
-/// this build lacks are refused here.
+/// Parses a device selection: `wallet:PROFILE` or `webauthn:RP_ID@ORIGIN`.
+/// Providers this build lacks are refused here.
 #[cfg(feature = "pass")]
 impl std::str::FromStr for DeviceProviderProfile {
     type Err = String;
 
     fn from_str(text: &str) -> std::result::Result<Self, String> {
-        const USAGE: &str =
-            "expected wallet:PROFILE, webauthn:RP_ID@ORIGIN or ssh:FINGERPRINT[#NAMESPACE]";
+        const USAGE: &str = "expected wallet:PROFILE or webauthn:RP_ID@ORIGIN";
         let nonempty = |value: &str| (!value.is_empty()).then(|| value.to_owned());
         let (provider, selection) = text.split_once(':').ok_or(USAGE)?;
         match provider {
@@ -150,17 +144,6 @@ impl std::str::FromStr for DeviceProviderProfile {
             }
             #[cfg(not(feature = "desktop-webauthn"))]
             "webauthn" => Err("this build has no desktop WebAuthn support".into()),
-            #[cfg(all(feature = "ssh-agent", unix))]
-            "ssh" => {
-                let (fingerprint, namespace) =
-                    selection.split_once('#').unwrap_or((selection, "sube"));
-                Ok(Self::SshAgent {
-                    fingerprint: nonempty(fingerprint).ok_or(USAGE)?,
-                    namespace: nonempty(namespace).ok_or(USAGE)?,
-                })
-            }
-            #[cfg(not(all(feature = "ssh-agent", unix)))]
-            "ssh" => Err("this build has no native SSH-agent support".into()),
             _ => Err(USAGE.into()),
         }
     }
@@ -428,28 +411,7 @@ mod tests {
         );
         #[cfg(not(feature = "desktop-webauthn"))]
         assert!(webauthn.unwrap_err().contains("no desktop WebAuthn"));
-
-        let ssh = |fingerprint: &str, namespace: &str| DeviceProviderProfile::SshAgent {
-            fingerprint: fingerprint.into(),
-            namespace: namespace.into(),
-        };
-        #[cfg(all(feature = "ssh-agent", unix))]
-        {
-            assert_eq!(
-                parse("ssh:SHA256:abc+/#virto-pass"),
-                Ok(ssh("SHA256:abc+/", "virto-pass"))
-            );
-            assert_eq!(parse("ssh:SHA256:abc"), Ok(ssh("SHA256:abc", "sube")));
-        }
-        #[cfg(not(all(feature = "ssh-agent", unix)))]
-        {
-            let _ = ssh;
-            assert!(
-                parse("ssh:SHA256:abc")
-                    .unwrap_err()
-                    .contains("no native SSH-agent")
-            );
-        }
+        assert!(parse("ssh:SHA256:abc").is_err());
     }
 
     #[test]
@@ -471,20 +433,6 @@ mod tests {
         };
         let encoded = serde_json::to_string(&profile).unwrap();
         assert!(encoded.contains("credential_id"));
-        assert!(!encoded.contains("private"));
-        assert!(!encoded.contains("secret"));
-    }
-
-    #[test]
-    #[cfg(feature = "pass")]
-    fn ssh_agent_profiles_store_only_selection_metadata() {
-        let device = DeviceProviderProfile::SshAgent {
-            fingerprint: "SHA256:example".into(),
-            namespace: "virto-pass".into(),
-        };
-        let encoded = serde_json::to_string(&device).unwrap();
-        assert!(encoded.contains("SHA256:example"));
-        assert!(encoded.contains("virto-pass"));
         assert!(!encoded.contains("private"));
         assert!(!encoded.contains("secret"));
     }

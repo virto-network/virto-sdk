@@ -21,8 +21,6 @@ enum Provider {
     Wallet(WalletSigner),
     #[cfg(feature = "desktop-webauthn")]
     WebAuthn(pass::webauthn::WebAuthnDevice<pass::webauthn::DesktopWebAuthnTransport>),
-    #[cfg(all(feature = "ssh-agent", unix))]
-    Ssh(pass::ssh_agent::SshAgentDevice<pass::ssh_agent::UnixSshAgent>),
 }
 
 impl Device {
@@ -62,23 +60,6 @@ impl Device {
             #[cfg(not(feature = "desktop-webauthn"))]
             DeviceProviderProfile::WebAuthn { .. } => {
                 anyhow::bail!("this build has no desktop WebAuthn support")
-            }
-            #[cfg(all(feature = "ssh-agent", unix))]
-            DeviceProviderProfile::SshAgent {
-                fingerprint,
-                namespace,
-            } => {
-                let transport =
-                    pass::ssh_agent::UnixSshAgent::from_env().map_err(anyhow::Error::msg)?;
-                Provider::Ssh(pass::ssh_agent::SshAgentDevice::new(
-                    transport,
-                    fingerprint,
-                    namespace,
-                ))
-            }
-            #[cfg(not(all(feature = "ssh-agent", unix)))]
-            DeviceProviderProfile::SshAgent { .. } => {
-                anyhow::bail!("this build has no native SSH-agent support")
             }
         };
         Ok(Self {
@@ -121,8 +102,6 @@ impl DeviceAuthenticator for Device {
             Provider::Wallet(signer) => wallet_device(signer).variant(),
             #[cfg(feature = "desktop-webauthn")]
             Provider::WebAuthn(device) => device.variant(),
-            #[cfg(all(feature = "ssh-agent", unix))]
-            Provider::Ssh(device) => device.variant(),
         }
     }
 
@@ -131,8 +110,6 @@ impl DeviceAuthenticator for Device {
             Provider::Wallet(signer) => wallet_device(signer).attest(request).await,
             #[cfg(feature = "desktop-webauthn")]
             Provider::WebAuthn(device) => device.attest(request).await,
-            #[cfg(all(feature = "ssh-agent", unix))]
-            Provider::Ssh(device) => device.attest(request).await,
         }
     }
 
@@ -141,8 +118,6 @@ impl DeviceAuthenticator for Device {
             Provider::Wallet(signer) => wallet_device(signer).assert(request).await,
             #[cfg(feature = "desktop-webauthn")]
             Provider::WebAuthn(device) => device.assert(request).await,
-            #[cfg(all(feature = "ssh-agent", unix))]
-            Provider::Ssh(device) => device.assert(request).await,
         }
     }
 }

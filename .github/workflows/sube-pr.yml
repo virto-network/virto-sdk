@@ -122,10 +122,6 @@ jobs:
       - name: Generic explorer
         run: cargo check -p sube-cli --no-default-features
 
-      - name: SSH agent provider
-        if: runner.os != 'Windows'
-        run: cargo check -p sube-cli --no-default-features --features ssh-agent
-
       - name: Desktop WebAuthn provider
         run: cargo check -p sube-cli --no-default-features --features desktop-webauthn
 
