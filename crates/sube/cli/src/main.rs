@@ -130,7 +130,7 @@ enum PassCommand {
         /// wallet profile, or the only one on this chain.
         #[arg(long)]
         registrar: Option<String>,
-        /// Device to enroll: wallet:PROFILE or webauthn:RP_ID@ORIGIN.
+        /// Device to enroll: wallet:PROFILE or webauthn:DOMAIN.
         #[arg(long)]
         device: profiles::DeviceProviderProfile,
         #[arg(long)]
@@ -155,7 +155,7 @@ enum PassCommand {
 enum DeviceCommand {
     Add {
         profile: String,
-        /// Device to add: wallet:PROFILE or webauthn:RP_ID@ORIGIN.
+        /// Device to add: wallet:PROFILE or webauthn:DOMAIN.
         #[arg(long)]
         device: profiles::DeviceProviderProfile,
         /// Explicit filter: calls:pallet/call,... or pallets:pallet,...
@@ -1064,9 +1064,7 @@ mod tests {
                     name: pass_name.clone(),
                     user_id: Some(hex::encode(user_id)),
                     registrar: Some(registrar_name.clone()),
-                    device: "webauthn:localhost@https://localhost"
-                        .parse()
-                        .map_err(anyhow::Error::msg)?,
+                    device: "webauthn:localhost".parse().map_err(anyhow::Error::msg)?,
                 },
             )
             .await?;

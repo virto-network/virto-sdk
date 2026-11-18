@@ -344,7 +344,7 @@ impl Dialog {
 }
 
 #[cfg(feature = "pass")]
-const DEVICE_LABEL: &str = "Device (wallet:PROFILE or webauthn:RP_ID@ORIGIN)";
+const DEVICE_LABEL: &str = "Device (wallet:PROFILE or webauthn:DOMAIN)";
 
 /// The device kinds this build supports and the runtime accepts, as
 /// `--device` prefixes.
@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(*field.value, "wallet:");
         field.cycle(false);
         assert_eq!(*field.value, "webauthn:");
-        field.value.push_str("example.com@https://example.com");
+        field.value.push_str("example.com");
         field.cycle(true);
         assert_eq!(*field.value, "wallet:");
     }

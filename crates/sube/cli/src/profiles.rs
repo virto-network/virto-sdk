@@ -137,14 +137,14 @@ pub enum DeviceProviderProfile {
     },
 }
 
-/// Parses a device selection: `wallet:PROFILE` or `webauthn:RP_ID@ORIGIN`.
+/// Parses a device selection: `wallet:PROFILE` or `webauthn:DOMAIN`.
 /// Providers this build lacks are refused here.
 #[cfg(feature = "pass")]
 impl std::str::FromStr for DeviceProviderProfile {
     type Err = String;
 
     fn from_str(text: &str) -> std::result::Result<Self, String> {
-        const USAGE: &str = "expected wallet:PROFILE or webauthn:RP_ID@ORIGIN";
+        const USAGE: &str = "expected wallet:PROFILE or webauthn:DOMAIN";
         let nonempty = |value: &str| (!value.is_empty()).then(|| value.to_owned());
         let (provider, selection) = text.split_once(':').ok_or(USAGE)?;
         match provider {
@@ -153,22 +153,20 @@ impl std::str::FromStr for DeviceProviderProfile {
             }),
             #[cfg(feature = "desktop-webauthn")]
             "webauthn" => {
-                let (rp_id, origin) = selection.split_once('@').ok_or(USAGE)?;
-                // pallet-pass checks the credential's RP id against the
-                // origin's domain, so they must be equal.
-                let domain = url::Url::parse(origin)
-                    .ok()
-                    .filter(|url| matches!(url.scheme(), "https" | "http"))
-                    .and_then(|url| url.domain().map(str::to_owned));
-                if domain.as_deref() != Some(rp_id) {
+                // pallet-pass only accepts a credential whose RP ID is the
+                // origin's domain, so the domain gives both.
+                let origin = format!("https://{selection}");
+                // Anything but a lowercase domain (a scheme, port, path, IP
+                // address) parses to a different domain or none.
+                let parsed = url::Url::parse(&origin).ok();
+                if parsed.as_ref().and_then(url::Url::domain) != Some(selection) {
                     return Err(format!(
-                        "the RP id must be the origin's domain, e.g. webauthn:{0}@https://{0}",
-                        nonempty(rp_id).unwrap_or_else(|| "example.com".into())
+                        "expected a lowercase domain name such as webauthn:example.com, not {selection:?}"
                     ));
                 }
                 Ok(Self::WebAuthn {
-                    rp_id: rp_id.to_owned(),
-                    origin: origin.to_owned(),
+                    rp_id: selection.to_owned(),
+                    origin,
                     credential_id: Vec::new(),
                 })
             }
@@ -428,17 +426,20 @@ mod tests {
             "alice-device",
             "wallet:",
             "nostr:npub1",
-            "webauthn:example.com",
-            // The RP id must be the origin's domain.
-            "webauthn:example.com@https://login.example.com",
-            "webauthn:@https://example.com",
-            "webauthn:127.0.0.1@https://127.0.0.1",
-            "webauthn:example.com@ftp://example.com",
+            // Only a bare domain: pallet-pass needs one.
+            "webauthn:",
+            "webauthn:https://example.com",
+            "webauthn:example.com@https://example.com",
+            "webauthn:example.com/login",
+            "webauthn:example.com:8443",
+            "webauthn:Example.com",
+            "webauthn:127.0.0.1",
+            "webauthn:user@example.com",
         ] {
             assert!(parse(invalid).is_err(), "{invalid}");
         }
 
-        let webauthn = parse("webauthn:example.com@https://example.com");
+        let webauthn = parse("webauthn:example.com");
         #[cfg(feature = "desktop-webauthn")]
         assert_eq!(
             webauthn,

@@ -50,9 +50,13 @@ cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
   --device wallet:alice-device --submit
 ```
 
-Default desktop builds can instead create a WebAuthn credential. Only the RP
-ID, origin, and opaque credential ID are written to the profile. The RP ID must
-be the origin's domain, which is what pallet-pass checks. Linux and macOS use
+Default desktop builds can instead create a WebAuthn credential for a domain,
+`webauthn:DOMAIN`. pallet-pass only accepts a credential whose RP ID is the
+origin's domain, so the domain is the RP ID and `https://DOMAIN` the origin.
+The chain doesn't restrict which domain: any one, `localhost` included, works
+from the CLI, but a browser app can only use the credential if it is that
+app's domain. Only the domain, origin, and opaque credential ID are written to
+the profile, and the credential works only with its domain. Linux and macOS use
 USB security keys; Windows uses the system's WebAuthn API. pallet-pass requires
 user verification, so a security key needs a PIN (or fingerprint), which it
 asks for on the terminal for every operation; the TUI hands the terminal over
@@ -61,7 +65,7 @@ while it does:
 ```sh
 cargo run -p sube-cli -- --chain wss://kreivo.io pass enroll \
   --name alice-pass --registrar alice \
-  --device webauthn:wallet.example.com@https://wallet.example.com --submit
+  --device webauthn:wallet.example.com --submit
 ```
 
 Without `--submit`, enrollment and device commands only print the review;
