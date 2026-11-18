@@ -13,7 +13,7 @@ blake2 = { version = "0.10", default-features = false }
 codec = { workspace = true }
 hex = { workspace = true }
 log = { workspace = true }
-scales = { path = "../scales", version = "1.1", package = "scale-serialization", default-features = false, features = [
+scales = { path = "../scales", version = "1.2", package = "scale-serialization", default-features = false, features = [
 	"serializer",
 	"frame",
 	"text",
