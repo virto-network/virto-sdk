@@ -248,7 +248,6 @@ impl Profiles {
         self.profiles.iter().find(|profile| profile.name() == name)
     }
 
-    #[cfg(feature = "wallet")]
     /// Each profile on the chain `genesis_hash` with its account.
     pub fn accounts(&self, genesis_hash: [u8; 32]) -> Vec<(String, [u8; 32])> {
         self.profiles
@@ -258,6 +257,7 @@ impl Profiles {
             .collect()
     }
 
+    #[cfg(feature = "wallet")]
     pub fn active(&self) -> Option<&Profile> {
         self.active.as_deref().and_then(|name| self.find(name))
     }
