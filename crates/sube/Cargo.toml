@@ -44,6 +44,9 @@ gloo-net = { version = "0.8", default-features = false, features = ["websocket"]
 # light client
 smoldot-light = { version = "4.0", optional = true, default-features = false }
 
+# in-process fork of a live chain, for development (GPL-3.0-or-later)
+sube-fork = { path = "../sube-fork", version = "0.1", optional = true }
+
 rand_core = { version = "0.10", optional = true }
 libwallet = { path = "../libwallet", version = "0.4", optional = true, default-features = false, features = [
 	"substrate",
@@ -80,10 +83,19 @@ ws-web = ["std", "dep:gloo-net", "dep:futures-util"]
 smoldot = ["dep:smoldot-light"]
 smoldot-std = ["smoldot", "std", "dep:smol", "dep:futures-util", "smoldot-light/std", "smoldot-light/wasmtime"]
 libwallet = ["dep:libwallet"]
+fork = ["std", "dep:sube-fork"]
 
 [[test]]
 name = "integration"
 required-features = ["wss"]
+
+[[test]]
+name = "fork"
+required-features = ["fork", "libwallet"]
+
+[[example]]
+name = "fork_snapshot"
+required-features = ["fork", "wss"]
 
 [[example]]
 name = "explore"

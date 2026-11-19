@@ -401,6 +401,14 @@ fn parse_tx_block(json: &str) -> Option<TxBlock> {
     Some(TxBlock { hash, index })
 }
 
+impl<R> ChainHead<R> {
+    /// The JSON-RPC transport this session runs on.
+    #[cfg(feature = "fork")]
+    pub(crate) fn rpc(&self) -> &R {
+        &self.rpc
+    }
+}
+
 impl<R: Rpc + RpcSubscription> ChainHead<R> {
     /// Create a new ChainHead session. Fetches genesis hash and starts follow subscription.
     pub async fn new(mut rpc: R) -> crate::Result<Self> {

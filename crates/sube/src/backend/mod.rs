@@ -21,6 +21,8 @@ pub enum AnyBackend {
     WsWeb(Box<ChainHead<crate::rpc::ws_web::Backend>>),
     #[cfg(all(feature = "smoldot", feature = "std"))]
     Smoldot(Box<ChainHead<crate::rpc::smoldot::Backend<SmoldotPlatform>>>),
+    #[cfg(feature = "fork")]
+    Fork(Box<ChainHead<sube_fork::ForkRpc>>),
 }
 
 macro_rules! dispatch {
@@ -32,6 +34,8 @@ macro_rules! dispatch {
             AnyBackend::WsWeb(b) => b.$method($($arg),*).await,
             #[cfg(all(feature = "smoldot", feature = "std"))]
             AnyBackend::Smoldot(b) => b.$method($($arg),*).await,
+            #[cfg(feature = "fork")]
+            AnyBackend::Fork(b) => b.$method($($arg),*).await,
             #[allow(unreachable_patterns)]
             _ => unreachable!("no backend available"),
         }
@@ -105,6 +109,8 @@ impl crate::rpc::chainhead::ChainSession for AnyBackend {
             AnyBackend::WsWeb(b) => b.try_next_chain_event(),
             #[cfg(all(feature = "smoldot", feature = "std"))]
             AnyBackend::Smoldot(b) => b.try_next_chain_event(),
+            #[cfg(feature = "fork")]
+            AnyBackend::Fork(b) => b.try_next_chain_event(),
             #[allow(unreachable_patterns)]
             _ => None,
         }
@@ -202,6 +208,47 @@ async fn with_timeout<T>(
 
 // --- Connect ---
 
+/// Chain strings starting with this open a local fork from a snapshot file.
+const FORK_PREFIX: &str = "fork:";
+
+pub(crate) fn is_fork(chain: &str) -> bool {
+    chain.starts_with(FORK_PREFIX)
+}
+
+/// Connect to a node URL, or with the `fork` feature boot a local fork from
+/// `fork:<snapshot file>`.
+pub(crate) async fn open(chain: &str, timeout: Duration) -> SubeResult<AnyBackend> {
+    match chain.strip_prefix(FORK_PREFIX) {
+        Some(snapshot) => boot_fork(snapshot).await,
+        None => connect(&chain_string_to_url(chain)?, timeout).await,
+    }
+}
+
+/// Boots synchronously: loading Kreivo's snapshot and the runtime takes
+/// ~100 ms, and the connect timeout doesn't apply.
+#[cfg(feature = "fork")]
+async fn boot_fork(snapshot: &str) -> SubeResult<AnyBackend> {
+    let loaded = sube_fork::Snapshot::load(snapshot)
+        .map_err(|e| Error::Node(format!("loading fork snapshot {snapshot}: {e}")))?;
+    let fork = sube_fork::Fork::new(loaded)
+        .map_err(|e| Error::Node(format!("booting the fork of {snapshot}: {e}")))?;
+    fork_session(Rc::new(core::cell::RefCell::new(fork))).await
+}
+
+#[cfg(not(feature = "fork"))]
+async fn boot_fork(_snapshot: &str) -> SubeResult<AnyBackend> {
+    Err(Error::Node(
+        "`fork:` chains need sube's `fork` feature".into(),
+    ))
+}
+
+/// A new session on a fork that may be shared with other sessions.
+#[cfg(feature = "fork")]
+pub(crate) async fn fork_session(fork: sube_fork::SharedFork) -> SubeResult<AnyBackend> {
+    let chainhead = ChainHead::new(sube_fork::ForkRpc::new(fork)).await?;
+    Ok(AnyBackend::Fork(Box::new(chainhead)))
+}
+
 pub(crate) async fn connect(url: &Url, timeout: Duration) -> SubeResult<AnyBackend> {
     with_timeout(timeout, async {
         match url.scheme() {
@@ -259,6 +306,13 @@ pub(crate) async fn connect_light_para(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(feature = "fork"))]
+    #[test]
+    fn fork_chains_need_the_feature() {
+        let opened = smol::block_on(open("fork:kreivo.snap", crate::DEFAULT_TIMEOUT));
+        assert!(matches!(opened, Err(Error::Node(e)) if e.contains("`fork` feature")));
+    }
 
     #[test]
     fn chain_string_with_scheme() {

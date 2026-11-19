@@ -106,6 +106,10 @@ pub struct Fork {
     unannounced_runtime: Option<RuntimeInfo>,
     relay: Relay,
     pub policy: SignaturePolicy,
+    /// Build a block as soon as a transaction is submitted over JSON-RPC (the
+    /// default). When off, transactions wait for `dev_newBlock` or
+    /// [`Fork::new_block`].
+    pub instant: bool,
     pool: Vec<Vec<u8>>,
     /// Everything dropped while building blocks, in order. Sessions keep a
     /// cursor into it to tell watchers.
@@ -158,6 +162,7 @@ impl Fork {
                 trusted_keys: relay.babe_authorities(),
                 magic: false,
             },
+            instant: true,
             relay,
             pool: Vec::new(),
             rejected: Vec::new(),

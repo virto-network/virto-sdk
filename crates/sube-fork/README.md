@@ -2,7 +2,7 @@
 
 An in-process fork of a live Substrate parachain for local development, in the
 spirit of [chopsticks](https://github.com/AcalaNetwork/chopsticks) but as a
-[sube](../sube) backend. It was built for Kreivo, which has no testnet. Front-end and
+library, and a [sube](../sube) backend behind its `fork` feature. It was built for Kreivo, which has no testnet. Front-end and
 back-end developers get the chain's real logic (common pallets, contracts) without
 running zombienet, collators or a relay chain.
 
@@ -20,30 +20,33 @@ running zombienet, collators or a relay chain.
 - **Time travel.** Kreivo's pallets use the relay chain block number as their
   clock, so jumping the relay chain forward moves scheduler, referenda, vesting and
   so on.
-- **Plain sube API.** `ForkRpc` implements sube's `Rpc`/`RpcSubscription`, so
-  `ChainHead` and `Sube` work unchanged. The chain is shared via
-  `Rc<RefCell<Fork>>`, so dev operations stay available while sube holds the
-  session. Single-threaded and poll-driven: nothing is spawned.
+- **A sube backend.** `ForkRpc` serves the new JSON-RPC API in process, and
+  sube's `fork` feature runs `ChainHead` on it, so the same code can use a fork
+  in development and a node or light client in production. The chain is shared
+  via `Rc<RefCell<Fork>>`, so dev operations stay available while sube holds
+  the session. Single-threaded and poll-driven: nothing is spawned. This crate
+  doesn't depend on sube.
 
 ## Usage
 
 ```sh
 # Once (or whenever you want fresher state): download a verified snapshot.
-cargo run -p sube-fork --example snapshot --release -- wss://kreivo.io kreivo.snap
+cargo run -p sube --example fork_snapshot --features fork,wss --release -- wss://kreivo.io kreivo.snap
 ```
 
-```rust,ignore
-use std::{cell::RefCell, rc::Rc};
-use sube_fork::{Diff, Fork, Snapshot};
+Through sube, with `features = ["fork"]`; the chain string is the only thing
+that changes between a fork and a node:
 
-let fork = Rc::new(RefCell::new(Fork::new(Snapshot::load("kreivo.snap")?)?));
-let mut sube = sube_fork::connect(fork.clone()).await?;
+```rust,ignore
+// "fork:kreivo.snap" in development, "wss://kreivo.io" in production.
+let mut sube = sube::Sube::connect(&chain).await?;
 
 // Query and submit as against any node; each submission builds a block.
 sube.query("timestamp/now").await?;
 
-// Dev operations on the shared handle.
-let mut diff = Diff::default();
+// Dev operations on the shared handle, when it's a fork.
+let fork = sube.fork().expect("a fork backend").clone();
+let mut diff = sube::fork::Diff::default();
 diff.insert(account_key, account_info); // e.g. fund an account
 fork.borrow_mut().set_storage(diff)?;
 fork.borrow_mut().time_travel(600); // the next block lands an hour later
@@ -56,7 +59,7 @@ fork.borrow_mut().policy.magic = true; // accept 0xdeadbeef…cd signatures
 | Methods | Notes |
 |---|---|
 | `chainHead_v1_*` (`follow`, `header`, `body`, `call`, `storage`, `continue`, `stopOperation`, `unpin`, `unfollow`) | Every block is final at once. `closestDescendantMerkleValue` storage queries return nothing. |
-| `transactionWatch_v1_*`, `transaction_v1_broadcast`/`stop` | Instant seal by default (`ForkRpc::instant`). |
+| `transactionWatch_v1_*`, `transaction_v1_broadcast`/`stop` | Instant seal by default (`Fork::instant`). |
 | `archive_v1_*` (`genesisHash`, `finalizedHeight`, `hashByHeight`, `header`, `call`, `storage`) | Blocks keep their state for 256 blocks; older headers still resolve. |
 | `chainSpec_v1_*`, `system_chain`/`name`/`version`/`properties`, `rpc_methods` | |
 | `dev_newBlock [{count}]` | Build blocks, including empty ones. |
@@ -65,11 +68,13 @@ fork.borrow_mut().policy.magic = true; // accept 0xdeadbeef…cd signatures
 
 ## Tests
 
-Unit tests run anywhere. The end-to-end tests drive sube against a real Kreivo
-fork, so they need a snapshot and are ignored by default:
+Unit tests run anywhere. The end-to-end tests run a real Kreivo fork, so they
+need a snapshot and are ignored by default. This crate's exercise the fork and
+its JSON-RPC session; sube's drive it through `Sube`, signing with libwallet:
 
 ```sh
 SUBE_FORK_SNAPSHOT=$PWD/kreivo.snap cargo test -p sube-fork --release -- --ignored
+SUBE_FORK_SNAPSHOT=$PWD/kreivo.snap cargo test -p sube --features fork,libwallet --release --test fork -- --ignored
 ```
 
 ## Limitations

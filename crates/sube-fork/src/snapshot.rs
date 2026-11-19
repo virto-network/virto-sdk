@@ -11,7 +11,6 @@ use std::path::Path;
 use codec::{Compact, Encode};
 use serde_json::{Value, json};
 use smoldot::trie::default_child_trie_root_key;
-use sube::rpc::Rpc;
 
 use crate::Hash;
 use crate::error::{Error, Result};
@@ -24,6 +23,15 @@ const MAGIC: &[u8; 8] = b"SUBEFORK";
 const FORMAT_VERSION: u32 = 1;
 const KEYS_PAGE: usize = 1000;
 const VALUES_BATCH: usize = 1000;
+
+/// A JSON-RPC client to download snapshots with, such as sube's WebSocket
+/// backend when its `fork` feature is on.
+#[allow(async_fn_in_trait)]
+pub trait Transport {
+    /// Send a request and return the raw JSON of its result.
+    async fn request(&mut self, method: &str, params: &str)
+    -> core::result::Result<String, String>;
+}
 
 pub struct Snapshot {
     pub chain_name: String,
@@ -52,10 +60,10 @@ fn snapshot_err(e: impl std::fmt::Display) -> Error {
 
 impl Snapshot {
     /// Download the full state of the finalized block, or of `at`, with the
-    /// legacy `state_*` methods full nodes serve. A pruned node keeps about 256
+    /// legacy `state_*` methods full nodes serve, over any [`Transport`]. A pruned node keeps about 256
     /// blocks of state, which leaves a few minutes to finish.
-    pub async fn download<R: Rpc>(
-        rpc: &mut R,
+    pub async fn download<T: Transport>(
+        rpc: &mut T,
         at: Option<Hash>,
         mut progress: impl FnMut(Progress),
     ) -> Result<Self> {
@@ -168,7 +176,7 @@ impl Snapshot {
     }
 }
 
-async fn fetch_block<R: Rpc>(rpc: &mut R, at: &str) -> Result<(Hash, Vec<u8>, Vec<Vec<u8>>)> {
+async fn fetch_block<T: Transport>(rpc: &mut T, at: &str) -> Result<(Hash, Vec<u8>, Vec<Vec<u8>>)> {
     let block = call(rpc, "chain_getBlock", json!([at])).await?;
     let h = &block["block"]["header"];
     let number = h["number"]
@@ -204,8 +212,8 @@ async fn fetch_block<R: Rpc>(rpc: &mut R, at: &str) -> Result<(Hash, Vec<u8>, Ve
     Ok((block_hash, header.encode(), extrinsics))
 }
 
-async fn fetch_main<R: Rpc>(
-    rpc: &mut R,
+async fn fetch_main<T: Transport>(
+    rpc: &mut T,
     at: &str,
     progress: &mut impl FnMut(Progress),
 ) -> Result<Entries> {
@@ -238,8 +246,8 @@ async fn fetch_main<R: Rpc>(
 }
 
 /// Child tries (e.g. contract storage), found by their roots in the main trie.
-async fn fetch_children<R: Rpc>(
-    rpc: &mut R,
+async fn fetch_children<T: Transport>(
+    rpc: &mut T,
     at: &str,
     main: &Entries,
     progress: &mut impl FnMut(Progress),
@@ -285,8 +293,8 @@ async fn fetch_children<R: Rpc>(
 }
 
 /// Page through `method`, whose params are `leading ++ [count, start, at]`.
-async fn keys_paged<R: Rpc>(
-    rpc: &mut R,
+async fn keys_paged<T: Transport>(
+    rpc: &mut T,
     method: &str,
     leading: Value,
     at: &str,
@@ -378,9 +386,9 @@ fn take_entries(input: &mut &[u8]) -> Option<Entries> {
         .collect()
 }
 
-async fn call<R: Rpc>(rpc: &mut R, method: &str, params: Value) -> Result<Value> {
+async fn call<T: Transport>(rpc: &mut T, method: &str, params: Value) -> Result<Value> {
     let raw = rpc
-        .rpc(method, &params.to_string())
+        .request(method, &params.to_string())
         .await
         .map_err(|e| snapshot_err(format!("{method}: {e}")))?;
     serde_json::from_str(&raw).map_err(|e| snapshot_err(format!("{method}: {e}")))

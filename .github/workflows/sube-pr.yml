@@ -49,6 +49,7 @@ jobs:
           cargo check -p sube --no-default-features
           cargo check -p sube --features wss
           cargo check -p sube --features smoldot-std
+          cargo check -p sube --no-default-features --features fork
           cargo check -p sube-cli
           cargo check -p sube-cli --no-default-features
           cargo check -p pass --no-default-features
@@ -62,9 +63,11 @@ jobs:
           cargo test -p sube-cli
           cargo test -p sube-cli --all-features
           cargo test -p sube-cli --no-default-features
+          cargo test -p sube --features fork,wss,libwallet
           cargo test -p sube-fork
           RUSTDOCFLAGS="-D warnings" cargo doc -p sube --features wss --no-deps
           RUSTDOCFLAGS="-D warnings" cargo doc -p pass --all-features --no-deps
+          RUSTDOCFLAGS="-D warnings" cargo doc -p sube --features fork,wss --no-deps
           RUSTDOCFLAGS="-D warnings" cargo doc -p sube-fork --no-deps
 
       - name: Clippy
@@ -73,6 +76,8 @@ jobs:
           cargo clippy -p sube-cli --all-targets --no-deps -- -D warnings
           cargo clippy -p sube-cli --all-targets --all-features --no-deps -- -D warnings
           cargo clippy -p pass --all-targets --all-features --no-deps -- -D warnings
+          cargo clippy -p sube --all-targets --features fork,wss,libwallet --no-deps -- -D warnings
+          cargo clippy -p sube --all-targets --no-default-features --features fork,libwallet --no-deps -- -D warnings
           cargo clippy -p sube-fork --all-targets --no-deps -- -D warnings
 
       - name: Package contents
@@ -149,5 +154,6 @@ jobs:
         run: |
           cargo check -p sube --no-default-features
           cargo check -p sube --features wss
+          cargo check -p sube --no-default-features --features fork
           cargo check -p sube --features smoldot-std
           cargo check -p sube-cli

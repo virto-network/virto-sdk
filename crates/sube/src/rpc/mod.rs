@@ -10,6 +10,7 @@
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 use core::fmt::Write;
@@ -22,6 +23,7 @@ use crate::prelude::*;
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 fn push_hex(buf: &mut String, bytes: &[u8]) {
@@ -36,6 +38,7 @@ fn push_hex(buf: &mut String, bytes: &[u8]) {
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 pub(crate) fn to_hex(bytes: &[u8]) -> String {
@@ -138,6 +141,7 @@ impl IncomingMessage {
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 fn marker_key(marker: &str) -> Option<&str> {
@@ -155,6 +159,7 @@ fn marker_key(marker: &str) -> Option<&str> {
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 pub(crate) fn extract_json_str<'a>(json: &'a str, marker: &str) -> Option<&'a str> {
@@ -169,6 +174,7 @@ pub(crate) fn extract_json_str<'a>(json: &'a str, marker: &str) -> Option<&'a st
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 fn extract_json_string(json: &str, marker: &str) -> Option<String> {
@@ -180,6 +186,7 @@ fn extract_json_string(json: &str, marker: &str) -> Option<String> {
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 pub(crate) fn extract_json_object(json: &str, marker: &str) -> Option<String> {
@@ -406,6 +413,7 @@ pub type RpcResult<T> = Result<T, JsonRpcError>;
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 pub(crate) fn result_as_str(result: &str) -> Option<&str> {
@@ -427,11 +435,12 @@ pub trait Rpc {
     async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String>;
 }
 
-/// Backends that support JSON-RPC subscriptions (WebSocket, smoldot).
+/// Backends that support JSON-RPC subscriptions (WebSocket, smoldot, fork).
 #[cfg(any(
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 #[allow(async_fn_in_trait)]
@@ -454,6 +463,8 @@ pub trait RpcSubscription: Rpc {
 
 #[cfg(feature = "ws-edge")]
 pub mod edge;
+#[cfg(feature = "fork")]
+mod fork;
 #[cfg(feature = "smoldot")]
 pub mod smoldot;
 #[cfg(feature = "ws")]
@@ -466,6 +477,7 @@ pub mod ws_web;
     feature = "ws",
     feature = "ws-edge",
     feature = "smoldot",
+    feature = "fork",
     all(feature = "ws-web", target_arch = "wasm32")
 ))]
 pub mod chainhead;
