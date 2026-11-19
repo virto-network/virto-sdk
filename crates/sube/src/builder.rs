@@ -1,6 +1,6 @@
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 use core::future::{Future, IntoFuture};
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 use core::pin::Pin;
 
 use alloc::rc::Rc;
@@ -12,10 +12,10 @@ use crate::extrinsic::{
 use crate::prelude::*;
 use crate::{Backend, ExtrinsicAssembler, Metadata, Response, Result as SubeResult};
 
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
-use crate::backend::{AnyBackend, chain_string_to_url, connect, get_metadata};
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
+use crate::backend::{AnyBackend, chain_string_to_url, connect, get_metadata, is_fork, open};
 
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 // --- SubeBuilder: entry point ---
@@ -60,13 +60,20 @@ impl SubeBuilder {
 }
 
 /// One-liner query: `sube("wss://host/pallet/item/key").await?`
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 impl IntoFuture for SubeBuilder {
     type Output = SubeResult<Response>;
     type IntoFuture = BoxFuture<'static, SubeResult<Response>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
+            // A snapshot path can't be told apart from the query path, and
+            // a fork per query would be wasteful.
+            if is_fork(&self.url) {
+                return Err(crate::Error::Node(
+                    "one-liner queries don't take forks; use Sube::connect(\"fork:…\")".into(),
+                ));
+            }
             let url = chain_string_to_url(&self.url)?;
 
             let block = url
@@ -106,10 +113,10 @@ impl IntoFuture for SubeBuilder {
 /// // Both support the same query API:
 /// let r = chain.query("system/account/0x1234").await?;
 /// ```
-/// When `ws` or `smoldot-std` is enabled, `B` defaults to
+/// When `ws`, `smoldot-std` or `fork` is enabled, `B` defaults to
 /// [`AnyBackend`] and includes URL/timeout
 /// for reconnect support.
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 pub struct Sube<B = AnyBackend> {
     backend: B,
     metadata: Rc<Metadata>,
@@ -117,7 +124,7 @@ pub struct Sube<B = AnyBackend> {
     timeout: core::time::Duration,
 }
 
-#[cfg(not(any(feature = "ws", feature = "smoldot-std")))]
+#[cfg(not(any(feature = "ws", feature = "smoldot-std", feature = "fork")))]
 pub struct Sube<B> {
     backend: B,
     metadata: Rc<Metadata>,
@@ -141,9 +148,9 @@ impl<B: Backend> Sube<B> {
         Sube {
             backend,
             metadata,
-            #[cfg(any(feature = "ws", feature = "smoldot-std"))]
+            #[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
             url: String::new(),
-            #[cfg(any(feature = "ws", feature = "smoldot-std"))]
+            #[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
             timeout: crate::DEFAULT_TIMEOUT,
         }
     }
@@ -263,7 +270,12 @@ impl<B: Backend> Sube<B> {
 
 // --- ChainSession methods (chain events, block-pinned queries) ---
 
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    feature = "fork"
+))]
 impl<B: crate::rpc::chainhead::ChainSession> Sube<B> {
     /// Wait for the next chain event (new block, finalization, best block change).
     ///
@@ -452,10 +464,10 @@ async fn connect_edge_chain_head(
 
 // --- URL-based constructors and reconnect (AnyBackend only) ---
 
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 use crate::rpc::chainhead::ChainSession as _;
 
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 impl Sube {
     /// Connect to a chain and return a reusable handle.
     pub async fn connect(url: &str) -> SubeResult<Self> {
@@ -484,8 +496,7 @@ impl Sube {
     /// let mut chain = Sube::connect_filtered("wss://kreivo.io", &["Balances"]).await?;
     /// ```
     pub async fn connect_filtered(url: &str, pallets: &[&str]) -> SubeResult<Self> {
-        let parsed = chain_string_to_url(url)?;
-        let mut backend = connect(&parsed, crate::DEFAULT_TIMEOUT).await?;
+        let mut backend = open(url, crate::DEFAULT_TIMEOUT).await?;
         let metadata = backend.metadata_filtered(pallets).await?;
         Ok(Sube {
             backend,
@@ -500,8 +511,7 @@ impl Sube {
         preloaded: Option<Metadata>,
         timeout: core::time::Duration,
     ) -> SubeResult<Self> {
-        let url = chain_string_to_url(url_str)?;
-        let mut backend = connect(&url, timeout).await?;
+        let mut backend = open(url_str, timeout).await?;
         let metadata = get_metadata(&mut backend, preloaded).await?;
         Ok(Sube {
             backend,
@@ -548,14 +558,45 @@ impl Sube {
         })
     }
 
-    /// Re-establish the backend connection using the stored URL.
+    /// Open a session on a fork you booted yourself, e.g. to share it
+    /// between handles. Each `Sube::connect("fork:<snapshot>")` boots a new,
+    /// independent fork instead.
+    #[cfg(feature = "fork")]
+    pub async fn connect_fork(fork: crate::fork::SharedFork) -> SubeResult<Self> {
+        let mut backend = crate::backend::fork_session(fork).await?;
+        let metadata = get_metadata(&mut backend, None).await?;
+        Ok(Self::from_parts(backend, metadata))
+    }
+
+    /// The fork behind this handle, for dev operations such as writing
+    /// storage, time travel or building blocks. `None` on other backends.
+    ///
+    /// A fork only builds blocks when asked to or when a transaction is
+    /// submitted, so waiting for the next block on an idle fork waits
+    /// forever. Don't hold a `borrow_mut()` across a sube `.await`: the
+    /// session borrows the fork too, and the `RefCell` would panic.
+    #[cfg(feature = "fork")]
+    pub fn fork(&self) -> Option<&crate::fork::SharedFork> {
+        match &self.backend {
+            AnyBackend::Fork(chain) => Some(chain.rpc().fork()),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
+
+    /// Re-establish the backend connection using the stored URL. On a fork,
+    /// open a new session on the same chain.
     pub async fn reconnect(&mut self) -> SubeResult<()> {
+        #[cfg(feature = "fork")]
+        if let Some(fork) = self.fork().cloned() {
+            self.backend = crate::backend::fork_session(fork).await?;
+            return Ok(());
+        }
         if self.url.is_empty() {
             return Err(crate::Error::ChainUnavailable);
         }
         log::info!("reconnecting to {}", self.url);
-        let url = chain_string_to_url(&self.url)?;
-        self.backend = connect(&url, self.timeout).await?;
+        self.backend = open(&self.url, self.timeout).await?;
         Ok(())
     }
 }

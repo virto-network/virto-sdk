@@ -26,6 +26,16 @@ assert!(response.to_text()?.is_some());
 | `ws-edge` | WebSocket via `edge-ws` for embedded targets (no_std) |
 | `ws-web` | Browser WebSocket via `gloo-net` (wasm32-unknown-unknown) |
 | `smoldot-std` | Light client via `smoldot-light` (std, no external node) |
+| `fork` | In-process fork of a live chain for development, via `sube-fork` |
+
+With `fork`, `Sube::connect("fork:kreivo.snap")` boots a local fork from a
+snapshot file, so the same code can use a fork in development and a node or
+light client in production. Each such connect boots its own fork, synchronously
+(~100 ms for Kreivo) and without the connect timeout; `Sube::connect_fork`
+shares one. `sube-fork` is GPL-3.0-or-later, so a binary
+built with the feature is GPL as a whole; builds without it don't include it.
+Enable it from a non-default feature of your own. The fork API follows
+`sube-fork`'s 0.x versions and may change in minor sube releases.
 
 Browser apps target `wasm32-unknown-unknown` with `--features ws-web`. A full
 in-browser light client (smoldot in wasm) is not yet available — upstream
@@ -56,9 +66,17 @@ pub use extrinsic::{
     TransactionWeight, WaitFor,
 };
 pub use meta::Metadata;
-#[cfg(any(feature = "ws", feature = "ws-edge", feature = "smoldot"))]
+#[cfg(any(
+    feature = "ws",
+    feature = "ws-edge",
+    feature = "smoldot",
+    feature = "fork"
+))]
 pub use rpc::chainhead::{BlockHeader, ChainEvent, ChainSession};
 pub use signer::{Bytes, ExtrinsicAssembler, Signer, SignerFn};
+/// The fork engine: snapshots, dev operations and the JSON-RPC session.
+#[cfg(feature = "fork")]
+pub use sube_fork as fork;
 
 use core::fmt;
 use metadata::{self as meta, KeyValue, StorageKey};
@@ -73,7 +91,7 @@ mod prelude {
     pub use alloc::vec::Vec;
 }
 
-#[cfg(any(feature = "ws", feature = "smoldot-std"))]
+#[cfg(any(feature = "ws", feature = "smoldot-std", feature = "fork"))]
 pub mod backend;
 pub mod builder;
 pub mod extrinsic;

@@ -64,6 +64,12 @@
 
 ### Added
 
+- `fork` feature: `Sube::connect("fork:<snapshot>")` boots an in-process
+  fork of a live chain with `sube-fork`, so development builds can use a
+  fork and production builds a node or light client with the same code.
+  `Sube::connect_fork` opens a session on a shared fork, `Sube::fork`
+  returns it for dev operations, and `sube::fork` re-exports the engine.
+  `sube-fork` is GPL-3.0-or-later; builds without the feature don't use it.
 - Metadata-driven V4 address/signature encoding, 64-block mortal checkpoints,
   optional-extension `None` defaults, transaction diagnostics and receipts.
 - `Signer::signature_variant` names the metadata signature variant a signer

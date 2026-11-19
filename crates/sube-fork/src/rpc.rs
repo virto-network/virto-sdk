@@ -1,10 +1,11 @@
-//! A JSON-RPC session over a shared [`Fork`].
+//! A JSON-RPC session over a shared [`Fork`](crate::Fork).
 //!
-//! [`ForkRpc`] implements sube's [`Rpc`] and [`RpcSubscription`], so sube's
-//! `ChainHead`, and so `Sube`, work against a fork unchanged. Each session has
-//! its own subscriptions and event queue, while the chain is shared through
-//! `Rc<RefCell<Fork>>`: code holding the handle can build blocks, write storage
-//! or time-travel while sube owns the session.
+//! [`ForkRpc`] speaks the new JSON-RPC API (`chainHead_v1`, `transaction_v1`,
+//! `archive_v1`...) plus `dev_*` methods, with requests and events as raw
+//! JSON strings, the way smoldot's light client does. sube's `fork` feature
+//! serves it to `ChainHead`. Each session has its own subscriptions and event
+//! queue, while the chain is shared as a [`SharedFork`](crate::SharedFork): code holding
+//! the handle can build blocks, write storage or time-travel at any time.
 //!
 //! Every block is final at once, so a follow subscription gets `newBlock`,
 //! `bestBlockChanged` and `finalized` together. Events are produced from
@@ -12,18 +13,14 @@
 //! `next_event` is woken when the fork builds a block, so any task on the same
 //! executor can move the chain forward.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
-use std::rc::Rc;
 use std::task::Poll;
 
 use serde_json::{Value, json};
-use sube::rpc::{JsonRpcError, Rpc, RpcResult, RpcSubscription};
 
 use crate::executor::RuntimeInfo;
-use crate::fork::Fork;
 use crate::util::{blake2_256, hex0x, unhex};
-use crate::{Diff, Error, Hash};
+use crate::{Diff, Error, Hash, SharedFork};
 
 const INVALID_PARAMS: i64 = -32602;
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -77,23 +74,40 @@ struct Watch {
 }
 
 pub struct ForkRpc {
-    fork: Rc<RefCell<Fork>>,
+    fork: SharedFork,
     next_id: u64,
     follows: BTreeMap<String, Follow>,
     watches: BTreeMap<String, Watch>,
-    /// How much of [`Fork::rejected`] watchers were told about.
+    /// How much of [`Fork::rejected`](crate::Fork::rejected) watchers were told about.
     rejected_seen: usize,
     queue: VecDeque<(String, String)>,
-    /// Build a block as soon as a transaction is submitted (the default).
-    /// When off, transactions wait for `dev_newBlock` or [`Fork::new_block`].
-    pub instant: bool,
 }
 
-fn err(code: i64, message: impl AsRef<str>) -> JsonRpcError {
-    JsonRpcError::new(code, message.as_ref())
+/// A JSON-RPC error response.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RpcError {
+    pub code: i64,
+    pub message: String,
 }
 
-fn fork_err(e: Error) -> JsonRpcError {
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RPC error {}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for RpcError {}
+
+type RpcResult<T> = Result<T, RpcError>;
+
+fn err(code: i64, message: impl Into<String>) -> RpcError {
+    RpcError {
+        code,
+        message: message.into(),
+    }
+}
+
+fn fork_err(e: Error) -> RpcError {
     match e {
         Error::UnknownBlock => err(INVALID_BLOCK, e.to_string()),
         e => err(FORK_ERROR, e.to_string()),
@@ -141,7 +155,7 @@ fn started(op: &str) -> Value {
 }
 
 impl ForkRpc {
-    pub fn new(fork: Rc<RefCell<Fork>>) -> Self {
+    pub fn new(fork: SharedFork) -> Self {
         let rejected_seen = fork.borrow().rejected().len();
         ForkRpc {
             fork,
@@ -150,8 +164,12 @@ impl ForkRpc {
             watches: BTreeMap::new(),
             rejected_seen,
             queue: VecDeque::new(),
-            instant: true,
         }
+    }
+
+    /// The fork this session serves.
+    pub fn fork(&self) -> &SharedFork {
+        &self.fork
     }
 
     fn id(&mut self) -> String {
@@ -491,10 +509,12 @@ impl ForkRpc {
         Ok(result)
     }
 
-    /// Instant seal: build a block if the pool has anything valid.
+    /// Instant seal ([`Fork::instant`](crate::Fork::instant)): build a block if the pool has
+    /// anything valid.
     fn seal_pool(&mut self) -> RpcResult<()> {
-        if self.instant {
-            self.fork.borrow_mut().include_pool().map_err(fork_err)?;
+        let mut fork = self.fork.borrow_mut();
+        if fork.instant {
+            fork.include_pool().map_err(fork_err)?;
         }
         Ok(())
     }
@@ -561,25 +581,28 @@ fn parse_params(params: &str) -> Value {
     serde_json::from_str(params).unwrap_or_else(|_| json!([]))
 }
 
-impl Rpc for ForkRpc {
-    async fn rpc(&mut self, method: &str, params: &str) -> RpcResult<String> {
+/// The client-facing API: requests take JSON params and return the raw JSON
+/// of the result; subscription events are `(subscription id, raw JSON)`.
+impl ForkRpc {
+    pub fn request(&mut self, method: &str, params: &str) -> RpcResult<String> {
         log::debug!("fork rpc {method} {params}");
         self.handle(method, &parse_params(params))
             .map(|v| v.to_string())
     }
-}
 
-impl RpcSubscription for ForkRpc {
-    async fn subscribe(&mut self, method: &str, params: &str) -> RpcResult<String> {
+    /// Start a subscription and return its id.
+    pub fn subscribe(&mut self, method: &str, params: &str) -> RpcResult<String> {
         log::debug!("fork subscribe {method} {params}");
         self.subscribe_to(method, &parse_params(params))
     }
 
-    async fn next_event(&mut self) -> Option<(String, String)> {
+    /// Wait for the next event. Sessions never close, so this waits until
+    /// a block is built if nothing is queued.
+    pub async fn next_event(&mut self) -> (String, String) {
         std::future::poll_fn(|cx| {
             self.sync();
             match self.queue.pop_front() {
-                Some(event) => Poll::Ready(Some(event)),
+                Some(event) => Poll::Ready(event),
                 None => {
                     self.fork.borrow_mut().register_waker(cx.waker());
                     Poll::Pending
@@ -589,15 +612,15 @@ impl RpcSubscription for ForkRpc {
         .await
     }
 
-    fn try_next_event(&mut self) -> Option<(String, String)> {
+    /// The next event if one is queued.
+    pub fn try_next_event(&mut self) -> Option<(String, String)> {
         self.sync();
         self.queue.pop_front()
     }
 
-    async fn unsubscribe(&mut self, _method: &str, sub_id: &str) -> RpcResult<()> {
+    pub fn unsubscribe(&mut self, sub_id: &str) {
         self.follows.remove(sub_id);
         self.watches.remove(sub_id);
         self.queue.retain(|(sub, _)| sub != sub_id);
-        Ok(())
     }
 }

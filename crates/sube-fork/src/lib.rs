@@ -1,22 +1,21 @@
 //! An in-process fork of a live Substrate parachain for local development.
 //!
-//! Like chopsticks, but as a sube backend: download a full-state [`Snapshot`]
+//! Like chopsticks, but as a library: download a full-state [`Snapshot`]
 //! once, then boot a [`Fork`] from it offline and build blocks with the real
 //! runtime, run by smoldot's executor. The relay chain is mocked, so no relay
 //! chain, collators or zombienet are needed.
 //!
+//! Clients talk to a fork through [`ForkRpc`], a JSON-RPC session. With its
+//! `fork` feature, sube uses it as a backend: `Sube::connect("fork:kreivo.snap")`.
+//!
 //! ```no_run
-//! # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-//! use std::{cell::RefCell, rc::Rc};
+//! # fn demo() -> Result<(), sube_fork::Error> {
 //! use sube_fork::{Fork, Snapshot};
 //!
-//! let fork = Rc::new(RefCell::new(Fork::new(Snapshot::load("kreivo.snap")?)?));
-//! let mut sube = sube_fork::connect(fork.clone()).await?;
-//! // Query and submit as usual; each submission builds a block.
-//! sube.query("timestamp/now").await?;
+//! let mut fork = Fork::new(Snapshot::load("kreivo.snap")?)?;
 //! // The next block lands an hour later.
-//! fork.borrow_mut().time_travel(600);
-//! fork.borrow_mut().new_block()?;
+//! fork.time_travel(600);
+//! let block = fork.new_block()?;
 //! # Ok(()) }
 //! ```
 //!
@@ -33,25 +32,14 @@ mod storage;
 mod trie;
 mod util;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 pub use error::{Error, Result};
 pub use executor::{RuntimeInfo, SignaturePolicy};
 pub use fork::{Block, Built, Fork, Rejected, STATE_HISTORY};
-pub use rpc::ForkRpc;
-pub use snapshot::{Progress, Snapshot};
+pub use rpc::{ForkRpc, RpcError};
+pub use snapshot::{Progress, Snapshot, Transport};
 pub use storage::{Base, Diff, Entries, View};
 
 pub type Hash = [u8; 32];
 
-/// The sube client a fork serves.
-pub type ForkSube = sube::Sube<sube::rpc::chainhead::ChainHead<ForkRpc>>;
-
-/// Open a sube session on a shared fork, with its metadata loaded.
-pub async fn connect(fork: Rc<RefCell<Fork>>) -> sube::Result<ForkSube> {
-    use sube::Backend as _;
-    let mut chain = sube::rpc::chainhead::ChainHead::new(ForkRpc::new(fork)).await?;
-    let metadata = chain.metadata().await?;
-    Ok(sube::Sube::from_parts(chain, Rc::new(metadata)))
-}
+/// A fork shared by its JSON-RPC sessions and the code driving it.
+pub type SharedFork = std::rc::Rc<std::cell::RefCell<Fork>>;
