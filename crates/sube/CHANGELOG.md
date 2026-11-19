@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### License
+
+- sube is now GPL-3.0-or-later, like the rest of the Virto SDK. Releases up
+  to 1.0.0 remain Apache-2.0.
+
 ### Breaking changes
 
 - Submitting is an explicit stage. Transactions go through `prepare_call`,
@@ -69,7 +74,6 @@
   fork and production builds a node or light client with the same code.
   `Sube::connect_fork` opens a session on a shared fork, `Sube::fork`
   returns it for dev operations, and `sube::fork` re-exports the engine.
-  `sube-fork` is GPL-3.0-or-later; builds without the feature don't use it.
 - Metadata-driven V4 address/signature encoding, 64-block mortal checkpoints,
   optional-extension `None` defaults, transaction diagnostics and receipts.
 - `Signer::signature_variant` names the metadata signature variant a signer

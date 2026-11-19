@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- scale-serialization is now GPL-3.0-or-later, like the rest of the Virto
+  SDK. Releases up to 1.2.0 remain Apache-2.0.
+
 ## 1.2.0
 
 Serializing with type information is stricter and fixes several encodings,

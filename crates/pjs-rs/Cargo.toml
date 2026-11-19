@@ -2,6 +2,7 @@
 name = "pjs"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 wasm-bindgen = { version = "0.2.92", default-features = false }

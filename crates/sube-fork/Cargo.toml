@@ -5,7 +5,7 @@ version = "0.1.0"
 authors = ["Daniel Olano <daniel@olanod.com>"]
 edition = "2024"
 rust-version = "1.91"
-license = "GPL-3.0-or-later"
+license.workspace = true
 repository = "https://github.com/virto-network/virto-sdk"
 readme = "README.md"
 

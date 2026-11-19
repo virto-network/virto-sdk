@@ -4,6 +4,7 @@ version = "1.0.0"
 edition = "2024"
 rust-version = "1.91"
 publish = false
+license.workspace = true
 
 [[bin]]
 name = "sube"

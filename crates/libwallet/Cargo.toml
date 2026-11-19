@@ -4,6 +4,7 @@ autoexamples = true
 edition = "2021"
 name = "libwallet"
 version = "0.4.0"
+license.workspace = true
 
 [dependencies]
 # base dependencies
