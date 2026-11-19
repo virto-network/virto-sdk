@@ -184,7 +184,8 @@ impl App {
             let reg = sube::Rc::new(self.meta.registry.clone());
             match &entry.ty {
                 StorageEntryType::Plain(_) => {
-                    self.storage_form = Some(FormState::new(vec![], reg, self.form_context));
+                    self.storage_form =
+                        Some(FormState::new(vec![], reg, self.form_context.clone()));
                 }
                 StorageEntryType::Map { hashers, key, .. } => {
                     let key_types =
@@ -196,7 +197,8 @@ impl App {
                             field_from_type(&format!("key{i}"), *ty_id, &self.meta.registry)
                         })
                         .collect();
-                    self.storage_form = Some(FormState::new(fields, reg, self.form_context));
+                    self.storage_form =
+                        Some(FormState::new(fields, reg, self.form_context.clone()));
                 }
             }
         }
@@ -251,7 +253,7 @@ impl App {
             self.call_form = Some(FormState::new(
                 fields,
                 sube::Rc::new(self.meta.registry.clone()),
-                self.form_context,
+                self.form_context.clone(),
             ));
         }
     }
@@ -381,6 +383,7 @@ impl App {
             }
             #[cfg(feature = "wallet")]
             FromChain::ProfilesUpdated(profiles, message) => {
+                self.form_context.accounts = profiles.accounts(self.genesis_hash).into();
                 self.profiles = profiles;
                 self.profile_idx = self
                     .profile_idx
@@ -508,11 +511,12 @@ pub async fn run(chain_url: &str, profile_path: &std::path::Path) -> Result<()> 
         .recv()
         .map_err(|_| anyhow::anyhow!("chain worker stopped during startup"))?
         .map_err(anyhow::Error::msg)?;
-    let form_context = FormContext {
-        ss58_format: ready.properties.ss58_format,
-    };
     let meta = sube::Rc::new(ready.metadata);
     let profiles = crate::profiles::Profiles::load(profile_path)?;
+    let form_context = FormContext {
+        ss58_format: ready.properties.ss58_format,
+        accounts: profiles.accounts(ready.genesis_hash).into(),
+    };
     eprintln!("Connected, metadata loaded.");
 
     enable_raw_mode()?;

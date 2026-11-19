@@ -15,6 +15,9 @@ pub enum Field {
         input: String,
         /// If true, the input is UTF-8 text, or hex with a `hex:` or `0x` prefix.
         is_bytes: bool,
+        /// A 32-byte array, such as an `AccountId32`: it also takes the name
+        /// of a known account.
+        account: bool,
         ty_id: TypeId,
     },
     /// Boolean toggle.
@@ -51,18 +54,21 @@ impl Field {
 
     /// Produce the text-format value for sube submission.
     #[allow(clippy::only_used_in_recursion)]
-    fn to_value(&self, registry: &Registry, context: FormContext) -> Result<String, String> {
+    fn to_value(&self, registry: &Registry, context: &FormContext) -> Result<String, String> {
         match self {
             Field::Text {
                 name,
                 input,
                 is_bytes,
+                account,
                 ty_id,
                 ..
             } => {
                 let input = input.trim();
                 let value = if *is_bytes {
                     encode_bytes(input).map_err(|error| format!("{name}: {error}"))?
+                } else if let Some(known) = context.account(input).filter(|_| *account) {
+                    format!("0x{}", hex::encode(known))
                 } else if looks_like_ss58(input) {
                     decode_ss58_account(input, context.ss58_format)
                         .map(|account| format!("0x{}", hex::encode(account)))
@@ -74,7 +80,12 @@ impl Field {
                 if let Err(error) = sube::scales::from_text(&value, registry, *ty_id) {
                     return Err(match byte_array_len(*ty_id, registry) {
                         _ if input.is_empty() => format!("{name}: missing"),
-                        Some(32) => format!("{name}: expected an SS58 address or 0x hex"),
+                        Some(32) if context.accounts.is_empty() => {
+                            format!("{name}: expected an SS58 address or 0x hex")
+                        }
+                        Some(32) => {
+                            format!("{name}: expected a profile name, an SS58 address or 0x hex")
+                        }
                         Some(len) => format!("{name}: expected 0x hex of {len} bytes"),
                         None => format!("{name}: {error}"),
                     });
@@ -135,9 +146,21 @@ impl Field {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct FormContext {
     pub ss58_format: Option<u16>,
+    /// Named accounts (the profiles on this chain) that 32-byte account
+    /// fields accept by name and offer with ←→.
+    pub accounts: std::rc::Rc<[(String, [u8; 32])]>,
+}
+
+impl FormContext {
+    fn account(&self, name: &str) -> Option<[u8; 32]> {
+        self.accounts
+            .iter()
+            .find(|(known, _)| known == name)
+            .map(|(_, account)| *account)
+    }
 }
 
 /// The length of a byte array type, seen through newtypes like `AccountId32`.
@@ -268,6 +291,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             type_desc: "Vec<u8> (utf8: or hex:)".into(),
             input: String::new(),
             is_bytes: true,
+            account: false,
             ty_id,
         },
         Some(TypeDef::Sequence(inner)) => {
@@ -278,6 +302,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
                     type_desc: "Vec<u8> (utf8: or hex:)".into(),
                     input: String::new(),
                     is_bytes: true,
+                    account: false,
                     ty_id,
                 }
             } else {
@@ -293,6 +318,7 @@ pub fn field_from_type(name: &str, ty_id: TypeId, registry: &Registry) -> Field 
             type_desc: types::describe(ty_id, registry),
             input: String::new(),
             is_bytes: false,
+            account: byte_array_len(ty_id, registry) == Some(32),
             ty_id,
         },
     }
@@ -413,14 +439,44 @@ impl FormState {
         }
     }
 
-    /// Toggle bool or cycle enum variant forward.
+    /// Toggle bool, cycle enum variant or named account forward.
     pub fn toggle(&mut self) {
-        self.cycle_enum(true);
+        if !self.cycle_account(true) {
+            self.cycle_enum(true);
+        }
     }
 
-    /// Toggle enum backward.
+    /// Cycle enum variant or named account backward.
     pub fn toggle_back(&mut self) {
-        self.cycle_enum(false);
+        if !self.cycle_account(false) {
+            self.cycle_enum(false);
+        }
+    }
+
+    /// On a 32-byte account field, replaces the input with the next or
+    /// previous named account. Returns whether the cursor was on one.
+    fn cycle_account(&mut self, forward: bool) -> bool {
+        let accounts = self.context.accounts.clone();
+        let Some(Field::Text {
+            input,
+            account: true,
+            ..
+        }) = self.field_at_cursor_mut()
+        else {
+            return false;
+        };
+        if accounts.is_empty() {
+            return false;
+        }
+        let count = accounts.len();
+        let next = match accounts.iter().position(|(name, _)| name == input.trim()) {
+            Some(index) if forward => (index + 1) % count,
+            Some(index) => (index + count - 1) % count,
+            None if forward => 0,
+            None => count - 1,
+        };
+        *input = accounts[next].0.clone();
+        true
     }
 
     fn cycle_enum(&mut self, forward: bool) {
@@ -496,7 +552,7 @@ impl FormState {
     pub fn values(&self) -> Result<Vec<String>, String> {
         self.fields
             .iter()
-            .map(|f| f.to_value(&self.registry, self.context))
+            .map(|f| f.to_value(&self.registry, &self.context))
             .collect()
     }
 
@@ -510,7 +566,7 @@ impl FormState {
             .map_or(0, |last| last + 1);
         self.fields[..given]
             .iter()
-            .map(|f| f.to_value(&self.registry, self.context))
+            .map(|f| f.to_value(&self.registry, &self.context))
             .collect()
     }
 
@@ -532,6 +588,7 @@ impl FormState {
             y = render_field(
                 f,
                 field,
+                &self.context,
                 area.x,
                 y,
                 area.width,
@@ -681,6 +738,7 @@ fn find_list_ty(field: &Field, target: usize, pos: &mut usize) -> Option<TypeId>
 fn render_field(
     f: &mut Frame,
     field: &Field,
+    context: &FormContext,
     x: u16,
     y: u16,
     width: u16,
@@ -707,9 +765,19 @@ fn render_field(
             name,
             type_desc,
             input,
+            account,
             ..
         } => {
-            let text = format!("{name} ({type_desc}): {input}{cursor_char}");
+            // A profile name shows the account it stands for.
+            let resolved = context
+                .account(input.trim())
+                .filter(|_| *account)
+                .map(|account| {
+                    let hex = hex::encode(account);
+                    format!("  = 0x{}…{}", &hex[..8], &hex[56..])
+                })
+                .unwrap_or_default();
+            let text = format!("{name} ({type_desc}): {input}{cursor_char}{resolved}");
             f.render_widget(Paragraph::new(text).style(style), area);
             *flat_idx += 1;
             y + 1
@@ -741,6 +809,7 @@ fn render_field(
                 next_y = render_field(
                     f,
                     sf,
+                    context,
                     x + 2,
                     next_y,
                     width.saturating_sub(2),
@@ -772,6 +841,7 @@ fn render_field(
                     next_y = render_field(
                         f,
                         sf,
+                        context,
                         x + 4,
                         next_y,
                         width.saturating_sub(4),
@@ -791,6 +861,10 @@ mod tests {
     use super::*;
 
     fn transfer_dest_ty(metadata: &sube::Metadata) -> TypeId {
+        transfer_field_ty(metadata, "dest")
+    }
+
+    fn transfer_field_ty(metadata: &sube::Metadata, name: &str) -> TypeId {
         let balances = metadata.pallet_by_name("Balances").unwrap();
         let calls = match metadata
             .registry
@@ -806,7 +880,7 @@ mod tests {
             .unwrap();
         match transfer.fields() {
             sube::scales::Fields::Struct(fields) => {
-                fields.iter().find(|field| field.name == "dest").unwrap().ty
+                fields.iter().find(|field| field.name == name).unwrap().ty
             }
             _ => panic!("transfer fields are not named"),
         }
@@ -867,6 +941,7 @@ mod tests {
                 sube::Rc::new(registry.clone()),
                 FormContext {
                     ss58_format: Some(42),
+                    ..Default::default()
                 },
             )
         };
@@ -922,6 +997,7 @@ mod tests {
                 type_desc: "Vec<u8>".into(),
                 input: String::new(),
                 is_bytes: true,
+                account: false,
                 ty_id: TypeId::default(),
             }],
             sube::Rc::new(metadata.registry.clone()),
@@ -932,6 +1008,64 @@ mod tests {
             unreachable!()
         };
         assert_eq!(input, "a b-c+");
+    }
+
+    #[test]
+    fn account_fields_take_profile_names_and_cycle_them() {
+        let metadata =
+            sube::Metadata::from_bytes(include_bytes!("../../../tests/fixtures/kreivo.scale"))
+                .unwrap();
+        let mut form = FormState::new(
+            vec![
+                field_from_type("dest", transfer_dest_ty(&metadata), &metadata.registry),
+                field_from_type(
+                    "value",
+                    transfer_field_ty(&metadata, "value"),
+                    &metadata.registry,
+                ),
+            ],
+            sube::Rc::new(metadata.registry.clone()),
+            FormContext {
+                ss58_format: None,
+                accounts: vec![("tmp".into(), [1; 32]), ("daniel".into(), [2; 32])].into(),
+            },
+        );
+        // On the `MultiAddress` row ←→ picks the variant; on its account,
+        // a profile.
+        form.next_field();
+        form.toggle();
+        let daniel = format!("MultiAddress::Id(0x{})", "02".repeat(32));
+        assert_eq!(
+            form.fields[0].to_value(&form.registry, &form.context),
+            Ok(format!("MultiAddress::Id(0x{})", "01".repeat(32)))
+        );
+        form.toggle();
+        assert_eq!(
+            form.fields[0].to_value(&form.registry, &form.context),
+            Ok(daniel.clone())
+        );
+        form.toggle();
+        form.toggle_back();
+        assert_eq!(
+            form.fields[0].to_value(&form.registry, &form.context),
+            Ok(daniel.clone())
+        );
+
+        // Typing the name works too.
+        form.backspace();
+        "l".chars().for_each(|c| form.push_char(c));
+        assert_eq!(
+            form.fields[0].to_value(&form.registry, &form.context),
+            Ok(daniel)
+        );
+
+        // Fields that aren't 32-byte arrays don't offer accounts.
+        form.next_field();
+        form.toggle();
+        let Field::Text { input, account, .. } = &form.fields[1] else {
+            panic!("expected a text field");
+        };
+        assert!(!account && input.is_empty());
     }
 
     #[test]
@@ -1003,6 +1137,7 @@ mod tests {
             sube::Rc::new(metadata.registry.clone()),
             FormContext {
                 ss58_format: Some(2),
+                ..Default::default()
             },
         );
         for c in "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY".chars() {

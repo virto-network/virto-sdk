@@ -70,7 +70,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     let help = match (&app.focus, &app.panel) {
         (Focus::Search, _) => " / filter  Enter confirm  Esc cancel",
         (Focus::Form, _) => {
-            " ↑↓ fields  ←→ enum  Space toggle  +/- list  Enter next/submit  Esc cancel"
+            " ↑↓ fields  ←→ enum/profile account  Space toggle  +/- list  Enter next/submit  Esc cancel"
         }
         (Focus::Profiles, _) => unreachable!(),
         #[cfg(feature = "wallet")]
@@ -103,14 +103,13 @@ fn draw_profiles(f: &mut Frame, app: &App) {
             Constraint::Length(3),
         ])
         .split(area);
-    #[allow(unreachable_patterns)]
-    let account = match app.profiles.profiles.get(app.profile_idx) {
-        Some(crate::profiles::Profile::Wallet(wallet)) => Some(wallet.account),
-        #[cfg(feature = "pass")]
-        Some(crate::profiles::Profile::Pass(pass)) => Some(pass.pass_account),
-        _ => None,
-    };
-    let account = account.map_or_else(String::new, |account| format!("0x{}", hex::encode(account)));
+    let account = app
+        .profiles
+        .profiles
+        .get(app.profile_idx)
+        .map_or_else(String::new, |profile| {
+            format!("0x{}", hex::encode(profile.account()))
+        });
     f.render_widget(
         Paragraph::new(format!(
             "Connected genesis: 0x{}\nSelected account:  {account}",
