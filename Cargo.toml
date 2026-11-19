@@ -15,6 +15,9 @@ exclude = [
     "showroom/*",
 ]
 
+[workspace.package]
+license = "GPL-3.0-or-later"
+
 [workspace.dependencies]
 serde = { version = "1", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["alloc"] }

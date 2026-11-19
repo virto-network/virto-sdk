@@ -3,6 +3,7 @@ name = "pass"
 version = "0.1.0"
 edition = "2024"
 description = "pallet-pass authenticator for sube — no_std, embedded-friendly"
+license.workspace = true
 
 [dependencies]
 sube = { path = "../sube", default-features = false }

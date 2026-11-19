@@ -3,6 +3,7 @@ edition      = "2024"
 name         = "kreivo-clock"
 rust-version = "1.91"
 version      = "0.1.0"
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "kreivo-clock"

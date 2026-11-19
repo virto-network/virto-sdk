@@ -54,7 +54,7 @@ assert!(response.to_text()?.is_some());
 | `smoldot` | custom `no_std` platform | Smoldot light-client backend |
 | `smoldot-std` | native `std` | Smoldot default platform with Wasmtime |
 | `libwallet` | any | Adapter for ordinary libwallet-backed V4 signing |
-| `fork` | native `std` | In-process fork of a live chain for development (`sube-fork`, GPL-3.0-or-later): `Sube::connect("fork:kreivo.snap")` |
+| `fork` | native `std` | In-process fork of a live chain for development (`sube-fork`): `Sube::connect("fork:kreivo.snap")` |
 
 Text-format encoding and decoding are always available; there is no separate
 `text` feature.

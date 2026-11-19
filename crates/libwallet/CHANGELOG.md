@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- libwallet declares GPL-3.0-or-later, like the rest of the Virto SDK.
+
 ## 0.4.0
 
 ### Breaking changes
