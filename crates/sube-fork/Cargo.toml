@@ -1,0 +1,33 @@
+[package]
+name = "sube-fork"
+description = "In-process fork of a live Substrate parachain, served to sube over JSON-RPC"
+version = "0.1.0"
+authors = ["Daniel Olano <daniel@olanod.com>"]
+edition = "2024"
+rust-version = "1.91"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/virto-network/virto-sdk"
+publish = false
+
+[dependencies]
+# `ws` enables sube's RpcSubscription/ChainHead layer that the fork serves.
+sube = { path = "../sube", features = ["ws"] }
+# Without default features smoldot leaves out wasmtime; the fork uses wasmi.
+smoldot = { version = "6.0.0", default-features = false }
+codec = { workspace = true }
+blake2 = "0.11"
+twox-hash = { version = "2.1", default-features = false, features = ["xxhash64"] }
+hex = { workspace = true }
+log = { workspace = true }
+serde_json = "1"
+
+[dev-dependencies]
+sube = { path = "../sube", features = ["wss", "libwallet"] }
+libwallet = { path = "../libwallet", default-features = false, features = [
+	"substrate",
+	"mnemonic",
+	"sr25519",
+	"rand",
+	"std",
+] }
+smol = { workspace = true }
