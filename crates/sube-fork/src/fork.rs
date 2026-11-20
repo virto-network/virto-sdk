@@ -260,6 +260,20 @@ impl Fork {
         Ok(output.output)
     }
 
+    /// Run a runtime API on the head and keep its storage changes, without
+    /// building a block: a dev operation like [`Fork::set_storage`], with the
+    /// runtime computing the writes. `ContractsApi_instantiate`, for example,
+    /// deploys a contract as any account, whatever origin the chain's
+    /// extrinsics ask for.
+    pub fn call_mut(&mut self, function: &str, param: &[u8]) -> Result<Vec<u8>> {
+        let out = {
+            let state = self.chain.head_view();
+            self.runtime.call(&state, &self.policy, function, param)?
+        };
+        self.set_storage(out.changes)?;
+        Ok(out.output)
+    }
+
     /// Validate an extrinsic against the head and queue it for the next block.
     /// Returns its hash.
     pub fn submit(&mut self, ext: Vec<u8>) -> Result<Hash> {
@@ -340,6 +354,27 @@ impl Fork {
             self.chain.blocks[head].code_at = head;
         }
         Ok(())
+    }
+
+    /// The head and its state as a snapshot, to save a fork and boot it again
+    /// with [`Fork::new`]. The pool, a pending time travel and the signature
+    /// policy aren't part of it. A fork's state roots aren't authoritative, so
+    /// [`Snapshot::verify`] rejects it.
+    pub fn snapshot(&self) -> Snapshot {
+        let head = self.head();
+        let mut state = self.chain.base.clone();
+        for block in &self.chain.blocks[self.chain.pruned + 1..] {
+            state.apply(block.diff.clone());
+        }
+        Snapshot {
+            chain_name: self.chain_name.clone(),
+            genesis_hash: self.genesis_hash,
+            properties: self.properties.clone(),
+            block_hash: head.hash,
+            header: head.header.clone(),
+            extrinsics: head.body.clone().expect("the head is never pruned"),
+            state,
+        }
     }
 
     /// Have `waker` woken when the next block is built.
