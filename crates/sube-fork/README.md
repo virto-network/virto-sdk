@@ -52,6 +52,13 @@ fork.borrow_mut().set_storage(diff)?;
 fork.borrow_mut().time_travel(600); // the next block lands an hour later
 fork.borrow_mut().new_block()?;
 fork.borrow_mut().policy.magic = true; // accept 0xdeadbeef…cd signatures
+
+// Keep what a runtime API writes, e.g. to deploy a contract as any account
+// where the chain's extrinsics would ask for another origin.
+fork.borrow_mut().call_mut("ContractsApi_instantiate", &params)?;
+
+// Save the fork and boot it again later.
+fork.borrow().snapshot().save("dev.snap")?;
 ```
 
 ## JSON-RPC surface
@@ -89,6 +96,9 @@ SUBE_FORK_SNAPSHOT=$PWD/kreivo.snap cargo test -p sube --features fork,libwallet
   `apply_authorized_upgrade` via governance) probably never enact, because the
   relay chain's upgrade go-ahead signal isn't mocked. Writing `:code` with
   `set_storage` does switch runtimes.
+- **Saved forks** (`Fork::snapshot`) keep the head and its state, not earlier
+  blocks, the pool or a pending time travel. Like any fork state they don't
+  pass `Snapshot::verify`.
 - **Not yet supported:** outbound XCM inspection and inbound message
   injection; reverting to an earlier block; more than one block per relay slot.
 - **Not yet exercised by tests:** Pass/WebAuthn-authenticated extrinsics,

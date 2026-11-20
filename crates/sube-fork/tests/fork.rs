@@ -10,6 +10,7 @@
 
 use std::cell::RefCell;
 
+use codec::Encode;
 use serde_json::{Value, json};
 use sube_fork::{Diff, Fork, ForkRpc, STATE_HISTORY, SharedFork, Snapshot};
 
@@ -248,4 +249,117 @@ fn long_chains_prune_old_state() {
         Some(&b"kept"[..]),
         "pruned diffs live on in the base"
     );
+}
+
+/// The smallest module pallet-contracts accepts: it imports its memory and
+/// exports `call` and `deploy`.
+const EMPTY_CONTRACT: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
+    0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // one type: () -> ()
+    0x02, 0x10, 0x01, 0x03, b'e', b'n', b'v', 0x06, b'm', b'e', b'm', b'o', b'r', b'y', 0x02, 0x01,
+    0x01, 0x01, // import env.memory, one page
+    0x03, 0x03, 0x02, 0x00, 0x00, // two functions
+    0x07, 0x11, 0x02, 0x04, b'c', b'a', b'l', b'l', 0x00, 0x00, 0x06, b'd', b'e', b'p', b'l', b'o',
+    b'y', 0x00, 0x01, // export them
+    0x0a, 0x07, 0x02, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, // two empty bodies
+];
+
+/// `System::Account(id)` holding `free`.
+fn account(id: &[u8; 32], free: u128) -> (Vec<u8>, Vec<u8>) {
+    use blake2::{Blake2b, Digest, digest::typenum::U16};
+    let hashed: [u8; 16] = Blake2b::<U16>::digest(id).into();
+    let key = [&twox128(b"System")[..], &twox128(b"Account"), &hashed, id].concat();
+    let (nonce, consumers, providers, sufficients) = (0u32, 0u32, 1u32, 0u32);
+    let flags = 1u128 << 127;
+    let info = (
+        nonce,
+        consumers,
+        providers,
+        sufficients,
+        free,
+        0u128,
+        0u128,
+        flags,
+    )
+        .encode();
+    (key, info)
+}
+
+#[test]
+#[ignore]
+fn runtime_calls_can_keep_their_changes() {
+    let fork = fork();
+    let mut f = fork.borrow_mut();
+    let uploader = [7u8; 32];
+    let (key, info) = account(&uploader, 1_000_000_000_000_000);
+    let mut diff = Diff::default();
+    diff.insert(key, info);
+    f.set_storage(diff).unwrap();
+
+    // Kreivo only lets communities upload code by extrinsic; its runtime API
+    // takes any account. `ContractsApi::upload_code(origin, code,
+    // storage_deposit_limit, determinism)` answers `Ok((code_hash, deposit))`.
+    let param = (uploader, EMPTY_CONTRACT.to_vec(), None::<u128>, 0u8).encode();
+    let code_info = |f: &Fork, code_hash: &[u8]| {
+        let key = [
+            &twox128(b"Contracts")[..],
+            &twox128(b"CodeInfoOf"),
+            code_hash,
+        ]
+        .concat();
+        f.storage(f.head_index(), None, &key)
+    };
+
+    let head = f.head_index();
+    let dry = f.call(head, "ContractsApi_upload_code", &param).unwrap();
+    assert_eq!(dry[0], 0, "upload failed: {}", hex0x(&dry));
+    let code_hash = dry[1..33].to_vec();
+    assert_eq!(code_info(&f, &code_hash), None, "`call` changes nothing");
+
+    let kept = f.call_mut("ContractsApi_upload_code", &param).unwrap();
+    assert_eq!(kept, dry);
+    assert!(
+        code_info(&f, &code_hash).is_some(),
+        "`call_mut` keeps the code"
+    );
+    assert_eq!(f.head_index(), head, "without building a block");
+
+    f.new_block().unwrap();
+    assert!(
+        code_info(&f, &code_hash).is_some(),
+        "and blocks build on it"
+    );
+}
+
+#[test]
+#[ignore]
+fn a_fork_resumes_from_its_own_snapshot() {
+    let fork = fork();
+    let mut f = fork.borrow_mut();
+    let (key, info) = account(&[9u8; 32], 42);
+    let mut diff = Diff::default();
+    diff.insert(key.clone(), info.clone());
+    f.set_storage(diff).unwrap();
+    f.new_block().unwrap();
+    f.time_travel(600);
+    f.new_block().unwrap();
+
+    // Through the file format, as a saved fork would be.
+    let saved = f.snapshot().encode();
+    let mut resumed = Fork::new(Snapshot::decode(&saved).unwrap()).expect("boots its own snapshot");
+    assert_eq!(resumed.head().hash, f.head().hash);
+    assert_eq!(resumed.head().number, f.head().number);
+    assert_eq!(resumed.genesis_hash(), f.genesis_hash());
+    assert_eq!(resumed.relay_clock(), f.relay_clock());
+    assert_eq!(timestamp(&resumed), timestamp(&f));
+    assert_eq!(
+        resumed.storage(resumed.head_index(), None, &key),
+        Some(info)
+    );
+
+    // Both keep building the same chain.
+    let (ours, theirs) = (f.new_block().unwrap(), resumed.new_block().unwrap());
+    assert_eq!(theirs.number, ours.number);
+    assert_eq!(theirs.hash, ours.hash);
+    assert_eq!(timestamp(&resumed), timestamp(&f));
 }
