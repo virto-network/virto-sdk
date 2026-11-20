@@ -1474,7 +1474,10 @@ impl<R: Rpc + RpcSubscription> crate::Backend for ChainHead<R> {
                 parent: self.genesis_hash,
             }),
             None => {
-                let finalized_hash = self.finalized_hash.clone();
+                // Take the follow events already delivered first: blocks
+                // finalized since the last operation would otherwise be
+                // missed, and a transaction anchored at a stale head.
+                let finalized_hash = self.prepare_operation().await?;
                 let header = self.header(&finalized_hash).await?;
                 let mut h = [0u8; 32];
                 hex::decode_to_slice(finalized_hash.trim_start_matches("0x"), &mut h)

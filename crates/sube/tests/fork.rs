@@ -18,7 +18,9 @@ use libwallet::{
 };
 use sube::fork::{Diff, Fork, ForkRpc, SharedFork, Snapshot};
 use sube::libwallet::{LibwalletSigner, SignatureScheme};
-use sube::{ChainEvent, DispatchOutcome, Error, Response, Sube, Text, TransactionOptions, WaitFor};
+use sube::{
+    Backend, ChainEvent, DispatchOutcome, Error, Response, Sube, Text, TransactionOptions, WaitFor,
+};
 
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
                       abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -170,6 +172,22 @@ fn waiting_for_a_block_wakes_when_another_task_builds_one() {
             ChainEvent::Finalized { hashes, .. } => assert_eq!(hashes, vec![hex0x(&built.hash)]),
             other => panic!("unexpected {other:?}"),
         }
+    });
+}
+
+#[test]
+#[ignore]
+fn the_finalized_head_follows_blocks_built_between_operations() {
+    smol::block_on(async {
+        let fork = fork();
+        let mut sube = Sube::connect_fork(fork.clone()).await.expect("connects");
+        fork.borrow_mut().new_block().unwrap();
+        let built = fork.borrow_mut().new_block().unwrap();
+        // Nothing was asked of the chain since those blocks: the head must
+        // not be the one the session started with.
+        let head = sube.backend().block_info(None).await.expect("the head");
+        assert_eq!(head.hash, built.hash);
+        assert_eq!(head.number, u64::from(built.number));
     });
 }
 
