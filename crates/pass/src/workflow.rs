@@ -16,7 +16,7 @@ use crate::{
 /// What a device provider is asked to sign, for enrollment and for
 /// authentication alike: a challenge bound to the `context` block, for a user
 /// of the runtime's authority.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChallengeRequest {
     pub user_id: HashedUserId,
     pub authority_id: AuthorityId,
@@ -107,6 +107,30 @@ pub struct EnrollmentDraft {
     pub checkpoint_hash: [u8; 32],
 }
 
+/// Prepare the registration of `user_id` with a device's `attestation`,
+/// answering [`ChallengeRequest::enrollment`].
+pub fn prepare_register(
+    metadata: &Metadata,
+    config: &PassRuntimeConfig,
+    user_id: HashedUserId,
+    attestation: &DeviceAttestation,
+) -> Result<PreparedCall> {
+    if !config.supports_attestation(&attestation.variant) {
+        return Err(Error::Mapping(format!(
+            "runtime does not advertise {} attestations",
+            attestation.variant
+        )));
+    }
+    sube::extrinsic::prepare_call(
+        metadata,
+        &format!("{}/{}", config.pallet, config.register.name),
+        &body(vec![
+            ("user", DynValue::from(user_id.0)),
+            ("attestation", attestation.runtime_value()),
+        ]),
+    )
+}
+
 /// Build the registration draft locally, prompting `authenticator` once.
 pub async fn prepare_enrollment<A: DeviceAuthenticator>(
     metadata: &Metadata,
@@ -133,15 +157,7 @@ pub async fn prepare_enrollment<A: DeviceAuthenticator>(
         &block_hash,
     );
     let attestation = authenticator.attest(&request).await?;
-
-    let call = sube::extrinsic::prepare_call(
-        metadata,
-        &format!("{}/{}", config.pallet, config.register.name),
-        &body(vec![
-            ("user", DynValue::from(user_id.0)),
-            ("attestation", attestation.runtime_value()),
-        ]),
-    )?;
+    let call = prepare_register(metadata, config, user_id, &attestation)?;
 
     Ok(EnrollmentDraft {
         user_id,

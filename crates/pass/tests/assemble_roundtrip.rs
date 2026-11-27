@@ -247,3 +247,138 @@ fn pass_authenticator_assembles_a_device_credential() {
     assert_eq!(assembled.signing_account, vec![0x02; 32]);
     assert_eq!(assembled.scheme, "PassAuthenticate");
 }
+
+fn identity() -> pass::PassIdentity {
+    pass::PassIdentity {
+        account: pass::Account([0x33; 32]),
+        device_id: pass::DeviceId([0x02; 32]),
+        user_id: pass::HashedUserId([0x44; 32]),
+        authority_id: pass::AuthorityId([0x22; 32]),
+        context: 42,
+        block_hash: [0x99; 32],
+    }
+}
+
+/// A device that answers later gives the bytes a device at hand gives: the
+/// `Pending` asks what `PassAuthenticator` asks, and `finish` adds only the
+/// length prefix.
+#[test]
+fn a_pending_transaction_finishes_as_the_one_step_assembly() {
+    let meta = Metadata::from_bytes(KREIVO_META).expect("decode");
+    let config = pass::PassRuntimeConfig::discover(&meta).expect("pass config");
+    let call = pass::workflow::prepare_remove_device(&meta, &config, pass::DeviceId([0x11; 32]))
+        .expect("remove_device call");
+    let identity = identity();
+
+    let device = RecordingDevice {
+        challenge: RefCell::new(None),
+    };
+    let authenticator = pass::PassAuthenticator::new(
+        &device,
+        identity.account,
+        identity.device_id,
+        identity.user_id,
+        identity.authority_id,
+        identity.context,
+        identity.block_hash,
+    );
+    assert_eq!(authenticator.identity(), identity);
+    let one_step = futures_lite::future::block_on(authenticator.assemble(
+        &call.bytes,
+        &meta.extrinsic,
+        &meta.registry,
+        &ctx(),
+        &[],
+    ))
+    .expect("assemble");
+
+    let pending =
+        pass::Pending::new(identity, call.clone(), ctx(), Vec::new(), &meta).expect("pending");
+    assert_eq!(Some(pending.request.challenge), *device.challenge.borrow());
+    // Mortal for 64 blocks from the checkpoint at 128.
+    assert_eq!(pending.expires_at(), Some(192));
+
+    // The answer arrives: the same credential the device at hand gave.
+    let credential = futures_lite::future::block_on(pass::DeviceAuthenticator::assert(
+        &device,
+        &pending.request,
+    ))
+    .expect("credential");
+    let extrinsic = pending.finish(credential, &meta).expect("finish");
+
+    let length = u8::try_from(one_step.bytes.len() % 64).expect("fits") << 2 | 0b01;
+    // A two-byte compact length: the extrinsic is longer than 63 bytes.
+    assert!(one_step.bytes.len() > 63 && one_step.bytes.len() < 1 << 14);
+    assert_eq!(extrinsic.bytes[0], length);
+    assert_eq!(
+        hex::encode(&extrinsic.bytes[2..]),
+        hex::encode(&one_step.bytes)
+    );
+    assert_eq!(extrinsic.call, call);
+    assert_eq!(extrinsic.nonce, ctx().account_nonce);
+    assert_eq!(extrinsic.expires_at, Some(192));
+    assert_eq!(extrinsic.authorization.nonce_account, vec![0x33; 32]);
+    assert_eq!(extrinsic.authorization.signing_account, vec![0x02; 32]);
+}
+
+/// The answer is for one transaction: a `Pending` whose call or context
+/// changed after the device was asked is refused.
+#[test]
+fn a_pending_transaction_refuses_an_answer_to_another_challenge() {
+    let meta = Metadata::from_bytes(KREIVO_META).expect("decode");
+    let config = pass::PassRuntimeConfig::discover(&meta).expect("pass config");
+    let call = pass::workflow::prepare_remove_device(&meta, &config, pass::DeviceId([0x11; 32]))
+        .expect("remove_device call");
+    let pending = pass::Pending::new(identity(), call, ctx(), Vec::new(), &meta).expect("pending");
+    let credential = pass::key::credential(
+        &pending.request,
+        pass::key::SignatureType::Sr25519,
+        &[9; 64],
+    );
+    pending
+        .finish(credential.clone(), &meta)
+        .expect("the unchanged transaction finishes");
+
+    let mut later = pending.clone();
+    later.context.account_nonce += 1;
+    assert!(later.finish(credential.clone(), &meta).is_err());
+
+    let mut other = pending.clone();
+    other.call = pass::workflow::prepare_remove_device(&meta, &config, pass::DeviceId([0x12; 32]))
+        .expect("remove_device call");
+    assert!(other.finish(credential, &meta).is_err());
+}
+
+/// A registration built from an attestation made elsewhere is the call
+/// `prepare_enrollment` builds with the device at hand.
+#[test]
+fn a_registration_from_an_attestation_is_the_enrollment_call() {
+    let meta = Metadata::from_bytes(KREIVO_META).expect("decode");
+    let config = pass::PassRuntimeConfig::discover(&meta).expect("pass config");
+    let user = pass::HashedUserId([0x44; 32]);
+    let request = ChallengeRequest::enrollment(
+        user,
+        config.derive_account(user),
+        config.authority_id,
+        42,
+        &[0x99; 32],
+    );
+    let attestation = pass::key::attestation(
+        &request,
+        &[7; 32],
+        pass::key::SignatureType::Sr25519,
+        &[9; 64],
+    );
+    assert_eq!(attestation.device_id, pass::key::device_id(&[7; 32]));
+    assert_eq!(attestation.device_id, pass::DeviceId([7; 32]));
+    let call =
+        pass::workflow::prepare_register(&meta, &config, user, &attestation).expect("register");
+    assert_eq!(call.pallet, config.pallet);
+    assert!(!call.bytes.is_empty());
+
+    let unknown = DeviceAttestation {
+        variant: "Unknown".into(),
+        ..attestation
+    };
+    assert!(pass::workflow::prepare_register(&meta, &config, user, &unknown).is_err());
+}

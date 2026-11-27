@@ -204,6 +204,43 @@ pub struct EncodedExtrinsic {
 }
 
 impl EncodedExtrinsic {
+    /// Length-prefix an extrinsic assembled for `call` in `ctx`, for
+    /// [`Sube::submit_transaction`](crate::Sube::submit_transaction).
+    ///
+    /// [`build_transaction`] does this itself. Use it when the assembly
+    /// happens apart from the chain, for example when a device answers a
+    /// challenge in a later request. `nonce_account` is the account whose
+    /// nonce `ctx` carries.
+    pub fn from_assembled(
+        assembled: AssembledExtrinsic,
+        call: &PreparedCall,
+        ctx: &ChainContext,
+        nonce_account: &[u8],
+    ) -> Result<Self> {
+        let len = Compact(
+            u32::try_from(assembled.bytes.len())
+                .map_err(|_| Error::Encode("extrinsic too large".into()))?,
+        )
+        .encode();
+        Ok(Self {
+            bytes: [len, assembled.bytes].concat(),
+            call: call.clone(),
+            checkpoint_hash: ctx.checkpoint_hash,
+            checkpoint_number: ctx.checkpoint_number,
+            expires_at: ctx.expires_at(),
+            genesis_hash: ctx.genesis_hash,
+            spec_version: ctx.spec_version,
+            transaction_version: ctx.tx_version,
+            nonce: ctx.account_nonce,
+            authorization: AuthorizationSummary {
+                signing_account: assembled.signing_account,
+                nonce_account: nonce_account.to_vec(),
+                scheme: Some(assembled.scheme),
+            },
+            extensions: assembled.extensions,
+        })
+    }
+
     /// `0x`-prefixed hex of the length-prefixed extrinsic.
     pub fn hex(&self) -> String {
         to_hex(&self.bytes)
@@ -307,6 +344,7 @@ pub struct TransactionReceipt {
 }
 
 /// Chain context fetched once for extension defaults.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainContext {
     pub spec_version: u32,
     pub tx_version: u32,
@@ -316,6 +354,14 @@ pub struct ChainContext {
     pub checkpoint_hash: [u8; 32],
     pub mortality: Mortality,
     pub tip: u64,
+}
+
+impl ChainContext {
+    /// The last block a transaction built in this context is valid in, or
+    /// `None` for an immortal one.
+    pub fn expires_at(&self) -> Option<u64> {
+        expiry(self.checkpoint_number, self.mortality)
+    }
 }
 
 /// Look up a caller-provided extension value by identifier.
@@ -534,31 +580,7 @@ pub async fn build_transaction(
         )
         .await?;
 
-    let len = Compact(
-        u32::try_from(assembled.bytes.len())
-            .map_err(|_| Error::Encode("extrinsic too large".into()))?,
-    )
-    .encode();
-
-    let bytes = [len, assembled.bytes].concat();
-    let expires_at = expiry(ctx.checkpoint_number, ctx.mortality);
-    Ok(EncodedExtrinsic {
-        bytes,
-        call: call.clone(),
-        checkpoint_hash: ctx.checkpoint_hash,
-        checkpoint_number: ctx.checkpoint_number,
-        expires_at,
-        genesis_hash: ctx.genesis_hash,
-        spec_version: ctx.spec_version,
-        transaction_version: ctx.tx_version,
-        nonce: ctx.account_nonce,
-        authorization: AuthorizationSummary {
-            signing_account: assembled.signing_account,
-            nonce_account: from_account.as_ref().to_vec(),
-            scheme: Some(assembled.scheme),
-        },
-        extensions: assembled.extensions,
-    })
+    EncodedExtrinsic::from_assembled(assembled, call, &ctx, from_account.as_ref())
 }
 
 /// Assemble a V4 signed extrinsic from a [`Signer`](crate::Signer).

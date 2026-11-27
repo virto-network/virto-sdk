@@ -53,6 +53,17 @@ pub struct AssertionResponse {
     pub signature: Vec<u8>,
 }
 
+impl AssertionResponse {
+    /// What an authenticator answered to a `get()`.
+    pub fn new(authenticator_data: Vec<u8>, client_data: Vec<u8>, signature: Vec<u8>) -> Self {
+        Self {
+            authenticator_data,
+            client_data,
+            signature,
+        }
+    }
+}
+
 /// Raw registration response. Private key material never leaves the
 /// authenticator; profiles retain only RP/origin and credential id.
 #[derive(Debug, Clone)]
@@ -573,6 +584,61 @@ pub use desktop::DesktopWebAuthnTransport;
 ))]
 pub use desktop::SoftWebAuthnTransport;
 
+/// Variant of passkeys in the runtime's attestation and credential enums.
+pub const VARIANT: &str = "WebAuthn";
+
+/// The device id of the passkey with this credential id.
+pub fn device_id(credential_id: &[u8]) -> DeviceId {
+    DeviceId(Blake2b256::digest(credential_id).into())
+}
+
+/// The attestation that registers a passkey, from what it answered to the
+/// `create()` that `request` challenged.
+///
+/// [`WebAuthnDevice`] asks its transport and builds this in one step. Use
+/// this function when the passkey answers apart from the code that builds
+/// the transaction, for example in a browser.
+pub fn attestation(request: &ChallengeRequest, response: AttestationResponse) -> DeviceAttestation {
+    let device_id = device_id(&response.credential_id);
+    DeviceAttestation {
+        device_id,
+        variant: VARIANT.into(),
+        payload: DynValue::obj(&[
+            ("meta", request.registration_meta(device_id)),
+            (
+                "authenticator_data",
+                DynValue::from(response.authenticator_data),
+            ),
+            ("client_data", DynValue::from(response.client_data)),
+            ("public_key", DynValue::from(response.public_key)),
+        ]),
+    }
+}
+
+/// The credential that answers `request`, from what a passkey answered to
+/// the `get()` that `request` challenged.
+pub fn credential(request: &ChallengeRequest, response: AssertionResponse) -> DynValue {
+    DynValue::obj(&[(
+        VARIANT,
+        DynValue::obj(&[
+            (
+                "meta",
+                DynValue::obj(&[
+                    ("authority_id", DynValue::from(request.authority_id.0)),
+                    ("user_id", DynValue::from(request.user_id.0)),
+                    ("context", DynValue::from(request.context)),
+                ]),
+            ),
+            (
+                "authenticator_data",
+                DynValue::from(response.authenticator_data),
+            ),
+            ("client_data", DynValue::from(response.client_data)),
+            ("signature", DynValue::from(response.signature)),
+        ]),
+    )])
+}
+
 /// Desktop WebAuthn provider independent of the concrete platform transport.
 pub struct WebAuthnDevice<T> {
     transport: T,
@@ -615,7 +681,7 @@ impl<T> WebAuthnDevice<T> {
 
 impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
     fn variant(&self) -> &'static str {
-        "WebAuthn"
+        VARIANT
     }
 
     async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
@@ -630,20 +696,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
             .await
             .map_err(authenticator_error)?;
         *self.credential_id.borrow_mut() = Some(response.credential_id.clone());
-        let device_id = DeviceId(Blake2b256::digest(&response.credential_id).into());
-        Ok(DeviceAttestation {
-            device_id,
-            variant: self.variant().into(),
-            payload: DynValue::obj(&[
-                ("meta", request.registration_meta(device_id)),
-                (
-                    "authenticator_data",
-                    DynValue::from(response.authenticator_data),
-                ),
-                ("client_data", DynValue::from(response.client_data)),
-                ("public_key", DynValue::from(response.public_key)),
-            ]),
-        })
+        Ok(attestation(request, response))
     }
 
     async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue> {
@@ -661,25 +714,7 @@ impl<T: WebAuthnTransport> DeviceAuthenticator for WebAuthnDevice<T> {
             })
             .await
             .map_err(authenticator_error)?;
-        Ok(DynValue::obj(&[(
-            self.variant(),
-            DynValue::obj(&[
-                (
-                    "meta",
-                    DynValue::obj(&[
-                        ("authority_id", DynValue::from(request.authority_id.0)),
-                        ("user_id", DynValue::from(request.user_id.0)),
-                        ("context", DynValue::from(request.context)),
-                    ]),
-                ),
-                (
-                    "authenticator_data",
-                    DynValue::from(response.authenticator_data),
-                ),
-                ("client_data", DynValue::from(response.client_data)),
-                ("signature", DynValue::from(response.signature)),
-            ]),
-        )]))
+        Ok(credential(request, response))
     }
 }
 

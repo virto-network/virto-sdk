@@ -79,6 +79,11 @@
 - `Signer::signature_variant` names the metadata signature variant a signer
   produces (`&str`, default `"Sr25519"`).
 - Optional `libwallet` adapter for ordinary wallet signers.
+- `EncodedExtrinsic::from_assembled` length-prefixes an extrinsic that was
+  assembled apart from `build_transaction`, for `submit_transaction`.
+  `ChainContext` is `Clone`, `Debug`, `PartialEq` and `Eq`, and
+  `ChainContext::expires_at` gives the last block its transactions are valid
+  in.
 - Non-mutating `sube query` and `sube tx` CLI commands.
 
 ### Fixed
