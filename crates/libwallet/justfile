@@ -3,10 +3,12 @@ default:
 
 check:
     cargo check
+    cargo check --no-default-features --features sr25519,rand
 lint:
     cargo clippy -- -D warnings
 test:
     cargo test --features std,substrate,ethereum,bitcoin,solana,cosmos,vault_simple
+    cargo test --no-default-features --features sr25519,rand
 
 check-no-std:
 	cargo build --features substrate --target wasm32-unknown-unknown

@@ -52,6 +52,8 @@ dirs = "7"
 [features]
 default = ["substrate"]
 # default = ["std", "substrate", "vault_simple", "mnemonic", "rand", "vault_pass", "vault_os"]
+# System randomness. sr25519 signing needs it: without this feature (or
+# another crate enabling schnorrkel's `getrandom`) `sign_msg` panics.
 rand = ["rand_core", "schnorrkel?/getrandom"]
 secp256k1 = ["dep:k256"]
 sr25519 = ["dep:schnorrkel", "dep:rand_chacha"]

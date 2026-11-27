@@ -357,6 +357,19 @@ pub mod sr25519 {
     mod tests {
         use crate::{Derive, Pair};
 
+        /// Signing draws system randomness, which only `rand` enables.
+        #[test]
+        #[cfg(feature = "rand")]
+        fn sign_and_verify() {
+            use crate::Signer;
+            let pair: super::Pair = Pair::from_bytes(&[7; 32]).unwrap();
+            smol::block_on(async {
+                let signature = Signer::sign_msg(&pair, b"a message").await.unwrap();
+                assert!(Signer::verify(&pair, b"a message", signature).await);
+                assert!(!Signer::verify(&pair, b"another message", signature).await);
+            });
+        }
+
         #[test]
         fn derive_substrate_keypair() {
             // "rotate increase color sustain print future moon rigid hunt wild diagram online"
