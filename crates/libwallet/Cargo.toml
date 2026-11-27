@@ -73,6 +73,10 @@ vault_pass = ["prs-lib", "mnemonic", "rand"]
 vault_simple = ["mnemonic", "rand"]
 
 [[test]]
+name = "sr25519"
+required-features = ["sr25519", "rand"]
+
+[[test]]
 name = "golden_vectors"
 required-features = ["std", "substrate", "ethereum", "bitcoin", "solana", "cosmos", "vault_simple"]
 

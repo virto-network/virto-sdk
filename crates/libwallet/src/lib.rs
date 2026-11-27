@@ -39,6 +39,14 @@ use arrayvec::ArrayVec;
 use core::fmt;
 
 pub use key_pair::{any, Derive, Pair, Public, Signature, Signer, SigningError};
+/// Typed key pairs, for a caller that knows its algorithm and does not want
+/// to go through [`any::Pair`].
+#[cfg(feature = "ed25519")]
+pub use key_pair::ed25519;
+#[cfg(feature = "secp256k1")]
+pub use key_pair::secp256k1;
+#[cfg(feature = "sr25519")]
+pub use key_pair::sr25519;
 #[cfg(feature = "mnemonic")]
 pub use mnemonic::{AnyMnemonic, BuiltInLanguage as Language};
 /// An English BIP39 mnemonic.
