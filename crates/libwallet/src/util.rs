@@ -8,7 +8,7 @@ where
     bytes
 }
 
-#[cfg(feature = "rand")]
+#[cfg(all(feature = "rand", feature = "mnemonic"))]
 pub fn gen_phrase<R>(rng: &mut R, lang: crate::Language) -> crate::AnyMnemonic
 where
     R: rand_core::CryptoRng + rand_core::RngCore,
