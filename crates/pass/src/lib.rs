@@ -32,6 +32,11 @@
 //!     .build_transaction(&call, &auth, sube::TransactionOptions::default())
 //!     .await?;
 //! ```
+//!
+//! When the device answers apart from the code that builds the transaction
+//! (a browser's passkey answering a server in a later request), make a
+//! [`Pending`] instead, hand its challenge to the device, and finish it with
+//! a credential from [`key::credential`] or [`webauthn::credential`].
 
 extern crate alloc;
 #[cfg(feature = "std")]
@@ -39,6 +44,8 @@ extern crate std;
 
 pub mod config;
 mod filter;
+pub mod key;
+mod pending;
 pub mod session;
 #[cfg(feature = "wallet")]
 pub mod wallet;
@@ -49,6 +56,7 @@ mod newtypes;
 pub use config::PassRuntimeConfig;
 pub use filter::{CallIndex, DeviceFilter};
 pub use newtypes::{Account, AuthorityId, DeviceId, HashedUserId, InvalidHashedUserId};
+pub use pending::Pending;
 pub use session::SessionAuthorizer;
 pub use workflow::{DeviceAuthenticator, EnrollmentDraft};
 
@@ -101,12 +109,7 @@ const PASS_AUTHENTICATE: &str = "PassAuthenticate";
 /// registry.
 pub struct PassAuthenticator<'a, A> {
     device: &'a A,
-    account: Account,
-    device_id: DeviceId,
-    user_id: HashedUserId,
-    authority_id: AuthorityId,
-    context: u32,
-    block_hash: [u8; 32],
+    identity: PassIdentity,
 }
 
 impl<'a, A> PassAuthenticator<'a, A> {
@@ -125,13 +128,20 @@ impl<'a, A> PassAuthenticator<'a, A> {
     ) -> Self {
         Self {
             device,
-            account,
-            device_id,
-            user_id,
-            authority_id,
-            context,
-            block_hash,
+            identity: PassIdentity {
+                account,
+                device_id,
+                user_id,
+                authority_id,
+                context,
+                block_hash,
+            },
         }
+    }
+
+    /// Who this authenticates as, without the device.
+    pub fn identity(&self) -> PassIdentity {
+        self.identity
     }
 }
 
@@ -139,7 +149,7 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
     type Account = [u8; 32];
 
     fn nonce_account(&self) -> Self::Account {
-        self.account.0
+        self.identity.account.0
     }
 
     async fn assemble(
@@ -150,6 +160,49 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
         ctx: &ChainContext,
         overrides: &[(String, DynValue)],
     ) -> Result<AssembledExtrinsic> {
+        let request = self
+            .identity
+            .challenge(encoded_call, meta, registry, ctx, overrides)?;
+        // Ask the device for the credential bound to this transaction.
+        let credential = self.device.assert(&request).await?;
+        self.identity
+            .assemble_with(credential, encoded_call, meta, registry, ctx, overrides)
+    }
+}
+
+/// Who a pass transaction is authenticated as: a device of a pass account,
+/// and the block its challenge is bound to. It holds no device, so the two
+/// halves of an authentication can run apart: [`challenge`](Self::challenge)
+/// says what the device must answer, and
+/// [`assemble_with`](Self::assemble_with) builds the extrinsic from its
+/// answer. [`Pending`] keeps what the second half needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassIdentity {
+    pub account: Account,
+    pub device_id: DeviceId,
+    pub user_id: HashedUserId,
+    pub authority_id: AuthorityId,
+    /// Number of the block the challenge is bound to.
+    pub context: u32,
+    /// Hash of that block.
+    pub block_hash: [u8; 32],
+}
+
+impl PassIdentity {
+    /// The challenge the device must answer to authenticate `encoded_call`
+    /// in `ctx`.
+    ///
+    /// It commits to the call and to every extension after
+    /// `PassAuthenticate`: on Kreivo that includes the era, the nonce and
+    /// the tip. A credential for it is good for that one transaction only.
+    pub fn challenge(
+        &self,
+        encoded_call: &[u8],
+        meta: &ExtrinsicMeta,
+        registry: &Registry,
+        ctx: &ChainContext,
+        overrides: &[(String, DynValue)],
+    ) -> Result<ChallengeRequest> {
         let after = extensions_after_pass_authenticate(&meta.extensions)?;
 
         // Encode extensions AFTER PassAuthenticate to compute the inherited implication.
@@ -163,25 +216,34 @@ impl<A: DeviceAuthenticator> ExtrinsicAssembler for PassAuthenticator<'_, A> {
             &after_additional,
         );
 
-        // Ask the device for the credential bound to this implication.
-        let credential_value = self
-            .device
-            .assert(&ChallengeRequest {
-                user_id: self.user_id,
-                authority_id: self.authority_id,
-                context: self.context,
-                challenge: block_challenge(&self.block_hash, &implication),
-            })
-            .await?;
+        Ok(ChallengeRequest {
+            user_id: self.user_id,
+            authority_id: self.authority_id,
+            context: self.context,
+            challenge: block_challenge(&self.block_hash, &implication),
+        })
+    }
 
+    /// The V5 "General" extrinsic of `encoded_call` in `ctx`, authenticated
+    /// by `credential`: the device's answer to [`challenge`](Self::challenge)
+    /// for the same arguments.
+    pub fn assemble_with(
+        &self,
+        credential: DynValue,
+        encoded_call: &[u8],
+        meta: &ExtrinsicMeta,
+        registry: &Registry,
+        ctx: &ChainContext,
+        overrides: &[(String, DynValue)],
+    ) -> Result<AssembledExtrinsic> {
         // `PassAuthenticate(Option<AuthenticateParams>)`: a bare value for an
         // `Option` is encoded as `Some(value)`.
         let pass_value = DynValue::obj(&[
             ("device_id", DynValue::from(self.device_id.0)),
-            ("credential", credential_value),
+            ("credential", credential),
         ]);
 
-        // Re-encode ALL extensions with the PassAuthenticate override in place.
+        // Encode ALL extensions with the PassAuthenticate override in place.
         let mut all_overrides = Vec::from(overrides);
         all_overrides.push((PASS_AUTHENTICATE.into(), pass_value));
         let (all_extra, _, extensions) =

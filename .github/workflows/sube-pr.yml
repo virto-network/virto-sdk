@@ -100,6 +100,7 @@ jobs:
           cargo check -p sube --target thumbv7em-none-eabihf --no-default-features
           cargo check -p sube --target thumbv7em-none-eabi --no-default-features --features ws-edge
           cargo check -p sube --target riscv32imac-unknown-none-elf --no-default-features
+          cargo check -p pass --target wasm32-unknown-unknown --no-default-features
 
       - name: Install QEMU
         run: sudo apt-get update && sudo apt-get install -y qemu-system-arm

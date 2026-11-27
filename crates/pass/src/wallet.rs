@@ -17,34 +17,10 @@
 use alloc::vec::Vec;
 
 use crate::DeviceId;
+use crate::key;
+pub use crate::key::SignatureType;
 use crate::workflow::{ChallengeRequest, DeviceAttestation, DeviceAuthenticator};
-use blake2::{Blake2b256, Digest};
 use sube::{DynValue, Error, Result};
-
-/// Substrate `MultiSignature` variant.
-///
-/// Must be specified explicitly at credential construction. The libwallet
-/// `Signer` trait does not reliably expose the underlying algorithm (a
-/// `DerivedSigner` returns its derivation path from `account_id()`, not the
-/// algorithm name), and guessing wrong produces credentials that fail
-/// on-chain verification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SignatureType {
-    Sr25519,
-    Ed25519,
-    Ecdsa,
-}
-
-impl SignatureType {
-    fn variant_name(self) -> &'static str {
-        match self {
-            Self::Sr25519 => "Sr25519",
-            Self::Ed25519 => "Ed25519",
-            Self::Ecdsa => "Ecdsa",
-        }
-    }
-}
 
 /// Substrate-key device provider used for both registration and direct
 /// authentication. The public key is explicit because libwallet's generic
@@ -65,57 +41,42 @@ impl<'a, S: libwallet::Signer> WalletDevice<'a, S> {
     }
 
     /// The device's `AccountId32`, which the substrate-keys authenticator
-    /// uses as its device id: the public key itself for sr25519/ed25519, its
-    /// blake2-256 hash for a 33-byte ECDSA key.
+    /// uses as its device id; see [`key::device_id`].
     pub fn device_id(&self) -> DeviceId {
-        DeviceId(match <[u8; 32]>::try_from(self.public_key.as_slice()) {
-            Ok(public) => public,
-            Err(_) => Blake2b256::digest(&self.public_key).into(),
-        })
+        key::device_id(&self.public_key)
     }
 
-    /// Sign the request's `SignedMessage` as a `MultiSignature` value.
-    async fn sign(&self, request: &ChallengeRequest) -> Result<DynValue> {
-        let signature = self
-            .signer
+    /// Sign the request's `SignedMessage`.
+    async fn sign(&self, request: &ChallengeRequest) -> Result<S::Signature> {
+        self.signer
             .sign_msg(request.signed_message())
             .await
-            .map_err(|error| Error::Signing(alloc::format!("{error}")))?;
-        Ok(DynValue::obj(&[(
-            self.signature_type.variant_name(),
-            DynValue::from(signature.as_ref()),
-        )]))
+            .map_err(|error| Error::Signing(alloc::format!("{error}")))
     }
 }
 
 impl<S: libwallet::Signer> DeviceAuthenticator for WalletDevice<'_, S> {
     fn variant(&self) -> &'static str {
-        "SubstrateKey"
+        key::VARIANT
     }
 
     async fn attest(&self, request: &ChallengeRequest) -> Result<DeviceAttestation> {
-        let device_id = self.device_id();
-        Ok(DeviceAttestation {
-            device_id,
-            variant: self.variant().into(),
-            // substrate-keys `KeyRegistration { public, message, signature }`.
-            payload: DynValue::obj(&[
-                ("public", DynValue::from(device_id.0)),
-                ("message", request.message_value()),
-                ("signature", self.sign(request).await?),
-            ]),
-        })
+        let signature = self.sign(request).await?;
+        Ok(key::attestation(
+            request,
+            &self.public_key,
+            self.signature_type,
+            signature.as_ref(),
+        ))
     }
 
     async fn assert(&self, request: &ChallengeRequest) -> Result<DynValue> {
-        Ok(DynValue::obj(&[(
-            self.variant(),
-            DynValue::obj(&[
-                ("user_id", DynValue::from(request.user_id.0)),
-                ("message", request.message_value()),
-                ("signature", self.sign(request).await?),
-            ]),
-        )]))
+        let signature = self.sign(request).await?;
+        Ok(key::credential(
+            request,
+            self.signature_type,
+            signature.as_ref(),
+        ))
     }
 }
 
